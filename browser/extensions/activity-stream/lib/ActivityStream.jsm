@@ -128,12 +128,6 @@ const FEEDS_DATA = [
     title: "Fetches content recommendations from a configurable content provider",
     // Dynamically determine if Pocket should be shown for a geo / locale
     getValue: ({geo, locale}) => {
-      const locales = ({
-        "US": ["en-US", "en-GB", "en-ZA"],
-        "CA": ["en-US", "en-GB", "en-ZA"],
-        "DE": ["de", "de-DE", "de-AT", "de-CH"]
-      })[geo];
-      return !!locales && locales.includes(locale);
     }
   },
   {

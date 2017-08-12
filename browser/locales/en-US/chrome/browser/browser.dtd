@@ -376,7 +376,7 @@ These should match what Safari and other Apple applications use on OS X Lion. --
 <!-- LOCALIZATION NOTE (appMenuRemoteTabs.noclients.label): This is shown
      when Sync is configured but this appears to be the only device attached to
      the account. We also show links to download Firefox for android/ios. -->
-<!ENTITY appMenuRemoteTabs.noclients.title "No synced tabs… yet!">
+<!ENTITY appMenuRemoteTabs.noclients.title "No synced tabs.">
 <!ENTITY appMenuRemoteTabs.noclients.subtitle "Want to see your tabs from other devices here?">
 <!ENTITY appMenuRemoteTabs.openprefs.label "Sync Preferences">
 <!ENTITY appMenuRemoteTabs.notsignedin.label "Sign in to view a list of tabs from your other devices.">
@@ -844,9 +844,9 @@ you can use these alternative items. Otherwise, their values should be empty.  -
 <!ENTITY social.directory.introText "Click on a service to add it to &brandShortName;.">
 <!ENTITY social.directory.viewmore.text "View More">
 
-<!ENTITY customizeMode.menuAndToolbars.header2 "Additional Tools and Features">
-<!ENTITY customizeMode.menuAndToolbars.empty "Want more tools?">
-<!ENTITY customizeMode.menuAndToolbars.emptyLink "Choose from thousands of add-ons">
+<!ENTITY customizeMode.menuAndToolbars.header2 "Additional Tools">
+<!ENTITY customizeMode.menuAndToolbars.empty "">
+<!ENTITY customizeMode.menuAndToolbars.emptyLink "">
 <!ENTITY customizeMode.restoreDefaults "Restore Defaults">
 <!ENTITY customizeMode.done "Done">
 <!ENTITY customizeMode.titlebar "Title Bar">
@@ -952,13 +952,10 @@ you can use these alternative items. Otherwise, their values should be empty.  -
 <!ENTITY panicButton.view.openNewWindow           "Open a new clean Window">
 
 <!ENTITY panicButton.view.undoWarning             "This action cannot be undone.">
-<!ENTITY panicButton.view.forgetButton            "Forget!">
+<!ENTITY panicButton.view.forgetButton            "Forget">
 
 <!ENTITY panicButton.okay.msg1                "Recent history has bees cleared.">
 <!ENTITY panicButton.okay.buttonlabel         "OK">
-
-<!ENTITY emeLearnMoreContextMenu.label            "Learn more about DRM…">
-<!ENTITY emeLearnMoreContextMenu.accesskey        "D">
 
 <!ENTITY updateAvailable.message "Update &brandShorterName;">
 <!ENTITY updateAvailable.whatsnew.label "See changes.">
@@ -968,15 +965,6 @@ you can use these alternative items. Otherwise, their values should be empty.  -
 <!ENTITY updateAvailable.cancelButton.label "Not Now">
 <!ENTITY updateAvailable.cancelButton.accesskey "N">
 <!ENTITY updateAvailable.panelUI.label "Download &brandShorterName; update">
-
-<!ENTITY updateManual.message "Download a fresh copy of &brandShorterName; and we’ll help you to install it.">
-<!ENTITY updateManual.whatsnew.label "See what’s new.">
-<!ENTITY updateManual.header.message "&brandShorterName; can’t update to the latest version.">
-<!ENTITY updateManual.acceptButton.label "Download &brandShorterName;">
-<!ENTITY updateManual.acceptButton.accesskey "D">
-<!ENTITY updateManual.cancelButton.label "Not Now">
-<!ENTITY updateManual.cancelButton.accesskey "N">
-<!ENTITY updateManual.panelUI.label "Download a fresh copy of &brandShorterName;">
 
 <!ENTITY updateRestart.message "After restarting, &brandShorterName; will restore all your open tabs and windows.">
 <!ENTITY updateRestart.header.message2 "Restart to update &brandShorterName;.">
