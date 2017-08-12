@@ -7,10 +7,6 @@
 <script type="application/javascript"
         src="chrome://browser/content/preferences/in-content-new/main.js"/>
 
-#ifdef MOZ_UPDATER
-  <script type="application/javascript" src="chrome://browser/content/aboutDialog-appUpdater.js"/>
-#endif
-
 <script type="application/javascript"
         src="chrome://mozapps/content/preferences/fontbuilder.js"/>
 
@@ -247,25 +243,6 @@
               name="browser.preferences.advanced.selectedTabIndex"
               type="int"/>
 
-#ifdef MOZ_UPDATER
-  <preference id="app.update.enabled"
-              name="app.update.enabled"
-              type="bool"/>
-  <preference id="app.update.auto"
-              name="app.update.auto"
-              type="bool"/>
-
-  <preference id="app.update.disable_button.showUpdateHistory"
-              name="app.update.disable_button.showUpdateHistory"
-              type="bool"/>
-
-#ifdef MOZ_MAINTENANCE_SERVICE
-  <preference id="app.update.service.enabled"
-              name="app.update.service.enabled"
-              type="bool"/>
-#endif
-#endif
-
   <preference id="browser.search.update"
               name="browser.search.update"
               type="bool"/>
@@ -430,9 +407,6 @@
                 accesskey="&browserContainersEnabled.accesskey;"
                 preference="privacy.userContext.enabled"
                 onsyncfrompreference="return gPrivacyPane.readBrowserContainersCheckbox();"/>
-      <label id="browserContainersLearnMore" class="learnMore text-link">
-        &browserContainersLearnMore.label;
-      </label>
       <spacer flex="1"/>
       <!-- Please don't remove the wrapping hbox/vbox/box for these elements. It's used to properly compute the search tooltip position. -->
       <hbox>
@@ -732,9 +706,6 @@
         <hbox align="center">
           <checkbox id="playDRMContent" preference="media.eme.enabled"
                     label="&playDRMContent2.label;" accesskey="&playDRMContent2.accesskey;"/>
-          <label id="playDRMContentLink" class="learnMore text-link">
-            &playDRMContent.learnMore.label;
-          </label>
         </hbox>
       </row>
     </rows>
@@ -761,139 +732,13 @@
     <vbox flex="1">
       <description>
         &updateApplication.version.pre;<label id="version"/>&updateApplication.version.post;
-        <label id="releasenotes" class="learnMore text-link" hidden="true">&releaseNotes.link;</label>
       </description>
       <description id="distribution" class="text-blurb" hidden="true"/>
       <description id="distributionId" class="text-blurb" hidden="true"/>
     </vbox>
-#ifdef MOZ_UPDATER
-    <spacer flex="1"/>
-    <!-- Please don't remove the wrapping hbox/vbox/box for these elements. It's used to properly compute the search tooltip position. -->
-    <vbox>
-      <button id="showUpdateHistory"
-              class="accessory-button"
-              label="&updateHistory2.label;"
-              accesskey="&updateHistory2.accesskey;"
-              preference="app.update.disable_button.showUpdateHistory"
-              searchkeywords="&history.title; &history2.intro;"/>
-    </vbox>
-#endif
   </hbox>
-#ifdef MOZ_UPDATER
-  <vbox id="updateBox">
-    <deck id="updateDeck" orient="vertical">
-      <hbox id="checkForUpdates" align="center">
-        <spacer flex="1"/>
-        <button id="checkForUpdatesButton"
-                label="&update.checkForUpdatesButton.label;"
-                accesskey="&update.checkForUpdatesButton.accesskey;"
-                oncommand="gAppUpdater.checkForUpdates();"/>
-      </hbox>
-      <hbox id="downloadAndInstall" align="center">
-        <spacer flex="1"/>
-        <button id="downloadAndInstallButton"
-                oncommand="gAppUpdater.startDownload();"/>
-                <!-- label and accesskey will be filled by JS -->
-      </hbox>
-      <hbox id="apply" align="center">
-        <spacer flex="1"/>
-        <button id="updateButton"
-                label="&update.updateButton.label3;"
-                accesskey="&update.updateButton.accesskey;"
-                oncommand="gAppUpdater.buttonRestartAfterDownload();"/>
-      </hbox>
-      <hbox id="checkingForUpdates" align="center">
-        <image class="update-throbber"/><label>&update.checkingForUpdates;</label>
-        <spacer flex="1"/>
-        <button label="&update.checkForUpdatesButton.label;"
-                accesskey="&update.checkForUpdatesButton.accesskey;"
-                disabled="true"/>
-      </hbox>
-      <hbox id="downloading" align="center">
-        <image class="update-throbber"/><label>&update.downloading.start;</label><label id="downloadStatus"/><label>&update.downloading.end;</label>
-      </hbox>
-      <hbox id="applying" align="center">
-        <image class="update-throbber"/><label>&update.applying;</label>
-      </hbox>
-      <hbox id="downloadFailed" align="center">
-        <label>&update.failed.start;</label><label id="failedLink" class="text-link">&update.failed.linkText;</label><label>&update.failed.end;</label>
-        <spacer flex="1"/>
-        <button label="&update.checkForUpdatesButton.label;"
-                accesskey="&update.checkForUpdatesButton.accesskey;"
-                oncommand="gAppUpdater.checkForUpdates();"/>
-      </hbox>
-      <hbox id="adminDisabled" align="center">
-        <label>&update.adminDisabled;</label>
-        <spacer flex="1"/>
-        <button label="&update.checkForUpdatesButton.label;"
-                accesskey="&update.checkForUpdatesButton.accesskey;"
-                disabled="true"/>
-      </hbox>
-      <hbox id="noUpdatesFound" align="center">
-        <image class="face-smile"/>
-        <label>&update.noUpdatesFound;</label>
-        <spacer flex="1"/>
-        <button label="&update.checkForUpdatesButton.label;"
-                accesskey="&update.checkForUpdatesButton.accesskey;"
-                oncommand="gAppUpdater.checkForUpdates();"/>
-      </hbox>
-      <hbox id="otherInstanceHandlingUpdates" align="center">
-        <label>&update.otherInstanceHandlingUpdates;</label>
-        <spacer flex="1"/>
-        <button label="&update.checkForUpdatesButton.label;"
-                accesskey="&update.checkForUpdatesButton.accesskey;"
-                disabled="true"/>
-      </hbox>
-      <hbox id="manualUpdate" align="center">
-        <image class="face-sad"/>
-        <label>&update.manual.start;</label><label id="manualLink" class="text-link"/><label>&update.manual.end;</label>
-        <spacer flex="1"/>
-        <button label="&update.checkForUpdatesButton.label;"
-                accesskey="&update.checkForUpdatesButton.accesskey;"
-                disabled="true"/>
-      </hbox>
-      <hbox id="unsupportedSystem" align="center">
-        <description flex="1">
-          <label>&update.unsupported.start;</label><label id="unsupportedLink" class="text-link">&update.unsupported.linkText;</label><label>&update.unsupported.end;</label>
-        </description>
-        <spacer flex="1"/>
-        <button label="&update.checkForUpdatesButton.label;"
-                accesskey="&update.checkForUpdatesButton.accesskey;"
-                disabled="true"/>
-      </hbox>
-      <hbox id="restarting" align="center">
-        <image class="update-throbber"/><label>&update.restarting;</label>
-        <spacer flex="1"/>
-        <button label="&update.updateButton.label3;"
-                accesskey="&update.updateButton.accesskey;"
-                disabled="true"/>
-      </hbox>
-    </deck>
-  </vbox>
-#endif
 
   <separator/>
-#ifdef MOZ_UPDATER
-  <description>&updateApplication.description;</description>
-  <radiogroup id="updateRadioGroup">
-    <radio id="autoDesktop"
-           value="auto"
-           label="&updateAuto3.label;"
-           accesskey="&updateAuto3.accesskey;"/>
-    <radio value="checkOnly"
-          label="&updateCheckChoose2.label;"
-          accesskey="&updateCheckChoose2.accesskey;"/>
-    <radio value="manual"
-          label="&updateManual2.label;"
-          accesskey="&updateManual2.accesskey;"/>
-  </radiogroup>
-#ifdef MOZ_MAINTENANCE_SERVICE
-  <checkbox id="useService"
-            label="&useService.label;"
-            accesskey="&useService.accesskey;"
-            preference="app.update.service.enabled"/>
-#endif
-#endif
   <checkbox id="enableSearchUpdate"
             label="&enableSearchUpdate2.label;"
             accesskey="&enableSearchUpdate2.accesskey;"
@@ -914,7 +759,6 @@
               label="&useRecommendedPerformanceSettings2.label;"
               accesskey="&useRecommendedPerformanceSettings2.accesskey;"
               preference="browser.preferences.defaultPerformanceSettings.enabled"/>
-    <label id="performanceSettingsLearnMore" class="learnMore text-link">&performanceSettingsLearnMore.label;</label>
   </hbox>
   <description class="indent">&useRecommendedPerformanceSettings2.description;</description>
 

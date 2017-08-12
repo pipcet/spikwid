@@ -183,10 +183,6 @@ var gMainPane = {
     this.initBrowserContainers();
     this.buildContentProcessCountMenuList();
 
-    let performanceSettingsLink = document.getElementById("performanceSettingsLearnMore");
-    let performanceSettingsUrl = Services.urlFormatter.formatURLPref("app.support.baseURL") + "performance";
-    performanceSettingsLink.setAttribute("href", performanceSettingsUrl);
-
     this.updateDefaultPerformanceSettingsPref();
 
     let defaultPerformancePref =
@@ -331,17 +327,6 @@ var gMainPane = {
 
     document.getElementById("version").textContent = version;
 
-    // Show a release notes link if we have a URL.
-    let relNotesLink = document.getElementById("releasenotes");
-    let relNotesPrefType = Services.prefs.getPrefType("app.releaseNotesURL");
-    if (relNotesPrefType != Services.prefs.PREF_INVALID) {
-      let relNotesURL = Services.urlFormatter.formatURLPref("app.releaseNotesURL");
-      if (relNotesURL != "about:blank") {
-        relNotesLink.href = relNotesURL;
-        relNotesLink.hidden = false;
-      }
-    }
-
     let distroId = Services.prefs.getCharPref("distribution.id", "");
     if (distroId) {
       let distroVersion = Services.prefs.getCharPref("distribution.version");
@@ -356,21 +341,6 @@ var gMainPane = {
         distroField.value = distroAbout;
         distroField.hidden = false;
       }
-    }
-
-    if (AppConstants.MOZ_UPDATER) {
-      gAppUpdater = new appUpdater();
-      let onUnload = () => {
-        window.removeEventListener("unload", onUnload);
-        Services.prefs.removeObserver("app.update.", this);
-      };
-      window.addEventListener("unload", onUnload);
-      Services.prefs.addObserver("app.update.", this);
-      this.updateReadPrefs();
-      setEventListener("updateRadioGroup", "command",
-                       gMainPane.updateWritePrefs);
-      setEventListener("showUpdateHistory", "command",
-                       gMainPane.showUpdates);
     }
 
     // Initilize Application section.
@@ -467,9 +437,6 @@ var gMainPane = {
       document.getElementById("browserContainersbox").setAttribute("data-hidden-from-search", "true");
       return;
     }
-
-    let link = document.getElementById("browserContainersLearnMore");
-    link.href = Services.urlFormatter.formatURLPref("app.support.baseURL") + "containers";
 
     document.getElementById("browserContainersbox").hidden = false;
 

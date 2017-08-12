@@ -427,7 +427,6 @@
     <vbox flex="1">
       <description flex="1">
         <label id="totalSiteDataSize"></label>
-        <label id="siteDataLearnMoreLink" class="learnMore text-link" value="&siteDataLearnMoreLink.label;"></label>
       </description>
     </vbox>
     <vbox align="end">
@@ -464,7 +463,6 @@
         <description id="trackingProtectionDesc"
                      control="trackingProtectionRadioGroup">
           &trackingProtection2.radioGroupLabel;
-           <label id="trackingProtectionLearnMore" class="learnMore text-link">&trackingProtectionLearnMore.label;</label>
         </description>
         <radiogroup id="trackingProtectionRadioGroup" aria-labelledby="trackingProtectionDesc">
           <radio value="always"
@@ -483,9 +481,6 @@
           <checkbox id="trackingProtectionPBM"
                     preference="privacy.trackingprotection.pbmode.enabled"
                     accesskey="&trackingProtectionPBM6.accesskey;"/>
-          <label flex="1">&trackingProtectionPBM6.label;<label id="trackingProtectionPBMLearnMore"
-                 class="learnMore text-link">&trackingProtectionPBMLearnMore.label;</label>
-          </label>
         </hbox>
       </vbox>
       <vbox id="trackingProtectionAdvancedSettings">
@@ -514,9 +509,7 @@
       </vbox>
     </hbox>
     <vbox id="doNotTrackLearnMoreBox">
-      <label>&doNotTrack.description;<label
-      class="learnMore text-link" href="https://www.mozilla.org/dnt"
-      >&doNotTrack.learnMore.label;</label></label>
+      <label>&doNotTrack.description;</label>
       <radiogroup id="doNotTrackRadioGroup" aria-labelledby="doNotTrackDesc" preference="privacy.donottrackheader.enabled">
         <radio value="false" label="&doNotTrack.default.label;"/>
         <radio value="true" label="&doNotTrack.always.label;"/>
@@ -543,8 +536,6 @@
       <row id="notificationsPolicyRow" align="center">
         <description flex="1">
           <label id="notificationsPolicy">&notificationsPolicyDesc4.label;</label>
-          <label id="notificationsPolicyLearnMore"
-                 class="learnMore text-link">&notificationsPolicyLearnMore.label;</label>
         </description>
         <hbox pack="end">
           <button id="notificationsPolicyButton"
@@ -617,15 +608,13 @@
 #ifdef MOZ_DATA_REPORTING
 <groupbox id="dataCollectionGroup" data-category="panePrivacy" data-subcategory="reports" hidden="true">
   <description>
-    &dataCollectionDesc.label;<label id="dataCollectionPrivacyNotice" class="learnMore text-link">&dataCollectionPrivacyNotice.label;</label>
+    &dataCollectionDesc.label;
   </description>
 
   <vbox>
     <description flex="1">
       <checkbox id="submitHealthReportBox" label="&enableHealthReport1.label;"
                 accesskey="&enableHealthReport1.accesskey;"/>
-      <label id="FHRLearnMore"
-             class="learnMore text-link">&healthReportLearnMore.label;</label>
     </description>
 #ifndef MOZ_TELEMETRY_REPORTING
     <description id="TelemetryDisabledDesc" class="indent" control="telemetryGroup">&healthReportingDisabled.label;</description>
@@ -637,8 +626,6 @@
               preference="browser.crashReports.unsubmittedCheck.autoSubmit"
               label="&alwaysSubmitCrashReports1.label;"
               accesskey="&alwaysSubmitCrashReports1.accesskey;"/>
-    <label id="crashReporterLearnMore"
-           class="learnMore text-link">&crashReporterLearnMore.label;</label>
   </hbox>
 #endif
 </groupbox>
