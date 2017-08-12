@@ -229,7 +229,7 @@ var gUpdates = {
   },
 
   never() {
-    // If the user clicks "No Thanks", we should not prompt them to update to
+    // If the user clicks "No", we should not prompt them to update to
     // this version again unless they manually select "Check for Updates..."
     // which will clear app.update.elevate.never preference.
     let aus = CoC["@mozilla.org/updates/update-service;1"].
@@ -1249,7 +1249,7 @@ var gFinishedPage = {
               getService(CoI.nsIApplicationUpdateService);
     if (aus.elevationRequired) {
       LOG("gFinishedPage", "elevationRequired");
-      gUpdates.setButtons("restartLaterButton", "noThanksButton",
+      gUpdates.setButtons("restartLaterButton", "noButton",
                           "restartNowButton", true);
     } else {
       LOG("gFinishedPage", "not elevationRequired");
@@ -1362,7 +1362,7 @@ var gFinishedPage = {
   },
 
   /**
-   * When elevation is required and the user clicks "No Thanks" in the wizard.
+   * When elevation is required and the user clicks "No" in the wizard.
    */
   async onExtra2() {
     Services.obs.notifyObservers(null, "update-canceled");

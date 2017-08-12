@@ -1789,7 +1789,7 @@ const at = _require3.actionTypes,
 /**
  * Manual migration component used to start the profile import wizard.
  * Message is presented temporarily and will go away if:
- * 1.  User clicks "No Thanks"
+ * 1.  User clicks "No"
  * 2.  User completed the data import
  * 3.  After 3 active days
  * 4.  User clicks "Cancel" on the import wizard (currently not implemented).

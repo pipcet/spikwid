@@ -954,9 +954,8 @@ you can use these alternative items. Otherwise, their values should be empty.  -
 <!ENTITY panicButton.view.undoWarning             "This action cannot be undone.">
 <!ENTITY panicButton.view.forgetButton            "Forget!">
 
-<!ENTITY panicButton.thankyou.msg1                "Your recent history is cleared.">
-<!ENTITY panicButton.thankyou.msg2                "Safe browsing!">
-<!ENTITY panicButton.thankyou.buttonlabel         "Thanks!">
+<!ENTITY panicButton.okay.msg1                "Recent history has bees cleared.">
+<!ENTITY panicButton.okay.buttonlabel         "OK">
 
 <!ENTITY emeLearnMoreContextMenu.label            "Learn more about DRM…">
 <!ENTITY emeLearnMoreContextMenu.accesskey        "D">
