@@ -250,9 +250,8 @@ pref("browser.uidensity", 0);
 // while the user is in a touch environment (such as Windows tablet mode).
 pref("browser.touchmode.auto", true);
 
-// At startup, check if we're the default browser and prompt user if not.
-pref("browser.shell.checkDefaultBrowser", true);
-pref("browser.shell.shortcutFavicons",true);
+pref("browser.shell.checkDefaultBrowser", false);
+pref("browser.shell.shortcutFavicons",false);
 pref("browser.shell.mostRecentDateSetAsDefault", "");
 pref("browser.shell.skipDefaultBrowserCheckOnFirstRun", true);
 pref("browser.shell.didSkipDefaultBrowserCheckOnFirstRun", false);
