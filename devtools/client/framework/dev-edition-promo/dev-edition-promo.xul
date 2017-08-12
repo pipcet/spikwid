@@ -10,27 +10,4 @@
 <?xml-stylesheet rel="stylesheet" href="chrome://devtools/content/framework/dev-edition-promo/dev-edition-promo.css" type="text/css"?>
 
 <window xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul" id="dev-edition-promo">
-  <vbox id="doorhanger-container">
-    <hbox flex="1" id="top-panel">
-      <image id="icon" />
-      <vbox id="info">
-        <h1>Using Developer Tools in your browser?</h1>
-        <p>Download Firefox Developer Edition, our first browser made just for you.</p>
-      </vbox>
-    </hbox>
-    <hbox id="lower-panel" flex="1">
-      <hbox id="button-container" flex="1">
-        <button id="close"
-                flex="1"
-                standalone="true"
-                label="No thanks">
-        </button>
-        <button id="go"
-                flex="1"
-                standalone="true"
-                label="Learn more »">
-        </button>
-      </hbox>
-    </hbox>
-  </vbox>
 </window>
