@@ -6,7 +6,7 @@
 
 <!ENTITY searchreset.pageTitle      "Restore your search settings?">
 
-<!ENTITY searchreset.pageInfo1      "Your search settings might be out-of-date. &brandShortName; can help you restore the default search settings.">
+<!ENTITY searchreset.pageInfo1      "&brandShortName; can restore the default search settings.">
 
 
 <!-- LOCALIZATION NOTE (searchreset.selector.label): this string is

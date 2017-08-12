@@ -8,14 +8,14 @@
 
 <!ENTITY privateBrowsing.title                           "Private Browsing">
 <!ENTITY privateBrowsing.title.tracking                  "Private Browsing with Tracking Protection">
-<!ENTITY aboutPrivateBrowsing.info.notsaved.before       "When you browse in a Private Window, Firefox ">
+<!ENTITY aboutPrivateBrowsing.info.notsaved.before       "When you browse in a Private Window, this browser ">
 <!ENTITY aboutPrivateBrowsing.info.notsaved.emphasize    "does not save">
 <!ENTITY aboutPrivateBrowsing.info.notsaved.after        ":">
 <!ENTITY aboutPrivateBrowsing.info.visited               "visited pages">
 <!ENTITY aboutPrivateBrowsing.info.searches              "searches">
 <!ENTITY aboutPrivateBrowsing.info.cookies               "cookies">
 <!ENTITY aboutPrivateBrowsing.info.temporaryFiles        "temporary files">
-<!ENTITY aboutPrivateBrowsing.info.saved.before          "Firefox ">
+<!ENTITY aboutPrivateBrowsing.info.saved.before          "This browser ">
 <!ENTITY aboutPrivateBrowsing.info.saved.emphasize       "will save">
 <!ENTITY aboutPrivateBrowsing.info.saved.after2          " your:">
 <!ENTITY aboutPrivateBrowsing.info.downloads             "downloads">
