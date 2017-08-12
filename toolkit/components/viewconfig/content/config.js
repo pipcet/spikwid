@@ -320,12 +320,7 @@ function onConfigLoad() {
   gTypeStrs[nsIPrefBranch.PREF_INT] = gConfigBundle.getString("int");
   gTypeStrs[nsIPrefBranch.PREF_BOOL] = gConfigBundle.getString("bool");
 
-  var showWarning = gPrefBranch.getBoolPref("general.warnOnAboutConfig");
-
-  if (showWarning)
-    document.getElementById("warningButton").focus();
-  else
-    ShowPrefs();
+  ShowPrefs();
 }
 
 // Unhide the warning message
@@ -352,7 +347,6 @@ function ShowPrefs() {
   configTree.view = view;
   configTree.controllers.insertControllerAt(0, configController);
 
-  document.getElementById("configDeck").setAttribute("selectedIndex", 1);
   document.getElementById("configTreeKeyset").removeAttribute("disabled");
   if (!document.getElementById("showWarningNextTime").checked)
     gPrefBranch.setBoolPref("general.warnOnAboutConfig", false);
@@ -373,7 +367,7 @@ function ShowPrefs() {
 }
 
 function onConfigUnload() {
-  if (document.getElementById("configDeck").getAttribute("selectedIndex") == 1) {
+  {
     gPrefBranch.removeObserver("", gPrefListener);
     var configTree = document.getElementById("configTree");
     configTree.view = null;
@@ -382,10 +376,6 @@ function onConfigUnload() {
 }
 
 function FilterPrefs() {
-  if (document.getElementById("configDeck").getAttribute("selectedIndex") != 1) {
-    return;
-  }
-
   var substring = document.getElementById("textbox").value;
   // Check for "/regex/[i]"
   if (substring.charAt(0) == "/") {

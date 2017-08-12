@@ -52,22 +52,6 @@
   <key key="&focusSearch2.key;" modifiers="accel" oncommand="document.getElementById('textbox').focus();"/>
 </keyset>
 <deck id="configDeck" flex="1">
-  <vbox id="warningScreen" flex="1" align="center" style="overflow: auto;">
-    <spacer flex="1"/>
-    <vbox id="warningBox" class="container">
-      <hbox class="title" flex="1">
-        <label id="warningTitle" class="title-text" flex="1">&aboutWarningTitle.label;</label>
-      </hbox>
-      <vbox class="description" flex="1">
-        <label id="warningText">&aboutWarningText.label;</label>
-        <checkbox id="showWarningNextTime" label="&aboutWarningCheckbox.label;" checked="true"/>
-        <hbox class="button-container">
-          <button id="warningButton" class="primary" oncommand="ShowPrefs();" label="&aboutWarningButton2.label;"/>
-        </hbox>
-      </vbox>
-    </vbox>
-    <spacer flex="2"/>
-  </vbox>
   <vbox flex="1">
     <hbox id="filterRow" align="center">
       <label value="&searchPrefs.label;" accesskey="&searchPrefs.accesskey;" control="textbox"/>
