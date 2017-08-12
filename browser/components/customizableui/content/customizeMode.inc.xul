@@ -5,18 +5,6 @@
 <box id="customization-container" flex="1" hidden="true">
   <box id="customization-content-container">
     <box flex="1" id="customization-palette-container">
-      <label id="customization-header">
-        &customizeMode.menuAndToolbars.header2;
-      </label>
-      <hbox id="customization-empty" hidden="true">
-        <label>&customizeMode.menuAndToolbars.empty;</label>
-        <label onclick="BrowserOpenAddonsMgr('addons://discover/');"
-               onkeypress="BrowserOpenAddonsMgr('addons://discover/');"
-               id="customization-more-tools"
-               class="text-link">
-          &customizeMode.menuAndToolbars.emptyLink;
-        </label>
-      </hbox>
       <vbox id="customization-palette" class="customization-palette" hidden="true"/>
       <spacer id="customization-spacer"/>
     </box>
