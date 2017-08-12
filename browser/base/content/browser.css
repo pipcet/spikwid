@@ -129,10 +129,8 @@ tabbrowser {
 .tabbrowser-tab:not([pinned]) {
   -moz-box-flex: 100;
   max-width: 225px;
-  min-width: 100px;
+  min-width: 50px;
   width: 0;
-  transition: min-width 100ms ease-out,
-              max-width 100ms ease-out;
 }
 
 .tabbrowser-tab:not([pinned]):not([fadein]) {
@@ -151,7 +149,6 @@ tabbrowser {
 .tab-close-button[fadein],
 .tab-background[fadein] {
   /* This transition is only wanted for opening tabs. */
-  transition: visibility 0ms 25ms;
 }
 
 .tab-close-button:not([fadein]),
@@ -178,7 +175,6 @@ tabbrowser {
 
 .tabbrowser-tab[tabdrop-samewindow],
 .tabbrowser-tabs[movingtab] > .tabbrowser-tab[fadein]:not([selected]) {
-  transition: transform 200ms var(--animation-easing-function);
 }
 
 .new-tab-popup,
@@ -309,7 +305,6 @@ toolbarpaletteitem {
 }
 
 #navigator-toolbox[fullscreenShouldAnimate] {
-  transition: 1.5s margin-top ease-out;
 }
 
 /* Rules to help integrate SDK widgets */
@@ -639,12 +634,10 @@ html|input.urlbar-input[textoverflow]:not([focused]) {
 }
 
 #PopupAutoCompleteRichResult.showSearchSuggestionsNotification {
-  transition: height 100ms;
 }
 
 #PopupAutoCompleteRichResult > deck[anonid="search-suggestions-notification"] {
   display: none;
-  transition: margin-top 100ms;
 }
 
 #PopupAutoCompleteRichResult.showSearchSuggestionsNotification > deck[anonid="search-suggestions-notification"] {
@@ -977,7 +970,6 @@ statuspanel[type=status] {
 }
 
 statuspanel[type=overLink] {
-  transition: opacity 120ms ease-out;
 }
 
 statuspanel[type=overLink] > .statuspanel-inner {
@@ -985,12 +977,9 @@ statuspanel[type=overLink] > .statuspanel-inner {
 }
 
 statuspanel[inactive] {
-  transition: none;
-  opacity: 0;
 }
 
 statuspanel[inactive][previoustype=overLink] {
-  transition: opacity 200ms ease-out;
 }
 
 .statuspanel-inner {
@@ -1127,10 +1116,7 @@ toolbarpaletteitem[place="palette"] > #downloads-button[indicator] > #downloads-
 
 #BMB_bookmarksPopup[side][animate="open"] {
   -moz-window-opacity: 1.0;
-  transition-duration: 0.18s, 0.18s;
   -moz-window-transform: none;
-  transition-timing-function:
-    var(--animation-easing-function), ease-in-out;
 }
 
 #BMB_bookmarksPopup[animate="cancel"] {
