@@ -385,29 +385,8 @@ function migrateRegionPrefs() {
     return;
   }
 
-  // If we have 'isUS' but no 'countryCode' then we are almost certainly
-  // a profile from Fx 34/35 that set 'isUS' based purely on a timezone
-  // check. If this said they were US, we force region to be US.
-  // (But if isUS was false, we leave region alone - we will do a geoip request
-  // and set the region accordingly)
-  try {
-    if (Services.prefs.getBoolPref("browser.search.isUS") &&
-        !Services.prefs.prefHasUserValue("browser.search.countryCode")) {
-      Services.prefs.setCharPref("browser.search.region", "US");
-    }
-  } catch (ex) {
-    // no isUS pref, nothing to do.
-  }
-  // If we have a countryCode pref but no region pref, just force region
-  // to be the countryCode.
-  try {
-    let countryCode = Services.prefs.getCharPref("browser.search.countryCode");
-    if (!Services.prefs.prefHasUserValue("browser.search.region")) {
-      Services.prefs.setCharPref("browser.search.region", countryCode);
-    }
-  } catch (ex) {
-    // no countryCode pref, nothing to do.
-  }
+  Services.prefs.setCharPref("browser.search.region", "US");
+  return;
 }
 
 // A method to determine if we are in the United States (US) for the search
@@ -465,55 +444,7 @@ function isUSTimezone() {
 // the hacky method above, so isUS() can avoid the hacky timezone method.
 // If it fails we don't touch that pref so isUS() does its normal thing.
 var ensureKnownCountryCode = async function(ss) {
-  // If we have a country-code already stored in our prefs we trust it.
-  let countryCode = Services.prefs.getCharPref("browser.search.countryCode", "");
-
-  if (!countryCode) {
-    // We don't have it cached, so fetch it. fetchCountryCode() will call
-    // storeCountryCode if it gets a result (even if that happens after the
-    // promise resolves) and fetchRegionDefault.
-    await fetchCountryCode(ss);
-  } else {
-    // if nothing to do, return early.
-    if (!geoSpecificDefaultsEnabled())
-      return;
-
-    let expir = ss.getGlobalAttr("searchDefaultExpir") || 0;
-    if (expir > Date.now()) {
-      // The territory default we have already fetched hasn't expired yet.
-      // If we have a default engine or a list of visible default engines
-      // saved, the hashes should be valid, verify them now so that we can
-      // refetch if they have been tampered with.
-      let defaultEngine = ss.getVerifiedGlobalAttr("searchDefault");
-      let visibleDefaultEngines = ss.getVerifiedGlobalAttr("visibleDefaultEngines");
-      if ((defaultEngine || defaultEngine === undefined) &&
-          (visibleDefaultEngines || visibleDefaultEngines === undefined)) {
-        // No geo defaults, or valid hashes; nothing to do.
-        return;
-      }
-    }
-
-    await new Promise(resolve => {
-      let timeoutMS = Services.prefs.getIntPref("browser.search.geoip.timeout");
-      let timerId = setTimeout(() => {
-        timerId = null;
-        resolve();
-      }, timeoutMS);
-
-      let callback = () => {
-        clearTimeout(timerId);
-        resolve();
-      };
-      fetchRegionDefault(ss).then(callback).catch(err => {
-        Components.utils.reportError(err);
-        callback();
-      });
-    });
-  }
-
-  // If gInitialized is true then the search service was forced to perform
-  // a sync initialization during our XHRs - capture this via telemetry.
-  Services.telemetry.getHistogramById("SEARCH_SERVICE_COUNTRY_FETCH_CAUSED_SYNC_INIT").add(gInitialized);
+  return;
 };
 
 // Store the result of the geoip request as well as any other values and
@@ -525,144 +456,10 @@ function storeCountryCode(cc) {
   if (!Services.prefs.prefHasUserValue("browser.search.region")) {
     Services.prefs.setCharPref("browser.search.region", cc);
   }
-  // and telemetry...
-  let isTimezoneUS = isUSTimezone();
-  if (cc == "US" && !isTimezoneUS) {
-    Services.telemetry.getHistogramById("SEARCH_SERVICE_US_COUNTRY_MISMATCHED_TIMEZONE").add(1);
-  }
-  if (cc != "US" && isTimezoneUS) {
-    Services.telemetry.getHistogramById("SEARCH_SERVICE_US_TIMEZONE_MISMATCHED_COUNTRY").add(1);
-  }
-  // telemetry to compare our geoip response with platform-specific country data.
-  // On Mac and Windows, we can get a country code via sysinfo
-  let platformCC = Services.sysinfo.get("countryCode");
-  if (platformCC) {
-    let probeUSMismatched, probeNonUSMismatched;
-    switch (Services.appinfo.OS) {
-      case "Darwin":
-        probeUSMismatched = "SEARCH_SERVICE_US_COUNTRY_MISMATCHED_PLATFORM_OSX";
-        probeNonUSMismatched = "SEARCH_SERVICE_NONUS_COUNTRY_MISMATCHED_PLATFORM_OSX";
-        break;
-      case "WINNT":
-        probeUSMismatched = "SEARCH_SERVICE_US_COUNTRY_MISMATCHED_PLATFORM_WIN";
-        probeNonUSMismatched = "SEARCH_SERVICE_NONUS_COUNTRY_MISMATCHED_PLATFORM_WIN";
-        break;
-      default:
-        Cu.reportError("Platform " + Services.appinfo.OS + " has system country code but no search service telemetry probes");
-        break;
-    }
-    if (probeUSMismatched && probeNonUSMismatched) {
-      if (cc == "US" || platformCC == "US") {
-        // one of the 2 said US, so record if they are the same.
-        Services.telemetry.getHistogramById(probeUSMismatched).add(cc != platformCC);
-      } else {
-        // different country - record if they are the same
-        Services.telemetry.getHistogramById(probeNonUSMismatched).add(cc != platformCC);
-      }
-    }
-  }
 }
 
-// Get the country we are in via a XHR geoip request.
 function fetchCountryCode(ss) {
-  // values for the SEARCH_SERVICE_COUNTRY_FETCH_RESULT 'enum' telemetry probe.
-  const TELEMETRY_RESULT_ENUM = {
-    SUCCESS: 0,
-    SUCCESS_WITHOUT_DATA: 1,
-    XHRTIMEOUT: 2,
-    ERROR: 3,
-    // Note that we expect to add finer-grained error types here later (eg,
-    // dns error, network error, ssl error, etc) with .ERROR remaining as the
-    // generic catch-all that doesn't fit into other categories.
-  };
-  let endpoint = Services.urlFormatter.formatURLPref("browser.search.geoip.url");
-  LOG("_fetchCountryCode starting with endpoint " + endpoint);
-  // As an escape hatch, no endpoint means no geoip.
-  if (!endpoint) {
-    return Promise.resolve();
-  }
-  let startTime = Date.now();
-  return new Promise(resolve => {
-    // Instead of using a timeout on the xhr object itself, we simulate one
-    // using a timer and let the XHR request complete.  This allows us to
-    // capture reliable telemetry on what timeout value should actually be
-    // used to ensure most users don't see one while not making it so large
-    // that many users end up doing a sync init of the search service and thus
-    // would see the jank that implies.
-    // (Note we do actually use a timeout on the XHR, but that's set to be a
-    // large value just incase the request never completes - we don't want the
-    // XHR object to live forever)
-    let timeoutMS = Services.prefs.getIntPref("browser.search.geoip.timeout");
-    let geoipTimeoutPossible = true;
-    let timerId = setTimeout(() => {
-      LOG("_fetchCountryCode: timeout fetching country information");
-      if (geoipTimeoutPossible)
-        Services.telemetry.getHistogramById("SEARCH_SERVICE_COUNTRY_TIMEOUT").add(1);
-      timerId = null;
-      resolve();
-    }, timeoutMS);
-
-    let resolveAndReportSuccess = (result, reason) => {
-      // Even if we timed out, we want to save the country code and everything
-      // related so next startup sees the value and doesn't retry this dance.
-      if (result) {
-        storeCountryCode(result);
-      }
-      Services.telemetry.getHistogramById("SEARCH_SERVICE_COUNTRY_FETCH_RESULT").add(reason);
-
-      // This notification is just for tests...
-      Services.obs.notifyObservers(null, SEARCH_SERVICE_TOPIC, "geoip-lookup-xhr-complete");
-
-      if (timerId) {
-        Services.telemetry.getHistogramById("SEARCH_SERVICE_COUNTRY_TIMEOUT").add(0);
-        geoipTimeoutPossible = false;
-      }
-
-      let callback = () => {
-        // If we've already timed out then we've already resolved the promise,
-        // so there's nothing else to do.
-        if (timerId == null) {
-          return;
-        }
-        clearTimeout(timerId);
-        resolve();
-      };
-
-      if (result && geoSpecificDefaultsEnabled()) {
-        fetchRegionDefault(ss).then(callback).catch(err => {
-          Components.utils.reportError(err);
-          callback();
-        });
-      } else {
-        callback();
-      }
-    };
-
-    let request = new XMLHttpRequest();
-    // This notification is just for tests...
-    Services.obs.notifyObservers(request, SEARCH_SERVICE_TOPIC, "geoip-lookup-xhr-starting");
-    request.timeout = 100000; // 100 seconds as the last-chance fallback
-    request.onload = function(event) {
-      let took = Date.now() - startTime;
-      let cc = event.target.response && event.target.response.country_code;
-      LOG("_fetchCountryCode got success response in " + took + "ms: " + cc);
-      Services.telemetry.getHistogramById("SEARCH_SERVICE_COUNTRY_FETCH_TIME_MS").add(took);
-      let reason = cc ? TELEMETRY_RESULT_ENUM.SUCCESS : TELEMETRY_RESULT_ENUM.SUCCESS_WITHOUT_DATA;
-      resolveAndReportSuccess(cc, reason);
-    };
-    request.ontimeout = function(event) {
-      LOG("_fetchCountryCode: XHR finally timed-out fetching country information");
-      resolveAndReportSuccess(null, TELEMETRY_RESULT_ENUM.XHRTIMEOUT);
-    };
-    request.onerror = function(event) {
-      LOG("_fetchCountryCode: failed to retrieve country information");
-      resolveAndReportSuccess(null, TELEMETRY_RESULT_ENUM.ERROR);
-    };
-    request.open("POST", endpoint, true);
-    request.setRequestHeader("Content-Type", "application/json");
-    request.responseType = "json";
-    request.send("{}");
-  });
+  return "US";
 }
 
 // This will make an HTTP request to a Mozilla server that will return
@@ -677,82 +474,7 @@ function fetchCountryCode(ss) {
 // responsibility to ensure with a timer that we are not going to
 // block the async init for too long.
 var fetchRegionDefault = (ss) => new Promise(resolve => {
-  let urlTemplate = Services.prefs.getDefaultBranch(BROWSER_SEARCH_PREF)
-                            .getCharPref("geoSpecificDefaults.url");
-  let endpoint = Services.urlFormatter.formatURL(urlTemplate);
-
-  // As an escape hatch, no endpoint means no region specific defaults.
-  if (!endpoint) {
-    resolve();
-    return;
-  }
-
-  // Append the optional cohort value.
-  const cohortPref = "browser.search.cohort";
-  let cohort = Services.prefs.getCharPref(cohortPref, "");
-  if (cohort)
-    endpoint += "/" + cohort;
-
-  LOG("fetchRegionDefault starting with endpoint " + endpoint);
-
-  let startTime = Date.now();
-  let request = new XMLHttpRequest();
-  request.timeout = 100000; // 100 seconds as the last-chance fallback
-  request.onload = function(event) {
-    let took = Date.now() - startTime;
-
-    let status = event.target.status;
-    if (status != 200) {
-      LOG("fetchRegionDefault failed with HTTP code " + status);
-      let retryAfter = request.getResponseHeader("retry-after");
-      if (retryAfter) {
-        ss.setGlobalAttr("searchDefaultExpir", Date.now() + retryAfter * 1000);
-      }
-      resolve();
-      return;
-    }
-
-    let response = event.target.response || {};
-    LOG("received " + response.toSource());
-
-    if (response.cohort) {
-      Services.prefs.setCharPref(cohortPref, response.cohort);
-    } else {
-      Services.prefs.clearUserPref(cohortPref);
-    }
-
-    if (response.settings && response.settings.searchDefault) {
-      let defaultEngine = response.settings.searchDefault;
-      ss.setVerifiedGlobalAttr("searchDefault", defaultEngine);
-      LOG("fetchRegionDefault saved searchDefault: " + defaultEngine);
-    }
-
-    if (response.settings && response.settings.visibleDefaultEngines) {
-      let visibleDefaultEngines = response.settings.visibleDefaultEngines;
-      let string = visibleDefaultEngines.join(",");
-      ss.setVerifiedGlobalAttr("visibleDefaultEngines", string);
-      LOG("fetchRegionDefault saved visibleDefaultEngines: " + string);
-    }
-
-    let interval = response.interval || SEARCH_GEO_DEFAULT_UPDATE_INTERVAL;
-    let milliseconds = interval * 1000; // |interval| is in seconds.
-    ss.setGlobalAttr("searchDefaultExpir", Date.now() + milliseconds);
-
-    LOG("fetchRegionDefault got success response in " + took + "ms");
-    resolve();
-  };
-  request.ontimeout = function(event) {
-    LOG("fetchRegionDefault: XHR finally timed-out");
-    resolve();
-  };
-  request.onerror = function(event) {
-    LOG("fetchRegionDefault: failed to retrieve territory default information");
-    resolve();
-  };
-  request.open("GET", endpoint, true);
-  request.setRequestHeader("Content-Type", "application/json");
-  request.responseType = "json";
-  request.send();
+  resolve();
 });
 
 function getVerificationHash(aName) {
