@@ -19,13 +19,6 @@
 
       <footer id="PanelUI-footer">
         <vbox id="PanelUI-footer-addons"></vbox>
-        <toolbarbutton class="panel-banner-item"
-                       label-update-available="&updateAvailable.panelUI.label;"
-                       label-update-manual="&updateManual.panelUI.label;"
-                       label-update-restart="&updateRestart.panelUI.label2;"
-                       oncommand="PanelUI._onBannerItemSelected(event)"
-                       wrap="true"
-                       hidden="true"/>
         <hbox id="PanelUI-fxa-container">
           <hbox id="PanelUI-fxa-status"
                 label="&fxaSignedIn.tooltip;"
@@ -446,57 +439,6 @@
        noautohide="true"
        nopreventnavboxhide="true"
        role="alert">
-  <popupnotification id="appMenu-update-available-notification"
-                     popupid="update-available"
-                     label="&updateAvailable.header.message;"
-                     buttonlabel="&updateAvailable.acceptButton.label;"
-                     buttonaccesskey="&updateAvailable.acceptButton.accesskey;"
-                     closebuttonhidden="true"
-                     secondarybuttonlabel="&updateAvailable.cancelButton.label;"
-                     secondarybuttonaccesskey="&updateAvailable.cancelButton.accesskey;"
-                     dropmarkerhidden="true"
-                     checkboxhidden="true"
-                     hidden="true">
-    <popupnotificationcontent id="update-available-notification-content" orient="vertical">
-      <description id="update-available-description">&updateAvailable.message;
-        <label id="update-available-whats-new" class="text-link" value="&updateAvailable.whatsnew.label;" />
-      </description>
-    </popupnotificationcontent>
-  </popupnotification>
-
-  <popupnotification id="appMenu-update-manual-notification"
-                     popupid="update-manual"
-                     label="&updateManual.header.message;"
-                     buttonlabel="&updateManual.acceptButton.label;"
-                     buttonaccesskey="&updateManual.acceptButton.accesskey;"
-                     closebuttonhidden="true"
-                     secondarybuttonlabel="&updateManual.cancelButton.label;"
-                     secondarybuttonaccesskey="&updateManual.cancelButton.accesskey;"
-                     dropmarkerhidden="true"
-                     checkboxhidden="true"
-                     hidden="true">
-    <popupnotificationcontent id="update-manual-notification-content" orient="vertical">
-      <description id="update-manual-description">&updateManual.message;
-        <label id="update-manual-whats-new" class="text-link" value="&updateManual.whatsnew.label;" />
-      </description>
-    </popupnotificationcontent>
-  </popupnotification>
-
-  <popupnotification id="appMenu-update-restart-notification"
-                     popupid="update-restart"
-                     label="&updateRestart.header.message2;"
-                     buttonlabel="&updateRestart.acceptButton.label;"
-                     buttonaccesskey="&updateRestart.acceptButton.accesskey;"
-                     closebuttonhidden="true"
-                     secondarybuttonlabel="&updateRestart.cancelButton.label;"
-                     secondarybuttonaccesskey="&updateRestart.cancelButton.accesskey;"
-                     dropmarkerhidden="true"
-                     checkboxhidden="true"
-                     hidden="true">
-    <popupnotificationcontent id="update-restart-notification-content" orient="vertical">
-      <description id="update-restart-description">&updateRestart.message;</description>
-    </popupnotificationcontent>
-  </popupnotification>
 </panel>
 
 <menupopup id="customizationPaletteItemContextMenu">
@@ -530,13 +472,6 @@
                descriptionheightworkaround="true">
       <vbox class="panel-subview-body">
         <vbox id="appMenu-addon-banners"/>
-        <toolbarbutton class="panel-banner-item"
-                       label-update-available="&updateAvailable.panelUI.label;"
-                       label-update-manual="&updateManual.panelUI.label;"
-                       label-update-restart="&updateRestart.panelUI.label2;"
-                       oncommand="PanelUI._onBannerItemSelected(event)"
-                       wrap="true"
-                       hidden="true"/>
         <toolbaritem id="appMenu-fxa-container" class="toolbaritem-combined-buttons">
           <hbox id="appMenu-fxa-status"
                 flex="1"
