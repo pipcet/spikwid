@@ -257,7 +257,6 @@ menuitem.bookmark-item {
 }
 .urlbar-history-dropmarker {
   -moz-appearance: toolbarbutton-dropdown;
-  transition: opacity 0.15s ease;
 }
 #urlbar-wrapper[switchingtabs] > #urlbar > .urlbar-textbox-container > .urlbar-history-dropmarker {
   transition: none;
@@ -662,7 +661,6 @@ html|span.ac-emphasize-text-url {
   background-image: url(chrome://browser/skin/tabbrowser/pendingpaint.png);
 }
 #share-container > browser {
-  transition: opacity 150ms ease-in-out;
   opacity: 1;
 }
 #share-container[loading] > browser {

@@ -169,7 +169,6 @@ body.compact .newtab-cell {
   background-repeat: no-repeat;
   background-size: cover;
   height: 180px;
-  transition: opacity 100ms ease-out;
 }
 
 body.compact .newtab-thumbnail {

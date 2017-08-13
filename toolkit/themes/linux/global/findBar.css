@@ -8,7 +8,6 @@ findbar {
   border-top: 1px solid ThreeDShadow;
   min-width: 1px;
   transition-property: margin-bottom, opacity, visibility;
-  transition-duration: 150ms, 150ms, 0s;
   transition-timing-function: ease-in-out, ease-in-out, linear;
 }
 
@@ -18,10 +17,9 @@ findbar[hidden] {
   visibility: collapse;
   margin-bottom: -1em;
   opacity: 0;
-  transition-delay: 0s, 0s, 150ms;
 }
 
-findbar[noanim] {
+findbar {
   transition-duration: 0s !important;
   transition-delay: 0s !important;
 }

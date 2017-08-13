@@ -89,11 +89,9 @@ panel[hidden] panelview {
 }
 
 .panel-mainview {
-  transition: transform var(--panelui-subview-transition-duration);
 }
 
 panelview:not([mainview]):not([current]) {
-  transition: visibility 0s linear var(--panelui-subview-transition-duration);
   visibility: collapse;
 }
 
@@ -645,7 +643,6 @@ html|input.urlbar-input[textoverflow]:not([focused]) {
 }
 
 #PopupAutoCompleteRichResult > richlistbox {
-  transition: height 100ms;
 }
 
 #PopupAutoCompleteRichResult.showSearchSuggestionsNotification > richlistbox {
@@ -826,7 +823,6 @@ html|*.pointerlockfswarning {
   position: fixed;
   z-index: 2147483647 !important;
   visibility: visible;
-  transition: transform 300ms ease-in;
   /* To center the warning box horizontally,
      we use left: 50% with translateX(-50%). */
   top: 0; left: 50%;
@@ -1023,7 +1019,6 @@ html|*#gcli-output-frame,
 }
 
 .browserStack[responsivemode] {
-  transition-duration: 200ms;
   transition-timing-function: linear;
 }
 
@@ -1105,7 +1100,6 @@ toolbarpaletteitem[place="palette"] > #downloads-button[indicator] > #downloads-
   -moz-window-opacity: 0;
   -moz-window-transform: translateY(-70px);
   transition-property: -moz-window-transform, -moz-window-opacity;
-  transition-duration: 0.18s, 0.18s;
   transition-timing-function:
     var(--animation-easing-function), ease-out;
 }

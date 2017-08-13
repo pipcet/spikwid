@@ -241,7 +241,6 @@
 
 .tab-icon-sound[soundplaying-scheduledremoval]:not([muted]):not(:hover),
 .tab-icon-overlay[soundplaying-scheduledremoval]:not([muted]):not(:hover) {
-  transition: opacity .3s linear var(--soundplaying-removal-delay);
   opacity: 0;
 }
 
@@ -278,7 +277,6 @@
 
 .tabbrowser-arrowscrollbox > .arrowscrollbox-overflow-start-indicator,
 .tabbrowser-arrowscrollbox > .arrowscrollbox-overflow-end-indicator {
-  transition: opacity 150ms ease;
 }
 
 .tabbrowser-tab:not([visuallyselected=true]),
@@ -347,7 +345,6 @@
 .tab-line:not([selected=true]) {
   opacity: 0;
   transform: scaleX(0);
-  transition: transform 250ms var(--animation-easing-function), opacity 250ms var(--animation-easing-function);
 }
 
 .tabbrowser-tab:hover > .tab-stack > .tab-background > .tab-line:not([selected=true]) {
@@ -516,7 +513,6 @@
   border-radius: 3px;
   margin: 3px;
   margin-inline-start: 9px;
-  transition: max-width 100ms;
   padding: 0 5px;
 }
 
