@@ -76,6 +76,7 @@ def _collect(pipe, poll_interval):
     data then forwards it on a pipe until told to stop.
     """
 
+    sys.exit(0)
     data = []
 
     # Establish initial values.
@@ -286,6 +287,7 @@ class SystemResourceMonitor(object):
             self._stopped = True
             return
 
+        return
         assert self._running
         assert not self._stopped
 
