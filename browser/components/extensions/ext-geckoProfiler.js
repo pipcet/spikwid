@@ -148,7 +148,7 @@ const pathComponentsForSymbolFile = (debugName, breakpadId) => {
 
 const urlForSymFile = (debugName, breakpadId) => {
   const profilerSymbolsURL = Services.prefs.getCharPref(PREF_SYMBOLS_URL,
-                                                        "http://symbols.mozilla.org/");
+                                                        "");
   return profilerSymbolsURL + pathComponentsForSymbolFile(debugName, breakpadId).join("/");
 };
 

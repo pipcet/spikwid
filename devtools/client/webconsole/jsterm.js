@@ -35,7 +35,7 @@ const HISTORY_FORWARD = 1;
 
 const XHTML_NS = "http://www.w3.org/1999/xhtml";
 
-const HELP_URL = "https://developer.mozilla.org/docs/Tools/Web_Console/Helpers";
+const HELP_URL = "";
 
 const VARIABLES_VIEW_URL = "chrome://devtools/content/shared/widgets/VariablesView.xul";
 

@@ -43,7 +43,7 @@ const l10n = require("devtools/client/webconsole/webconsole-l10n");
 
 const XHTML_NS = "http://www.w3.org/1999/xhtml";
 
-const MIXED_CONTENT_LEARN_MORE = "https://developer.mozilla.org/docs/Web/Security/Mixed_content";
+const MIXED_CONTENT_LEARN_MORE = "";
 
 const IGNORED_SOURCE_URLS = ["debugger eval code"];
 

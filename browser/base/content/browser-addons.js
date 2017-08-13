@@ -615,18 +615,7 @@ var LightWeightThemeWebInstaller = {
     // theme is installed.  But the discovery pane served from the url(s)
     // below has its own toggle switch for quick undos, so don't show the
     // notification in that case.
-    let notify = uri.prePath != "https://discovery.addons.mozilla.org";
-    if (notify) {
-      try {
-        if (Services.prefs.getBoolPref("extensions.webapi.testing")
-            && (uri.prePath == "https://discovery.addons.allizom.org"
-                || uri.prePath == "https://discovery.addons-dev.allizom.org")) {
-          notify = false;
-        }
-      } catch (e) {
-        // getBoolPref() throws if the testing pref isn't set.  ignore it.
-      }
-    }
+    let notify = true;
 
     if (this._isAllowed(baseURI)) {
       this._install(data, notify);

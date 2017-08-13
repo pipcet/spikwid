@@ -140,9 +140,9 @@ const SUPPORTED_HTTP_CODES = [
     "511"
 ];
 
-const MDN_URL = "https://developer.mozilla.org/docs/";
+const MDN_URL = "";
 const GA_PARAMS =
-  "?utm_source=mozilla&utm_medium=devtools-netmonitor&utm_campaign=default";
+  "";
 
 /**
  * Get the MDN URL for the specified header.

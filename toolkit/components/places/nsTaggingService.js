@@ -230,8 +230,7 @@ TaggingService.prototype = {
 
     let isAnyTagNotTrimmed = tags.some(tag => /^\s|\s$/.test(tag.name));
     if (isAnyTagNotTrimmed) {
-      Deprecated.warning("At least one tag passed to untagURI was not trimmed",
-                         "https://bugzilla.mozilla.org/show_bug.cgi?id=967196");
+      Deprecated.warning("At least one tag passed to untagURI was not trimmed");
     }
 
     let untaggingFunction = () => {
@@ -262,8 +261,7 @@ TaggingService.prototype = {
     }
 
     if (/^\s|\s$/.test(aTagName)) {
-      Deprecated.warning("Tag passed to getURIsForTag was not trimmed",
-                         "https://bugzilla.mozilla.org/show_bug.cgi?id=967196");
+      Deprecated.warning("Tag passed to getURIsForTag was not trimmed");
     }
 
     let uris = [];

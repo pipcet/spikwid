@@ -4,7 +4,7 @@
 
 // Developer edition promo preferences
 pref("devtools.devedition.promo.shown", false);
-pref("devtools.devedition.promo.url", "https://www.mozilla.org/firefox/developer/?utm_source=firefox-dev-tools&utm_medium=firefox-browser&utm_content=betadoorhanger");
+pref("devtools.devedition.promo.url", ");
 
 // Only potentially show in beta release
 #if MOZ_UPDATE_CHANNEL == beta
