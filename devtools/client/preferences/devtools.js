@@ -6,12 +6,7 @@
 pref("devtools.devedition.promo.shown", false);
 pref("devtools.devedition.promo.url", ");
 
-// Only potentially show in beta release
-#if MOZ_UPDATE_CHANNEL == beta
-  pref("devtools.devedition.promo.enabled", true);
-#else
-  pref("devtools.devedition.promo.enabled", false);
-#endif
+pref("devtools.devedition.promo.enabled", false);
 
 // DevTools development workflow
 pref("devtools.loader.hotreload", false);
