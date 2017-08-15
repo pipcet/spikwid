@@ -762,11 +762,11 @@ ContentParent::MinTabSelect(const nsTArray<ContentParent*>& aContentParents,
 /*static*/ already_AddRefed<ContentParent>
 ContentParent::GetNewOrUsedBrowserProcess(const nsAString& aRemoteType,
                                           ProcessPriority aPriority,
-                                          ContentParent* aOpener)
+                                          ContentParent* aOpener,
+                                          bool aPreferUsed)
 {
   nsTArray<ContentParent*>& contentParents = GetOrCreatePool(aRemoteType);
   uint32_t maxContentParents = GetMaxProcessCount(aRemoteType);
-
   if (aRemoteType.EqualsLiteral(LARGE_ALLOCATION_REMOTE_TYPE)) {
     // We never want to re-use Large-Allocation processes.
     if (contentParents.Length() >= maxContentParents) {
@@ -775,9 +775,16 @@ ContentParent::GetNewOrUsedBrowserProcess(const nsAString& aRemoteType,
                                         aOpener);
     }
   } else {
-    nsTArray<nsIContentProcessInfo*> infos(contentParents.Length());
+    uint32_t numberOfParents = contentParents.Length();
+    nsTArray<nsIContentProcessInfo*> infos(numberOfParents);
     for (auto* cp : contentParents) {
       infos.AppendElement(cp->mScriptableHelper);
+    }
+
+    if (aPreferUsed && numberOfParents) {
+      // For the preloaded browser we don't want to create a new process but reuse an
+      // existing one.
+      maxContentParents = numberOfParents;
     }
 
     nsCOMPtr<nsIContentProcessProvider> cpp =
@@ -1131,6 +1138,13 @@ ContentParent::CreateBrowser(const TabContext& aContext,
     remoteType.AssignLiteral(DEFAULT_REMOTE_TYPE);
   }
 
+  bool isPreloadBrowser = false;
+  nsAutoString isPreloadBrowserStr;
+  if (aFrameElement->GetAttr(kNameSpaceID_None, nsGkAtoms::isPreloadBrowser,
+                             isPreloadBrowserStr)) {
+    isPreloadBrowser = isPreloadBrowserStr.EqualsLiteral("true");
+  }
+
   RefPtr<nsIContentParent> constructorSender;
   if (isInContentProcess) {
     MOZ_ASSERT(aContext.IsMozBrowserElement() || aContext.IsJSPlugin());
@@ -1146,7 +1160,8 @@ ContentParent::CreateBrowser(const TabContext& aContext,
                                       initialPriority);
       } else {
         constructorSender =
-          GetNewOrUsedBrowserProcess(remoteType, initialPriority, nullptr);
+          GetNewOrUsedBrowserProcess(remoteType, initialPriority,
+                                     nullptr, isPreloadBrowser);
       }
       if (!constructorSender) {
         return nullptr;
@@ -1498,14 +1513,13 @@ ContentParent::MarkAsDead()
 void
 ContentParent::OnChannelError()
 {
-  RefPtr<ContentParent> content(this);
   PContentParent::OnChannelError();
 }
 
 void
 ContentParent::OnChannelConnected(int32_t pid)
 {
-  SetOtherProcessId(pid);
+  MOZ_ASSERT(NS_IsMainThread());
 
 #if defined(ANDROID) || defined(LINUX)
   // Check nice preference
@@ -1529,6 +1543,11 @@ ContentParent::OnChannelConnected(int32_t pid)
       setpriority(PRIO_PROCESS, pid, getpriority(PRIO_PROCESS, pid) + nice);
     }
   }
+#endif
+
+#ifdef MOZ_CODE_COVERAGE
+  Unused << SendShareCodeCoverageMutex(
+              CodeCoverageHandler::Get()->GetMutexHandle(pid));
 #endif
 }
 
@@ -2023,22 +2042,14 @@ ContentParent::LaunchSubprocess(ProcessPriority aInitialPriority /* = PROCESS_PR
     extraArgs.push_back("-safeMode");
   }
 
-  if (!mSubprocess->LaunchAndWaitForProcessHandle(extraArgs)) {
+  if (!mSubprocess->Launch(extraArgs)) {
     MarkAsDead();
     return false;
   }
 
-  base::ProcessId procId = base::GetProcId(mSubprocess->GetChildProcessHandle());
+  OpenWithAsyncPid(mSubprocess->GetChannel());
 
-  Open(mSubprocess->GetChannel(), procId);
-
-#ifdef MOZ_CODE_COVERAGE
-  Unused << SendShareCodeCoverageMutex(CodeCoverageHandler::Get()->GetMutexHandle(procId));
-#endif
-
-  InitInternal(aInitialPriority,
-               true, /* Setup off-main thread compositing */
-               true  /* Send registered chrome */);
+  InitInternal(aInitialPriority);
 
   ContentProcessManager::GetSingleton()->AddContentProcess(this);
 
@@ -2108,7 +2119,7 @@ ContentParent::ContentParent(ContentParent* aOpener,
   ChildPrivileges privs = mRemoteType.EqualsLiteral(FILE_REMOTE_TYPE)
                           ? base::PRIVILEGES_FILEREAD
                           : base::PRIVILEGES_DEFAULT;
-  mSubprocess = new GeckoChildProcessHost(GeckoProcessType_Content, privs);
+  mSubprocess = new ContentProcessHost(this, privs);
 }
 
 ContentParent::~ContentParent()
@@ -2132,9 +2143,7 @@ ContentParent::~ContentParent()
 }
 
 void
-ContentParent::InitInternal(ProcessPriority aInitialPriority,
-                            bool aSetupOffMainThreadCompositing,
-                            bool aSendRegisteredChrome)
+ContentParent::InitInternal(ProcessPriority aPriority)
 {
   Telemetry::Accumulate(Telemetry::CONTENT_PROCESS_LAUNCH_TIME_MS,
                         static_cast<uint32_t>((TimeStamp::Now() - mLaunchTS)
@@ -2250,12 +2259,10 @@ ContentParent::InitInternal(ProcessPriority aInitialPriority,
 
   Unused << SendSetXPCOMProcessAttributes(xpcomInit, initialData, lnfCache);
 
-  if (aSendRegisteredChrome) {
-    nsCOMPtr<nsIChromeRegistry> registrySvc = nsChromeRegistry::GetService();
-    nsChromeRegistryChrome* chromeRegistry =
-      static_cast<nsChromeRegistryChrome*>(registrySvc.get());
-    chromeRegistry->SendRegisteredChrome(this);
-  }
+  nsCOMPtr<nsIChromeRegistry> registrySvc = nsChromeRegistry::GetService();
+  nsChromeRegistryChrome* chromeRegistry =
+    static_cast<nsChromeRegistryChrome*>(registrySvc.get());
+  chromeRegistry->SendRegisteredChrome(this);
 
   if (gAppData) {
     nsCString version(gAppData->version);
@@ -2286,45 +2293,43 @@ ContentParent::InitInternal(ProcessPriority aInitialPriority,
   //
   // This call can cause us to send IPC messages to the child process, so it
   // must come after the Open() call above.
-  ProcessPriorityManager::SetProcessPriority(this, aInitialPriority);
+  ProcessPriorityManager::SetProcessPriority(this, aPriority);
 
-  if (aSetupOffMainThreadCompositing) {
-    // NB: internally, this will send an IPC message to the child
-    // process to get it to create the CompositorBridgeChild.  This
-    // message goes through the regular IPC queue for this
-    // channel, so delivery will happen-before any other messages
-    // we send.  The CompositorBridgeChild must be created before any
-    // PBrowsers are created, because they rely on the Compositor
-    // already being around.  (Creation is async, so can't happen
-    // on demand.)
-    bool useOffMainThreadCompositing = !!CompositorThreadHolder::Loop();
-    if (useOffMainThreadCompositing) {
-      GPUProcessManager* gpm = GPUProcessManager::Get();
+  // NB: internally, this will send an IPC message to the child
+  // process to get it to create the CompositorBridgeChild.  This
+  // message goes through the regular IPC queue for this
+  // channel, so delivery will happen-before any other messages
+  // we send.  The CompositorBridgeChild must be created before any
+  // PBrowsers are created, because they rely on the Compositor
+  // already being around.  (Creation is async, so can't happen
+  // on demand.)
+  bool useOffMainThreadCompositing = !!CompositorThreadHolder::Loop();
+  if (useOffMainThreadCompositing) {
+    GPUProcessManager* gpm = GPUProcessManager::Get();
 
-      Endpoint<PCompositorManagerChild> compositor;
-      Endpoint<PImageBridgeChild> imageBridge;
-      Endpoint<PVRManagerChild> vrBridge;
-      Endpoint<PVideoDecoderManagerChild> videoManager;
-      AutoTArray<uint32_t, 3> namespaces;
+    Endpoint<PCompositorManagerChild> compositor;
+    Endpoint<PImageBridgeChild> imageBridge;
+    Endpoint<PVRManagerChild> vrBridge;
+    Endpoint<PVideoDecoderManagerChild> videoManager;
+    AutoTArray<uint32_t, 3> namespaces;
 
-      DebugOnly<bool> opened = gpm->CreateContentBridges(
-        OtherPid(),
-        &compositor,
-        &imageBridge,
-        &vrBridge,
-        &videoManager,
-        &namespaces);
-      MOZ_ASSERT(opened);
+    DebugOnly<bool> opened = gpm->CreateContentBridges(
+      OtherPid(),
+      &compositor,
+      &imageBridge,
+      &vrBridge,
+      &videoManager,
+      &namespaces);
+    MOZ_ASSERT(opened);
 
-      Unused << SendInitRendering(
-        Move(compositor),
-        Move(imageBridge),
-        Move(vrBridge),
-        Move(videoManager),
-        namespaces);
+    Unused << SendInitRendering(
+      Move(compositor),
+      Move(imageBridge),
+      Move(vrBridge),
+      Move(videoManager),
+      namespaces);
 
-      gpm->AddListener(this);
-    }
+    gpm->AddListener(this);
   }
 
   nsStyleSheetService *sheetService = nsStyleSheetService::GetInstance();
@@ -2670,6 +2675,7 @@ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(ContentParent)
   NS_INTERFACE_MAP_ENTRY(nsIObserver)
   NS_INTERFACE_MAP_ENTRY(nsIDOMGeoPositionCallback)
   NS_INTERFACE_MAP_ENTRY(nsIDOMGeoPositionErrorCallback)
+  NS_INTERFACE_MAP_ENTRY(nsIInterfaceRequestor)
   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIObserver)
 NS_INTERFACE_MAP_END
 
@@ -2849,6 +2855,20 @@ ContentParent::Observe(nsISupports* aSubject,
     }
   }
   return NS_OK;
+}
+
+NS_IMETHODIMP
+ContentParent::GetInterface(const nsIID& aIID, void** aResult)
+{
+  NS_ENSURE_ARG_POINTER(aResult);
+
+  if (aIID.Equals(NS_GET_IID(nsIMessageSender))) {
+    nsCOMPtr<nsIMessageSender> mm = GetMessageManager();
+    mm.forget(aResult);
+    return NS_OK;
+  }
+
+  return NS_NOINTERFACE;
 }
 
 mozilla::ipc::IPCResult

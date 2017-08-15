@@ -456,7 +456,10 @@ def set_gecko_property(ffi_name, expr):
 </%def>
 
 <%def name="impl_keyword_clone(ident, gecko_ffi_name, keyword, cast_type='u8')">
-    #[allow(non_snake_case)]
+    // FIXME: We introduced non_upper_case_globals for -moz-appearance only
+    //        since the prefix of Gecko value starts with ThemeWidgetType_NS_THEME.
+    //        We should remove this after fix bug 1371809.
+    #[allow(non_snake_case, non_upper_case_globals)]
     pub fn clone_${ident}(&self) -> longhands::${ident}::computed_value::T {
         use properties::longhands::${ident}::computed_value::T as Keyword;
         // FIXME(bholley): Align binary representations and ditch |match| for cast + static_asserts
@@ -4219,21 +4222,11 @@ fn static_assert() {
            return Either::Second(Auto);
         }
 
-        let get_clip_rect_component = |value: structs::nscoord| -> Option<Au> {
-            if value == 0 {
-                None
-            } else {
-                Some(Au(value))
-            }
-        };
-
         Either::First(ClipRect {
-            top: get_clip_rect_component(self.gecko.mImageRegion.y),
-            right: get_clip_rect_component(self.gecko.mImageRegion.width).map(
-                |v| v + Au(self.gecko.mImageRegion.x)),
-            bottom: get_clip_rect_component(self.gecko.mImageRegion.height).map(
-                |v| v + Au(self.gecko.mImageRegion.y)),
-            left: get_clip_rect_component(self.gecko.mImageRegion.x),
+            top: Some(Au(self.gecko.mImageRegion.y)),
+            right: Some(Au(self.gecko.mImageRegion.width) + Au(self.gecko.mImageRegion.x)),
+            bottom: Some(Au(self.gecko.mImageRegion.height) + Au(self.gecko.mImageRegion.y)),
+            left: Some(Au(self.gecko.mImageRegion.x)),
         })
     }
 
