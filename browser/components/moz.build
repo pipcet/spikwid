@@ -46,7 +46,6 @@ DIRS += [
     'shell',
     'selfsupport',
     'syncedtabs',
-    'translation',
 ]
 
 DIRS += ['build']
