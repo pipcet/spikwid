@@ -205,7 +205,7 @@ public:
 
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_ELEMENT_IID)
 
-  NS_DECL_SIZEOF_EXCLUDING_THIS
+  NS_DECL_ADDSIZEOFEXCLUDINGTHIS
 
   NS_IMETHOD QueryInterface(REFNSIID aIID, void** aInstancePtr) override;
 
@@ -468,8 +468,8 @@ public:
 
   Directionality GetComputedDirectionality() const;
 
-  inline Element* GetFlattenedTreeParentElement() const;
-  inline Element* GetFlattenedTreeParentElementForStyle() const;
+  void NoteDirtyForServo();
+  void NoteAnimationOnlyDirtyForServo();
 
   bool HasDirtyDescendantsForServo() const
   {
@@ -487,21 +487,20 @@ public:
     UnsetFlags(ELEMENT_HAS_DIRTY_DESCENDANTS_FOR_SERVO);
   }
 
-  inline void NoteDirtyDescendantsForServo();
-
   bool HasAnimationOnlyDirtyDescendantsForServo() const {
     MOZ_ASSERT(IsStyledByServo());
     return HasFlag(ELEMENT_HAS_ANIMATION_ONLY_DIRTY_DESCENDANTS_FOR_SERVO);
+  }
+
+  void SetHasAnimationOnlyDirtyDescendantsForServo() {
+    MOZ_ASSERT(IsStyledByServo());
+    SetFlags(ELEMENT_HAS_ANIMATION_ONLY_DIRTY_DESCENDANTS_FOR_SERVO);
   }
 
   void UnsetHasAnimationOnlyDirtyDescendantsForServo() {
     MOZ_ASSERT(IsStyledByServo());
     UnsetFlags(ELEMENT_HAS_ANIMATION_ONLY_DIRTY_DESCENDANTS_FOR_SERVO);
   }
-
-#ifdef DEBUG
-  inline bool DirtyDescendantsBitIsPropagatedForServo();
-#endif
 
   bool HasServoData() const {
     return !!mServoData.Get();

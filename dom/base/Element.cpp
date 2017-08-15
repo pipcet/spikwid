@@ -4143,18 +4143,117 @@ Element::SetCustomElementData(CustomElementData* aData)
 
 MOZ_DEFINE_MALLOC_SIZE_OF(ServoElementMallocSizeOf)
 
-size_t
-Element::SizeOfExcludingThis(SizeOfState& aState) const
+void
+Element::AddSizeOfExcludingThis(SizeOfState& aState, nsStyleSizes& aSizes,
+                                size_t* aNodeSize) const
 {
-  size_t n = FragmentOrElement::SizeOfExcludingThis(aState);
+  FragmentOrElement::AddSizeOfExcludingThis(aState, aSizes, aNodeSize);
 
-  // Measure mServoData. We use ServoElementMallocSizeOf rather than
-  // |aState.mMallocSizeOf| to distinguish in DMD's output the memory
-  // measured within Servo code.
-  if (mServoData.Get()) {
-    n += Servo_Element_SizeOfExcludingThis(ServoElementMallocSizeOf,
-                                           &aState.mSeenPtrs, this);
+  if (HasServoData()) {
+    // Measure mServoData, excluding the ComputedValues. This measurement
+    // counts towards the element's size. We use ServoElementMallocSizeOf
+    // rather thang |aState.mMallocSizeOf| to better distinguish in DMD's
+    // output the memory measured within Servo code.
+    *aNodeSize +=
+      Servo_Element_SizeOfExcludingThisAndCVs(ServoElementMallocSizeOf,
+                                              &aState.mSeenPtrs, this);
+
+    // Now measure just the ComputedValues (and style structs) under
+    // mServoData. This counts towards the relevant fields in |aSizes|.
+    RefPtr<ServoStyleContext> sc;
+    if (Servo_Element_HasPrimaryComputedValues(this)) {
+      sc = Servo_Element_GetPrimaryComputedValues(this).Consume();
+      if (!aState.HaveSeenPtr(sc.get())) {
+        sc->AddSizeOfIncludingThis(aState, aSizes, /* isDOM = */ true);
+      }
+
+      for (size_t i = 0; i < nsCSSPseudoElements::kEagerPseudoCount; i++) {
+        if (Servo_Element_HasPseudoComputedValues(this, i)) {
+          sc = Servo_Element_GetPseudoComputedValues(this, i).Consume();
+          if (!aState.HaveSeenPtr(sc.get())) {
+            sc->AddSizeOfIncludingThis(aState, aSizes, /* isDOM = */ true);
+          }
+        }
+      }
+    }
   }
-  return n;
 }
 
+struct DirtyDescendantsBit {
+  static bool HasBit(const Element* aElement)
+  {
+    return aElement->HasDirtyDescendantsForServo();
+  }
+  static void SetBit(Element* aElement)
+  {
+    aElement->SetHasDirtyDescendantsForServo();
+  }
+};
+
+struct AnimationOnlyDirtyDescendantsBit {
+  static bool HasBit(const Element* aElement)
+  {
+    return aElement->HasAnimationOnlyDirtyDescendantsForServo();
+  }
+  static void SetBit(Element* aElement)
+  {
+    aElement->SetHasAnimationOnlyDirtyDescendantsForServo();
+  }
+};
+
+#ifdef DEBUG
+template<typename Traits>
+bool
+BitIsPropagated(const Element* aElement)
+{
+  const Element* curr = aElement;
+  while (curr) {
+    if (!Traits::HasBit(curr)) {
+      return false;
+    }
+    nsINode* parentNode = curr->GetParentNode();
+    curr = curr->GetFlattenedTreeParentElementForStyle();
+    MOZ_ASSERT_IF(!curr,
+                  parentNode == aElement->OwnerDoc() ||
+                  parentNode == parentNode->OwnerDoc()->GetRootElement());
+  }
+  return true;
+}
+#endif
+
+template<typename Traits>
+void
+NoteDirtyElement(Element* aElement)
+{
+  MOZ_ASSERT(aElement->IsInComposedDoc());
+  nsIDocument* doc = aElement->GetComposedDoc();
+  nsIPresShell* shell = doc->GetShell();
+  NS_ENSURE_TRUE_VOID(shell);
+  shell->EnsureStyleFlush();
+
+  Element* parent = aElement->GetFlattenedTreeParentElementForStyle();
+  if (!parent || !parent->HasServoData()) {
+    // The bits only apply to styled elements.
+    return;
+  }
+
+  Element* curr = parent;
+  while (curr && !Traits::HasBit(curr)) {
+    Traits::SetBit(curr);
+    curr = curr->GetFlattenedTreeParentElementForStyle();
+  }
+
+  MOZ_ASSERT(BitIsPropagated<Traits>(parent));
+}
+
+void
+Element::NoteDirtyForServo()
+{
+  NoteDirtyElement<DirtyDescendantsBit>(this);
+}
+
+void
+Element::NoteAnimationOnlyDirtyForServo()
+{
+  NoteDirtyElement<AnimationOnlyDirtyDescendantsBit>(this);
+}

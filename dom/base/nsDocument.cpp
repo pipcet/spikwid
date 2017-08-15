@@ -1354,6 +1354,7 @@ nsIDocument::nsIDocument()
     mIsContentDocument(false),
     mMightHaveStaleServoData(false),
     mDidCallBeginLoad(false),
+    mBufferingCSPViolations(false),
     mIsScopedStyleEnabled(eScopedStyle_Unknown),
     mCompatMode(eCompatibility_FullStandards),
     mReadyState(ReadyState::READYSTATE_UNINITIALIZED),
@@ -6120,19 +6121,63 @@ nsDocument::CustomElementConstructor(JSContext* aCx, unsigned aArgc, JS::Value* 
     return true;
   }
 
-  nsDependentAtomString localName(definition->mLocalName);
+  RefPtr<Element> element;
 
-  nsCOMPtr<Element> element =
-    document->CreateElem(localName, nullptr, kNameSpaceID_XHTML);
-  NS_ENSURE_TRUE(element, true);
+  // We integrate with construction stack and do prototype swizzling here, so
+  // that old upgrade behavior could also share the new upgrade steps.
+  // And this old upgrade will be remove at some point (when everything is
+  // switched to latest custom element spec).
+  nsTArray<RefPtr<nsGenericHTMLElement>>& constructionStack =
+    definition->mConstructionStack;
+  if (constructionStack.Length()) {
+    element = constructionStack.LastElement();
+    NS_ENSURE_TRUE(element != ALEADY_CONSTRUCTED_MARKER, false);
 
-  if (definition->mLocalName != typeAtom) {
-    // This element is a custom element by extension, thus we need to
-    // do some special setup. For non-extended custom elements, this happens
-    // when the element is created.
-    nsContentUtils::SetupCustomElement(element, &elemName);
+    // Do prototype swizzling if dom reflector exists.
+    JS::Rooted<JSObject*> reflector(aCx, element->GetWrapper());
+    if (reflector) {
+      Maybe<JSAutoCompartment> ac;
+      JS::Rooted<JSObject*> prototype(aCx, definition->mPrototype);
+      if (element->NodePrincipal()->SubsumesConsideringDomain(nsContentUtils::ObjectPrincipal(prototype))) {
+        ac.emplace(aCx, reflector);
+        if (!JS_WrapObject(aCx, &prototype) ||
+            !JS_SetPrototype(aCx, reflector, prototype)) {
+          return false;
+        }
+      } else {
+        // We want to set the custom prototype in the compartment where it was
+        // registered. We store the prototype from define() without unwrapped,
+        // hence the prototype's compartment is the compartment where it was
+        // registered.
+        // In the case that |reflector| and |prototype| are in different
+        // compartments, this will set the prototype on the |reflector|'s wrapper
+        // and thus only visible in the wrapper's compartment, since we know
+        // reflector's principal does not subsume prototype's in this case.
+        ac.emplace(aCx, prototype);
+        if (!JS_WrapObject(aCx, &reflector) ||
+            !JS_SetPrototype(aCx, reflector, prototype)) {
+          return false;
+        }
+      }
+
+      // Wrap into current context.
+      if (!JS_WrapObject(aCx, &reflector)) {
+        return false;
+      }
+
+      args.rval().setObject(*reflector);
+      return true;
+    }
+  } else {
+    nsDependentAtomString localName(definition->mLocalName);
+    element =
+      document->CreateElem(localName, nullptr, kNameSpaceID_XHTML,
+                           (definition->mLocalName != typeAtom) ? &elemName
+                                                                : nullptr);
+    NS_ENSURE_TRUE(element, false);
   }
 
+  // The prototype setup happens in Element::WrapObject().
   nsresult rv = nsContentUtils::WrapNative(aCx, element, element, args.rval());
   NS_ENSURE_SUCCESS(rv, true);
 
@@ -12389,26 +12434,25 @@ nsDocument::GetVisibilityState(nsAString& aState)
 }
 
 /* virtual */ void
-nsIDocument::DocAddSizeOfExcludingThis(nsWindowSizes& aWindowSizes) const
+nsIDocument::DocAddSizeOfExcludingThis(nsWindowSizes& aSizes) const
 {
-  aWindowSizes.mDOMOtherSize +=
-    nsINode::SizeOfExcludingThis(aWindowSizes.mState);
+  nsINode::AddSizeOfExcludingThis(aSizes.mState, aSizes.mStyleSizes,
+                                  &aSizes.mDOMOtherSize);
 
   if (mPresShell) {
-    mPresShell->AddSizeOfIncludingThis(aWindowSizes);
+    mPresShell->AddSizeOfIncludingThis(aSizes);
   }
 
-  aWindowSizes.mPropertyTablesSize +=
-    mPropertyTable.SizeOfExcludingThis(aWindowSizes.mState.mMallocSizeOf);
+  aSizes.mPropertyTablesSize +=
+    mPropertyTable.SizeOfExcludingThis(aSizes.mState.mMallocSizeOf);
   for (uint32_t i = 0, count = mExtraPropertyTables.Length();
        i < count; ++i) {
-    aWindowSizes.mPropertyTablesSize +=
-      mExtraPropertyTables[i]->SizeOfIncludingThis(
-        aWindowSizes.mState.mMallocSizeOf);
+    aSizes.mPropertyTablesSize +=
+      mExtraPropertyTables[i]->SizeOfIncludingThis(aSizes.mState.mMallocSizeOf);
   }
 
   if (EventListenerManager* elm = GetExistingListenerManager()) {
-    aWindowSizes.mDOMEventListenersCount += elm->ListenerCount();
+    aSizes.mDOMEventListenersCount += elm->ListenerCount();
   }
 
   // Measurement of the following members may be added later if DMD finds it
@@ -12439,10 +12483,12 @@ SizeOfOwnedSheetArrayExcludingThis(const nsTArray<RefPtr<StyleSheet>>& aSheets,
   return n;
 }
 
-size_t
-nsDocument::SizeOfExcludingThis(SizeOfState& aState) const
+void
+nsDocument::AddSizeOfExcludingThis(SizeOfState& aState,
+                                   nsStyleSizes& aSizes,
+                                   size_t* aNodeSize) const
 {
-  // This SizeOfExcludingThis() overrides the one from nsINode.  But
+  // This AddSizeOfExcludingThis() overrides the one from nsINode.  But
   // nsDocuments can only appear at the top of the DOM tree, and we use the
   // specialized DocAddSizeOfExcludingThis() in that case.  So this should never
   // be called.
@@ -12452,39 +12498,47 @@ nsDocument::SizeOfExcludingThis(SizeOfState& aState) const
 void
 nsDocument::DocAddSizeOfExcludingThis(nsWindowSizes& aWindowSizes) const
 {
-  nsIDocument::DocAddSizeOfExcludingThis(aWindowSizes);
-
   for (nsIContent* node = nsINode::GetFirstChild();
        node;
        node = node->GetNextNode(this))
   {
-    size_t nodeSize = node->SizeOfIncludingThis(aWindowSizes.mState);
-    size_t* p;
+    size_t nodeSize = 0;
+    node->AddSizeOfIncludingThis(aWindowSizes.mState, aWindowSizes.mStyleSizes,
+                                 &nodeSize);
 
+    // This is where we transfer the nodeSize obtained from
+    // nsINode::AddSizeOfIncludingThis() to a value in nsWindowSizes.
     switch (node->NodeType()) {
     case nsIDOMNode::ELEMENT_NODE:
-      p = &aWindowSizes.mDOMElementNodesSize;
+      aWindowSizes.mDOMElementNodesSize += nodeSize;
       break;
     case nsIDOMNode::TEXT_NODE:
-      p = &aWindowSizes.mDOMTextNodesSize;
+      aWindowSizes.mDOMTextNodesSize += nodeSize;
       break;
     case nsIDOMNode::CDATA_SECTION_NODE:
-      p = &aWindowSizes.mDOMCDATANodesSize;
+      aWindowSizes.mDOMCDATANodesSize += nodeSize;
       break;
     case nsIDOMNode::COMMENT_NODE:
-      p = &aWindowSizes.mDOMCommentNodesSize;
+      aWindowSizes.mDOMCommentNodesSize += nodeSize;
       break;
     default:
-      p = &aWindowSizes.mDOMOtherSize;
+      aWindowSizes.mDOMOtherSize += nodeSize;
       break;
     }
-
-    *p += nodeSize;
 
     if (EventListenerManager* elm = node->GetExistingListenerManager()) {
       aWindowSizes.mDOMEventListenersCount += elm->ListenerCount();
     }
   }
+
+  // IMPORTANT: for our ComputedValues measurements, we want to measure
+  // ComputedValues accessible from DOM elements before ComputedValues not
+  // accessible from DOM elements (i.e. accessible only from the frame tree).
+  //
+  // Therefore, the measurement of the nsIDocument superclass must happen after
+  // the measurement of DOM nodes (above), because nsIDocument contains the
+  // PresShell, which contains the frame tree.
+  nsIDocument::DocAddSizeOfExcludingThis(aWindowSizes);
 
   aWindowSizes.mStyleSheetsSize +=
     SizeOfOwnedSheetArrayExcludingThis(mStyleSheets,

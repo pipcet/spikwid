@@ -15,6 +15,7 @@ use gecko_bindings::structs::mozilla::css::ImageValue;
 use gecko_bindings::structs::mozilla::css::URLValue;
 use gecko_bindings::structs::mozilla::css::URLValueData;
 use gecko_bindings::structs::mozilla::MallocSizeOf;
+use gecko_bindings::structs::mozilla::OriginFlags;
 use gecko_bindings::structs::mozilla::Side;
 use gecko_bindings::structs::mozilla::UniquePtr;
 use gecko_bindings::structs::nsIContent;
@@ -1082,8 +1083,11 @@ extern "C" {
     pub fn Gecko_UnsetNodeFlags(node: RawGeckoNodeBorrowed, flags: u32);
 }
 extern "C" {
-    pub fn Gecko_SetOwnerDocumentNeedsStyleFlush(element:
-                                                     RawGeckoElementBorrowed);
+    pub fn Gecko_NoteDirtyElement(element: RawGeckoElementBorrowed);
+}
+extern "C" {
+    pub fn Gecko_NoteAnimationOnlyDirtyElement(element:
+                                                   RawGeckoElementBorrowed);
 }
 extern "C" {
     pub fn Gecko_GetStyleContext(element: RawGeckoElementBorrowed,
@@ -1911,10 +1915,25 @@ extern "C" {
     pub fn Servo_Element_ClearData(node: RawGeckoElementBorrowed);
 }
 extern "C" {
-    pub fn Servo_Element_SizeOfExcludingThis(arg1: MallocSizeOf,
-                                             seen_ptrs: *mut SeenPtrs,
-                                             node: RawGeckoElementBorrowed)
+    pub fn Servo_Element_SizeOfExcludingThisAndCVs(malloc_size_of: MallocSizeOf,
+                                                   seen_ptrs: *mut SeenPtrs,
+                                                   node: RawGeckoElementBorrowed)
      -> usize;
+}
+extern "C" {
+    pub fn Servo_Element_HasPrimaryComputedValues(element: RawGeckoElementBorrowed) -> bool;
+}
+extern "C" {
+    pub fn Servo_Element_GetPrimaryComputedValues(element: RawGeckoElementBorrowed)
+     -> ServoStyleContextStrong;
+}
+extern "C" {
+    pub fn Servo_Element_HasPseudoComputedValues(element: RawGeckoElementBorrowed, index: usize)
+     -> bool;
+}
+extern "C" {
+    pub fn Servo_Element_GetPseudoComputedValues(element: RawGeckoElementBorrowed, index: usize)
+     -> ServoStyleContextStrong;
 }
 extern "C" {
     pub fn Servo_StyleSheet_FromUTF8Bytes(loader: *mut Loader,
@@ -1952,6 +1971,11 @@ extern "C" {
                                                 sheet:
                                                     RawServoStyleSheetContentsBorrowed)
      -> usize;
+}
+extern "C" {
+    pub fn Servo_StyleSheet_GetOrigin(sheet:
+                                          RawServoStyleSheetContentsBorrowed)
+     -> OriginFlags;
 }
 extern "C" {
     pub fn Servo_StyleSet_Init(pres_context: RawGeckoPresContextOwned)
@@ -2003,7 +2027,9 @@ extern "C" {
 extern "C" {
     pub fn Servo_StyleSet_NoteStyleSheetsChanged(set:
                                                      RawServoStyleSetBorrowed,
-                                                 author_style_disabled: bool);
+                                                 author_style_disabled: bool,
+                                                 changed_origins:
+                                                     OriginFlags);
 }
 extern "C" {
     pub fn Servo_StyleSet_GetKeyframesForName(set: RawServoStyleSetBorrowed,
@@ -2812,13 +2838,11 @@ extern "C" {
 }
 extern "C" {
     pub fn Servo_TakeChangeHint(element: RawGeckoElementBorrowed,
-                                flags: ServoTraversalFlags,
                                 was_restyled: *mut bool) -> nsChangeHint;
 }
 extern "C" {
     pub fn Servo_ResolveStyle(element: RawGeckoElementBorrowed,
-                              set: RawServoStyleSetBorrowed,
-                              flags: ServoTraversalFlags)
+                              set: RawServoStyleSetBorrowed)
      -> ServoStyleContextStrong;
 }
 extern "C" {

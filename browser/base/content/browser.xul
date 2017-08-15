@@ -735,6 +735,7 @@
         <toolbarbutton id="back-button" class="toolbarbutton-1 chromeclass-toolbar-additional"
                        label="&backCmd.label;"
                        removable="false" overflows="false"
+                       keepbroadcastattributeswhencustomizing="true"
                        command="Browser:BackOrBackDuplicate"
                        onclick="checkForMiddleClick(this, event);"
                        tooltip="back-button-tooltip"
@@ -742,6 +743,7 @@
         <toolbarbutton id="forward-button" class="toolbarbutton-1 chromeclass-toolbar-additional"
                        label="&forwardCmd.label;"
                        removable="false" overflows="false"
+                       keepbroadcastattributeswhencustomizing="true"
                        command="Browser:ForwardOrForwardDuplicate"
                        onclick="checkForMiddleClick(this, event);"
                        tooltip="forward-button-tooltip"
@@ -781,7 +783,6 @@
         <toolbaritem id="urlbar-container" flex="400" persist="width"
                      removable="false"
                      class="chromeclass-location" overflows="false">
-          <hbox id="urlbar-wrapper" flex="1">
             <textbox id="urlbar" flex="1"
                      placeholder="&urlbar.placeholder2;"
                      type="autocomplete"
@@ -879,7 +880,7 @@
                 <label id="switchtab" class="urlbar-display urlbar-display-switchtab" value="&urlbar.switchToTab.label;"/>
                 <label id="extension" class="urlbar-display urlbar-display-extension" value="&urlbar.extension.label;"/>
               </box>
-              <hbox id="urlbar-icons">
+              <hbox id="page-action-buttons">
                 <image id="page-report-button"
                        class="urlbar-icon"
                        hidden="true"
@@ -899,6 +900,7 @@
                        onclick="BrowserPageActions.mainButtonClicked(event);"/>
                 <hbox id="star-button-box"
                       hidden="true"
+                      class="urlbar-icon-wrapper"
                       context="pageActionPanelContextMenu"
                       oncontextmenu="BrowserPageActions.onContextMenu(event);"
                       onclick="BrowserPageActions.bookmark.onUrlbarNodeClicked(event);">
@@ -916,7 +918,6 @@
                 <image id="userContext-indicator"/>
               </hbox>
             </textbox>
-          </hbox>
         </toolbaritem>
 
         <toolbaritem id="search-container" title="&searchItem.title;"

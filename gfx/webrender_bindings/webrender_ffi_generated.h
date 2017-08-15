@@ -774,7 +774,7 @@ WR_FUNC;
 
 WR_INLINE
 uint64_t wr_dp_define_clip(WrState *aState,
-                           LayoutRect aRect,
+                           LayoutRect aClipRect,
                            const WrComplexClipRegion *aComplex,
                            size_t aComplexCount,
                            const WrImageMask *aMask)
@@ -943,6 +943,7 @@ void wr_dp_push_stacking_context(WrState *aState,
                                  const float *aOpacity,
                                  const LayoutTransform *aTransform,
                                  TransformStyle aTransformStyle,
+                                 const LayoutTransform *aPerspective,
                                  MixBlendMode aMixBlendMode,
                                  const WrFilterOp *aFilters,
                                  size_t aFilterCount)

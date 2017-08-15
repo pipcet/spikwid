@@ -69,6 +69,7 @@ var BrowserPageActions = {
       this._appendPanelSeparator(action);
       return;
     }
+    action.onBeforePlacedInWindow(window);
     this.placeActionInPanel(action, panelInsertBeforeID);
     this.placeActionInUrlbar(action, urlbarInsertBeforeID);
   },
@@ -176,7 +177,7 @@ var BrowserPageActions = {
     let panelNode = document.getElementById(panelNodeID);
     if (panelNode) {
       panelNode.hidePopup();
-      return;
+      return null;
     }
 
     panelNode = document.createElement("panel");
@@ -205,7 +206,16 @@ var BrowserPageActions = {
     let popupSet = document.getElementById("mainPopupSet");
     popupSet.appendChild(panelNode);
     panelNode.addEventListener("popuphidden", () => {
+      if (iframeNode) {
+        action.onIframeHidden(iframeNode, panelNode);
+      }
       panelNode.remove();
+    }, { once: true });
+
+    panelNode.addEventListener("popuphiding", () => {
+      if (iframeNode) {
+        action.onIframeHiding(iframeNode, panelNode);
+      }
     }, { once: true });
 
     if (panelViewNode) {
@@ -216,13 +226,22 @@ var BrowserPageActions = {
     this.panelNode.hidePopup();
 
     let urlbarNodeID = this._urlbarButtonNodeIDForActionID(action.id);
-    let anchorNode =
-      document.getElementById(urlbarNodeID) || this.mainButtonNode;
+    let urlbarNode = document.getElementById(urlbarNodeID);
+    let anchorNode;
+    if (urlbarNode && !urlbarNode.hidden) {
+      anchorNode = action.anchorIDOverride ?
+        document.getElementById(action.anchorIDOverride) :
+        urlbarNode;
+    } else {
+      anchorNode = this.mainButtonNode;
+    }
     panelNode.openPopup(anchorNode, "bottomcenter topright");
 
     if (iframeNode) {
       action.onIframeShown(iframeNode, panelNode);
     }
+
+    return panelNode;
   },
 
   get _tempPanelID() {
@@ -411,6 +430,14 @@ var BrowserPageActions = {
     }
   },
 
+  doCommandForAction(action) {
+    if (action.subview || action.wantsIframe) {
+      this._toggleTempPanelForAction(action);
+      return;
+    }
+    action.onCommand();
+  },
+
   /**
    * Returns the action for a node.
    *
@@ -430,8 +457,8 @@ var BrowserPageActions = {
       // like how #star-button is contained in #star-button-box, the latter
       // being the bookmark action's node.  Look up the ancestor chain.
       for (let n = node.parentNode; n && !action; n = n.parentNode) {
-        if (n.id == "urlbar-icons" || n.localName == "panelview") {
-          // We reached the urlbar icons container or the panelview container.
+        if (n.id == "page-action-buttons" || n.localName == "panelview") {
+          // We reached the page-action-buttons or panelview container.
           // Stop looking; no acton was found.
           break;
         }
