@@ -98,8 +98,10 @@ WebRenderLayerManager::DoDestroy(bool aIsSync)
   LayerManager::Destroy();
 
   if (WrBridge()) {
-    DiscardImages();
-    DiscardCompositorAnimations();
+    // Just clear ImageKeys, they are deleted during WebRenderAPI destruction.
+    mImageKeysToDelete.clear();
+    // CompositorAnimations are cleared by WebRenderBridgeParent.
+    mDiscardedCompositorAnimationsIds.Clear();
     WrBridge()->Destroy(aIsSync);
   }
 
@@ -437,9 +439,8 @@ WebRenderLayerManager::GenerateFallbackData(nsDisplayItem* aItem,
     return nullptr;
   }
 
-  nsPoint shift = clippedBounds.TopLeft() - itemBounds.TopLeft();
   aOffset = ViewAs<LayerPixel>(
-      LayoutDevicePoint::FromAppUnits(aItem->ToReferenceFrame() + shift, appUnitsPerDevPixel),
+      LayoutDevicePoint::FromAppUnits(clippedBounds.TopLeft(), appUnitsPerDevPixel),
       PixelCastJustification::WebRenderHasUnitResolution);
 
   nsRegion invalidRegion;

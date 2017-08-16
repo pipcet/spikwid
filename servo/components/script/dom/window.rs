@@ -5,6 +5,7 @@
 use app_units::Au;
 use base64;
 use bluetooth_traits::BluetoothRequest;
+use canvas_traits::webgl::WebGLChan;
 use cssparser::{Parser, ParserInput};
 use devtools_traits::{ScriptToDevtoolsControlMsg, TimelineMarker, TimelineMarkerType};
 use dom::bindings::cell::DOMRefCell;
@@ -80,7 +81,7 @@ use script_runtime::{CommonScriptMsg, ScriptChan, ScriptPort, ScriptThreadEventC
 use script_thread::{ImageCacheMsg, MainThreadScriptChan, MainThreadScriptMsg, Runnable};
 use script_thread::{RunnableWrapper, ScriptThread, SendableMainThreadScriptChan};
 use script_traits::{ConstellationControlMsg, DocumentState, LoadData, MozBrowserEvent};
-use script_traits::{ScriptMsg as ConstellationMsg, ScrollState, TimerEvent, TimerEventId};
+use script_traits::{ScriptToConstellationChan, ScriptMsg, ScrollState, TimerEvent, TimerEventId};
 use script_traits::{TimerSchedulerMsg, UntrustedNodeAddress, WindowSizeData, WindowSizeType};
 use script_traits::webdriver_msg::{WebDriverJSError, WebDriverJSResult};
 use selectors::attr::CaseSensitivity;
@@ -264,7 +265,11 @@ pub struct Window {
 
     /// A handle for communicating messages to the webvr thread, if available.
     #[ignore_heap_size_of = "channels are hard"]
-    webvr_thread: Option<IpcSender<WebVRMsg>>,
+    webgl_chan: WebGLChan,
+
+    /// A handle for communicating messages to the webvr thread, if available.
+    #[ignore_heap_size_of = "channels are hard"]
+    webvr_chan: Option<IpcSender<WebVRMsg>>,
 
     /// A map for storing the previous permission state read results.
     permission_state_invocation_results: DOMRefCell<HashMap<String, PermissionState>>,
@@ -380,8 +385,12 @@ impl Window {
         self.current_viewport.clone().get()
     }
 
+    pub fn webgl_chan(&self) -> WebGLChan {
+        self.webgl_chan.clone()
+    }
+
     pub fn webvr_thread(&self) -> Option<IpcSender<WebVRMsg>> {
-        self.webvr_thread.clone()
+        self.webvr_chan.clone()
     }
 
     fn new_paint_worklet(&self) -> Root<Worklet> {
@@ -515,11 +524,7 @@ impl WindowMethods for Window {
         }
 
         let (sender, receiver) = ipc::channel().unwrap();
-        let global_scope = self.upcast::<GlobalScope>();
-        global_scope
-            .constellation_chan()
-            .send(ConstellationMsg::Alert(global_scope.pipeline_id(), s.to_string(), sender))
-            .unwrap();
+        self.send_to_constellation(ScriptMsg::Alert(s.to_string(), sender));
 
         let should_display_alert_dialog = receiver.recv().unwrap();
         if should_display_alert_dialog {
@@ -918,10 +923,7 @@ impl WindowMethods for Window {
         // Step 1
         //TODO determine if this operation is allowed
         let size = Size2D::new(x.to_u32().unwrap_or(1), y.to_u32().unwrap_or(1));
-        self.upcast::<GlobalScope>()
-            .constellation_chan()
-            .send(ConstellationMsg::ResizeTo(size))
-            .unwrap()
+        self.send_to_constellation(ScriptMsg::ResizeTo(size));
     }
 
     // https://drafts.csswg.org/cssom-view/#dom-window-resizeby
@@ -936,10 +938,7 @@ impl WindowMethods for Window {
         // Step 1
         //TODO determine if this operation is allowed
         let point = Point2D::new(x, y);
-        self.upcast::<GlobalScope>()
-            .constellation_chan()
-            .send(ConstellationMsg::MoveTo(point))
-            .unwrap()
+        self.send_to_constellation(ScriptMsg::MoveTo(point));
     }
 
     // https://drafts.csswg.org/cssom-view/#dom-window-moveby
@@ -1159,9 +1158,8 @@ impl Window {
             scroll_offset: Vector2D::new(-x, -y),
         })).unwrap();
 
-        let global_scope = self.upcast::<GlobalScope>();
-        let message = ConstellationMsg::ScrollFragmentPoint(scroll_root_id, point, smooth);
-        global_scope.constellation_chan().send(message).unwrap();
+        let message = ScriptMsg::ScrollFragmentPoint(scroll_root_id, point, smooth);
+        self.send_to_constellation(message);
     }
 
     pub fn update_viewport_for_scroll(&self, x: f32, y: f32) {
@@ -1172,10 +1170,7 @@ impl Window {
 
     pub fn client_window(&self) -> (Size2D<u32>, Point2D<i32>) {
         let (send, recv) = ipc::channel::<(Size2D<u32>, Point2D<i32>)>().unwrap();
-        self.upcast::<GlobalScope>()
-            .constellation_chan()
-            .send(ConstellationMsg::GetClientWindow(send))
-            .unwrap();
+        self.send_to_constellation(ScriptMsg::GetClientWindow(send));
         recv.recv().unwrap_or((Size2D::zero(), Point2D::zero()))
     }
 
@@ -1371,9 +1366,8 @@ impl Window {
 
             let pending_images = self.pending_layout_images.borrow().is_empty();
             if ready_state == DocumentReadyState::Complete && !reftest_wait && pending_images {
-                let global_scope = self.upcast::<GlobalScope>();
-                let event = ConstellationMsg::SetDocumentState(global_scope.pipeline_id(), DocumentState::Idle);
-                global_scope.constellation_chan().send(event).unwrap();
+                let event = ScriptMsg::SetDocumentState(DocumentState::Idle);
+                self.send_to_constellation(event);
             }
         }
 
@@ -1779,6 +1773,13 @@ impl Window {
         self.navigation_start.set(now);
         self.navigation_start_precise.set(time::precise_time_ns() as f64);
     }
+
+    fn send_to_constellation(&self, msg: ScriptMsg) {
+        self.upcast::<GlobalScope>()
+            .script_to_constellation_chan()
+            .send(msg)
+            .unwrap();
+    }
 }
 
 impl Window {
@@ -1797,7 +1798,7 @@ impl Window {
                mem_profiler_chan: MemProfilerChan,
                time_profiler_chan: TimeProfilerChan,
                devtools_chan: Option<IpcSender<ScriptToDevtoolsControlMsg>>,
-               constellation_chan: IpcSender<ConstellationMsg>,
+               constellation_chan: ScriptToConstellationChan,
                control_chan: IpcSender<ConstellationControlMsg>,
                scheduler_chan: IpcSender<TimerSchedulerMsg>,
                timer_event_chan: IpcSender<TimerEvent>,
@@ -1808,7 +1809,8 @@ impl Window {
                origin: MutableOrigin,
                navigation_start: u64,
                navigation_start_precise: f64,
-               webvr_thread: Option<IpcSender<WebVRMsg>>)
+               webgl_chan: WebGLChan,
+               webvr_chan: Option<IpcSender<WebVRMsg>>)
                -> Root<Window> {
         let layout_rpc: Box<LayoutRPC + Send> = {
             let (rpc_send, rpc_recv) = channel();
@@ -1874,7 +1876,8 @@ impl Window {
             scroll_offsets: DOMRefCell::new(HashMap::new()),
             media_query_lists: WeakMediaQueryListVec::new(),
             test_runner: Default::default(),
-            webvr_thread: webvr_thread,
+            webgl_chan: webgl_chan,
+            webvr_chan: webvr_chan,
             permission_state_invocation_results: DOMRefCell::new(HashMap::new()),
             pending_layout_images: DOMRefCell::new(HashMap::new()),
             unminified_js_dir: DOMRefCell::new(None),

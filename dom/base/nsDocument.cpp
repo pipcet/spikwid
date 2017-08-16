@@ -49,6 +49,7 @@
 #include "nsDOMClassInfo.h"
 #include "mozilla/Services.h"
 #include "nsScreen.h"
+#include "ChildIterator.h"
 
 #include "mozilla/AsyncEventDispatcher.h"
 #include "mozilla/BasicEvents.h"
@@ -9938,7 +9939,8 @@ nsDocument::GetTemplateContentsOwner()
                                     NodePrincipal(),
                                     true, // aLoadedAsData
                                     scriptObject, // aEventObject
-                                    DocumentFlavorHTML);
+                                    DocumentFlavorHTML,
+                                    mStyleBackendType);
     NS_ENSURE_SUCCESS(rv, nullptr);
 
     mTemplateContentsOwner = do_QueryInterface(domDocument);
@@ -12495,40 +12497,57 @@ nsDocument::AddSizeOfExcludingThis(SizeOfState& aState,
   MOZ_CRASH();
 }
 
+static void
+AddSizeOfNodeTree(nsIContent* aNode, nsWindowSizes& aWindowSizes)
+{
+  size_t nodeSize = 0;
+  aNode->AddSizeOfIncludingThis(aWindowSizes.mState, aWindowSizes.mStyleSizes,
+                                &nodeSize);
+
+  // This is where we transfer the nodeSize obtained from
+  // nsINode::AddSizeOfIncludingThis() to a value in nsWindowSizes.
+  switch (aNode->NodeType()) {
+  case nsIDOMNode::ELEMENT_NODE:
+    aWindowSizes.mDOMElementNodesSize += nodeSize;
+    break;
+  case nsIDOMNode::TEXT_NODE:
+    aWindowSizes.mDOMTextNodesSize += nodeSize;
+    break;
+  case nsIDOMNode::CDATA_SECTION_NODE:
+    aWindowSizes.mDOMCDATANodesSize += nodeSize;
+    break;
+  case nsIDOMNode::COMMENT_NODE:
+    aWindowSizes.mDOMCommentNodesSize += nodeSize;
+    break;
+  default:
+    aWindowSizes.mDOMOtherSize += nodeSize;
+    break;
+  }
+
+  if (EventListenerManager* elm = aNode->GetExistingListenerManager()) {
+    aWindowSizes.mDOMEventListenersCount += elm->ListenerCount();
+  }
+
+  AllChildrenIterator iter(aNode, nsIContent::eAllChildren);
+  for (nsIContent* n = iter.GetNextChild(); n; n = iter.GetNextChild()) {
+    AddSizeOfNodeTree(n, aWindowSizes);
+  }
+}
+
 void
 nsDocument::DocAddSizeOfExcludingThis(nsWindowSizes& aWindowSizes) const
 {
+  // We use AllChildrenIterator to iterate over DOM nodes in
+  // AddSizeOfNodeTree(). The obvious place to start is at the document's root
+  // element, using GetRootElement(). However, that will miss comment nodes
+  // that are siblings of the root element. Instead we use
+  // GetFirstChild()/GetNextSibling() to traverse the document's immediate
+  // child nodes, calling AddSizeOfNodeTree() on each to measure them and then
+  // all their descendants. (The comment nodes won't have any descendants).
   for (nsIContent* node = nsINode::GetFirstChild();
        node;
-       node = node->GetNextNode(this))
-  {
-    size_t nodeSize = 0;
-    node->AddSizeOfIncludingThis(aWindowSizes.mState, aWindowSizes.mStyleSizes,
-                                 &nodeSize);
-
-    // This is where we transfer the nodeSize obtained from
-    // nsINode::AddSizeOfIncludingThis() to a value in nsWindowSizes.
-    switch (node->NodeType()) {
-    case nsIDOMNode::ELEMENT_NODE:
-      aWindowSizes.mDOMElementNodesSize += nodeSize;
-      break;
-    case nsIDOMNode::TEXT_NODE:
-      aWindowSizes.mDOMTextNodesSize += nodeSize;
-      break;
-    case nsIDOMNode::CDATA_SECTION_NODE:
-      aWindowSizes.mDOMCDATANodesSize += nodeSize;
-      break;
-    case nsIDOMNode::COMMENT_NODE:
-      aWindowSizes.mDOMCommentNodesSize += nodeSize;
-      break;
-    default:
-      aWindowSizes.mDOMOtherSize += nodeSize;
-      break;
-    }
-
-    if (EventListenerManager* elm = node->GetExistingListenerManager()) {
-      aWindowSizes.mDOMEventListenersCount += elm->ListenerCount();
-    }
+       node = node->GetNextSibling()) {
+    AddSizeOfNodeTree(node, aWindowSizes);
   }
 
   // IMPORTANT: for our ComputedValues measurements, we want to measure
@@ -12585,6 +12604,12 @@ nsIDocument::Constructor(const GlobalObject& aGlobal,
     return nullptr;
   }
 
+  auto styleBackend = StyleBackendType::None;
+  nsCOMPtr<nsPIDOMWindowInner> window = do_QueryInterface(global);
+  if (window && window->GetExtantDoc()) {
+    styleBackend = window->GetExtantDoc()->GetStyleBackendType();
+  }
+
   nsCOMPtr<nsIScriptObjectPrincipal> prin = do_QueryInterface(aGlobal.GetAsSupports());
   if (!prin) {
     rv.Throw(NS_ERROR_UNEXPECTED);
@@ -12609,7 +12634,8 @@ nsIDocument::Constructor(const GlobalObject& aGlobal,
                       prin->GetPrincipal(),
                       true,
                       global,
-                      DocumentFlavorPlain);
+                      DocumentFlavorPlain,
+                      styleBackend);
   if (NS_FAILED(res)) {
     rv.Throw(res);
     return nullptr;

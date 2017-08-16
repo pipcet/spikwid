@@ -30,8 +30,11 @@
 //! `JSTraceable` to a datatype.
 
 use app_units::Au;
-use canvas_traits::{CanvasGradientStop, LinearGradientStyle, RadialGradientStyle};
-use canvas_traits::{CompositionOrBlending, LineCapStyle, LineJoinStyle, RepetitionStyle};
+use canvas_traits::canvas::{CanvasGradientStop, LinearGradientStyle, RadialGradientStyle};
+use canvas_traits::canvas::{CompositionOrBlending, LineCapStyle, LineJoinStyle, RepetitionStyle};
+use canvas_traits::webgl::{WebGLBufferId, WebGLFramebufferId, WebGLProgramId, WebGLRenderbufferId};
+use canvas_traits::webgl::{WebGLChan, WebGLContextShareMode, WebGLError, WebGLPipeline, WebGLMsgSender};
+use canvas_traits::webgl::{WebGLReceiver, WebGLSender, WebGLShaderId, WebGLTextureId, WebGLVertexArrayId};
 use cssparser::RGBA;
 use devtools_traits::{CSSError, TimelineMarkerType, WorkerId};
 use dom::abstractworker::SharedRt;
@@ -73,7 +76,7 @@ use profile_traits::time::ProfilerChan as TimeProfilerChan;
 use script_layout_interface::OpaqueStyleAndLayoutData;
 use script_layout_interface::reporter::CSSErrorReporter;
 use script_layout_interface::rpc::LayoutRPC;
-use script_traits::{DocumentActivity, TimerEventId, TimerSource, TouchpadPressurePhase};
+use script_traits::{DocumentActivity, ScriptToConstellationChan, TimerEventId, TimerSource, TouchpadPressurePhase};
 use script_traits::{UntrustedNodeAddress, WindowSizeData, WindowSizeType};
 use script_traits::DrawAPaintImageResult;
 use selectors::matching::ElementSelectorFlags;
@@ -105,8 +108,7 @@ use style::stylesheets::keyframes_rule::Keyframe;
 use style::values::specified::Length;
 use time::Duration;
 use uuid::Uuid;
-use webrender_api::{WebGLBufferId, WebGLError, WebGLFramebufferId, WebGLProgramId};
-use webrender_api::{WebGLRenderbufferId, WebGLShaderId, WebGLTextureId, WebGLVertexArrayId};
+use webrender_api::ImageKey;
 use webvr_traits::WebVRGamepadHand;
 
 /// A trait to allow tracing (only) DOM objects.
@@ -391,8 +393,13 @@ unsafe_no_jsmanaged_fields!(OpaqueStyleAndLayoutData);
 unsafe_no_jsmanaged_fields!(PathBuf);
 unsafe_no_jsmanaged_fields!(CSSErrorReporter);
 unsafe_no_jsmanaged_fields!(DrawAPaintImageResult);
+unsafe_no_jsmanaged_fields!(ImageKey);
 unsafe_no_jsmanaged_fields!(WebGLBufferId);
+unsafe_no_jsmanaged_fields!(WebGLChan);
+unsafe_no_jsmanaged_fields!(WebGLContextShareMode);
 unsafe_no_jsmanaged_fields!(WebGLFramebufferId);
+unsafe_no_jsmanaged_fields!(WebGLMsgSender);
+unsafe_no_jsmanaged_fields!(WebGLPipeline);
 unsafe_no_jsmanaged_fields!(WebGLProgramId);
 unsafe_no_jsmanaged_fields!(WebGLRenderbufferId);
 unsafe_no_jsmanaged_fields!(WebGLShaderId);
@@ -400,6 +407,7 @@ unsafe_no_jsmanaged_fields!(WebGLTextureId);
 unsafe_no_jsmanaged_fields!(WebGLVertexArrayId);
 unsafe_no_jsmanaged_fields!(MediaList);
 unsafe_no_jsmanaged_fields!(WebVRGamepadHand);
+unsafe_no_jsmanaged_fields!(ScriptToConstellationChan);
 
 unsafe impl<'a> JSTraceable for &'a str {
     #[inline]
@@ -459,6 +467,20 @@ unsafe impl<T: Send> JSTraceable for Receiver<T> {
 }
 
 unsafe impl<T: Send> JSTraceable for Sender<T> {
+    #[inline]
+    unsafe fn trace(&self, _: *mut JSTracer) {
+        // Do nothing
+    }
+}
+
+unsafe impl<T: Send> JSTraceable for WebGLReceiver<T> where T: for<'de> Deserialize<'de> + Serialize {
+    #[inline]
+    unsafe fn trace(&self, _: *mut JSTracer) {
+        // Do nothing
+    }
+}
+
+unsafe impl<T: Send> JSTraceable for WebGLSender<T> where T: for<'de> Deserialize<'de> + Serialize {
     #[inline]
     unsafe fn trace(&self, _: *mut JSTracer) {
         // Do nothing

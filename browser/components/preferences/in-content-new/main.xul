@@ -326,7 +326,7 @@
         </menulist>
       </html:td>
     </html:tr>
-    <html:tr>
+    <html:tr class="tableGroup">
       <html:td class="label-cell">
         <label accesskey="&homepage2.accesskey;"
                control="browserHomePage">&homepage2.label;</label>
@@ -342,7 +342,7 @@
                  preference="browser.startup.homepage"/>
       </html:td>
     </html:tr>
-    <html:tr>
+    <html:tr class="tableSubGroup">
       <html:td class="label-cell" />
       <html:td class="content-cell homepage-buttons">
         <button id="useCurrent"
@@ -727,7 +727,6 @@
 <!-- Update -->
 <groupbox id="updateApp" data-category="paneGeneral" hidden="true">
   <label>&updateApplicationDescription.label;</label>
-  <separator/>
   <hbox align="start">
     <vbox flex="1">
       <description>
@@ -738,7 +737,6 @@
     </vbox>
   </hbox>
 
-  <separator/>
   <checkbox id="enableSearchUpdate"
             label="&enableSearchUpdate2.label;"
             accesskey="&enableSearchUpdate2.accesskey;"

@@ -1501,6 +1501,8 @@ pref("toolkit.telemetry.shutdownPingSender.enabledFirstSession", false);
 pref("toolkit.telemetry.newProfilePing.enabled", true);
 // Enables sending 'update' pings on Firefox updates.
 pref("toolkit.telemetry.updatePing.enabled", true);
+// Enables sending 'bhr' pings when the browser hangs.
+pref("toolkit.telemetry.bhrPing.enabled", true);
 
 // Telemetry experiments settings.
 pref("experiments.enabled", true);
