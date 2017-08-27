@@ -21,11 +21,7 @@ public:
   {
   }
 
-  MediaResource* GetResource() const override final;
-
   void Shutdown() override;
-
-  MediaDecoderStateMachine* CreateStateMachine() override;
 
   // Returns true if the HLS backend is pref'ed on.
   static bool IsEnabled();
@@ -41,16 +37,23 @@ public:
 
   void Pause() override;
 
+  bool IsTransportSeekable() override { return true; }
   void Suspend() override;
   void Resume() override;
 
 private:
+  MediaResource* GetResource() const override final;
+
+  MediaDecoderStateMachine* CreateStateMachine();
+
   bool CanPlayThroughImpl() override final
   {
     // TODO: We don't know how to estimate 'canplaythrough' for this decoder.
     // For now we just return true for 'autoplay' can work.
     return true;
   }
+
+  bool IsLiveStream() override final { return false; }
 
   RefPtr<HLSResource> mResource;
 };

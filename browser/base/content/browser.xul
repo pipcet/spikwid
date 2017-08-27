@@ -65,7 +65,9 @@
 # so that they can be shared by macBrowserOverlay.xul.
 #include global-scripts.inc
 
-<script type="application/javascript" src="chrome://global/content/contentAreaUtils.js"/>
+<script type="application/javascript">
+  Services.scriptloader.loadSubScript("chrome://global/content/contentAreaUtils.js", this);
+</script>
 
 # All sets except for popupsets (commands, keys, stringbundles and broadcasters) *must* go into the
 # browser-sets.inc file for sharing with hiddenWindow.xul.
@@ -155,13 +157,15 @@
            level="parent"
            overflowpadding="30" />
 
+   <!-- for date/time picker. consumeoutsideclicks is set to never, so that
+        clicks on the anchored input box are never consumed. -->
     <panel id="DateTimePickerPanel"
            type="arrow"
            hidden="true"
            orient="vertical"
            noautofocus="true"
-           noautohide="true"
-           consumeoutsideclicks="false"
+           norolluponanchor="true"
+           consumeoutsideclicks="never"
            level="parent"
            tabspecific="true">
     </panel>
@@ -264,26 +268,6 @@
       <box id="UITourHighlight"></box>
     </panel>
 
-    <panel id="social-share-panel"
-           class="social-panel"
-           type="arrow"
-           orient="vertical"
-           onpopupshowing="SocialShare.onShowing()"
-           onpopuphidden="SocialShare.onHidden()"
-           hidden="true">
-      <hbox class="social-share-toolbar">
-        <toolbarbutton id="manage-share-providers" class="share-provider-button"
-                       tooltiptext="&social.addons.label;"
-                       oncommand="BrowserOpenAddonsMgr('addons://list/service');
-                                  this.parentNode.parentNode.hidePopup();"/>
-        <arrowscrollbox id="social-share-provider-buttons" orient="horizontal" flex="1" pack="end">
-          <toolbarbutton id="add-share-provider" class="share-provider-button" type="radio"
-                         group="share-providers" tooltiptext="&findShareServices.label;"
-                         oncommand="SocialShare.showDirectory()"/>
-        </arrowscrollbox>
-      </hbox>
-      <hbox id="share-container" flex="1"/>
-    </panel>
     <panel id="sidebarMenu-popup"
            class="cui-widget-panel"
            role="group"
@@ -413,14 +397,14 @@
       <menuitem id="placesContext_hideRecentlyBookmarked"
                 label="&hideRecentlyBookmarked.label;"
                 accesskey="&hideRecentlyBookmarked.accesskey;"
-                oncommand="BookmarkingUI.hideRecentlyBookmarked();"
+                oncommand="RecentBookmarksMenuUI.visible = false;"
                 closemenu="single"
                 ignoreitem="true"
                 hidden="true"/>
       <menuitem id="placesContext_showRecentlyBookmarked"
                 label="&showRecentlyBookmarked.label;"
                 accesskey="&showRecentlyBookmarked.accesskey;"
-                oncommand="BookmarkingUI.showRecentlyBookmarked();"
+                oncommand="RecentBookmarksMenuUI.visible = true;"
                 closemenu="single"
                 ignoreitem="true"
                 hidden="true"/>
@@ -446,20 +430,19 @@
            type="arrow"
            hidden="true"
            flip="slide"
-           photon="true"
            position="bottomcenter topright"
            tabspecific="true"
            noautofocus="true"
-           context="pageActionPanelContextMenu"
-           oncontextmenu="BrowserPageActions.onContextMenu(event);"
            copyURL-title="&copyURLCmd.label;"
            emailLink-title="&emailPageCmd.label;"
-           sendToDevice-title="&sendToDevice.label2;"
+           sendToDevice-title="&sendToDevice.label3;"
            sendToDevice-notReadyTitle="&sendToDevice.syncNotReady.label;">
       <photonpanelmultiview id="pageActionPanelMultiView"
                             mainViewId="pageActionPanelMainView"
                             viewCacheId="appMenu-viewCache">
         <panelview id="pageActionPanelMainView"
+                   context="pageActionPanelContextMenu"
+                   oncontextmenu="BrowserPageActions.onContextMenu(event);"
                    class="PanelUI-subView">
           <vbox class="panel-subview-body"/>
         </panelview>
@@ -496,11 +479,6 @@
 #else
       <label class="tooltip-label" value="&backForwardButtonMenu.tooltip;"/>
 #endif
-    </tooltip>
-
-    <tooltip id="share-button-tooltip" onpopupshowing="SocialShare.createTooltip(event);">
-      <label class="tooltip-label"/>
-      <label class="tooltip-label"/>
     </tooltip>
 
 #include popup-notifications.inc
@@ -882,41 +860,42 @@
                 <label id="extension" class="urlbar-display urlbar-display-extension" value="&urlbar.extension.label;"/>
               </box>
               <hbox id="page-action-buttons">
+                <hbox id="userContext-icons" hidden="true">
+                  <label id="userContext-label"/>
+                  <image id="userContext-indicator"/>
+                </hbox>
                 <image id="page-report-button"
-                       class="urlbar-icon"
+                       class="urlbar-icon urlbar-page-action"
                        hidden="true"
                        tooltiptext="&pageReportIcon.tooltip;"
                        onmousedown="gPopupBlockerObserver.onReportButtonMousedown(event);"/>
                 <image id="reader-mode-button"
-                       class="urlbar-icon"
+                       class="urlbar-icon urlbar-page-action"
                        hidden="true"
                        onclick="ReaderParent.buttonClick(event);"/>
                 <toolbarbutton id="urlbar-zoom-button"
                        onclick="FullZoom.reset();"
                        tooltip="dynamic-shortcut-tooltip"
                        hidden="true"/>
+                <box id="pageActionSeparator" class="urlbar-page-action"/>
                 <image id="pageActionButton"
-                       class="urlbar-icon"
+                       class="urlbar-icon urlbar-page-action"
                        tooltiptext="&pageActionButton.tooltip;"
                        onclick="BrowserPageActions.mainButtonClicked(event);"/>
                 <hbox id="star-button-box"
                       hidden="true"
-                      class="urlbar-icon-wrapper"
+                      class="urlbar-icon-wrapper urlbar-page-action"
                       context="pageActionPanelContextMenu"
                       oncontextmenu="BrowserPageActions.onContextMenu(event);"
                       onclick="BrowserPageActions.bookmark.onUrlbarNodeClicked(event);">
-                  <image id="star-button" class="urlbar-icon">
-                    <observes element="bookmarkThisPageBroadcaster" attribute="starred"/>
-                    <observes element="bookmarkThisPageBroadcaster" attribute="tooltiptext"/>
-                  </image>
+                  <image id="star-button"
+                         class="urlbar-icon"
+                         observes="bookmarkThisPageBroadcaster"/>
                   <hbox id="star-button-animatable-box">
-                    <image id="star-button-animatable-image"/>
+                    <image id="star-button-animatable-image"
+                           observes="bookmarkThisPageBroadcaster"/>
                   </hbox>
                 </hbox>
-              </hbox>
-              <hbox id="userContext-icons" hidden="true">
-                <label id="userContext-label"/>
-                <image id="userContext-indicator"/>
               </hbox>
             </textbox>
         </toolbaritem>
@@ -947,11 +926,9 @@
                        removable="true"
                        oncommand="PanelUI.showSubView('appMenu-libraryView', this, null, event);"
                        closemenu="none"
-                       label="&places.library.title;">
-          <box class="toolbarbutton-animatable-box">
-            <image class="toolbarbutton-animatable-image"/>
-          </box>
-        </toolbarbutton>
+                       cui-areatype="toolbar"
+                       tooltiptext="&libraryButton.tooltip;"
+                       label="&places.library.title;"/>
 
       </hbox>
 
@@ -1008,8 +985,11 @@
                    cui-areatype="toolbar"
                    removable="true">
         <toolbarbutton id="bookmarks-toolbar-placeholder"
+                       class="bookmark-item"
+                       label="&bookmarksToolbarItem.label;"/>
+        <toolbarbutton id="bookmarks-toolbar-button"
                        class="toolbarbutton-1"
-                       mousethrough="never"
+                       flex="1"
                        label="&bookmarksToolbarItem.label;"
                        oncommand="PlacesToolbarHelper.onPlaceholderCommand();"/>
         <hbox flex="1"
@@ -1078,7 +1058,7 @@
                      class="toolbarbutton-1 chromeclass-toolbar-additional"
                      removable="true"
                      type="menu"
-                     label="&bookmarksMenuButton.label;"
+                     label="&bookmarksMenuButton2.label;"
                      tooltip="dynamic-shortcut-tooltip"
                      anchor="dropmarker"
                      ondragenter="PlacesMenuDNDHandler.onDragEnter(event);"
@@ -1172,6 +1152,9 @@
         </menupopup>
       </toolbarbutton>
     </toolbarpalette>
+    <box id="library-animatable-box" class="toolbarbutton-animatable-box">
+      <image class="toolbarbutton-animatable-image"/>
+    </box>
   </toolbox>
 
   <hbox id="fullscr-toggler" hidden="true"/>

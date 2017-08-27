@@ -4,6 +4,7 @@
 
 import os
 import sys
+from distutils.spawn import find_executable
 
 import pytest
 
@@ -38,6 +39,7 @@ def test_cli_run_with_fix(run, capfd):
     assert out.endswith('{}\n')
 
 
+@pytest.mark.skipif(not find_executable("echo"), reason="No `echo` executable found.")
 def test_cli_run_with_edit(run, parser, capfd):
     os.environ['EDITOR'] = 'echo'
 

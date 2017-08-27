@@ -170,7 +170,7 @@ pub trait Parser<'i> {
     }
 }
 
-#[derive(PartialEq, Eq, Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SelectorList<Impl: SelectorImpl>(pub Vec<Selector<Impl>>);
 
 impl<Impl: SelectorImpl> SelectorList<Impl> {
@@ -206,7 +206,7 @@ impl<Impl: SelectorImpl> SelectorList<Impl> {
 /// off the upper bits) at the expense of making the fourth somewhat more
 /// complicated to assemble, because we often bail out before checking all the
 /// hashes.
-#[derive(Eq, PartialEq, Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AncestorHashes {
     pub packed_hashes: [u32; 3],
 }
@@ -272,7 +272,7 @@ impl<Impl: SelectorImpl> SelectorMethods for Selector<Impl> {
         let mut current = self.iter();
         let mut combinator = None;
         loop {
-            if !visitor.visit_complex_selector(current.clone(), combinator) {
+            if !visitor.visit_complex_selector(combinator) {
                 return false;
             }
 
@@ -575,7 +575,7 @@ impl<'a, Impl: SelectorImpl> Iterator for AncestorIter<'a, Impl> {
     }
 }
 
-#[derive(Eq, PartialEq, Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Combinator {
     Child,  //  >
     Descendant,  // space
@@ -613,7 +613,7 @@ impl Combinator {
 /// optimal packing and cache performance, see [1].
 ///
 /// [1] https://bugzilla.mozilla.org/show_bug.cgi?id=1357973
-#[derive(Eq, PartialEq, Clone)]
+#[derive(Clone, Eq, PartialEq)]
 pub enum Component<Impl: SelectorImpl> {
     Combinator(Combinator),
 
@@ -712,7 +712,7 @@ impl<Impl: SelectorImpl> Component<Impl> {
     }
 }
 
-#[derive(Eq, PartialEq, Clone)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct LocalName<Impl: SelectorImpl> {
     pub name: Impl::LocalName,
     pub lower_name: Impl::LocalName,
@@ -1425,14 +1425,7 @@ fn parse_negation<'i, 't, P, E, Impl>(parser: &P,
     // We use a sequence because a type selector may be represented as two Components.
     let mut sequence = SmallVec::<[Component<Impl>; 2]>::new();
 
-    // Consume any leading whitespace.
-    loop {
-        let before_this_token = input.state();
-        if !matches!(input.next_including_whitespace(), Ok(&Token::WhiteSpace(_))) {
-            input.reset(&before_this_token);
-            break
-        }
-    }
+    input.skip_whitespace();
 
     // Get exactly one simple selector. The parse logic in the caller will verify
     // that there are no trailing tokens after we're done.
@@ -1468,14 +1461,8 @@ fn parse_compound_selector<'i, 't, P, E, Impl>(
     -> Result<bool, ParseError<'i, SelectorParseError<'i, E>>>
     where P: Parser<'i, Impl=Impl, Error=E>, Impl: SelectorImpl
 {
-    // Consume any leading whitespace.
-    loop {
-        let before_this_token = input.state();
-        if !matches!(input.next_including_whitespace(), Ok(&Token::WhiteSpace(_))) {
-            input.reset(&before_this_token);
-            break
-        }
-    }
+    input.skip_whitespace();
+
     let mut empty = true;
     if !parse_type_selector(parser, input, builder)? {
         if let Some(url) = parser.default_namespace() {
@@ -1694,14 +1681,14 @@ pub mod tests {
     use std::fmt;
     use super::*;
 
-    #[derive(PartialEq, Clone, Debug, Eq)]
+    #[derive(Clone, Debug, Eq, PartialEq)]
     pub enum PseudoClass {
         Hover,
         Active,
         Lang(String),
     }
 
-    #[derive(Eq, PartialEq, Clone, Debug)]
+    #[derive(Clone, Debug, Eq, PartialEq)]
     pub enum PseudoElement {
         Before,
         After,
@@ -1749,7 +1736,7 @@ pub mod tests {
             where V: SelectorVisitor<Impl = Self::Impl> { true }
     }
 
-    #[derive(Clone, PartialEq, Debug)]
+    #[derive(Clone, Debug, PartialEq)]
     pub struct DummySelectorImpl;
 
     #[derive(Default)]
@@ -1786,7 +1773,7 @@ pub mod tests {
         }
     }
 
-    #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
+    #[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
     pub struct DummyAtom(String);
 
     impl fmt::Display for DummyAtom {

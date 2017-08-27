@@ -28,9 +28,6 @@
 #include "mozilla/layers/APZCCallbackHelper.h"
 #include "ClientLayerManager.h"
 #include "nsQueryObject.h"
-#ifdef MOZ_FMP4
-#include "MP4Decoder.h"
-#endif
 #include "CubebUtils.h"
 
 #include "nsIScrollableFrame.h"
@@ -193,6 +190,7 @@ NativeInputRunnable::NativeInputRunnable(already_AddRefed<nsIRunnable>&& aEvent)
 /* static */ already_AddRefed<nsIRunnable>
 NativeInputRunnable::Create(already_AddRefed<nsIRunnable>&& aEvent)
 {
+  MOZ_ASSERT(NS_IsMainThread());
   nsCOMPtr<nsIRunnable> event(new NativeInputRunnable(Move(aEvent)));
   return event.forget();
 }
@@ -2475,35 +2473,6 @@ nsDOMWindowUtils::GetUsingAdvancedLayers(bool* retval)
 }
 
 NS_IMETHODIMP
-nsDOMWindowUtils::GetSupportsHardwareH264Decoding(JS::MutableHandle<JS::Value> aPromise)
-{
-  nsCOMPtr<nsPIDOMWindowOuter> window = do_QueryReferent(mWindow);
-  NS_ENSURE_STATE(window);
-  nsCOMPtr<nsIGlobalObject> parentObject =
-    do_QueryInterface(window->GetCurrentInnerWindow());
-  NS_ENSURE_STATE(parentObject);
-#ifdef MOZ_FMP4
-  nsCOMPtr<nsIWidget> widget = GetWidget();
-  NS_ENSURE_STATE(widget);
-  LayerManager *mgr = widget->GetLayerManager();
-  NS_ENSURE_STATE(mgr);
-  RefPtr<Promise> promise =
-    MP4Decoder::IsVideoAccelerated(mgr->AsKnowsCompositor(), parentObject);
-  NS_ENSURE_STATE(promise);
-  aPromise.setObject(*promise->PromiseObj());
-#else
-  ErrorResult rv;
-  RefPtr<Promise> promise = Promise::Create(parentObject, rv);
-  if (rv.Failed()) {
-    return rv.StealNSResult();
-  }
-  promise->MaybeResolve(NS_LITERAL_STRING("No; Compiled without MP4 support."));
-  aPromise.setObject(*promise->PromiseObj());
-#endif
-  return NS_OK;
-}
-
-NS_IMETHODIMP
 nsDOMWindowUtils::GetCurrentAudioBackend(nsAString& aBackend)
 {
   CubebUtils::GetCurrentBackend(aBackend);
@@ -3002,7 +2971,7 @@ nsDOMWindowUtils::GetUnanimatedComputedStyle(nsIDOMElement* aElement,
     return NS_ERROR_FAILURE;
   }
 
-  nsIAtom* pseudo = nsCSSPseudoElements::GetPseudoAtom(aPseudoElement);
+  nsCOMPtr<nsIAtom> pseudo = nsCSSPseudoElements::GetPseudoAtom(aPseudoElement);
   RefPtr<nsStyleContext> styleContext =
     nsComputedDOMStyle::GetUnanimatedStyleContextNoFlush(element,
                                                          pseudo, shell);

@@ -105,7 +105,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Sender, channel};
 use std::sync::mpsc::TryRecvError::{Disconnected, Empty};
 use style::context::ReflowGoal;
-use style::error_reporting::ParseErrorReporter;
 use style::media_queries;
 use style::parser::ParserContext as CssParserContext;
 use style::properties::PropertyId;
@@ -118,6 +117,7 @@ use task_source::dom_manipulation::DOMManipulationTaskSource;
 use task_source::file_reading::FileReadingTaskSource;
 use task_source::history_traversal::HistoryTraversalTaskSource;
 use task_source::networking::NetworkingTaskSource;
+use task_source::performance_timeline::PerformanceTimelineTaskSource;
 use task_source::user_interaction::UserInteractionTaskSource;
 use time;
 use timers::{IsInterval, TimerCallback};
@@ -129,7 +129,7 @@ use webrender_api::ClipId;
 use webvr_traits::WebVRMsg;
 
 /// Current state of the window object
-#[derive(JSTraceable, Copy, Clone, Debug, PartialEq, HeapSizeOf)]
+#[derive(Clone, Copy, Debug, HeapSizeOf, JSTraceable, PartialEq)]
 enum WindowState {
     Alive,
     Zombie,     // Pipeline is closed, but the window hasn't been GCed yet.
@@ -175,6 +175,8 @@ pub struct Window {
     history_traversal_task_source: HistoryTraversalTaskSource,
     #[ignore_heap_size_of = "task sources are hard"]
     file_reading_task_source: FileReadingTaskSource,
+    #[ignore_heap_size_of = "task sources are hard"]
+    performance_timeline_task_source: PerformanceTimelineTaskSource,
     navigator: MutNullableJS<Navigator>,
     #[ignore_heap_size_of = "Arc"]
     image_cache: Arc<ImageCache>,
@@ -329,6 +331,10 @@ impl Window {
         self.file_reading_task_source.clone()
     }
 
+    pub fn performance_timeline_task_source(&self) -> PerformanceTimelineTaskSource {
+        self.performance_timeline_task_source.clone()
+    }
+
     pub fn main_thread_script_chan(&self) -> &Sender<MainThreadScriptMsg> {
         &self.script_chan.0
     }
@@ -370,7 +376,7 @@ impl Window {
          &self.bluetooth_extra_permission_data
     }
 
-    pub fn css_error_reporter(&self) -> &ParseErrorReporter {
+    pub fn css_error_reporter(&self) -> &CSSErrorReporter {
         &self.error_reporter
     }
 
@@ -1005,7 +1011,7 @@ impl WindowMethods for Window {
         let mut parser = Parser::new(&mut input);
         let url = self.get_url();
         let quirks_mode = self.Document().quirks_mode();
-        let context = CssParserContext::new_for_cssom(&url, self.css_error_reporter(), Some(CssRuleType::Media),
+        let context = CssParserContext::new_for_cssom(&url, Some(CssRuleType::Media),
                                                       PARSING_MODE_DEFAULT,
                                                       quirks_mode);
         let media_query_list = media_queries::parse_media_query_list(&context, &mut parser);
@@ -1233,7 +1239,8 @@ impl Window {
         }
 
         let document = self.Document();
-        let stylesheets_changed = document.get_and_reset_stylesheets_changed_since_reflow();
+
+        let stylesheets_changed = document.flush_stylesheets_for_reflow();
 
         // Send new document and relevant styles to layout.
         let reflow = ScriptReflow {
@@ -1242,11 +1249,10 @@ impl Window {
                 page_clip_rect: self.page_clip_rect.get(),
             },
             document: self.Document().upcast::<Node>().to_trusted_node_address(),
-            document_stylesheets: document.stylesheets(),
-            stylesheets_changed: stylesheets_changed,
-            window_size: window_size,
+            stylesheets_changed,
+            window_size,
+            query_type,
             script_join_chan: join_chan,
-            query_type: query_type,
             dom_count: self.Document().dom_count(),
         };
 
@@ -1791,6 +1797,7 @@ impl Window {
                network_task_source: NetworkingTaskSource,
                history_task_source: HistoryTraversalTaskSource,
                file_task_source: FileReadingTaskSource,
+               performance_timeline_task_source: PerformanceTimelineTaskSource,
                image_cache_chan: Sender<ImageCacheMsg>,
                image_cache: Arc<ImageCache>,
                resource_threads: ResourceThreads,
@@ -1839,6 +1846,7 @@ impl Window {
             networking_task_source: network_task_source,
             history_traversal_task_source: history_task_source,
             file_reading_task_source: file_task_source,
+            performance_timeline_task_source,
             image_cache_chan: image_cache_chan,
             image_cache: image_cache.clone(),
             navigator: Default::default(),

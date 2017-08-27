@@ -1510,6 +1510,15 @@ public:
 
     if (mMarkLaunchServiceWorkerEnd) {
       mInterceptedChannel->SetLaunchServiceWorkerEnd(TimeStamp::Now());
+
+      // A probe to measure sw launch time for telemetry.
+      TimeStamp launchStartTime = TimeStamp();
+      mInterceptedChannel->GetLaunchServiceWorkerStart(&launchStartTime);
+
+      TimeStamp launchEndTime = TimeStamp();
+      mInterceptedChannel->GetLaunchServiceWorkerEnd(&launchEndTime);
+      Telemetry::AccumulateTimeDelta(Telemetry::SERVICE_WORKER_LAUNCH_TIME,
+                                     launchStartTime, launchEndTime);
     }
 
     mInterceptedChannel->SetDispatchFetchEventEnd(TimeStamp::Now());
@@ -1806,7 +1815,7 @@ ServiceWorkerPrivate::SpawnWorkerIfNeeded(WakeUpReason aWhy,
   // If we are loading a script for a ServiceWorker then we must not
   // try to intercept it.  If the interception matches the current
   // ServiceWorker's scope then we could deadlock the load.
-  info.mLoadFlags = mInfo->GetLoadFlags() |
+  info.mLoadFlags = mInfo->GetImportsLoadFlags() |
                     nsIChannel::LOAD_BYPASS_SERVICE_WORKER;
 
   rv = info.mBaseURI->GetHost(info.mDomain);

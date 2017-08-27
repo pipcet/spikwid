@@ -30,8 +30,8 @@
 #include "irregexp/RegExpEngine.h"
 #include "irregexp/RegExpParser.h"
 #endif
+#include "jit/AtomicOperations.h"
 #include "jit/InlinableNatives.h"
-#include "jit/JitFrameIterator.h"
 #include "js/Debug.h"
 #include "js/HashTable.h"
 #include "js/StructuredClone.h"
@@ -53,6 +53,7 @@
 #include "wasm/WasmModule.h"
 #include "wasm/WasmSignalHandlers.h"
 #include "wasm/WasmTextToBinary.h"
+#include "wasm/WasmTypes.h"
 
 #include "jscntxtinlines.h"
 #include "jsobjinlines.h"
@@ -530,6 +531,37 @@ WasmIsSupported(JSContext* cx, unsigned argc, Value* vp)
 }
 
 static bool
+WasmDebuggingIsSupported(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    args.rval().setBoolean(wasm::HasSupport(cx) && cx->options().wasmBaseline());
+    return true;
+}
+
+static bool
+WasmThreadsSupported(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+#ifdef ENABLE_WASM_THREAD_OPS
+    bool isSupported = wasm::HasSupport(cx);
+#else
+    bool isSupported = false;
+#endif
+
+    // NOTE!  When we land thread support, the following test and its comment
+    // should be moved into wasm::HasSupport() or wasm::HasCompilerSupport().
+
+    // Wasm threads require 8-byte lock-free atomics.  This guard will
+    // effectively disable Wasm support for some older devices, such as early
+    // ARMv6 and older MIPS.
+
+    isSupported = isSupported && jit::AtomicOperations::isLockfree8();
+
+    args.rval().setBoolean(isSupported);
+    return true;
+}
+
+static bool
 WasmTextToBinary(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
@@ -651,8 +683,43 @@ WasmExtractCode(JSContext* cx, unsigned argc, Value* vp)
     }
 
     Rooted<WasmModuleObject*> module(cx, &unwrapped->as<WasmModuleObject>());
+
+    bool stableTier = false;
+    bool bestTier = false;
+    bool baselineTier = false;
+    bool ionTier = false;
+    if (args.length() > 1) {
+        JSString* opt = JS::ToString(cx, args[1]);
+        if (!opt)
+            return false;
+        if (!JS_StringEqualsAscii(cx, opt, "stable", &stableTier) ||
+            !JS_StringEqualsAscii(cx, opt, "best", &bestTier) ||
+            !JS_StringEqualsAscii(cx, opt, "baseline", &baselineTier) ||
+            !JS_StringEqualsAscii(cx, opt, "ion", &ionTier))
+        {
+            return false;
+        }
+        // You can omit the argument but you can't pass just anything you like
+        if (!(stableTier || bestTier || baselineTier || ionTier)) {
+            args.rval().setNull();
+            return true;
+        }
+    } else {
+        stableTier = true;
+    }
+
+    wasm::Tier tier;
+    if (stableTier)
+        tier = module->module().code().stableTier();
+    else if (bestTier)
+        tier = module->module().code().bestTier();
+    else if (baselineTier)
+        tier = wasm::Tier::Baseline;
+    else
+        tier = wasm::Tier::Ion;
+
     RootedValue result(cx);
-    if (!module->module().extractCode(cx, &result))
+    if (!module->module().extractCode(cx, tier, &result))
         return false;
 
     args.rval().set(result);
@@ -1411,7 +1478,6 @@ SetupOOMFailure(JSContext* cx, bool failAlways, unsigned argc, Value* vp)
         return false;
     }
 
-    HelperThreadState().waitForAllThreads();
     js::oom::SimulateOOMAfter(count, targetThread, failAlways);
     args.rval().setUndefined();
     return true;
@@ -1519,9 +1585,6 @@ OOMTest(JSContext* cx, unsigned argc, Value* vp)
     for (unsigned thread = threadStart; thread < threadEnd; thread++) {
         if (verbose)
             fprintf(stderr, "thread %d\n", thread);
-
-        HelperThreadState().waitForAllThreads();
-        js::oom::targetThread = thread;
 
         unsigned allocation = 1;
         bool handledOOM;
@@ -1722,8 +1785,6 @@ finalize_counter_finalize(JSFreeOp* fop, JSObject* obj)
 static const JSClassOps FinalizeCounterClassOps = {
     nullptr, /* addProperty */
     nullptr, /* delProperty */
-    nullptr, /* getProperty */
-    nullptr, /* setProperty */
     nullptr, /* enumerate */
     nullptr, /* newEnumerate */
     nullptr, /* resolve */
@@ -2149,7 +2210,7 @@ testingFunc_inIon(JSContext* cx, unsigned argc, Value* vp)
     ScriptFrameIter iter(cx);
     if (!iter.done() && iter.isIon()) {
         // Reset the counter of the IonScript's script.
-        jit::JitFrameIterator jitIter(cx);
+        jit::JSJitFrameIter jitIter(cx);
         ++jitIter;
         jitIter.script()->resetWarmUpResetCounter();
     } else {
@@ -2455,8 +2516,6 @@ class CloneBufferObject : public NativeObject {
 static const ClassOps CloneBufferObjectClassOps = {
     nullptr, /* addProperty */
     nullptr, /* delProperty */
-    nullptr, /* getProperty */
-    nullptr, /* setProperty */
     nullptr, /* enumerate */
     nullptr, /* newEnumerate */
     nullptr, /* resolve */
@@ -4671,6 +4730,16 @@ gc::ZealModeHelpText),
 "wasmIsSupported()",
 "  Returns a boolean indicating whether WebAssembly is supported on the current device."),
 
+    JS_FN_HELP("wasmDebuggingIsSupported", WasmDebuggingIsSupported, 0, 0,
+"wasmDebuggingIsSupported()",
+"  Returns a boolean indicating whether WebAssembly debugging is supported on the current device;\n"
+"  returns false also if WebAssembly is not supported"),
+
+    JS_FN_HELP("wasmThreadsSupported", WasmThreadsSupported, 0, 0,
+"wasmThreadsSupported()",
+"  Returns a boolean indicating whether the WebAssembly threads proposal is\n"
+"  supported on the current device."),
+
     JS_FN_HELP("wasmTextToBinary", WasmTextToBinary, 1, 0,
 "wasmTextToBinary(str)",
 "  Translates the given text wasm module into its binary encoding."),
@@ -4680,8 +4749,11 @@ gc::ZealModeHelpText),
 "  Translates binary encoding to text format"),
 
     JS_FN_HELP("wasmExtractCode", WasmExtractCode, 1, 0,
-"wasmExtractCode(module)",
-"  Extracts generated machine code from WebAssembly.Module."),
+"wasmExtractCode(module[, tier])",
+"  Extracts generated machine code from WebAssembly.Module.  The tier is a string,\n"
+"  'stable', 'best', 'baseline', or 'ion'; the default is 'stable'.  If the request\n"
+"  cannot be satisfied then null is returned.  If the request is 'ion' then block\n"
+"  until background compilation is complete."),
 
     JS_FN_HELP("isLazyFunction", IsLazyFunction, 1, 0,
 "isLazyFunction(fun)",

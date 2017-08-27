@@ -543,28 +543,6 @@ GlobalObject::isRuntimeCodeGenEnabled(JSContext* cx, Handle<GlobalObject*> globa
     return !v.isFalse();
 }
 
-/* static */ bool
-GlobalObject::warnOnceAbout(JSContext* cx, HandleObject obj, WarnOnceFlag flag,
-                            unsigned errorNumber)
-{
-    Rooted<GlobalObject*> global(cx, &obj->global());
-    HeapSlot& v = global->getSlotRef(WARNED_ONCE_FLAGS);
-    MOZ_ASSERT_IF(!v.isUndefined(), v.toInt32());
-    int32_t flags = v.isUndefined() ? 0 : v.toInt32();
-    if (!(flags & flag)) {
-        if (!JS_ReportErrorFlagsAndNumberASCII(cx, JSREPORT_WARNING, GetErrorMessage, nullptr,
-                                               errorNumber))
-        {
-            return false;
-        }
-        if (v.isUndefined())
-            v.init(global, HeapSlot::Slot, WARNED_ONCE_FLAGS, Int32Value(flags | flag));
-        else
-            v.set(global, HeapSlot::Slot, WARNED_ONCE_FLAGS, Int32Value(flags | flag));
-    }
-    return true;
-}
-
 /* static */ JSFunction*
 GlobalObject::createConstructor(JSContext* cx, Native ctor, JSAtom* nameArg, unsigned length,
                                 gc::AllocKind kind, const JSJitInfo* jitInfo)
@@ -653,8 +631,6 @@ GlobalDebuggees_finalize(FreeOp* fop, JSObject* obj)
 
 static const ClassOps
 GlobalDebuggees_classOps = {
-    nullptr,
-    nullptr,
     nullptr,
     nullptr,
     nullptr,
@@ -859,5 +835,6 @@ GlobalObject::ensureModulePrototypesCreated(JSContext *cx, Handle<GlobalObject*>
 {
     return getOrCreateObject(cx, global, MODULE_PROTO, initModuleProto) &&
            getOrCreateObject(cx, global, IMPORT_ENTRY_PROTO, initImportEntryProto) &&
-           getOrCreateObject(cx, global, EXPORT_ENTRY_PROTO, initExportEntryProto);
+           getOrCreateObject(cx, global, EXPORT_ENTRY_PROTO, initExportEntryProto) &&
+           getOrCreateObject(cx, global, REQUESTED_MODULE_PROTO, initRequestedModuleProto);
 }

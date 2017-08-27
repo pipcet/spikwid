@@ -196,6 +196,7 @@
 #include "mozilla/dom/Comment.h"
 #include "nsTextNode.h"
 #include "mozilla/dom/Link.h"
+#include "mozilla/dom/HTMLCollectionBinding.h"
 #include "mozilla/dom/HTMLElementBinding.h"
 #include "nsXULAppAPI.h"
 #include "mozilla/dom/Touch.h"
@@ -273,9 +274,6 @@
 #include "nsISpeculativeConnect.h"
 
 #include "mozilla/MediaManager.h"
-#ifdef MOZ_WEBRTC
-#include "IPeerConnection.h"
-#endif // MOZ_WEBRTC
 
 #include "nsIURIClassifier.h"
 #include "mozilla/DocumentStyleRootIterator.h"
@@ -515,11 +513,130 @@ nsIdentifierMapEntry::SetImageElement(Element* aElement)
   }
 }
 
+namespace mozilla {
+namespace dom {
+class SimpleHTMLCollection final : public nsSimpleContentList
+                                 , public nsIHTMLCollection
+{
+public:
+  explicit SimpleHTMLCollection(nsINode* aRoot) : nsSimpleContentList(aRoot) {}
+
+  NS_DECL_ISUPPORTS_INHERITED
+
+  // nsIDOMHTMLCollection
+  NS_DECL_NSIDOMHTMLCOLLECTION
+
+  virtual nsINode* GetParentObject() override
+  {
+    return nsSimpleContentList::GetParentObject();
+  }
+  virtual Element* GetElementAt(uint32_t aIndex) override
+  {
+    return mElements.SafeElementAt(aIndex)->AsElement();
+  }
+
+  virtual Element* GetFirstNamedElement(const nsAString& aName,
+                                        bool& aFound) override
+  {
+    aFound = false;
+    nsCOMPtr<nsIAtom> name = NS_Atomize(aName);
+    for (uint32_t i = 0; i < mElements.Length(); i++) {
+      MOZ_DIAGNOSTIC_ASSERT(mElements[i]);
+      Element* element = mElements[i]->AsElement();
+      if (element->GetID() == name ||
+          (element->HasName() &&
+           element->GetParsedAttr(nsGkAtoms::name)->GetAtomValue() == name)) {
+        aFound = true;
+        return element;
+      }
+    }
+    return nullptr;
+  }
+
+  virtual void GetSupportedNames(nsTArray<nsString>& aNames) override
+  {
+    AutoTArray<nsIAtom*, 8> atoms;
+    for (uint32_t i = 0; i < mElements.Length(); i++) {
+      MOZ_DIAGNOSTIC_ASSERT(mElements[i]);
+      Element* element = mElements[i]->AsElement();
+
+      nsIAtom* id = element->GetID();
+      MOZ_ASSERT(id != nsGkAtoms::_empty);
+      if (id && !atoms.Contains(id)) {
+        atoms.AppendElement(id);
+      }
+
+      if (element->HasName()) {
+        nsIAtom* name = element->GetParsedAttr(nsGkAtoms::name)->GetAtomValue();
+        MOZ_ASSERT(name && name != nsGkAtoms::_empty);
+        if (name && !atoms.Contains(name)) {
+          atoms.AppendElement(name);
+        }
+      }
+    }
+
+    nsString* names = aNames.AppendElements(atoms.Length());
+    for (uint32_t i = 0; i < atoms.Length(); i++) {
+      atoms[i]->ToString(names[i]);
+    }
+  }
+
+  virtual JSObject* GetWrapperPreserveColorInternal() override
+  {
+    return nsWrapperCache::GetWrapperPreserveColor();
+  }
+  virtual void PreserveWrapperInternal(nsISupports* aScriptObjectHolder) override
+  {
+    nsWrapperCache::PreserveWrapper(aScriptObjectHolder);
+  }
+  virtual JSObject* WrapObject(JSContext *aCx,
+                               JS::Handle<JSObject*> aGivenProto) override
+  {
+    return HTMLCollectionBinding::Wrap(aCx, this, aGivenProto);
+  }
+
+  using nsBaseContentList::Length;
+  using nsBaseContentList::Item;
+  using nsIHTMLCollection::NamedItem;
+
+private:
+  virtual ~SimpleHTMLCollection() {}
+};
+
+NS_IMPL_ISUPPORTS_INHERITED(SimpleHTMLCollection, nsSimpleContentList,
+                            nsIHTMLCollection, nsIDOMHTMLCollection)
+
+NS_IMETHODIMP
+SimpleHTMLCollection::GetLength(uint32_t* aLength)
+{
+  *aLength = Length();
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+SimpleHTMLCollection::Item(uint32_t aIdx, nsIDOMNode** aRetVal)
+{
+  nsCOMPtr<nsIDOMNode> retVal = Item(aIdx)->AsDOMNode();
+  retVal.forget(aRetVal);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+SimpleHTMLCollection::NamedItem(const nsAString& aName, nsIDOMNode** aRetVal)
+{
+  nsCOMPtr<nsIDOMNode> retVal = NamedItem(aName)->AsDOMNode();
+  retVal.forget(aRetVal);
+  return NS_OK;
+}
+
+} // namespace dom
+} // namespace mozilla
+
 void
 nsIdentifierMapEntry::AddNameElement(nsINode* aNode, Element* aElement)
 {
   if (!mNameContentList) {
-    mNameContentList = new nsSimpleContentList(aNode);
+    mNameContentList = new SimpleHTMLCollection(aNode);
   }
 
   mNameContentList->AppendElement(aElement);
@@ -1010,12 +1127,12 @@ nsExternalResourceMap::PendingLoad::SetupViewer(nsIRequest* aRequest,
   nsCOMPtr<nsICategoryManager> catMan =
     do_GetService(NS_CATEGORYMANAGER_CONTRACTID);
   NS_ENSURE_TRUE(catMan, NS_ERROR_NOT_AVAILABLE);
-  nsXPIDLCString contractId;
+  nsCString contractId;
   nsresult rv = catMan->GetCategoryEntry("Gecko-Content-Viewers", type.get(),
                                          getter_Copies(contractId));
   NS_ENSURE_SUCCESS(rv, rv);
   nsCOMPtr<nsIDocumentLoaderFactory> docLoaderFactory =
-    do_GetService(contractId);
+    do_GetService(contractId.get());
   NS_ENSURE_TRUE(docLoaderFactory, NS_ERROR_NOT_AVAILABLE);
 
   nsCOMPtr<nsIContentViewer> viewer;
@@ -1389,7 +1506,8 @@ nsIDocument::nsIDocument()
     mChildDocumentUseCounters(0),
     mNotifiedPageForUseCounter(0),
     mIncCounters(),
-    mUserHasInteracted(false)
+    mUserHasInteracted(false),
+    mServoRestyleRootDirtyBits(0)
 {
   SetIsInDocument();
   for (auto& cnt : mIncCounters) {
@@ -1443,6 +1561,9 @@ nsDocument::nsDocument(const char* aContentType)
 #ifdef DEBUG
   , mWillReparent(false)
 #endif
+  , mDOMLoadingSet(false)
+  , mDOMInteractiveSet(false)
+  , mDOMCompleteSet(false)
 {
   SetContentTypeInternal(nsDependentCString(aContentType));
 
@@ -3927,6 +4048,9 @@ nsDocument::CreateShell(nsPresContext* aContext, nsViewManager* aViewManager,
   if (docShell && docShell->IsInvisible())
     shell->SetNeverPainting(true);
 
+  MOZ_LOG(gDocumentLeakPRLog, LogLevel::Debug, ("DOCUMENT %p with PressShell %p and DocShell %p",
+                                                this, shell.get(), docShell.get()));
+
   mExternalResourceMap.ShowViewers();
 
   UpdateFrameRequestCallbackSchedulingState();
@@ -5463,6 +5587,9 @@ nsDocument::UnblockDOMContentLoaded()
   if (--mBlockDOMContentLoaded != 0 || mDidFireDOMContentLoaded) {
     return;
   }
+
+  MOZ_LOG(gDocumentLeakPRLog, LogLevel::Debug, ("DOCUMENT %p UnblockDOMContentLoaded", this));
+
   mDidFireDOMContentLoaded = true;
 
   MOZ_ASSERT(mReadyState == READYSTATE_INTERACTIVE);
@@ -5903,6 +6030,13 @@ nsDocument::CreateTextNode(const nsAString& aData, nsIDOMText** aReturn)
 {
   *aReturn = nsIDocument::CreateTextNode(aData).take();
   return NS_OK;
+}
+
+already_AddRefed<nsTextNode>
+nsIDocument::CreateEmptyTextNode() const
+{
+  RefPtr<nsTextNode> text = new nsTextNode(mNodeInfoManager);
+  return text.forget();
 }
 
 already_AddRefed<nsTextNode>
@@ -8748,15 +8882,8 @@ nsDocument::CanSavePresentation(nsIRequest *aNewRequest)
 
 #ifdef MOZ_WEBRTC
   // Check if we have active PeerConnections
-  nsCOMPtr<IPeerConnectionManager> pcManager =
-    do_GetService(IPEERCONNECTION_MANAGER_CONTRACTID);
-
-  if (pcManager && win) {
-    bool active;
-    pcManager->HasActivePeerConnection(win->WindowID(), &active);
-    if (active) {
-      return false;
-    }
+  if (win && win->HasActivePeerConnections()) {
+    return false;
   }
 #endif // MOZ_WEBRTC
 
@@ -8818,6 +8945,7 @@ nsDocument::Destroy()
 
   mIsGoingAway = true;
 
+  ScriptLoader()->Destroy();
   SetScriptGlobalObject(nullptr);
   RemovedFromDocShell();
 
@@ -9519,6 +9647,8 @@ nsDocument::SetReadyStateInternal(ReadyState rs)
     mLoadingTimeStamp = mozilla::TimeStamp::Now();
   }
 
+  RecordNavigationTiming(rs);
+
   RefPtr<AsyncEventDispatcher> asyncDispatcher =
     new AsyncEventDispatcher(this, NS_LITERAL_STRING("readystatechange"),
                              false, false);
@@ -9640,19 +9770,23 @@ already_AddRefed<nsIURI>
 nsDocument::ResolvePreloadImage(nsIURI *aBaseURI,
                                 const nsAString& aSrcAttr,
                                 const nsAString& aSrcsetAttr,
-                                const nsAString& aSizesAttr)
+                                const nsAString& aSizesAttr,
+                                bool *aIsImgSet)
 {
   nsString sourceURL;
+  bool isImgSet;
   if (mPreloadPictureDepth == 1 && !mPreloadPictureFoundSource.IsVoid()) {
     // We're in a <picture> element and found a URI from a source previous to
     // this image, use it.
     sourceURL = mPreloadPictureFoundSource;
+    isImgSet = true;
   } else {
     // Otherwise try to use this <img> as a source
     HTMLImageElement::SelectSourceForTagWithAttrs(this, false, aSrcAttr,
                                                   aSrcsetAttr, aSizesAttr,
                                                   NullString(), NullString(),
                                                   sourceURL);
+    isImgSet = !aSrcsetAttr.IsEmpty();
   }
 
   // Empty sources are not loaded by <img> (i.e. not resolved to the baseURI)
@@ -9670,6 +9804,8 @@ nsDocument::ResolvePreloadImage(nsIURI *aBaseURI,
     return nullptr;
   }
 
+  *aIsImgSet = isImgSet;
+
   // We don't clear mPreloadPictureFoundSource because subsequent <img> tags in
   // this this <picture> share the same <sources> (though this is not valid per
   // spec)
@@ -9678,16 +9814,12 @@ nsDocument::ResolvePreloadImage(nsIURI *aBaseURI,
 
 void
 nsDocument::MaybePreLoadImage(nsIURI* uri, const nsAString &aCrossOriginAttr,
-                              ReferrerPolicy aReferrerPolicy)
+                              ReferrerPolicy aReferrerPolicy, bool aIsImgSet)
 {
   // Early exit if the img is already present in the img-cache
   // which indicates that the "real" load has already started and
   // that we shouldn't preload it.
-  int16_t blockingStatus;
-  if (nsContentUtils::IsImageInCache(uri, static_cast<nsIDocument *>(this)) ||
-      !nsContentUtils::CanLoadImage(uri, static_cast<nsIDocument *>(this),
-                                    this, NodePrincipal(), &blockingStatus,
-                                    nsIContentPolicy::TYPE_INTERNAL_IMAGE_PRELOAD)) {
+  if (nsContentUtils::IsImageInCache(uri, static_cast<nsIDocument *>(this))) {
     return;
   }
 
@@ -9706,6 +9838,10 @@ nsDocument::MaybePreLoadImage(nsIURI* uri, const nsAString &aCrossOriginAttr,
     MOZ_CRASH("Unknown CORS mode!");
   }
 
+  nsContentPolicyType policyType =
+    aIsImgSet ? nsIContentPolicy::TYPE_IMAGESET :
+                nsIContentPolicy::TYPE_INTERNAL_IMAGE_PRELOAD;
+
   // Image not in cache - trigger preload
   RefPtr<imgRequestProxy> request;
   nsresult rv =
@@ -9719,7 +9855,7 @@ nsDocument::MaybePreLoadImage(nsIURI* uri, const nsAString &aCrossOriginAttr,
                               loadFlags,
                               NS_LITERAL_STRING("img"),
                               getter_AddRefs(request),
-                              nsIContentPolicy::TYPE_INTERNAL_IMAGE_PRELOAD);
+                              policyType);
 
   // Pin image-reference to avoid evicting it from the img-cache before
   // the "real" load occurs. Unpinned in DispatchContentLoadedEvents and
@@ -12438,8 +12574,7 @@ nsDocument::GetVisibilityState(nsAString& aState)
 /* virtual */ void
 nsIDocument::DocAddSizeOfExcludingThis(nsWindowSizes& aSizes) const
 {
-  nsINode::AddSizeOfExcludingThis(aSizes.mState, aSizes.mStyleSizes,
-                                  &aSizes.mDOMOtherSize);
+  nsINode::AddSizeOfExcludingThis(aSizes, &aSizes.mDOMOtherSize);
 
   if (mPresShell) {
     mPresShell->AddSizeOfIncludingThis(aSizes);
@@ -12486,8 +12621,7 @@ SizeOfOwnedSheetArrayExcludingThis(const nsTArray<RefPtr<StyleSheet>>& aSheets,
 }
 
 void
-nsDocument::AddSizeOfExcludingThis(SizeOfState& aState,
-                                   nsStyleSizes& aSizes,
+nsDocument::AddSizeOfExcludingThis(nsWindowSizes& aSizes,
                                    size_t* aNodeSize) const
 {
   // This AddSizeOfExcludingThis() overrides the one from nsINode.  But
@@ -12501,8 +12635,7 @@ static void
 AddSizeOfNodeTree(nsIContent* aNode, nsWindowSizes& aWindowSizes)
 {
   size_t nodeSize = 0;
-  aNode->AddSizeOfIncludingThis(aWindowSizes.mState, aWindowSizes.mStyleSizes,
-                                &nodeSize);
+  aNode->AddSizeOfIncludingThis(aWindowSizes, &nodeSize);
 
   // This is where we transfer the nodeSize obtained from
   // nsINode::AddSizeOfIncludingThis() to a value in nsWindowSizes.
@@ -13693,4 +13826,54 @@ nsIDocument::GetSelection(ErrorResult& aRv)
   }
 
   return nsGlobalWindow::Cast(window)->GetSelection(aRv);
+}
+
+void
+nsDocument::RecordNavigationTiming(ReadyState aReadyState)
+{
+  if (!XRE_IsContentProcess()) {
+    return;
+  }
+  if (!IsTopLevelContentDocument()) {
+    return;
+  }
+  // If we dont have the timing yet (mostly because the doc is still loading),
+  // get it from docshell.
+  RefPtr<nsDOMNavigationTiming> timing = mTiming;
+  if (!timing) {
+    if (!mDocumentContainer) {
+      return;
+    }
+    timing = mDocumentContainer->GetNavigationTiming();
+    if (!timing) {
+      return;
+    }
+  }
+  TimeStamp startTime = timing->GetNavigationStartTimeStamp();
+  switch (aReadyState) {
+    case READYSTATE_LOADING:
+      if (!mDOMLoadingSet) {
+        Telemetry::AccumulateTimeDelta(Telemetry::TIME_TO_DOM_LOADING_MS,
+                                       startTime);
+        mDOMLoadingSet = true;
+      }
+      break;
+    case READYSTATE_INTERACTIVE:
+      if (!mDOMInteractiveSet) {
+        Telemetry::AccumulateTimeDelta(Telemetry::TIME_TO_DOM_INTERACTIVE_MS,
+                                       startTime);
+        mDOMInteractiveSet = true;
+      }
+      break;
+    case READYSTATE_COMPLETE:
+      if (!mDOMCompleteSet) {
+        Telemetry::AccumulateTimeDelta(Telemetry::TIME_TO_DOM_COMPLETE_MS,
+                                       startTime);
+        mDOMCompleteSet = true;
+      }
+      break;
+    default:
+      NS_WARNING("Unexpected ReadyState value");
+      break;
+  }
 }

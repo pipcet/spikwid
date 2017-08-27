@@ -2359,6 +2359,7 @@ nsTextEditorState::CreateEmptyDivNode()
 
   // Create the text node for DIV
   RefPtr<nsTextNode> textNode = new nsTextNode(pNodeInfoManager);
+  textNode->MarkAsMaybeModifiedFrequently();
 
   element->AppendChildTo(textNode, false);
 
@@ -2794,7 +2795,7 @@ nsTextEditorState::HasNonEmptyValue()
   if (mTextEditor && mBoundFrame && mEditorInitialized &&
       !mIsCommittingComposition) {
     bool empty;
-    nsresult rv = mTextEditor->GetDocumentIsEmpty(&empty);
+    nsresult rv = mTextEditor->DocumentIsEmpty(&empty);
     if (NS_SUCCEEDED(rv)) {
       return !empty;
     }

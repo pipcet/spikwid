@@ -65,6 +65,9 @@ this.sidebarAction = class extends ExtensionAPI {
                                      extension);
 
     // We need to ensure our elements are available before session restore.
+    for (let window of windowTracker.browserWindows()) {
+      this.createMenuItem(window, this.defaults);
+    }
     this.windowOpenListener = (window) => {
       this.createMenuItem(window, this.defaults);
     };
@@ -346,6 +349,30 @@ this.sidebarAction = class extends ExtensionAPI {
     }
   }
 
+  /**
+   * Opens this sidebar action for the given window.
+   *
+   * @param {ChromeWindow} window
+   */
+  open(window) {
+    let {SidebarUI} = window;
+    if (SidebarUI) {
+      SidebarUI.show(this.id);
+    }
+  }
+
+  /**
+   * Closes this sidebar action for the given window if this sidebar action is open.
+   *
+   * @param {ChromeWindow} window
+   */
+  close(window) {
+    let {SidebarUI} = window;
+    if (SidebarUI.isOpen && this.id == SidebarUI.currentID) {
+      SidebarUI.hide();
+    }
+  }
+
   getAPI(context) {
     let {extension} = context;
     const sidebarAction = this;
@@ -405,6 +432,16 @@ this.sidebarAction = class extends ExtensionAPI {
 
           let panel = sidebarAction.getProperty(nativeTab, "panel");
           return Promise.resolve(panel);
+        },
+
+        open() {
+          let window = windowTracker.topWindow;
+          sidebarAction.open(window);
+        },
+
+        close() {
+          let window = windowTracker.topWindow;
+          sidebarAction.close(window);
         },
       },
     };

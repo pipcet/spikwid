@@ -491,8 +491,6 @@ public:
 
   virtual mozilla::ipc::IPCResult RecvDeactivate(PBrowserChild* aTab) override;
 
-  virtual mozilla::ipc::IPCResult RecvParentActivated(PBrowserChild* aTab, const bool& aActivated) override;
-
   mozilla::ipc::IPCResult
   RecvRefreshScreens(nsTArray<ScreenDetails>&& aScreens) override;
 
@@ -620,6 +618,18 @@ public:
 
   virtual mozilla::ipc::IPCResult
   RecvResetCodeCoverageCounters() override;
+
+  virtual mozilla::ipc::IPCResult
+  RecvSetInputEventQueueEnabled() override;
+
+  virtual mozilla::ipc::IPCResult
+  RecvFlushInputEventQueue() override;
+
+  virtual mozilla::ipc::IPCResult
+  RecvSuspendInputEventQueue() override;
+
+  virtual mozilla::ipc::IPCResult
+  RecvResumeInputEventQueue() override;
 
 #if defined(XP_WIN) && defined(ACCESSIBILITY)
   bool

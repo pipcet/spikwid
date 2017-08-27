@@ -68,6 +68,14 @@
               "toolbar": {
                 "type": "string",
                 "optional": true
+              },
+              "toolbar_field": {
+                "type": "string",
+                "optional": true
+              },
+              "toolbar_field_text": {
+                "type": "string",
+                "optional": true
               }
             },
             "additionalProperties": { "$ref": "UnrecognizedProperty" }
@@ -173,10 +181,6 @@
                 "optional": true
               },
               "sidebars": {
-                "$ref": "ExtensionURL",
-                "optional": true
-              },
-              "share_page": {
                 "$ref": "ExtensionURL",
                 "optional": true
               },

@@ -97,6 +97,7 @@
 #include "DecoderTraits.h"
 #include "MediaContainerType.h"
 #include "MP4Decoder.h"
+#include "FrameStatistics.h"
 
 #ifdef MOZ_ANDROID_HLS_SUPPORT
 #include "HLSDecoder.h"
@@ -3692,7 +3693,7 @@ MediaElementTableCount(HTMLMediaElement* aElement, nsIURI* aURI)
 void
 HTMLMediaElement::AddMediaElementToURITable()
 {
-  NS_ASSERTION(mDecoder && mDecoder->GetResource(), "Call this only with decoder Load called");
+  NS_ASSERTION(mDecoder, "Call this only with decoder Load called");
   NS_ASSERTION(MediaElementTableCount(this, mLoadingSrc) == 0,
     "Should not have entry for element in element table before addition");
   if (!gElementTable) {
@@ -5537,9 +5538,10 @@ void HTMLMediaElement::SeekCompleted()
   }
 }
 
-void HTMLMediaElement::NotifySuspendedByCache(bool aIsSuspended)
+void
+HTMLMediaElement::NotifySuspendedByCache(bool aSuspendedByCache)
 {
-  mDownloadSuspendedByCache = aIsSuspended;
+  mDownloadSuspendedByCache = aSuspendedByCache;
 }
 
 void HTMLMediaElement::DownloadSuspended()
@@ -5744,18 +5746,18 @@ HTMLMediaElement::UpdateReadyStateInternal()
   }
 
   enum NextFrameStatus nextFrameStatus = NextFrameStatus();
-  if (nextFrameStatus == NEXT_FRAME_UNAVAILABLE ||
-      (nextFrameStatus == NEXT_FRAME_UNAVAILABLE_BUFFERING &&
-       mWaitingForKey == WAITING_FOR_KEY)) {
-    if (mWaitingForKey != NOT_WAITING_FOR_KEY) {
+  if (mWaitingForKey == NOT_WAITING_FOR_KEY) {
+    if (nextFrameStatus == NEXT_FRAME_UNAVAILABLE && mDecoder &&
+        !mDecoder->IsEnded()) {
+      nextFrameStatus = mDecoder->NextFrameBufferedStatus();
+    }
+  } else if (mWaitingForKey == WAITING_FOR_KEY) {
+    if (nextFrameStatus == NEXT_FRAME_UNAVAILABLE ||
+        nextFrameStatus == NEXT_FRAME_UNAVAILABLE_BUFFERING) {
       // http://w3c.github.io/encrypted-media/#wait-for-key
       // Continuing 7.3.4 Queue a "waitingforkey" Event
       // 4. Queue a task to fire a simple event named waitingforkey
       // at the media element.
-      if (mWaitingForKey == WAITING_FOR_KEY) {
-        mWaitingForKey = WAITING_FOR_KEY_DISPATCHED;
-        DispatchAsyncEvent(NS_LITERAL_STRING("waitingforkey"));
-      }
       // 5. Set the readyState of media element to HAVE_METADATA.
       // NOTE: We'll change to HAVE_CURRENT_DATA or HAVE_METADATA
       // depending on whether we've loaded the first frame or not
@@ -5763,8 +5765,15 @@ HTMLMediaElement::UpdateReadyStateInternal()
       // 6. Suspend playback.
       // Note: Playback will already be stalled, as the next frame is
       // unavailable.
-    } else if (mDecoder && !mDecoder->IsEnded()) {
-      nextFrameStatus = mDecoder->NextFrameBufferedStatus();
+      mWaitingForKey = WAITING_FOR_KEY_DISPATCHED;
+      DispatchAsyncEvent(NS_LITERAL_STRING("waitingforkey"));
+    }
+  } else {
+    MOZ_ASSERT(mWaitingForKey == WAITING_FOR_KEY_DISPATCHED);
+    if (nextFrameStatus == NEXT_FRAME_AVAILABLE) {
+      // We have new frames after dispatching "waitingforkey".
+      // This means we've got the key and can reset mWaitingForKey now.
+      mWaitingForKey = NOT_WAITING_FOR_KEY;
     }
   }
 
@@ -5823,14 +5832,6 @@ HTMLMediaElement::UpdateReadyStateInternal()
     return;
   }
 
-  if (mDecoder && !mDecoder->IsEnded() &&
-      !mDecoder->GetResource()->IsExpectingMoreData()) {
-    LOG(LogLevel::Debug, ("MediaElement %p UpdateReadyStateInternal() "
-                          "Decoder fetched all data for media resource", this));
-    ChangeReadyState(nsIDOMHTMLMediaElement::HAVE_ENOUGH_DATA);
-    return;
-  }
-
   if (nextFrameStatus != MediaDecoderOwner::NEXT_FRAME_AVAILABLE) {
     LOG(LogLevel::Debug, ("MediaElement %p UpdateReadyStateInternal() "
                           "Next frame not available", this));
@@ -5853,7 +5854,7 @@ HTMLMediaElement::UpdateReadyStateInternal()
   // autoplay elements for live streams will never play. Otherwise we
   // move to HAVE_ENOUGH_DATA if we can play through the entire media
   // without stopping to buffer.
-  if (mWaitingForKey == NOT_WAITING_FOR_KEY && mDecoder->CanPlayThrough()) {
+  if (mDecoder->CanPlayThrough()) {
     LOG(LogLevel::Debug, ("MediaElement %p UpdateReadyStateInternal() "
                           "Decoder can play through", this));
     ChangeReadyState(nsIDOMHTMLMediaElement::HAVE_ENOUGH_DATA);
@@ -5918,7 +5919,6 @@ void HTMLMediaElement::ChangeReadyState(nsMediaReadyState aState)
       mReadyState >= nsIDOMHTMLMediaElement::HAVE_FUTURE_DATA) {
     DispatchAsyncEvent(NS_LITERAL_STRING("canplay"));
     if (!mPaused) {
-      mWaitingForKey = NOT_WAITING_FOR_KEY;
       NotifyAboutPlaying();
     }
   }
@@ -6669,14 +6669,16 @@ NS_IMETHODIMP HTMLMediaElement::GetMozFragmentEnd(double* aTime)
 
 static double ClampPlaybackRate(double aPlaybackRate)
 {
+  MOZ_ASSERT(aPlaybackRate >= 0.0);
+
   if (aPlaybackRate == 0.0) {
     return aPlaybackRate;
   }
-  if (Abs(aPlaybackRate) < MIN_PLAYBACKRATE) {
-    return aPlaybackRate < 0 ? -MIN_PLAYBACKRATE : MIN_PLAYBACKRATE;
+  if (aPlaybackRate < MIN_PLAYBACKRATE) {
+    return MIN_PLAYBACKRATE;
   }
-  if (Abs(aPlaybackRate) > MAX_PLAYBACKRATE) {
-    return aPlaybackRate < 0 ? -MAX_PLAYBACKRATE : MAX_PLAYBACKRATE;
+  if (aPlaybackRate > MAX_PLAYBACKRATE) {
+    return MAX_PLAYBACKRATE;
   }
   return aPlaybackRate;
 }
@@ -6718,14 +6720,18 @@ HTMLMediaElement::SetPlaybackRate(double aPlaybackRate, ErrorResult& aRv)
   // Changing the playback rate of a media that has more than two channels is
   // not supported.
   if (aPlaybackRate < 0) {
-    aRv.Throw(NS_ERROR_NOT_IMPLEMENTED);
+    aRv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
     return;
   }
 
-  mPlaybackRate = ClampPlaybackRate(aPlaybackRate);
+  if (mPlaybackRate == aPlaybackRate) {
+    return;
+  }
+
+  mPlaybackRate = aPlaybackRate;
 
   if (mPlaybackRate != 0.0 &&
-      (mPlaybackRate < 0 || mPlaybackRate > THRESHOLD_HIGH_PLAYBACKRATE_AUDIO ||
+      (mPlaybackRate > THRESHOLD_HIGH_PLAYBACKRATE_AUDIO ||
        mPlaybackRate < THRESHOLD_LOW_PLAYBACKRATE_AUDIO)) {
     SetMutedInternal(mMuted | MUTED_BY_INVALID_PLAYBACK_RATE);
   } else {
@@ -6733,7 +6739,7 @@ HTMLMediaElement::SetPlaybackRate(double aPlaybackRate, ErrorResult& aRv)
   }
 
   if (mDecoder) {
-    mDecoder->SetPlaybackRate(mPlaybackRate);
+    mDecoder->SetPlaybackRate(ClampPlaybackRate(mPlaybackRate));
   }
   DispatchAsyncEvent(NS_LITERAL_STRING("ratechange"));
 }
@@ -7150,6 +7156,17 @@ HTMLMediaElement::NextFrameStatus()
     return mMediaStreamListener->NextFrameStatus();
   }
   return NEXT_FRAME_UNINITIALIZED;
+}
+
+
+void
+HTMLMediaElement::SetDecoder(MediaDecoder* aDecoder)
+{
+  MOZ_ASSERT(aDecoder); // Use ShutdownDecoder() to clear.
+  if (mDecoder) {
+    ShutdownDecoder();
+  }
+  mDecoder = aDecoder;
 }
 
 float

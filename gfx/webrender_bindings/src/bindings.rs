@@ -9,7 +9,7 @@ use gleam::gl;
 use webrender_api::*;
 use webrender::renderer::{ReadPixelsFormat, Renderer, RendererOptions};
 use webrender::renderer::{ExternalImage, ExternalImageHandler, ExternalImageSource};
-use webrender::renderer::{DebugFlags, PROFILER_DBG};
+use webrender::renderer::DebugFlags;
 use webrender::{ApiRecordingReceiver, BinaryRecorder};
 use thread_profiler::register_thread_with_profiler;
 use moz2d_renderer::Moz2dImageRenderer;
@@ -462,12 +462,22 @@ pub unsafe extern "C" fn wr_renderer_readback(renderer: &mut Renderer,
                               &mut slice);
 }
 
+/// cbindgen:field-names=[mBits]
+#[repr(C)]
+pub struct WrDebugFlags {
+    bits: u32,
+}
+
 #[no_mangle]
-pub extern "C" fn wr_renderer_set_profiler_enabled(renderer: &mut Renderer,
-                                                   enabled: bool) {
-    let mut flags = renderer.get_debug_flags();
-    flags.set(PROFILER_DBG, enabled);
-    renderer.set_debug_flags(flags);
+pub extern "C" fn wr_renderer_get_debug_flags(renderer: &mut Renderer) -> WrDebugFlags {
+    WrDebugFlags { bits: renderer.get_debug_flags().bits() }
+}
+
+#[no_mangle]
+pub extern "C" fn wr_renderer_set_debug_flags(renderer: &mut Renderer, flags: WrDebugFlags) {
+    if let Some(dbg_flags) = DebugFlags::from_bits(flags.bits) {
+        renderer.set_debug_flags(dbg_flags);
+    }
 }
 
 #[no_mangle]
@@ -532,7 +542,7 @@ pub unsafe extern "C" fn wr_thread_pool_new() -> *mut WrThreadPool {
             register_thread_with_profiler(format!("WebRender:Worker#{}", idx));
         });
 
-    let workers = Arc::new(rayon::ThreadPool::new(worker_config).unwrap());        
+    let workers = Arc::new(rayon::ThreadPool::new(worker_config).unwrap());
 
     Box::into_raw(Box::new(WrThreadPool(workers)))
 }
@@ -550,7 +560,6 @@ pub extern "C" fn wr_window_new(window_id: WrWindowId,
                                 window_height: u32,
                                 gl_context: *mut c_void,
                                 thread_pool: *mut WrThreadPool,
-                                enable_profiler: bool,
                                 out_handle: &mut *mut DocumentHandle,
                                 out_renderer: &mut *mut Renderer,
                                 out_max_texture_size: *mut u32)
@@ -580,16 +589,12 @@ pub extern "C" fn wr_window_new(window_id: WrWindowId,
         Arc::clone(&(*thread_pool).0)
     };
 
-    let mut debug_flags = DebugFlags::empty();
-    debug_flags.set(PROFILER_DBG, enable_profiler);
     let opts = RendererOptions {
         enable_aa: true,
         enable_subpixel_aa: true,
-        debug_flags: debug_flags,
         recorder: recorder,
         blob_image_renderer: Some(Box::new(Moz2dImageRenderer::new(workers.clone()))),
         workers: Some(workers.clone()),
-        cache_expiry_frames: 60, // see https://github.com/servo/webrender/pull/1294#issuecomment-304318800
         enable_render_on_scroll: false,
         ..Default::default()
     };
@@ -1282,6 +1287,48 @@ pub extern "C" fn wr_dp_push_text(state: &mut WrState,
 }
 
 #[no_mangle]
+pub extern "C" fn wr_dp_push_text_shadow(state: &mut WrState,
+                                         bounds: LayoutRect,
+                                         clip: LayoutRect,
+                                         shadow: TextShadow) {
+    assert!(unsafe { is_in_main_thread() });
+
+    state.frame_builder.dl_builder.push_text_shadow(bounds, Some(LocalClip::Rect(clip.into())), shadow.into());
+}
+
+#[no_mangle]
+pub extern "C" fn wr_dp_pop_text_shadow(state: &mut WrState) {
+    assert!(unsafe { is_in_main_thread() });
+
+    state.frame_builder.dl_builder.pop_text_shadow();
+}
+
+#[no_mangle]
+pub extern "C" fn wr_dp_push_line(state: &mut WrState,
+                                  clip: LayoutRect,
+                                  baseline: f32,
+                                  start: f32,
+                                  end: f32,
+                                  orientation: LineOrientation,
+                                  width: f32,
+                                  color: ColorF,
+                                  style: LineStyle) {
+    assert!(unsafe { is_in_main_thread() });
+
+    state.frame_builder
+         .dl_builder
+         .push_line(Some(LocalClip::Rect(clip.into())),
+                    baseline,
+                    start,
+                    end,
+                    orientation,
+                    width,
+                    color,
+                    style);
+
+}
+
+#[no_mangle]
 pub extern "C" fn wr_dp_push_border(state: &mut WrState,
                                     rect: LayoutRect,
                                     clip: LayoutRect,
@@ -1543,6 +1590,8 @@ extern "C" {
                                width: u32,
                                height: u32,
                                format: ImageFormat,
+                               tile_size: *const u16,
+                               tile_offset: *const TileOffset,
                                output: MutByteSlice)
                                -> bool;
 }

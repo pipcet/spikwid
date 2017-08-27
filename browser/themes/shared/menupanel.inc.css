@@ -1,11 +1,5 @@
 /* Menu panel and palette styles */
 
-#add-share-provider {
-  list-style-image: url(chrome://browser/skin/menuPanel-small.svg);
-  -moz-image-region: rect(0px, 96px, 16px, 80px);
-}
-
-#appMenuRecentlyClosedWindows,
 #appMenu-new-window-button {
   list-style-image: url(chrome://browser/skin/new-window.svg);
 }
@@ -40,7 +34,7 @@
 }
 
 #appMenu-help-button {
-  list-style-image: url(chrome://browser/skin/help.svg);
+  list-style-image: url(chrome://global/skin/icons/help.svg);
 }
 
 #appMenu-cut-button {
@@ -68,7 +62,7 @@
 }
 
 #appMenu-fullscreen-button {
-  list-style-image: url(chrome://browser/skin/fullscreen-enter.svg);
+  list-style-image: url(chrome://browser/skin/fullscreen.svg);
 }
 
 #appMenu-fullscreen-button[checked] {
@@ -128,3 +122,8 @@ toolbarpaletteitem[place="palette"] > #bookmarks-menu-button,
 #appMenuRestoreLastSession {
   list-style-image: url("chrome://browser/skin/reload.svg");
 }
+
+#appMenuRecentlyClosedWindows {
+  list-style-image: url(chrome://browser/skin/window.svg);
+}
+

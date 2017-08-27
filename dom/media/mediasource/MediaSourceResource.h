@@ -41,8 +41,6 @@ public:
   int64_t GetNextCachedData(int64_t aOffset) override { UNIMPLEMENTED(); return -1; }
   int64_t GetCachedDataEnd(int64_t aOffset) override { UNIMPLEMENTED(); return -1; }
   bool IsDataCachedToEndOfResource(int64_t aOffset) override { UNIMPLEMENTED(); return false; }
-  bool IsSuspendedByCache() override { UNIMPLEMENTED(); return false; }
-  bool IsSuspended() override { UNIMPLEMENTED(); return false; }
   nsresult ReadFromCache(char* aBuffer, int64_t aOffset, uint32_t aCount) override { UNIMPLEMENTED(); return NS_ERROR_FAILURE; }
 
   already_AddRefed<nsIPrincipal> GetCurrentPrincipal() override
@@ -57,23 +55,10 @@ public:
     return NS_OK;
   }
 
-  bool IsTransportSeekable() override { return true; }
-
-  bool IsLiveStream() override
-  {
-    MonitorAutoLock mon(mMonitor);
-    return !mEnded;
-  }
   void SetEnded(bool aEnded)
   {
     MonitorAutoLock mon(mMonitor);
     mEnded = aEnded;
-  }
-
-  bool IsExpectingMoreData() override
-  {
-    MonitorAutoLock mon(mMonitor);
-    return !mEnded;
   }
 
 private:

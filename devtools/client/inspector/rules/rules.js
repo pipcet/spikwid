@@ -911,6 +911,7 @@ CssRuleView.prototype = {
 
     createChild(this.element, "div", {
       id: "ruleview-no-results",
+      class: "devtools-sidepanel-no-result",
       textContent: l10n("rule.empty")
     });
   },
@@ -1003,12 +1004,7 @@ CssRuleView.prototype = {
     container.hidden = false;
     this.element.appendChild(container);
 
-    header.addEventListener("dblclick", () => {
-      this._toggleContainerVisibility(twisty, container, isPseudo,
-        !this.showPseudoElements);
-    });
-
-    twisty.addEventListener("click", () => {
+    header.addEventListener("click", () => {
       this._toggleContainerVisibility(twisty, container, isPseudo,
         !this.showPseudoElements);
     });
@@ -1057,7 +1053,7 @@ CssRuleView.prototype = {
   },
 
   _getRuleViewHeaderClassName: function (isPseudo) {
-    let baseClassName = "theme-gutter ruleview-header";
+    let baseClassName = "ruleview-header";
     return isPseudo ? baseClassName + " ruleview-expandable-header" :
       baseClassName;
   },

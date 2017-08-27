@@ -32,7 +32,7 @@ use string_cache::Atom;
 use style_traits::{CSSPixel, DevicePixel};
 use style_traits::{ToCss, ParseError, StyleParseError};
 use style_traits::viewport::ViewportConstraints;
-use values::{CSSFloat, specified, CustomIdent};
+use values::{CSSFloat, specified, CustomIdent, serialize_dimension};
 use values::computed::{self, ToComputedValue};
 
 /// The `Device` in Gecko wraps a pres context, has a default values computed,
@@ -200,7 +200,7 @@ impl Device {
 
 /// A expression for gecko contains a reference to the media feature, the value
 /// the media query contained, and the range to evaluate.
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct Expression {
     feature: &'static nsMediaFeature,
     value: Option<MediaExpressionValue>,
@@ -242,7 +242,7 @@ impl PartialEq for Expression {
 }
 
 /// A resolution.
-#[derive(PartialEq, Debug, Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Resolution {
     /// Dots per inch.
     Dpi(CSSFloat),
@@ -287,15 +287,15 @@ impl ToCss for Resolution {
         where W: fmt::Write,
     {
         match *self {
-            Resolution::Dpi(v) => write!(dest, "{}dpi", v),
-            Resolution::Dppx(v) => write!(dest, "{}dppx", v),
-            Resolution::Dpcm(v) => write!(dest, "{}dpcm", v),
+            Resolution::Dpi(v) => serialize_dimension(v, "dpi", dest),
+            Resolution::Dppx(v) => serialize_dimension(v, "dppx", dest),
+            Resolution::Dpcm(v) => serialize_dimension(v, "dpcm", dest),
         }
     }
 }
 
 /// A value found or expected in a media expression.
-#[derive(PartialEq, Debug, Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum MediaExpressionValue {
     /// A length.
     Length(specified::Length),
@@ -386,8 +386,8 @@ impl MediaExpressionValue {
     {
         match *self {
             MediaExpressionValue::Length(ref l) => l.to_css(dest),
-            MediaExpressionValue::Integer(v) => write!(dest, "{}", v),
-            MediaExpressionValue::Float(v) => write!(dest, "{}", v),
+            MediaExpressionValue::Integer(v) => v.to_css(dest),
+            MediaExpressionValue::Float(v) => v.to_css(dest),
             MediaExpressionValue::BoolInteger(v) => {
                 dest.write_str(if v { "1" } else { "0" })
             },

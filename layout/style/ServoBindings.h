@@ -301,6 +301,12 @@ void Gecko_nsFont_InitSystem(nsFont* dst, int32_t font_id,
                              const nsStyleFont* font, RawGeckoPresContextBorrowed pres_context);
 void Gecko_nsFont_Destroy(nsFont* dst);
 
+nsTArray<unsigned int>* Gecko_AppendFeatureValueHashEntry(
+  gfxFontFeatureValueSet* value_set, nsIAtom* family, uint32_t alternate, nsIAtom* name);
+void Gecko_nsFont_SetFontFeatureValuesLookup(nsFont* font,
+                                             const RawGeckoPresContext* pres_context);
+void Gecko_nsFont_ResetFontFeatureValuesLookup(nsFont* font);
+
 // Font variant alternates
 void Gecko_ClearAlternateValues(nsFont* font, size_t length);
 void Gecko_AppendAlternateValues(nsFont* font, uint32_t alternate_name, nsIAtom* atom);
@@ -384,10 +390,6 @@ void Gecko_NoteDirtyElement(RawGeckoElementBorrowed element);
 void Gecko_NoteAnimationOnlyDirtyElement(RawGeckoElementBorrowed element);
 
 // Incremental restyle.
-// Also, we might want a ComputedValues to ComputedValues API for animations?
-// Not if we do them in Gecko...
-nsStyleContext* Gecko_GetStyleContext(RawGeckoElementBorrowed element,
-                                      nsIAtom* aPseudoTagOrNull);
 mozilla::CSSPseudoElementType Gecko_GetImplementedPseudo(RawGeckoElementBorrowed element);
 // We'd like to return `nsChangeHint` here, but bindgen bitfield enums don't
 // work as return values with the Linux 32-bit ABI at the moment because
@@ -649,6 +651,9 @@ void Gecko_AddPropertyToSet(nsCSSPropertyIDSetBorrowedMut, nsCSSPropertyID);
 // Register a namespace and get a namespace id.
 // Returns -1 on error (OOM)
 int32_t Gecko_RegisterNamespace(nsIAtom* ns);
+
+// Returns true if this process should create a rayon thread pool for styling.
+bool Gecko_ShouldCreateStyleThreadPool();
 
 // Style-struct management.
 #define STYLE_STRUCT(name, checkdata_cb)                                       \

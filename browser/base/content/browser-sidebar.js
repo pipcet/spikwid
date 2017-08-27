@@ -68,6 +68,15 @@ var SidebarUI = {
     enumerator.getNext();
     if (!enumerator.hasMoreElements()) {
       document.persist("sidebar-box", "sidebarcommand");
+
+      let xulStore = Cc["@mozilla.org/xul/xulstore;1"].getService(Ci.nsIXULStore);
+
+      if (this._box.hasAttribute("positionend")) {
+        document.persist("sidebar-box", "positionend");
+      } else {
+        xulStore.removeValue(document.documentURI, "sidebar-box", "positionend");
+      }
+
       document.persist("sidebar-box", "width");
       document.persist("sidebar-title", "value");
     }
@@ -439,7 +448,6 @@ var SidebarUI = {
     sidebarBroadcaster.removeAttribute("checked");
     this._box.setAttribute("sidebarcommand", "");
     this._box.removeAttribute("checked");
-    this.title = "";
     this._box.hidden = this._splitter.hidden = true;
 
     let selBrowser = gBrowser.selectedBrowser;

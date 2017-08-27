@@ -373,6 +373,9 @@ public:
 
   nsCSSCounterStyleRule* CounterStyleRuleForName(nsIAtom* aName);
 
+  // Get all the currently-active font feature values set.
+  already_AddRefed<gfxFontFeatureValueSet> BuildFontFeatureValueSet();
+
   already_AddRefed<ServoStyleContext>
   GetBaseContextForElement(dom::Element* aElement,
                            ServoStyleContext* aParentContext,
@@ -420,6 +423,11 @@ public:
 
   // Returns the style rule map.
   ServoStyleRuleMap* StyleRuleMap();
+
+  // Clear mPresContext. This is needed after XBL ServoStyleSet is created.
+  void ClearPresContext() {
+    mPresContext = nullptr;
+  }
 
   /**
    * Returns true if a modification to an an attribute with the specified

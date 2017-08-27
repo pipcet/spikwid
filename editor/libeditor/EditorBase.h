@@ -48,7 +48,6 @@ class nsISupports;
 class nsITransaction;
 class nsIWidget;
 class nsRange;
-class nsString;
 class nsTransactionManager;
 
 // This is int32_t instead of int16_t because nsIInlineSpellChecker.idl's
@@ -347,6 +346,12 @@ public:
    * @param aTag        Tag you want.
    */
   already_AddRefed<Element> CreateHTMLContent(nsIAtom* aTag);
+
+  /**
+   * Creates text node which is marked as "maybe modified frequently".
+   */
+  static already_AddRefed<nsTextNode> CreateTextNode(nsIDocument& aDocument,
+                                                     const nsAString& aData);
 
   /**
    * IME event handlers.
@@ -658,9 +663,14 @@ public:
   /**
    * Return the offset of aChild in aParent.  Asserts fatally if parent or
    * child is null, or parent is not child's parent.
+   * FYI: aChild must not be being removed from aParent.  In such case, these
+   *      methods may return wrong index if aChild doesn't have previous
+   *      sibling or next sibling.
    */
   static int32_t GetChildOffset(nsIDOMNode* aChild,
                                 nsIDOMNode* aParent);
+  static int32_t GetChildOffset(nsINode* aChild,
+                                nsINode* aParent);
 
   /**
    * Set outOffset to the offset of aChild in the parent.
@@ -867,7 +877,10 @@ public:
   virtual bool AreNodesSameType(nsIContent* aNode1, nsIContent* aNode2);
 
   static bool IsTextNode(nsIDOMNode* aNode);
-  static bool IsTextNode(nsINode* aNode);
+  static bool IsTextNode(nsINode* aNode)
+  {
+    return aNode->NodeType() == nsIDOMNode::TEXT_NODE;
+  }
 
   static nsCOMPtr<nsIDOMNode> GetChildAt(nsIDOMNode* aParent, int32_t aOffset);
   static nsIContent* GetNodeAtRangeOffsetPoint(nsINode* aParentOrNode,
@@ -898,6 +911,11 @@ public:
     Selection* selection = sc->GetDOMSelection(ToRawSelectionType(aSelectionType));
     return selection;
   }
+
+  /**
+   * CollapseSelectionToEnd() collapses the selection to the end of the editor.
+   */
+  nsresult CollapseSelectionToEnd(Selection* aSelection);
 
   /**
    * Helpers to add a node to the selection.
@@ -954,7 +972,16 @@ public:
   /**
    * Fast non-refcounting editor root element accessor
    */
-  Element* GetRoot();
+  Element* GetRoot()
+  {
+    if (!mRootElement) {
+      // Let GetRootElement() do the work
+      nsCOMPtr<nsIDOMElement> root;
+      GetRootElement(getter_AddRefs(root));
+    }
+
+    return mRootElement;
+  }
 
   /**
    * Likewise, but gets the editor's root instead, which is different for HTML

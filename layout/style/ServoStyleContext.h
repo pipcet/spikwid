@@ -100,8 +100,10 @@ public:
    */
   inline void ResolveSameStructsAs(const ServoStyleContext* aOther);
 
-  void AddSizeOfIncludingThis(SizeOfState& aState, nsStyleSizes& aSizes,
-                              bool aIsDOM) const
+  // The |aCVsSize| outparam on this function is where the actual CVs size
+  // value is added. It's done that way because the callers know which value
+  // the size should be added to.
+  void AddSizeOfIncludingThis(nsWindowSizes& aSizes, size_t* aCVsSize) const
   {
     // XXX WARNING: similar to ServoComputedData::AddSizeOfExcludingThis(),
     // but here we need to step back 4 or 8 bytes to get past the servo_arc::Arc
@@ -115,12 +117,8 @@ public:
     // We use ServoComputedValuesMallocSizeOf rather than
     // |aState.mMallocSizeOf| to better distinguish in DMD's output the memory
     // measured here.
-    if (aIsDOM) {
-      aSizes.mComputedValuesDom += ServoComputedValuesMallocSizeOf(p);
-    } else {
-      aSizes.mComputedValuesNonDom += ServoComputedValuesMallocSizeOf(p);
-    }
-    mSource.AddSizeOfExcludingThis(aState, aSizes);
+    *aCVsSize += ServoComputedValuesMallocSizeOf(p);
+    mSource.AddSizeOfExcludingThis(aSizes);
   }
 
 private:

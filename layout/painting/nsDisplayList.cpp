@@ -2117,9 +2117,11 @@ already_AddRefed<LayerManager> nsDisplayList::PaintRoot(nsDisplayListBuilder* aB
       }
     }
 
+    WebRenderLayerManager* wrManager = static_cast<WebRenderLayerManager*>(layerManager.get());
+
     MaybeSetupTransactionIdAllocator(layerManager, presContext);
     bool temp = aBuilder->SetIsCompositingCheap(layerManager->IsCompositingCheap());
-    static_cast<WebRenderLayerManager*>(layerManager.get())->EndTransactionWithoutLayer(this, aBuilder);
+    wrManager->EndTransactionWithoutLayer(this, aBuilder);
 
     // For layers-free mode, we check the invalidation state bits in the EndTransaction.
     // So we clear the invalidation state bits after EndTransaction.
@@ -2134,6 +2136,10 @@ already_AddRefed<LayerManager> nsDisplayList::PaintRoot(nsDisplayListBuilder* aB
     aBuilder->SetIsCompositingCheap(temp);
     if (document && widgetTransaction) {
       TriggerPendingAnimations(document, layerManager->GetAnimationReadyTime());
+    }
+
+    if (wrManager->ShouldNotifyInvalidation()) {
+      presContext->NotifyInvalidation(layerManager->GetLastTransactionId(), nsIntRect());
     }
 
     return layerManager.forget();
@@ -2503,7 +2509,7 @@ void nsDisplayList::HitTest(nsDisplayListBuilder* aBuilder, const nsRect& aRect,
       (itemType == DisplayItemType::TYPE_TRANSFORM &&
        static_cast<nsDisplayTransform*>(item)->IsParticipating3DContext()) ||
       (itemType == DisplayItemType::TYPE_PERSPECTIVE &&
-       item->Frame()->Extend3DContext());
+       static_cast<nsDisplayPerspective*>(item)->TransformFrame()->Extend3DContext());
     if (same3DContext &&
         (itemType != DisplayItemType::TYPE_TRANSFORM ||
          !static_cast<nsDisplayTransform*>(item)->IsLeafOf3DContext())) {
@@ -7524,11 +7530,11 @@ nsDisplayTransform::GetResultingTransformMatrixInternal(const FrameTransformProp
   if ((aFlags & INCLUDE_PRESERVE3D_ANCESTORS) &&
       frame && frame->Combines3DTransformWithAncestors()) {
     // Include the transform set on our parent
-    NS_ASSERTION(frame->GetParent() &&
-                 frame->GetParent()->IsTransformed() &&
-                 frame->GetParent()->Extend3DContext(),
+    nsIFrame* parentFrame = frame->GetFlattenedTreeParentPrimaryFrame();
+    NS_ASSERTION(parentFrame && parentFrame->IsTransformed() &&
+                 parentFrame->Extend3DContext(),
                  "Preserve3D mismatch!");
-    FrameTransformProperties props(frame->GetParent(),
+    FrameTransformProperties props(parentFrame,
                                    aAppUnitsPerPixel,
                                    nullptr);
 
@@ -7773,7 +7779,7 @@ nsDisplayTransform::GetAccumulatedPreserved3DTransform(nsDisplayListBuilder* aBu
     const nsIFrame* establisher; // Establisher of the 3D rendering context.
     for (establisher = mFrame;
          establisher && establisher->Combines3DTransformWithAncestors();
-         establisher = nsLayoutUtils::GetCrossDocParentFrame(establisher)) {
+         establisher = establisher->GetFlattenedTreeParentPrimaryFrame()) {
     }
     const nsIFrame* establisherReference =
       aBuilder->FindReferenceFrameFor(nsLayoutUtils::GetCrossDocParentFrame(establisher));
@@ -7859,6 +7865,17 @@ nsDisplayTransform::CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBu
 
   return mStoredList.CreateWebRenderCommands(aBuilder, sc, aParentCommands,
                                              aManager, aDisplayListBuilder);
+}
+
+bool
+nsDisplayTransform::UpdateScrollData(mozilla::layers::WebRenderScrollData* aData,
+                                     mozilla::layers::WebRenderLayerScrollData* aLayerData)
+{
+  if (aLayerData) {
+    aLayerData->SetTransform(GetTransform());
+    aLayerData->SetTransformIsPerspective(mFrame->HasPerspective());
+  }
+  return true;
 }
 
 already_AddRefed<Layer> nsDisplayTransform::BuildLayer(nsDisplayListBuilder *aBuilder,
@@ -8877,15 +8894,6 @@ bool nsDisplayMask::ShouldPaintOnMaskLayer(LayerManager* aManager)
     return false;
   }
 
-  nsSVGUtils::MaskUsage maskUsage;
-  nsSVGUtils::DetermineMaskUsage(mFrame, mHandleOpacity, maskUsage);
-
-  // XXX Temporary disable paint clip-path onto mask before figure out
-  // performance regression(bug 1325550).
-  if (maskUsage.shouldApplyClipPath) {
-    return false;
-  }
-
   if (!nsSVGIntegrationUtils::IsMaskResourceReady(mFrame)) {
     return false;
   }
@@ -8996,14 +9004,18 @@ nsDisplayMask::CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBuilder
 
   Maybe<wr::WrImageMask> mask = aManager->BuildWrMaskImage(this, aBuilder, aSc, aDisplayListBuilder, bounds);
   if (mask) {
-    aBuilder.PushClip(aBuilder.DefineClip(
-        aSc.ToRelativeLayoutRect(bounds), nullptr, mask.ptr()));
+    wr::WrClipId clipId = aBuilder.DefineClip(
+        aSc.ToRelativeLayoutRect(bounds), nullptr, mask.ptr());
+    // Don't record this clip push in aBuilder's internal clip stack, because
+    // otherwise any nested ScrollingLayersHelper instances that are created
+    // will get confused about which clips are pushed.
+    aBuilder.PushClip(clipId, /*aRecordInStack*/ false);
   }
 
   nsDisplaySVGEffects::CreateWebRenderCommands(aBuilder, aSc, aParentCommands, aManager, aDisplayListBuilder);
 
   if (mask) {
-    aBuilder.PopClip();
+    aBuilder.PopClip(/*aRecordInStack*/ false);
   }
 
   return true;

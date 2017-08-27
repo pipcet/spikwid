@@ -246,11 +246,16 @@ impl Separator for Space {
     where
         F: for<'tt> FnMut(&mut Parser<'i, 'tt>) -> Result<T, ParseError<'i, E>>
     {
+        input.skip_whitespace();  // Unnecessary for correctness, but may help try() rewind less.
         let mut results = vec![parse_one(input)?];
-        while let Ok(item) = input.try(&mut parse_one) {
-            results.push(item);
+        loop {
+            input.skip_whitespace();  // Unnecessary for correctness, but may help try() rewind less.
+            if let Ok(item) = input.try(&mut parse_one) {
+                results.push(item);
+            } else {
+                return Ok(results)
+            }
         }
-        Ok(results)
     }
 }
 
@@ -266,9 +271,12 @@ impl Separator for CommaWithSpace {
     where
         F: for<'tt> FnMut(&mut Parser<'i, 'tt>) -> Result<T, ParseError<'i, E>>
     {
+        input.skip_whitespace();  // Unnecessary for correctness, but may help try() rewind less.
         let mut results = vec![parse_one(input)?];
         loop {
+            input.skip_whitespace();  // Unnecessary for correctness, but may help try() rewind less.
             let comma = input.try(|i| i.expect_comma()).is_ok();
+            input.skip_whitespace();  // Unnecessary for correctness, but may help try() rewind less.
             if let Ok(item) = input.try(&mut parse_one) {
                 results.push(item);
             } else if comma {
@@ -396,7 +404,7 @@ macro_rules! __define_css_keyword_enum__actual {
                   [ $( $css: expr => $variant: ident ),+ ]
                   [ $( $alias: expr => $alias_variant: ident ),* ]) => {
         #[allow(non_camel_case_types, missing_docs)]
-        #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq $(, $derived_trait )* )]
+        #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq$(, $derived_trait )* )]
         pub enum $name {
             $( $variant ),+
         }
@@ -443,7 +451,7 @@ pub mod specified {
     /// Whether to allow negative lengths or not.
     #[repr(u8)]
     #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub enum AllowedLengthType {
         /// Allow all kind of lengths.
         All,

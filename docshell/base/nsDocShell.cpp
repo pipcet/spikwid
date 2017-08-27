@@ -842,6 +842,7 @@ nsDocShell::nsDocShell()
   , mDefaultLoadFlags(nsIRequest::LOAD_NORMAL)
   , mFrameType(FRAME_TYPE_REGULAR)
   , mPrivateBrowsingId(0)
+  , mDisplayMode(nsIDocShell::DISPLAY_MODE_BROWSER)
   , mForcedCharset(nullptr)
   , mParentCharset(nullptr)
   , mParentCharsetSource(0)
@@ -1834,6 +1835,12 @@ nsDocShell::MaybeResetInitTiming(bool aReset)
   if (aReset) {
     mTiming = nullptr;
   }
+}
+
+nsDOMNavigationTiming*
+nsDocShell::GetNavigationTiming() const
+{
+  return mTiming;
 }
 
 //
@@ -9710,6 +9717,8 @@ public:
     // Make sure to keep null things null as needed
     if (aTypeHint) {
       mTypeHint = aTypeHint;
+    } else {
+      mTypeHint.SetIsVoid(true);
     }
   }
 
@@ -9721,7 +9730,9 @@ public:
                                    mReferrer,
                                    mReferrerPolicy,
                                    mTriggeringPrincipal, mPrincipalToInherit,
-                                   mFlags, EmptyString(), mTypeHint.get(),
+                                   mFlags, EmptyString(),
+                                   mTypeHint.IsVoid() ? nullptr
+                                                      : mTypeHint.get(),
                                    NullString(), mPostData, mHeadersData,
                                    mLoadType, mSHEntry, mFirstParty,
                                    mSrcdoc, mSourceDocShell, mBaseURI,
@@ -9729,8 +9740,7 @@ public:
   }
 
 private:
-  // Use IDL strings so .get() returns null by default
-  nsXPIDLCString mTypeHint;
+  nsCString mTypeHint;
   nsString mSrcdoc;
 
   RefPtr<nsDocShell> mDocShell;
@@ -10879,6 +10889,62 @@ nsDocShell::GetInheritedPrincipal(bool aConsiderCurrentDocument)
   return nullptr;
 }
 
+// CSPs upgrade-insecure-requests directive applies to same origin top level
+// navigations. Using the SOP would return false for the case when an https
+// page triggers and http page to load, even though that http page would be
+// upgraded to https later. Hence we have to use that custom function instead
+// of simply calling aTriggeringPrincipal->Equals(aResultPrincipal).
+static bool
+IsConsideredSameOriginForUIR(nsIPrincipal* aTriggeringPrincipal,
+                             nsIPrincipal* aResultPrincipal)
+{
+  MOZ_ASSERT(aTriggeringPrincipal);
+  MOZ_ASSERT(aResultPrincipal);
+
+  // we only have to make sure that the following truth table holds:
+  // aTriggeringPrincipal         | aResultPrincipal             | Result
+  // ----------------------------------------------------------------
+  // http://example.com/foo.html  | http://example.com/bar.html  | true
+  // https://example.com/foo.html | https://example.com/bar.html | true
+  // https://example.com/foo.html | http://example.com/bar.html  | true
+  if (aTriggeringPrincipal->Equals(aResultPrincipal)) {
+    return true;
+  }
+
+  if (!aResultPrincipal->GetIsCodebasePrincipal()) {
+    return false;
+  }
+
+  nsCOMPtr<nsIURI> resultURI;
+  nsresult rv = aResultPrincipal->GetURI(getter_AddRefs(resultURI));
+  NS_ENSURE_SUCCESS(rv, false);
+
+  nsAutoCString resultScheme;
+  rv = resultURI->GetScheme(resultScheme);
+  NS_ENSURE_SUCCESS(rv, false);
+  if (!resultScheme.EqualsLiteral("http")) {
+    return false;
+  }
+
+  nsAutoCString tmpResultSpec;
+  rv = resultURI->GetSpec(tmpResultSpec);
+  NS_ENSURE_SUCCESS(rv, false);
+  // replace http with https
+  tmpResultSpec.Replace(0, 4, "https");
+
+  nsCOMPtr<nsIURI> tmpResultURI;
+  rv = NS_NewURI(getter_AddRefs(tmpResultURI), tmpResultSpec);
+  NS_ENSURE_SUCCESS(rv, false);
+
+  mozilla::OriginAttributes tmpOA =
+    BasePrincipal::Cast(aResultPrincipal)->OriginAttributesRef();
+
+  nsCOMPtr<nsIPrincipal> tmpResultPrincipal =
+    BasePrincipal::CreateCodebasePrincipal(tmpResultURI, tmpOA);
+
+  return aTriggeringPrincipal->Equals(tmpResultPrincipal);
+}
+
 nsresult
 nsDocShell::DoURILoad(nsIURI* aURI,
                       nsIURI* aOriginalURI,
@@ -11173,7 +11239,7 @@ nsDocShell::DoURILoad(nsIURI* aURI,
              GetChannelResultPrincipal(channel,
                                        getter_AddRefs(resultPrincipal));
       NS_ENSURE_SUCCESS(rv, rv);
-      if (resultPrincipal->Equals(aTriggeringPrincipal)) {
+      if (IsConsideredSameOriginForUIR(aTriggeringPrincipal, resultPrincipal)) {
         static_cast<mozilla::LoadInfo*>(loadInfo.get())->SetUpgradeInsecureRequests();
       }
     }
@@ -12367,7 +12433,7 @@ nsDocShell::SetCurrentScrollRestorationIsManual(bool aIsManual)
 }
 
 bool
-nsDocShell::ShouldAddToSessionHistory(nsIURI* aURI)
+nsDocShell::ShouldAddToSessionHistory(nsIURI* aURI, nsIChannel* aChannel)
 {
   // I believe none of the about: urls should go in the history. But then
   // that could just be me... If the intent is only deny about:blank then we
@@ -12387,8 +12453,18 @@ nsDocShell::ShouldAddToSessionHistory(nsIURI* aURI)
       return false;
     }
 
-    if (buf.EqualsLiteral("blank") || buf.EqualsLiteral("newtab")) {
+    if (buf.EqualsLiteral("blank")) {
       return false;
+    }
+    // We only want to add about:newtab if it's not privileged:
+    if (buf.EqualsLiteral("newtab")) {
+      NS_ENSURE_TRUE(aChannel, false);
+      nsCOMPtr<nsIPrincipal> resultPrincipal;
+      rv = nsContentUtils::GetSecurityManager()->
+             GetChannelResultPrincipal(aChannel,
+                                       getter_AddRefs(resultPrincipal));
+      NS_ENSURE_SUCCESS(rv, false);
+      return !nsContentUtils::IsSystemPrincipal(resultPrincipal);
     }
   }
 
@@ -12422,9 +12498,6 @@ nsDocShell::AddToSessionHistory(nsIURI* aURI, nsIChannel* aChannel,
 
   nsresult rv = NS_OK;
   nsCOMPtr<nsISHEntry> entry;
-  bool shouldPersist;
-
-  shouldPersist = ShouldAddToSessionHistory(aURI);
 
   // Get a handle to the root docshell
   nsCOMPtr<nsIDocShellTreeItem> root;
@@ -12626,6 +12699,8 @@ nsDocShell::AddToSessionHistory(nsIURI* aURI, nsIChannel* aChannel,
         do_QueryInterface(mSessionHistory);
       NS_ENSURE_TRUE(shPrivate, NS_ERROR_FAILURE);
       mSessionHistory->GetIndex(&mPreviousTransIndex);
+
+      bool shouldPersist = ShouldAddToSessionHistory(aURI, aChannel);
       rv = shPrivate->AddEntry(entry, shouldPersist);
       mSessionHistory->GetIndex(&mLoadedTransIndex);
 #ifdef DEBUG_PAGE_CACHE
@@ -15086,4 +15161,34 @@ nsIDocShell::SetHTMLEditor(HTMLEditor* aHTMLEditor)
 {
   nsDocShell* docShell = static_cast<nsDocShell*>(this);
   return docShell->SetHTMLEditorInternal(aHTMLEditor);
+}
+
+NS_IMETHODIMP
+nsDocShell::GetDisplayMode(uint32_t* aDisplayMode)
+{
+  NS_ENSURE_ARG_POINTER(aDisplayMode);
+  *aDisplayMode = mDisplayMode;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsDocShell::SetDisplayMode(uint32_t aDisplayMode)
+{
+  if (!(aDisplayMode == nsIDocShell::DISPLAY_MODE_BROWSER ||
+        aDisplayMode == nsIDocShell::DISPLAY_MODE_STANDALONE ||
+        aDisplayMode == nsIDocShell::DISPLAY_MODE_FULLSCREEN ||
+        aDisplayMode == nsIDocShell::DISPLAY_MODE_MINIMAL_UI)) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  if (aDisplayMode != mDisplayMode) {
+    mDisplayMode = aDisplayMode;
+
+    RefPtr<nsPresContext> presContext;
+    if (NS_SUCCEEDED(GetPresContext(getter_AddRefs(presContext)))) {
+      presContext->MediaFeatureValuesChangedAllDocuments(nsRestyleHint(0));
+    }
+  }
+
+  return NS_OK;
 }

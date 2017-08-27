@@ -370,11 +370,12 @@ ${helpers.single_keyword("position", "static absolute relative fixed",
         /// The keywords are the same, and the `LengthOrPercentage` is computed
         /// here.
         #[allow(non_camel_case_types)]
-        #[derive(PartialEq, Copy, Clone, Debug)]
         #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+        #[derive(Animate, Clone, ComputeSquaredDistance, Copy, Debug, PartialEq)]
         pub enum T {
             % for keyword in vertical_align_keywords:
-                ${to_rust_ident(keyword)},
+            #[animation(error)] // only animatable as a length
+            ${to_rust_ident(keyword)},
             % endfor
             LengthOrPercentage(computed::LengthOrPercentage),
         }
@@ -523,7 +524,7 @@ ${helpers.predefined_type("transition-delay",
         pub use super::SpecifiedValue as T;
     }
 
-    #[derive(Clone, Debug, Hash, Eq, PartialEq)]
+    #[derive(Clone, Debug, Eq, Hash, PartialEq)]
     #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
     pub struct SpecifiedValue(pub Option<KeyframesName>);
 
@@ -618,7 +619,7 @@ ${helpers.predefined_type("animation-timing-function",
 
     // https://drafts.csswg.org/css-animations/#animation-iteration-count
     #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-    #[derive(Debug, Clone, PartialEq, ToCss)]
+    #[derive(Clone, Debug, PartialEq, ToCss)]
     pub enum SpecifiedValue {
         Number(f32),
         Infinite,
@@ -1855,7 +1856,7 @@ ${helpers.single_keyword("-moz-orient",
         pub use super::SpecifiedValue as T;
     }
 
-    #[derive(Debug, Clone, PartialEq)]
+    #[derive(Clone, Debug, PartialEq)]
     #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
     pub enum SpecifiedValue {
         Auto,

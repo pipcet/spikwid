@@ -321,19 +321,29 @@ var PingPicker = {
     document.getElementById("older-ping")
             .addEventListener("click", () => this._movePingIndex(1));
 
+    let pingPickerNeedHide = false;
+    let pingPicker = document.getElementById("ping-picker");
+    pingPicker.addEventListener("mouseenter", () => pingPickerNeedHide = false);
+    pingPicker.addEventListener("mouseleave", () => pingPickerNeedHide = true);
     document.addEventListener("click", (ev) => {
-      if (ev.target.querySelector("#ping-picker")) {
-        document.getElementById("ping-picker").classList.add("hidden");
+      if (pingPickerNeedHide) {
+        pingPicker.classList.add("hidden");
       }
     });
     document.getElementById("choose-payload")
             .addEventListener("change", () => displayPingData(gPingData));
     document.getElementById("processes")
             .addEventListener("change", () => displayPingData(gPingData));
-    Array.from(document.querySelectorAll(".change-ping")).forEach(el =>
-      el.addEventListener("click", () =>
-        document.getElementById("ping-picker").classList.remove("hidden"))
-    );
+    Array.from(document.querySelectorAll(".change-ping")).forEach(el => {
+      el.addEventListener("click", (event) => {
+        if (!pingPicker.classList.contains("hidden")) {
+          pingPicker.classList.add("hidden");
+        } else {
+          pingPicker.classList.remove("hidden")
+          event.stopPropagation();
+        }
+      });
+    });
   },
 
   onPingSourceChanged() {
@@ -349,30 +359,30 @@ var PingPicker = {
     let pingLink = "<a href=\"http://gecko.readthedocs.io/en/latest/toolkit/components/telemetry/telemetry/concepts/pings.html\">" + pings + "</a>";
     let pingName = this._getSelectedPingName();
 
-    let pingDate = document.getElementById("ping-date");
-    pingDate.textContent = pingName;
-    pingDate.setAttribute("title", pingName);
-
     // Display the type and controls if the ping is not current
+    let pingDate = document.getElementById("ping-date");
     let pingType = document.getElementById("ping-type");
-    let older = document.getElementById("older-ping");
-    let newer = document.getElementById("newer-ping");
+    let controls = document.getElementById("controls");
     let explanation;
     if (!this.viewCurrentPingData) {
+      // Change sidebar heading text.
+      pingDate.textContent = pingName;
+      pingDate.setAttribute("title", pingName);
       let pingTypeText = this._getSelectedPingType();
-      pingType.hidden = false;
-      older.hidden = false;
-      newer.hidden = false;
+      controls.classList.remove("hidden");
       pingType.textContent = pingTypeText;
+
+      // Change home page text.
       pingName = bundle.formatStringFromName("namedPing", [pingName, pingTypeText], 2);
       let pingNameHtml = "<span class=\"change-ping\">" + pingName + "</span>";
       let parameters = [pingLink, pingNameHtml, pingTypeText];
       explanation = bundle.formatStringFromName("pingDetails", parameters, 3);
     } else {
-      pingType.hidden = true;
-      older.hidden = true;
-      newer.hidden = true;
-      pingDate.textContent = bundle.GetStringFromName("currentPingSidebar");
+      // Change sidebar heading text.
+      controls.classList.add("hidden");
+      pingType.textContent = bundle.GetStringFromName("currentPingSidebar");
+
+      // Change home page text.
       let pingNameHtml = "<span class=\"change-ping\">" + pingName + "</span>";
       explanation = bundle.formatStringFromName("pingDetailsCurrent", [pingLink, pingNameHtml], 2);
     }
@@ -688,7 +698,6 @@ var EnvironmentData = {
 
   appendAddonSubsectionTitle(section, table) {
     let caption = document.createElement("caption");
-    caption.setAttribute("class", "addon-caption");
     caption.appendChild(document.createTextNode(section));
     table.appendChild(caption);
   },
@@ -838,7 +847,6 @@ var SlowSQL = {
       this.renderTable(table, mainThread);
 
       slowSqlDiv.appendChild(table);
-      slowSqlDiv.appendChild(document.createElement("hr"));
     }
 
     // Other threads
@@ -848,7 +856,6 @@ var SlowSQL = {
       this.renderTable(table, otherThreads);
 
       slowSqlDiv.appendChild(table);
-      slowSqlDiv.appendChild(document.createElement("hr"));
     }
   },
 
@@ -1166,7 +1173,7 @@ var Histogram = {
     outerDiv.id = aName;
 
     let divTitle = document.createElement("div");
-    divTitle.className = "histogram-title";
+    divTitle.classList.add("histogram-title");
     divTitle.appendChild(document.createTextNode(aName));
     outerDiv.appendChild(divTitle);
 
@@ -1175,6 +1182,7 @@ var Histogram = {
                 this.hgramSumCaption + " = " + hgram.sum;
 
     let divStats = document.createElement("div");
+    divStats.classList.add("histogram-stats");
     divStats.appendChild(document.createTextNode(stats));
     outerDiv.appendChild(divStats);
 
@@ -1389,37 +1397,34 @@ var Search = {
     this.idleTimeout = setTimeout(() => Search.search(e.target.value), FILTER_IDLE_TIMEOUT);
   },
 
-  search(text) {
-    let selectedSection = document.querySelector("section.active");
-    if (selectedSection.id === "histograms-section") {
-      let histograms = selectedSection.getElementsByClassName("histogram");
+  search(text, section = null) {
+    if (!section) {
+      let sectionId = document.querySelector(".category.selected").getAttribute("value");
+      section = document.getElementById(sectionId);
+    }
+    if (section.id === "home-section") {
+      this.homeSearch(text);
+    } else if (section.id === "histograms-section") {
+      let histograms = section.getElementsByClassName("histogram");
       this.filterElements(histograms, text);
-    } else if (selectedSection.id === "keyed-histograms-section") {
+    } else if (section.id === "keyed-histograms-section") {
       let keyedElements = [];
-      let keyedHistograms = selectedSection.getElementsByClassName("keyed-histogram");
+      let keyedHistograms = section.getElementsByClassName("keyed-histogram");
       for (let key of keyedHistograms) {
         let datas = key.getElementsByClassName("histogram");
         keyedElements.push({key, datas});
       }
       this.filterKeyedElements(keyedElements, text);
-    } else if (selectedSection.id === "keyed-scalars-section") {
+    } else if (section.id === "keyed-scalars-section") {
       let keyedElements = [];
-      let keyedScalars = selectedSection.getElementsByClassName("keyed-scalar");
+      let keyedScalars = section.getElementsByClassName("keyed-scalar");
       for (let key of keyedScalars) {
         let datas = key.querySelector("table").rows;
         keyedElements.push({key, datas});
       }
       this.filterKeyedElements(keyedElements, text);
-    } else if (selectedSection.id === "thread-hang-stats-section") {
-      let keyedElements = [];
-      let threads = selectedSection.children[0].children;
-      for (let key of threads) {
-        let datas = key.getElementsByClassName("histogram");
-        keyedElements.push({key, datas});
-      }
-      this.filterKeyedElements(keyedElements, text);
     } else {
-      let tables = selectedSection.querySelectorAll("table");
+      let tables = section.querySelectorAll("table");
       for (let table of tables) {
         let allElementsHidden = this.filterElements(table.rows, text);
         if (table.caption) {
@@ -1428,6 +1433,32 @@ var Search = {
       }
     }
   },
+
+  resetHome() {
+    document.getElementById("main").classList.remove("search");
+    adjustHeaderState();
+    Array.from(document.querySelectorAll("section")).forEach((section) => {
+      section.classList.toggle("active", section.id == "home-section");
+    });
+  },
+
+  homeSearch(text) {
+    if (text === "") {
+      this.resetHome();
+      return;
+    }
+    document.getElementById("main").classList.add("search");
+    let title = bundle.formatStringFromName("resultsForSearch", [text], 1);
+    adjustHeaderState(title);
+    Array.from(document.querySelectorAll("section")).forEach((section) => {
+      if (section.id == "home-section" || section.id == "raw-payload-section") {
+        section.classList.remove("active");
+        return;
+      }
+      section.classList.add("active");
+      this.search(text, section);
+    });
+  }
 }
 
 /*
@@ -1598,7 +1629,7 @@ var KeyedHistogram = {
     outerDiv.id = id;
 
     let divTitle = document.createElement("div");
-    divTitle.className = "keyed-histogram-title";
+    divTitle.classList.add("keyed-title");
     divTitle.appendChild(document.createTextNode(id));
     outerDiv.appendChild(divTitle);
 
@@ -1630,14 +1661,14 @@ var AddonDetails = {
     }
 
     for (let provider in addonDetails) {
-      let providerSection = document.createElement("h2");
+      let providerSection = document.createElement("caption");
       let titleText = bundle.formatStringFromName("addonProvider", [provider], 1);
       providerSection.appendChild(document.createTextNode(titleText));
-      addonSection.appendChild(providerSection);
 
       let headingStrings = [this.tableIDTitle, this.tableDetailsTitle ]
       let table = GenericTable.render(explodeObject(addonDetails[provider]),
                                       headingStrings);
+      table.appendChild(providerSection);
       addonSection.appendChild(table);
     }
   },
@@ -1717,7 +1748,8 @@ var KeyedScalars = {
       let container = document.createElement("div");
       container.classList.add("keyed-scalar");
       container.id = scalar;
-      let scalarNameSection = document.createElement("h2");
+      let scalarNameSection = document.createElement("p");
+      scalarNameSection.classList.add("keyed-title");
       scalarNameSection.appendChild(document.createTextNode(scalar));
       container.appendChild(scalarNameSection);
       // Populate the section with the key-value pairs from the scalar.
@@ -1810,12 +1842,10 @@ function displayProcessesSelector(selectedSection) {
 }
 
 function adjustSearchState() {
-  let selectedSection = document.querySelector("section.active").id;
+  let selectedSection = document.querySelector(".category.selected").getAttribute("value");
   let blacklist = [
-    "home-section",
     "raw-payload-section"
   ];
-  // TODO: Implement global search for the Home section
   let search = document.getElementById("search");
   search.hidden = blacklist.includes(selectedSection);
   // Filter element on section change.
@@ -1829,6 +1859,18 @@ function adjustSection() {
   if (!selectedCategory.classList.contains("has-data")) {
     PingPicker._showStructuredPingData();
   }
+}
+
+function adjustHeaderState(title = null) {
+  let selected = document.querySelector(".category.selected .category-name");
+  let selectedTitle = selected.textContent.trim();
+  document.getElementById("sectionTitle").textContent = title ? title : selectedTitle;
+  if (selected.parentElement.id === "category-home") {
+    selectedTitle = bundle.GetStringFromName("allSections");
+  }
+  let search = document.getElementById("search");
+  let placeholder = bundle.formatStringFromName("filterPlaceholder", [ selectedTitle ], 1);
+  search.setAttribute("placeholder", placeholder);
 }
 
 /**
@@ -1854,36 +1896,34 @@ function show(selected) {
     return;
   }
 
-  let current_button = document.querySelector(".category.selected");
-  current_button.classList.remove("selected");
-  if (current_button.classList.contains("has-subsection")) {
-    for (let subsection of current_button.children) {
+  let selected_section = document.getElementById(selectedValue);
+  let subsections = selected_section.querySelectorAll(".sub-section");
+  if (selected.classList.contains("has-subsection")) {
+    for (let subsection of selected.children) {
       subsection.classList.remove("selected");
     }
   }
-  selected.classList.add("selected");
-  // Hack because subsection text appear selected. See Bug 1375114.
-  document.getSelection().empty();
-
-  let current_section = document.querySelector("section.active");
-  let selected_section = document.getElementById(selectedValue);
-  let subsections = current_section.querySelectorAll(".sub-section");
   if (subsections) {
     for (let subsection of subsections) {
       subsection.hidden = false;
     }
   }
-  if (current_section == selected_section)
+
+  let current_button = document.querySelector(".category.selected");
+  if (current_button == selected)
     return;
-  current_section.classList.remove("active");
+  current_button.classList.remove("selected");
+  selected.classList.add("selected");
+
+  document.querySelectorAll("section").forEach((section) => {
+    section.classList.remove("active")
+  });
   selected_section.classList.add("active");
 
-  let title = selected.querySelector(".category-name").textContent.trim();
-  document.getElementById("sectionTitle").textContent = title;
+  // Hack because subsection text appear selected. See Bug 1375114.
+  document.getSelection().empty();
 
-  let search = document.getElementById("search");
-  let placeholder = bundle.formatStringFromName("filterPlaceholder", [ title ], 1);
-  search.setAttribute("placeholder", placeholder);
+  adjustHeaderState();
   displayProcessesSelector(selectedValue);
   adjustSearchState();
   changeUrlPath(selectedValue);
@@ -2020,7 +2060,12 @@ function urlStateRestore() {
 }
 
 function openJsonInFirefoxJsonViewer(json) {
-  window.open("data:application/json;base64," + btoa(json));
+  json = unescape(encodeURIComponent(json));
+  try {
+    window.open("data:application/json;base64," + btoa(json));
+  } catch (e) {
+    show(document.querySelector(".category[value=raw-payload-section]"));
+  }
 }
 
 function onLoad() {
@@ -2034,6 +2079,8 @@ function onLoad() {
 
   // Render settings.
   Settings.render();
+
+  adjustHeaderState();
 
   // Update ping data when async Telemetry init is finished.
   Telemetry.asyncFetchTelemetryData(async () => {

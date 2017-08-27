@@ -2283,11 +2283,6 @@ BytecodeEmitter::emitCheck(ptrdiff_t delta, ptrdiff_t* offset)
 {
     *offset = code().length();
 
-    // Start it off moderately large to avoid repeated resizings early on.
-    // ~98% of cases fit within 1024 bytes.
-    if (code().capacity() == 0 && !code().reserve(1024))
-        return false;
-
     if (!code().growBy(delta)) {
         ReportOutOfMemory(cx);
         return false;
@@ -8265,7 +8260,7 @@ BytecodeEmitter::emitFunction(ParseNode* pn, bool needsProto)
     if (topLevelFunction) {
         if (sc->isModuleContext()) {
             // For modules, we record the function and instantiate the binding
-            // during ModuleDeclarationInstantiation(), before the script is run.
+            // during ModuleInstantiate(), before the script is run.
 
             RootedModuleObject module(cx, sc->asModuleContext()->module());
             if (!module->noteFunctionDeclaration(cx, name, fun))
@@ -11301,11 +11296,6 @@ BytecodeEmitter::emitTreeInBranch(ParseNode* pn,
 static bool
 AllocSrcNote(JSContext* cx, SrcNotesVector& notes, unsigned* index)
 {
-    // Start it off moderately large to avoid repeated resizings early on.
-    // ~99% of cases fit within 256 bytes.
-    if (notes.capacity() == 0 && !notes.reserve(256))
-        return false;
-
     if (!notes.growBy(1)) {
         ReportOutOfMemory(cx);
         return false;

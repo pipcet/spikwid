@@ -12,7 +12,7 @@
 #include "nsIURI.h"
 #include "nsIURL.h"
 #include "nsIChannel.h"
-#include "nsXPIDLString.h"
+#include "nsString.h"
 #include "nsReadableUtils.h"
 #include "plstr.h"
 #include "nsIContent.h"
@@ -86,7 +86,7 @@ XBLEnumerate(JSContext *cx, JS::Handle<JSObject*> obj)
 }
 
 static const JSClassOps gPrototypeJSClassOps = {
-    nullptr, nullptr, nullptr, nullptr,
+    nullptr, nullptr,
     XBLEnumerate, nullptr, nullptr,
     nullptr, XBLFinalize,
     nullptr, nullptr, nullptr, nullptr

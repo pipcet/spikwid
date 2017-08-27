@@ -18,12 +18,12 @@ add_task(async function() {
 add_task(async function() {
   await openPreferencesViaOpenPreferencesAPI("paneGeneral", {leaveOpen: true});
 
-  // Ensure the "Create Account" button in the hidden child of the <xul:deck>
+  // Ensure the "Sign Up" button in the hidden child of the <xul:deck>
   // is selected and displayed on the screen.
   let weavePrefsDeck = gBrowser.contentDocument.getElementById("weavePrefsDeck");
   is(weavePrefsDeck.selectedIndex, 0, "Should select the #noFxaAccount child node");
   let noFxaSignUp = weavePrefsDeck.childNodes[0].querySelector("#noFxaSignUp");
-  is(noFxaSignUp.label, "Create Account", "The Create Account button should exist");
+  is(noFxaSignUp.textContent, "Don\u2019t have an account? Get started", "The Sign Up button should exist");
 
   // Performs search.
   let searchInput = gBrowser.contentDocument.getElementById("searchInput");
@@ -31,7 +31,7 @@ add_task(async function() {
   is(searchInput, gBrowser.contentDocument.activeElement.closest("#searchInput"),
     "Search input should be focused when visiting preferences");
 
-  let query = "Create Account";
+  let query = "Don\u2019t have an account? Get started";
   let searchCompletedPromise = BrowserTestUtils.waitForEvent(
       gBrowser.contentWindow, "PreferencesSearchCompleted", evt => evt.detail == query);
   EventUtils.sendString(query);
@@ -48,9 +48,9 @@ add_task(async function() {
     }
   }
 
-  // Ensure the "Forget this Email" button exists in the hidden child of the <xul:deck>.
+  // Ensure the "Forget this email" button exists in the hidden child of the <xul:deck>.
   let unlinkFxaAccount = weavePrefsDeck.childNodes[1].querySelector("#unverifiedUnlinkFxaAccount");
-  is(unlinkFxaAccount.label, "Forget this Email", "The Forget this Email button should exist");
+  is(unlinkFxaAccount.label, "Forget this email", "The Forget this email button should exist");
 
   // Performs search.
   searchInput.focus();

@@ -87,8 +87,6 @@ enum {
 const ClassOps DebuggerFrame::classOps_ = {
     nullptr,    /* addProperty */
     nullptr,    /* delProperty */
-    nullptr,    /* getProperty */
-    nullptr,    /* setProperty */
     nullptr,    /* enumerate   */
     nullptr,    /* newEnumerate */
     nullptr,    /* resolve     */
@@ -121,8 +119,6 @@ const Class DebuggerArguments::class_ = {
 const ClassOps DebuggerEnvironment::classOps_ = {
     nullptr,    /* addProperty */
     nullptr,    /* delProperty */
-    nullptr,    /* getProperty */
-    nullptr,    /* setProperty */
     nullptr,    /* enumerate   */
     nullptr,    /* newEnumerate */
     nullptr,    /* resolve     */
@@ -149,8 +145,6 @@ enum {
 const ClassOps DebuggerObject::classOps_ = {
     nullptr,    /* addProperty */
     nullptr,    /* delProperty */
-    nullptr,    /* getProperty */
-    nullptr,    /* setProperty */
     nullptr,    /* enumerate   */
     nullptr,    /* newEnumerate */
     nullptr,    /* resolve     */
@@ -177,8 +171,6 @@ enum {
 static const ClassOps DebuggerScript_classOps = {
     nullptr,    /* addProperty */
     nullptr,    /* delProperty */
-    nullptr,    /* getProperty */
-    nullptr,    /* setProperty */
     nullptr,    /* enumerate   */
     nullptr,    /* newEnumerate */
     nullptr,    /* resolve     */
@@ -206,8 +198,6 @@ enum {
 static const ClassOps DebuggerSource_classOps = {
     nullptr,    /* addProperty */
     nullptr,    /* delProperty */
-    nullptr,    /* getProperty */
-    nullptr,    /* setProperty */
     nullptr,    /* enumerate   */
     nullptr,    /* newEnumerate */
     nullptr,    /* resolve     */
@@ -2630,14 +2620,15 @@ UpdateExecutionObservabilityOfScriptsInZone(JSContext* cx, Zone* zone,
             if (actIter->compartment()->zone() != zone)
                 continue;
 
-            for (JitFrameIterator iter(actIter); !iter.done(); ++iter) {
-                switch (iter.type()) {
+            for (OnlyJSJitFrameIter iter(actIter); !iter.done(); ++iter) {
+                const jit::JSJitFrameIter& frame = iter.frame();
+                switch (frame.type()) {
                   case JitFrame_BaselineJS:
-                    MarkBaselineScriptActiveIfObservable(iter.script(), obs);
+                    MarkBaselineScriptActiveIfObservable(frame.script(), obs);
                     break;
                   case JitFrame_IonJS:
-                    MarkBaselineScriptActiveIfObservable(iter.script(), obs);
-                    for (InlineFrameIterator inlineIter(cx, &iter); inlineIter.more(); ++inlineIter)
+                    MarkBaselineScriptActiveIfObservable(frame.script(), obs);
+                    for (InlineFrameIterator inlineIter(cx, &frame); inlineIter.more(); ++inlineIter)
                         MarkBaselineScriptActiveIfObservable(inlineIter.script(), obs);
                     break;
                   default:;
@@ -3310,8 +3301,6 @@ Debugger::findZoneEdges(Zone* zone, js::gc::ZoneComponentFinder& finder)
 const ClassOps Debugger::classOps_ = {
     nullptr,    /* addProperty */
     nullptr,    /* delProperty */
-    nullptr,    /* getProperty */
-    nullptr,    /* setProperty */
     nullptr,    /* enumerate   */
     nullptr,    /* newEnumerate */
     nullptr,    /* resolve     */
@@ -5751,14 +5740,9 @@ class BytecodeRangeWithPosition : private BytecodeRange
  *       The instruction cannot be reached, so the instruction is not an entry
  *       point for the line it is on.
  *   - hasSingleEdge:
- *   - hasMultipleEdgesFromSingleLine:
  *       The instruction can be reached from a single line. If this line is
  *       different from the line the instruction is on, the instruction is an
  *       entry point for that line.
- *   - hasMultipleEdgesFromMultipleLines:
- *       The instruction can be reached from multiple lines. At least one of
- *       these lines is guaranteed to be different from the line the instruction
- *       is on, so the instruction is an entry point for that line.
  *
  * Similarly, an instruction on a given position (line/column pair) is an
  * entry point for that position if it can be reached from (an instruction on) a
@@ -5770,21 +5754,11 @@ class BytecodeRangeWithPosition : private BytecodeRange
  *       The instruction can be reached from a single position. If this line is
  *       different from the position the instruction is on, the instruction is
  *       an entry point for that position.
- *   - hasMultipleEdgesFromSingleLine:
- *   - hasMultipleEdgesFromMultipleLines:
- *       The instruction can be reached from multiple positions. At least one
- *       of these positions is guaranteed to be different from the position the
- *       instruction is on, so the instruction is an entry point for that
- *       position.
  */
 class FlowGraphSummary {
   public:
     class Entry {
       public:
-        static Entry createWithNoEdges() {
-            return Entry(SIZE_MAX, 0);
-        }
-
         static Entry createWithSingleEdge(size_t lineno, size_t column) {
             return Entry(lineno, column);
         }
@@ -5805,22 +5779,6 @@ class FlowGraphSummary {
 
         bool hasSingleEdge() const {
             return lineno_ != SIZE_MAX && column_ != SIZE_MAX;
-        }
-
-        bool hasMultipleEdgesFromSingleLine() const {
-            return lineno_ != SIZE_MAX && column_ == SIZE_MAX;
-        }
-
-        bool hasMultipleEdgesFromMultipleLines() const {
-            return lineno_ == SIZE_MAX && column_ == SIZE_MAX;
-        }
-
-        bool operator==(const Entry& other) const {
-            return lineno_ == other.lineno_ && column_ == other.column_;
-        }
-
-        bool operator!=(const Entry& other) const {
-            return lineno_ != other.lineno_ || column_ != other.column_;
         }
 
         size_t lineno() const {
@@ -7642,11 +7600,11 @@ UpdateFrameIterPc(FrameIter& iter)
         while (activationIter.activation() != activation)
             ++activationIter;
 
-        jit::JitFrameIterator jitIter(activationIter);
-        while (!jitIter.isIonJS() || jitIter.jsFrame() != jsFrame)
+        OnlyJSJitFrameIter jitIter(activationIter);
+        while (!jitIter.frame().isIonJS() || jitIter.frame().jsFrame() != jsFrame)
             ++jitIter;
 
-        jit::InlineFrameIterator ionInlineIter(cx, &jitIter);
+        jit::InlineFrameIterator ionInlineIter(cx, &jitIter.frame());
         while (ionInlineIter.frameNo() != frame->frameNo())
             ++ionInlineIter;
 
@@ -8185,10 +8143,10 @@ static void
 DebuggerFrame_trace(JSTracer* trc, JSObject* obj)
 {
     OnStepHandler* onStepHandler = obj->as<DebuggerFrame>().onStepHandler();
-    if (onStepHandler) 
+    if (onStepHandler)
         onStepHandler->trace(trc);
     OnPopHandler* onPopHandler = obj->as<DebuggerFrame>().onPopHandler();
-    if (onPopHandler) 
+    if (onPopHandler)
         onPopHandler->trace(trc);
 }
 

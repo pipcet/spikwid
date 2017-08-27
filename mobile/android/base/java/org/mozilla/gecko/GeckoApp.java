@@ -740,29 +740,6 @@ public abstract class GeckoApp extends GeckoActivity
         } else if ("PrivateBrowsing:Data".equals(event)) {
             mPrivateBrowsingSession = message.getString("session");
 
-        } else if ("RuntimePermissions:Check".equals(event)) {
-            final String[] permissions = message.getStringArray("permissions");
-            final boolean shouldPrompt = message.getBoolean("shouldPrompt", false);
-            if (callback == null || permissions == null) {
-                return;
-            }
-
-            Permissions.from(this)
-                    .withPermissions(permissions)
-                    .doNotPromptIf(!shouldPrompt)
-                    .andFallback(new Runnable() {
-                        @Override
-                        public void run() {
-                            callback.sendSuccess(false);
-                        }
-                    })
-                    .run(new Runnable() {
-                        @Override
-                        public void run() {
-                            callback.sendSuccess(true);
-                        }
-                    });
-
         } else if ("Share:Text".equals(event)) {
             final String text = message.getString("text");
             final Tab tab = Tabs.getInstance().getSelectedTab();
@@ -1053,6 +1030,11 @@ public abstract class GeckoApp extends GeckoActivity
 
     @Override // GeckoView.ContentListener
     public void onFullScreen(final GeckoView view, final boolean fullScreen) {
+        if (fullScreen) {
+            SnackbarBuilder.builder(this)
+                    .message(R.string.fullscreen_warning)
+                    .duration(Snackbar.LENGTH_LONG).buildAndShow();
+        }
         ThreadUtils.assertOnUiThread();
         ActivityUtils.setFullScreen(this, fullScreen);
     }
@@ -1249,7 +1231,6 @@ public abstract class GeckoApp extends GeckoActivity
             "Mma:web_save_media",
             "Permissions:Data",
             "PrivateBrowsing:Data",
-            "RuntimePermissions:Check",
             "Share:Text",
             "SystemUI:Visibility",
             "ToggleChrome:Focus",
@@ -1504,7 +1485,7 @@ public abstract class GeckoApp extends GeckoActivity
     }
 
     protected void initializeChrome() {
-        mDoorHangerPopup = new DoorHangerPopup(this);
+        mDoorHangerPopup = new DoorHangerPopup(this, getAppEventDispatcher());
         mDoorHangerPopup.setOnVisibilityChangeListener(this);
         mFormAssistPopup = (FormAssistPopup) findViewById(R.id.form_assist_popup);
     }
@@ -2242,7 +2223,6 @@ public abstract class GeckoApp extends GeckoActivity
             "Mma:web_save_media",
             "Permissions:Data",
             "PrivateBrowsing:Data",
-            "RuntimePermissions:Check",
             "Share:Text",
             "SystemUI:Visibility",
             "ToggleChrome:Focus",

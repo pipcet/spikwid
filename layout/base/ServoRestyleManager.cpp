@@ -423,9 +423,7 @@ ServoRestyleManager::ClearRestyleStateFromSubtree(Element* aElement)
 
   bool wasRestyled;
   Unused << Servo_TakeChangeHint(aElement, &wasRestyled);
-  aElement->UnsetHasDirtyDescendantsForServo();
-  aElement->UnsetHasAnimationOnlyDirtyDescendantsForServo();
-  aElement->UnsetFlags(NODE_DESCENDANTS_NEED_FRAMES);
+  aElement->UnsetFlags(Element::kAllServoDescendantBits);
 }
 
 /**
@@ -439,10 +437,12 @@ ServoRestyleManager::ClearRestyleStateFromSubtree(Element* aElement)
 struct ServoRestyleManager::TextPostTraversalState
 {
 public:
-  TextPostTraversalState(ServoStyleContext& aParentContext,
+  TextPostTraversalState(Element& aParentElement,
+                         ServoStyleContext* aParentContext,
                          bool aDisplayContentsParentStyleChanged,
                          ServoRestyleState& aParentRestyleState)
-    : mParentContext(aParentContext)
+    : mParentElement(aParentElement)
+    , mParentContext(aParentContext)
     , mParentRestyleState(aParentRestyleState)
     , mStyle(nullptr)
     , mShouldPostHints(aDisplayContentsParentStyleChanged)
@@ -456,7 +456,7 @@ public:
   {
     if (!mStyle) {
       mStyle = mParentRestyleState.StyleSet().ResolveStyleForText(
-        aTextNode, &mParentContext);
+        aTextNode, &ParentStyle());
     }
     MOZ_ASSERT(mStyle);
     return *mStyle;
@@ -499,55 +499,24 @@ public:
   }
 
 private:
-  ServoStyleContext& mParentContext;
+  ServoStyleContext& ParentStyle() {
+    if (!mParentContext) {
+      mLazilyResolvedParentContext =
+        mParentRestyleState.StyleSet().ResolveServoStyle(&mParentElement);
+      mParentContext = mLazilyResolvedParentContext;
+    }
+    return *mParentContext;
+  }
+
+  Element& mParentElement;
+  ServoStyleContext* mParentContext;
+  RefPtr<ServoStyleContext> mLazilyResolvedParentContext;
   ServoRestyleState& mParentRestyleState;
   RefPtr<nsStyleContext> mStyle;
   bool mShouldPostHints;
   bool mShouldComputeHints;
   nsChangeHint mComputedHint;
 };
-
-// Get the nsBlockFrame which might contain ::first-letter/::first-line for the
-// given element.  Will return null if there is no such blockframe.
-static nsBlockFrame*
-GetBlockForElement(const Element* aElement)
-{
-  nsIFrame* frame = aElement->GetPrimaryFrame();
-  if (!frame) {
-    return nullptr;
-  }
-  // The first-letter frame will always be inside the content insertion frame,
-  // which will always be a block if we have a first-letter frame at all.
-  frame = frame->GetContentInsertionFrame();
-  if (!frame) {
-    // We're a leaf; certainly no first-letter frame.
-    return nullptr;
-  }
-
-  if (!frame->IsFrameOfType(nsIFrame::eBlockFrame)) {
-    return nullptr;
-  }
-
-  return static_cast<nsBlockFrame*>(frame);
-}
-
-// Find the first-letter frame for the given element, if any.  Returns null to
-// indicate there isn't one.
-static nsIFrame*
-FindFirstLetterFrameForElement(const Element* aElement)
-{
-  nsBlockFrame* f = GetBlockForElement(aElement);
-  return f ? f->GetFirstLetter() : nullptr;
-}
-
-// Find the first-line frame for the given element, if any.  Returns null to
-// indicate there isn't one.
-static nsIFrame*
-FindFirstLineFrameForElement(const Element* aElement)
-{
-  nsBlockFrame* f = GetBlockForElement(aElement);
-  return f ? f->GetFirstLineFrame() : nullptr;
-}
 
 static void
 UpdateBackdropIfNeeded(nsIFrame* aFrame,
@@ -676,14 +645,6 @@ UpdateFramePseudoElementStyles(nsIFrame* aFrame,
     aFrame, aRestyleState.StyleSet(), aRestyleState.ChangeList());
 }
 
-static inline bool
-NeedsToTraverseElementChildren(const Element& aParent)
-{
-  return aParent.HasAnimationOnlyDirtyDescendantsForServo() ||
-         aParent.HasDirtyDescendantsForServo() ||
-         aParent.HasFlag(NODE_DESCENDANTS_NEED_FRAMES);
-}
-
 bool
 ServoRestyleManager::ProcessPostTraversal(
   Element* aElement,
@@ -793,11 +754,9 @@ ServoRestyleManager::ProcessPostTraversal(
     thisFrameRestyleState ? *thisFrameRestyleState : aRestyleState;
 
   RefPtr<ServoStyleContext> upToDateContext =
-    (wasRestyled || !oldStyleContext)
+    wasRestyled
       ? aRestyleState.StyleSet().ResolveServoStyle(aElement)
       : oldStyleContext;
-
-  MOZ_ASSERT(upToDateContext);
 
   if (wasRestyled && oldStyleContext) {
     MOZ_ASSERT(styleFrame || displayContentsStyle);
@@ -855,14 +814,14 @@ ServoRestyleManager::ProcessPostTraversal(
   }
 
   const bool traverseElementChildren =
-    NeedsToTraverseElementChildren(*aElement);
-  const bool descendantsNeedFrames =
-    aElement->HasFlag(NODE_DESCENDANTS_NEED_FRAMES);
-  const bool traverseTextChildren = wasRestyled || descendantsNeedFrames;
+    aElement->HasAnyOfFlags(Element::kAllServoDescendantBits);
+  const bool traverseTextChildren =
+    wasRestyled || aElement->HasFlag(NODE_DESCENDANTS_NEED_FRAMES);
   bool recreatedAnyContext = wasRestyled;
   if (traverseElementChildren || traverseTextChildren) {
     StyleChildrenIterator it(aElement);
-    TextPostTraversalState textState(*upToDateContext,
+    TextPostTraversalState textState(*aElement,
+                                     upToDateContext,
                                      displayContentsStyle && wasRestyled,
                                      childrenRestyleState);
     for (nsIContent* n = it.GetNextChild(); n; n = it.GetNextChild()) {
@@ -913,10 +872,7 @@ ServoRestyleManager::ProcessPostTraversal(
     }
   }
 
-  aElement->UnsetHasDirtyDescendantsForServo();
-  aElement->UnsetFlags(NODE_DESCENDANTS_NEED_FRAMES);
-  aElement->UnsetHasAnimationOnlyDirtyDescendantsForServo();
-
+  aElement->UnsetFlags(Element::kAllServoDescendantBits);
   return recreatedAnyContext;
 }
 
@@ -998,41 +954,21 @@ ServoRestyleManager::SnapshotFor(Element* aElement)
   ServoElementSnapshot* snapshot = mSnapshots.LookupOrAdd(aElement, aElement);
   aElement->SetFlags(ELEMENT_HAS_SNAPSHOT);
 
-  nsIPresShell* presShell = mPresContext->PresShell();
-  presShell->EnsureStyleFlush();
+  // Now that we have a snapshot, make sure a restyle is triggered.
+  //
+  // If we have any later siblings, we need to flag the restyle on the parent,
+  // so that a traversal from the restyle root is guaranteed to reach those
+  // siblings (since the snapshot may generate hints for later siblings).
+  if (aElement->GetNextElementSibling()) {
+    Element* parent = aElement->GetFlattenedTreeParentElementForStyle();
+    MOZ_ASSERT(parent);
+    parent->NoteDirtyForServo();
+    parent->SetHasDirtyDescendantsForServo();
+  } else {
+    aElement->NoteDirtyForServo();
+  }
 
   return *snapshot;
-}
-
-/* static */ nsIFrame*
-ServoRestyleManager::FrameForPseudoElement(const Element* aElement,
-                                           nsIAtom* aPseudoTagOrNull)
-{
-  if (!aPseudoTagOrNull) {
-    return nsLayoutUtils::GetStyleFrame(aElement);
-  }
-
-  if (aPseudoTagOrNull == nsCSSPseudoElements::before) {
-    Element* pseudoElement = nsLayoutUtils::GetBeforePseudo(aElement);
-    return pseudoElement ? nsLayoutUtils::GetStyleFrame(pseudoElement) : nullptr;
-  }
-
-  if (aPseudoTagOrNull == nsCSSPseudoElements::after) {
-    Element* pseudoElement = nsLayoutUtils::GetAfterPseudo(aElement);
-    return pseudoElement ? nsLayoutUtils::GetStyleFrame(pseudoElement) : nullptr;
-  }
-
-  if (aPseudoTagOrNull == nsCSSPseudoElements::firstLetter) {
-    return FindFirstLetterFrameForElement(aElement);
-  }
-
-  if (aPseudoTagOrNull == nsCSSPseudoElements::firstLine) {
-    return FindFirstLineFrameForElement(aElement);
-  }
-
-  MOZ_CRASH("Unkown pseudo-element given to "
-            "ServoRestyleManager::FrameForPseudoElement");
-  return nullptr;
 }
 
 void
@@ -1086,7 +1022,7 @@ ServoRestyleManager::DoProcessPendingRestyles(ServoTraversalFlags aFlags)
     // lazy frame construction).
     {
       AutoRestyleTimelineMarker marker(mPresContext->GetDocShell(), false);
-      DocumentStyleRootIterator iter(doc);
+      DocumentStyleRootIterator iter(doc->GetServoRestyleRoot());
       while (Element* root = iter.GetNextStyleRoot()) {
         nsTArray<nsIFrame*> wrappersToRestyle;
         ServoRestyleState state(*styleSet, currentChanges, wrappersToRestyle);
@@ -1095,6 +1031,8 @@ ServoRestyleManager::DoProcessPendingRestyles(ServoTraversalFlags aFlags)
                                /* aParentWasRestyled = */ false);
       }
     }
+
+    doc->ClearServoRestyleRoot();
 
     // Process the change hints.
     //
@@ -1138,6 +1076,8 @@ ServoRestyleManager::DoProcessPendingRestyles(ServoTraversalFlags aFlags)
       IncrementRestyleGeneration();
     }
   }
+
+  doc->ClearServoRestyleRoot();
 
   FlushOverflowChangedTracker();
 
@@ -1228,8 +1168,6 @@ ServoRestyleManager::ContentStateChanged(nsIContent* aContent,
   ServoElementSnapshot& snapshot = SnapshotFor(aElement);
   EventStates previousState = aElement->StyleState() ^ aChangedBits;
   snapshot.AddState(previousState);
-
-  aElement->NoteDirtyForServo();
 
   if (restyleHint || changeHint) {
     Servo_NoteExplicitHints(aElement, restyleHint, changeHint);
@@ -1348,8 +1286,6 @@ ServoRestyleManager::TakeSnapshotForAttributeChange(Element* aElement,
   if (influencesOtherPseudoClassState) {
     snapshot.AddOtherPseudoClassState(aElement);
   }
-
-  aElement->NoteDirtyForServo();
 }
 
 // For some attribute changes we must restyle the whole subtree:

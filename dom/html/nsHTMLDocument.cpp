@@ -11,7 +11,7 @@
 #include "mozilla/dom/HTMLAllCollection.h"
 #include "nsCOMPtr.h"
 #include "nsGlobalWindow.h"
-#include "nsXPIDLString.h"
+#include "nsString.h"
 #include "nsPrintfCString.h"
 #include "nsReadableUtils.h"
 #include "nsUnicharUtils.h"
@@ -57,7 +57,6 @@
 #include "nsIComponentManager.h"
 #include "nsParserCIID.h"
 #include "nsIDOMHTMLElement.h"
-#include "nsIDOMHTMLHeadElement.h"
 #include "nsNameSpaceManager.h"
 #include "nsGenericHTMLElement.h"
 #include "mozilla/css/Loader.h"
@@ -1150,7 +1149,7 @@ nsHTMLDocument::SetBody(nsGenericHTMLElement* newBody, ErrorResult& rv)
 }
 
 NS_IMETHODIMP
-nsHTMLDocument::GetHead(nsIDOMHTMLHeadElement** aHead)
+nsHTMLDocument::GetHead(nsISupports** aHead)
 {
   *aHead = nullptr;
 
@@ -1371,7 +1370,7 @@ nsHTMLDocument::GetCookie(nsAString& aCookie, ErrorResult& rv)
       }
     }
 
-    nsXPIDLCString cookie;
+    nsCString cookie;
     service->GetCookieString(codebaseURI, channel, getter_Copies(cookie));
     // CopyUTF8toUTF16 doesn't handle error
     // because it assumes that the input is valid.
@@ -3668,7 +3667,7 @@ nsHTMLDocument::QueryCommandValue(const nsAString& commandID,
   // aValue will wind up being the empty string.  This is fine -- we want to
   // return "" in that case anyway (bug 738385), so we just return NS_OK
   // regardless.
-  nsXPIDLCString cStringResult;
+  nsCString cStringResult;
   cmdParams->GetCStringValue("state_attribute",
                              getter_Copies(cStringResult));
   CopyUTF8toUTF16(cStringResult, aValue);

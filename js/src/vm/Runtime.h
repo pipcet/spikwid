@@ -69,8 +69,6 @@ class EnterDebuggeeNoExecute;
 class TraceLoggerThread;
 #endif
 
-typedef Vector<UniquePtr<PromiseTask>, 0, SystemAllocPolicy> PromiseTaskPtrVector;
-
 } // namespace js
 
 struct DtoaState;
@@ -457,6 +455,10 @@ struct JSRuntime : public js::MallocProvider<JSRuntime>
 
     /* Call this to accumulate telemetry data. */
     js::ActiveThreadData<JSAccumulateTelemetryDataCallback> telemetryCallback;
+
+    /* Call this to accumulate use counter data. */
+    js::ActiveThreadData<JSSetUseCounterCallback> useCounterCallback;
+
   public:
     // Accumulates data for Firefox telemetry. |id| is the ID of a JS_TELEMETRY_*
     // histogram. |key| provides an additional key to identify the histogram.
@@ -465,10 +467,15 @@ struct JSRuntime : public js::MallocProvider<JSRuntime>
 
     void setTelemetryCallback(JSRuntime* rt, JSAccumulateTelemetryDataCallback callback);
 
+    // Sets the use counter for a specific feature, measuring the presence or
+    // absence of usage of a feature on a specific web page and document which
+    // the passed JSObject belongs to.
+    void setUseCounter(JSObject* obj, JSUseCounter counter);
+
+    void setUseCounterCallback(JSRuntime* rt, JSSetUseCounterCallback callback);
+
   public:
-    js::ActiveThreadData<JS::StartAsyncTaskCallback> startAsyncTaskCallback;
-    js::UnprotectedData<JS::FinishAsyncTaskCallback> finishAsyncTaskCallback;
-    js::ExclusiveData<js::PromiseTaskPtrVector> promiseTasksToDestroy;
+    js::UnprotectedData<js::OffThreadPromiseRuntimeState> offThreadPromiseState;
 
     JSObject* getIncumbentGlobal(JSContext* cx);
     bool enqueuePromiseJob(JSContext* cx, js::HandleFunction job, js::HandleObject promise,

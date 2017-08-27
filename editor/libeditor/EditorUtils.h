@@ -411,10 +411,13 @@ struct MOZ_STACK_CLASS EditorDOMPoint final
 class EditorUtils final
 {
 public:
+  // Note that aChild isn't a normal XPCOM outparam and won't get AddRef'ed.
   static bool IsDescendantOf(nsINode* aNode, nsINode* aParent,
-                             int32_t* aOffset = 0);
+                             nsIContent** aChild);
+  static bool IsDescendantOf(nsINode* aNode, nsINode* aParent,
+                             int32_t* aOffset = nullptr);
   static bool IsDescendantOf(nsIDOMNode* aNode, nsIDOMNode* aParent,
-                             int32_t* aOffset = 0);
+                             int32_t* aOffset = nullptr);
   static bool IsLeafNode(nsIDOMNode* aNode);
 };
 

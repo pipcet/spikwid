@@ -1904,10 +1904,6 @@ js::InitClass(JSContext* cx, HandleObject obj, HandleObject protoProto_,
 {
     RootedObject protoProto(cx, protoProto_);
 
-    /* Check function pointer members. */
-    MOZ_ASSERT(clasp->getGetProperty() != JS_PropertyStub);
-    MOZ_ASSERT(clasp->getSetProperty() != JS_StrictPropertyStub);
-
     RootedAtom atom(cx, Atomize(cx, clasp->name, strlen(clasp->name)));
     if (!atom)
         return nullptr;
@@ -2981,21 +2977,6 @@ static bool
 DefineFunctionFromSpec(JSContext* cx, HandleObject obj, const JSFunctionSpec* fs, unsigned flags,
                        DefineAsIntrinsic intrinsic)
 {
-    GetterOp gop;
-    SetterOp sop;
-    if (flags & JSFUN_STUB_GSOPS) {
-        // JSFUN_STUB_GSOPS is a request flag only, not stored in fun->flags or
-        // the defined property's attributes.
-        flags &= ~JSFUN_STUB_GSOPS;
-        gop = nullptr;
-        sop = nullptr;
-    } else {
-        gop = obj->getClass()->getGetProperty();
-        sop = obj->getClass()->getSetProperty();
-        MOZ_ASSERT(gop != JS_PropertyStub);
-        MOZ_ASSERT(sop != JS_StrictPropertyStub);
-    }
-
     RootedId id(cx);
     if (!PropertySpecNameToId(cx, fs->name, &id))
         return false;
@@ -3008,7 +2989,7 @@ DefineFunctionFromSpec(JSContext* cx, HandleObject obj, const JSFunctionSpec* fs
         fun->setIsIntrinsic();
 
     RootedValue funVal(cx, ObjectValue(*fun));
-    return DefineProperty(cx, obj, id, funVal, gop, sop, flags & ~JSFUN_FLAGS_MASK);
+    return DefineProperty(cx, obj, id, funVal, nullptr, nullptr, flags & ~JSFUN_FLAGS_MASK);
 }
 
 bool
@@ -3151,7 +3132,7 @@ js::ToPrimitiveSlow(JSContext* cx, JSType preferredType, MutableHandleValue vp)
         return false;
 
     // Step 6.
-    if (!method.isUndefined()) {
+    if (!method.isNullOrUndefined()) {
         // Step 6 of GetMethod. js::Call() below would do this check and throw a
         // TypeError anyway, but this produces a better error message.
         if (!IsCallable(method))
@@ -3649,7 +3630,7 @@ js::DumpInterpreterFrame(JSContext* cx, FILE* fp, InterpreterFrame* start)
             return;
         }
     } else {
-        while (!i.done() && !i.isJit() && i.interpFrame() != start)
+        while (!i.done() && !i.isJSJit() && i.interpFrame() != start)
             ++i;
 
         if (i.done()) {
@@ -3660,7 +3641,7 @@ js::DumpInterpreterFrame(JSContext* cx, FILE* fp, InterpreterFrame* start)
     }
 
     for (; !i.done(); ++i) {
-        if (i.isJit())
+        if (i.isJSJit())
             fprintf(fp, "JIT frame\n");
         else
             fprintf(fp, "InterpreterFrame at %p\n", (void*) i.interpFrame());
@@ -3686,7 +3667,7 @@ js::DumpInterpreterFrame(JSContext* cx, FILE* fp, InterpreterFrame* start)
         }
         if (i.isFunctionFrame())
             MaybeDumpValue("this", i.thisArgument(cx), fp);
-        if (!i.isJit()) {
+        if (!i.isJSJit()) {
             fprintf(fp, "  rval: ");
             dumpValue(i.interpFrame()->returnValue(), fp);
             fputc('\n', fp);
@@ -3695,7 +3676,7 @@ js::DumpInterpreterFrame(JSContext* cx, FILE* fp, InterpreterFrame* start)
         fprintf(fp, "  flags:");
         if (i.isConstructing())
             fprintf(fp, " constructing");
-        if (!i.isJit() && i.interpFrame()->isDebuggerEvalFrame())
+        if (!i.isJSJit() && i.interpFrame()->isDebuggerEvalFrame())
             fprintf(fp, " debugger eval");
         if (i.isEvalFrame())
             fprintf(fp, " eval");

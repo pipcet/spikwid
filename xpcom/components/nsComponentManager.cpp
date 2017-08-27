@@ -2,19 +2,7 @@
 /* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- * This Original Code has been modified by IBM Corporation.
- * Modifications made by IBM described herein are
- * Copyright (c) International Business Machines
- * Corporation, 2000
- *
- * Modifications to Mozilla code or documentation
- * identified per MPL Section 3.3
- *
- * Date             Modified by     Description of modification
- * 04/20/2000       IBM Corp.      Added PR_CALLBACK for Optlink use in OS2
- */
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include <stdlib.h>
 #include "nscore.h"
@@ -43,7 +31,6 @@
 #include "nsLocalFile.h"
 #include "nsReadableUtils.h"
 #include "nsString.h"
-#include "nsXPIDLString.h"
 #include "prcmon.h"
 #include "xptinfo.h" // this after nsISupports, to pick up IID so that xpt stuff doesn't try to define it itself...
 #include "nsThreadUtils.h"
@@ -105,7 +92,7 @@ nsGetServiceFromCategory::operator()(const nsIID& aIID,
                                      void** aInstancePtr) const
 {
   nsresult rv;
-  nsXPIDLCString value;
+  nsCString value;
   nsCOMPtr<nsICategoryManager> catman;
   nsComponentManagerImpl* compMgr = nsComponentManagerImpl::gComponentManager;
   if (!compMgr) {
@@ -132,12 +119,12 @@ nsGetServiceFromCategory::operator()(const nsIID& aIID,
   if (NS_FAILED(rv)) {
     goto error;
   }
-  if (!value) {
+  if (value.IsVoid()) {
     rv = NS_ERROR_SERVICE_NOT_AVAILABLE;
     goto error;
   }
 
-  rv = compMgr->nsComponentManagerImpl::GetServiceByContractID(value,
+  rv = compMgr->nsComponentManagerImpl::GetServiceByContractID(value.get(),
                                                                aIID,
                                                                aInstancePtr);
   if (NS_FAILED(rv)) {

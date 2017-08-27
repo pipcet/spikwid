@@ -63,7 +63,7 @@ use unicode_bidi as bidi;
 /// with a float or a horizontal wall of the containing block. The block-start
 /// inline-start corner of the green zone is the same as that of the line, but
 /// the green zone can be taller and wider than the line itself.
-#[derive(Serialize, Debug, Clone)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Line {
     /// A range of line indices that describe line breaks.
     ///
@@ -823,7 +823,7 @@ impl LineBreaker {
 }
 
 /// Represents a list of inline fragments, including element ranges.
-#[derive(Serialize, Clone)]
+#[derive(Clone, Serialize)]
 pub struct InlineFragments {
     /// The fragments themselves.
     pub fragments: Vec<Fragment>,
@@ -1486,7 +1486,7 @@ impl Flow for InlineFlow {
             indentation = Au(0)
         }
 
-        if self.contains_positioned_fragments() {
+        if self.is_absolute_containing_block() {
             // Assign block-sizes for all flows in this absolute flow tree.
             // This is preorder because the block-size of an absolute flow may depend on
             // the block-size of its containing block, which may also be an absolute flow.
@@ -1864,13 +1864,13 @@ impl InlineMetrics {
     }
 }
 
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 enum LineFlushMode {
     No,
     Flush,
 }
 
-#[derive(Copy, Clone, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Serialize)]
 pub struct LineMetrics {
     pub space_above_baseline: Au,
     pub space_below_baseline: Au,

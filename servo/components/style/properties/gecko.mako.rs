@@ -588,7 +588,7 @@ def set_gecko_property(ffi_name, expr):
     // set on mContextFlags, and the length field is set to the initial value.
 
     pub fn set_${ident}(&mut self, v: longhands::${ident}::computed_value::T) {
-        use values::generics::svg::SVGLength;
+        use values::generics::svg::{SVGLength, SvgLengthOrPercentageOrNumber};
         use gecko_bindings::structs::nsStyleSVG_${ident.upper()}_CONTEXT as CONTEXT_VALUE;
         let length = match v {
             SVGLength::Length(length) => {
@@ -604,9 +604,10 @@ def set_gecko_property(ffi_name, expr):
             }
         };
         match length {
-            Either::First(number) =>
-                self.gecko.${gecko_ffi_name}.set_value(CoordDataValue::Factor(From::from(number))),
-            Either::Second(lop) => self.gecko.${gecko_ffi_name}.set(lop),
+            SvgLengthOrPercentageOrNumber::LengthOrPercentage(lop) =>
+                self.gecko.${gecko_ffi_name}.set(lop),
+            SvgLengthOrPercentageOrNumber::Number(num) =>
+                self.gecko.${gecko_ffi_name}.set_value(CoordDataValue::Factor(num.into())),
         }
     }
 
@@ -623,21 +624,28 @@ def set_gecko_property(ffi_name, expr):
     }
 
     pub fn clone_${ident}(&self) -> longhands::${ident}::computed_value::T {
-        use values::generics::svg::SVGLength;
+        use values::generics::svg::{SVGLength, SvgLengthOrPercentageOrNumber};
         use values::computed::LengthOrPercentage;
         use gecko_bindings::structs::nsStyleSVG_${ident.upper()}_CONTEXT as CONTEXT_VALUE;
         if (self.gecko.mContextFlags & CONTEXT_VALUE) != 0 {
             return SVGLength::ContextValue;
         }
         let length = match self.gecko.${gecko_ffi_name}.as_value() {
-            CoordDataValue::Factor(number) => Either::First(From::from(number)),
-            CoordDataValue::Coord(coord) => Either::Second(From::from(LengthOrPercentage::Length(Au(coord)))),
-            CoordDataValue::Percent(p) => Either::Second(From::from(LengthOrPercentage::Percentage(Percentage(p)))),
-            CoordDataValue::Calc(calc) => Either::Second(From::from(LengthOrPercentage::Calc(calc.into()))),
+            CoordDataValue::Factor(number) =>
+                SvgLengthOrPercentageOrNumber::Number(number),
+            CoordDataValue::Coord(coord) =>
+                SvgLengthOrPercentageOrNumber::LengthOrPercentage(
+                    LengthOrPercentage::Length(Au(coord))),
+            CoordDataValue::Percent(p) =>
+                SvgLengthOrPercentageOrNumber::LengthOrPercentage(
+                    LengthOrPercentage::Percentage(Percentage(p))),
+            CoordDataValue::Calc(calc) =>
+                SvgLengthOrPercentageOrNumber::LengthOrPercentage(
+                    LengthOrPercentage::Calc(calc.into())),
             _ => unreachable!("Unexpected coordinate {:?} in ${ident}",
                               self.gecko.${gecko_ffi_name}.as_value()),
         };
-        SVGLength::Length(length)
+        SVGLength::Length(length.into())
     }
 </%def>
 
@@ -2161,9 +2169,10 @@ fn static_assert() {
         }
     }
 
-    pub fn fixup_system(&mut self) {
+    pub fn fixup_system(&mut self, default_font_type: structs::FontFamilyType) {
         self.gecko.mFont.systemFont = true;
         self.gecko.mGenericID = structs::kGenericFont_NONE;
+        self.gecko.mFont.fontlist.mDefaultFontType = default_font_type;
     }
 
     pub fn set_font_family(&mut self, v: longhands::font_family::computed_value::T) {
@@ -2215,7 +2224,16 @@ fn static_assert() {
         use gecko_bindings::structs::FontFamilyType;
         use gecko_string_cache::Atom;
 
-        ::properties::longhands::font_family::computed_value::T(
+        if self.gecko.mFont.fontlist.mFontlist.is_empty() {
+            let default = match self.gecko.mFont.fontlist.mDefaultFontType {
+                FontFamilyType::eFamily_serif => FontFamily::Generic(atom!("serif")),
+                FontFamilyType::eFamily_sans_serif => FontFamily::Generic(atom!("sans-serif")),
+                _ => panic!("Default generic must be serif or sans-serif"),
+            };
+            return longhands::font_family::computed_value::T(vec![default]);
+        }
+
+        longhands::font_family::computed_value::T(
             self.gecko.mFont.fontlist.mFontlist.iter().map(|gecko_font_family_name| {
                 match gecko_font_family_name.mType {
                     FontFamilyType::eFamily_serif => FontFamily::Generic(atom!("serif")),
@@ -2505,8 +2523,12 @@ fn static_assert() {
 
     <% impl_simple_type_with_conversion("font_language_override", "mFont.languageOverride") %>
 
-    pub fn set_font_variant_alternates(&mut self, v: longhands::font_variant_alternates::computed_value::T) {
+    pub fn set_font_variant_alternates(&mut self,
+                                       v: longhands::font_variant_alternates::computed_value::T,
+                                       device: &Device) {
         use gecko_bindings::bindings::{Gecko_ClearAlternateValues, Gecko_AppendAlternateValues};
+        use gecko_bindings::bindings::Gecko_nsFont_ResetFontFeatureValuesLookup;
+        use gecko_bindings::bindings::Gecko_nsFont_SetFontFeatureValuesLookup;
         % for value in "normal swash stylistic ornaments annotation styleset character_variant historical".split():
             use gecko_bindings::structs::NS_FONT_VARIANT_ALTERNATES_${value.upper()};
         % endfor
@@ -2518,6 +2540,8 @@ fn static_assert() {
 
         if v.0.is_empty() {
             self.gecko.mFont.variantAlternates = NS_FONT_VARIANT_ALTERNATES_NORMAL as u16;
+            unsafe { Gecko_nsFont_ResetFontFeatureValuesLookup(&mut self.gecko.mFont); }
+            return;
         }
 
         for val in v.0.iter() {
@@ -2548,6 +2572,10 @@ fn static_assert() {
                     self.gecko.mFont.variantAlternates |= NS_FONT_VARIANT_ALTERNATES_HISTORICAL as u16;
                 }
             }
+        }
+
+        unsafe {
+            Gecko_nsFont_SetFontFeatureValuesLookup(&mut self.gecko.mFont, device.pres_context());
         }
     }
 
@@ -3505,7 +3533,7 @@ fn static_assert() {
                         Gecko_AppendWillChange(&mut self.gecko, feature.0.as_ptr());
                     }
 
-                    if let Ok(prop_id) = PropertyId::parse(&feature.0.to_string()) {
+                    if let Ok(prop_id) = PropertyId::parse(&feature.0.to_string(), None) {
                         match prop_id.as_shorthand() {
                             Ok(shorthand) => {
                                 for longhand in shorthand.longhands() {
@@ -4432,14 +4460,14 @@ fn static_assert() {
                     fn init_shadow(filter: &mut nsStyleFilter) -> &mut nsCSSShadowArray {
                         unsafe {
                             let ref mut union = filter.__bindgen_anon_1;
-                            let mut shadow_array: &mut *mut nsCSSShadowArray = union.mDropShadow.as_mut();
+                            let shadow_array: &mut *mut nsCSSShadowArray = union.mDropShadow.as_mut();
                             *shadow_array = Gecko_NewCSSShadowArray(1);
 
                             &mut **shadow_array
                         }
                     }
 
-                    let mut gecko_shadow = init_shadow(gecko_filter);
+                    let gecko_shadow = init_shadow(gecko_filter);
                     gecko_shadow.mArray[0].set_from_simple_shadow(shadow);
                 },
                 Url(ref url) => {
@@ -4988,14 +5016,14 @@ fn static_assert() {
                     unsafe {
                         // We have to be very careful to avoid a copy here!
                         let ref mut union = ${ident}.__bindgen_anon_1;
-                        let mut shape: &mut *mut StyleBasicShape = union.mBasicShape.as_mut();
+                        let shape: &mut *mut StyleBasicShape = union.mBasicShape.as_mut();
                         *shape = Gecko_NewBasicShape(ty);
                         &mut **shape
                     }
                 }
                 match servo_shape {
                     BasicShape::Inset(inset) => {
-                        let mut shape = init_shape(${ident}, StyleBasicShapeType::Inset);
+                        let shape = init_shape(${ident}, StyleBasicShapeType::Inset);
                         unsafe { shape.mCoordinates.set_len(4) };
 
                         // set_len() can't call constructors, so the coordinates
@@ -5017,7 +5045,7 @@ fn static_assert() {
                         set_corners_from_radius(inset.round, &mut shape.mRadius);
                     }
                     BasicShape::Circle(circ) => {
-                        let mut shape = init_shape(${ident}, StyleBasicShapeType::Circle);
+                        let shape = init_shape(${ident}, StyleBasicShapeType::Circle);
                         unsafe { shape.mCoordinates.set_len(1) };
                         shape.mCoordinates[0].leaky_set_null();
                         circ.radius.to_gecko_style_coord(&mut shape.mCoordinates[0]);
@@ -5025,7 +5053,7 @@ fn static_assert() {
                         shape.mPosition = circ.position.into();
                     }
                     BasicShape::Ellipse(el) => {
-                        let mut shape = init_shape(${ident}, StyleBasicShapeType::Ellipse);
+                        let shape = init_shape(${ident}, StyleBasicShapeType::Ellipse);
                         unsafe { shape.mCoordinates.set_len(2) };
                         shape.mCoordinates[0].leaky_set_null();
                         el.semiaxis_x.to_gecko_style_coord(&mut shape.mCoordinates[0]);
@@ -5035,7 +5063,7 @@ fn static_assert() {
                         shape.mPosition = el.position.into();
                     }
                     BasicShape::Polygon(poly) => {
-                        let mut shape = init_shape(${ident}, StyleBasicShapeType::Polygon);
+                        let shape = init_shape(${ident}, StyleBasicShapeType::Polygon);
                         unsafe {
                             shape.mCoordinates.set_len(poly.coordinates.len() as u32 * 2);
                         }
@@ -5141,7 +5169,7 @@ clip-path
 
     pub fn set_stroke_dasharray(&mut self, v: longhands::stroke_dasharray::computed_value::T) {
         use gecko_bindings::structs::nsStyleSVG_STROKE_DASHARRAY_CONTEXT as CONTEXT_VALUE;
-        use values::generics::svg::SVGStrokeDashArray;
+        use values::generics::svg::{SVGStrokeDashArray, SvgLengthOrPercentageOrNumber};
 
         match v {
             SVGStrokeDashArray::Values(v) => {
@@ -5150,10 +5178,12 @@ clip-path
                 unsafe {
                     bindings::Gecko_nsStyleSVG_SetDashArrayLength(&mut self.gecko, v.len() as u32);
                 }
-                for (mut gecko, servo) in self.gecko.mStrokeDasharray.iter_mut().zip(v) {
+                for (gecko, servo) in self.gecko.mStrokeDasharray.iter_mut().zip(v) {
                     match servo {
-                        Either::First(number) => gecko.set_value(CoordDataValue::Factor(number.into())),
-                        Either::Second(lop) => gecko.set(lop),
+                        SvgLengthOrPercentageOrNumber::LengthOrPercentage(lop) =>
+                            gecko.set(lop),
+                        SvgLengthOrPercentageOrNumber::Number(num) =>
+                            gecko.set_value(CoordDataValue::Factor(num.into())),
                     }
                 }
             }
@@ -5183,7 +5213,7 @@ clip-path
     pub fn clone_stroke_dasharray(&self) -> longhands::stroke_dasharray::computed_value::T {
         use gecko_bindings::structs::nsStyleSVG_STROKE_DASHARRAY_CONTEXT as CONTEXT_VALUE;
         use values::computed::LengthOrPercentage;
-        use values::generics::svg::SVGStrokeDashArray;
+        use values::generics::svg::{SVGStrokeDashArray, SvgLengthOrPercentageOrNumber};
 
         if self.gecko.mContextFlags & CONTEXT_VALUE != 0 {
             debug_assert_eq!(self.gecko.mStrokeDasharray.len(), 0);
@@ -5192,13 +5222,17 @@ clip-path
         let mut vec = vec![];
         for gecko in self.gecko.mStrokeDasharray.iter() {
             match gecko.as_value() {
-                CoordDataValue::Factor(number) => vec.push(Either::First(number.into())),
+                CoordDataValue::Factor(number) =>
+                    vec.push(SvgLengthOrPercentageOrNumber::Number(number.into())),
                 CoordDataValue::Coord(coord) =>
-                    vec.push(Either::Second(LengthOrPercentage::Length(Au(coord)).into())),
+                    vec.push(SvgLengthOrPercentageOrNumber::LengthOrPercentage(
+                        LengthOrPercentage::Length(Au(coord)).into())),
                 CoordDataValue::Percent(p) =>
-                    vec.push(Either::Second(LengthOrPercentage::Percentage(Percentage(p)).into())),
+                    vec.push(SvgLengthOrPercentageOrNumber::LengthOrPercentage(
+                        LengthOrPercentage::Percentage(Percentage(p)).into())),
                 CoordDataValue::Calc(calc) =>
-                    vec.push(Either::Second(LengthOrPercentage::Calc(calc.into()).into())),
+                    vec.push(SvgLengthOrPercentageOrNumber::LengthOrPercentage(
+                        LengthOrPercentage::Calc(calc.into()).into())),
                 _ => unreachable!(),
             }
         }
@@ -5216,7 +5250,7 @@ clip-path
         }
 
         self.gecko.mContextPropsBits = 0;
-        for (mut gecko, servo) in self.gecko.mContextProps.iter_mut().zip(v) {
+        for (gecko, servo) in self.gecko.mContextProps.iter_mut().zip(v) {
             if servo.0 == atom!("fill") {
                 self.gecko.mContextPropsBits |= structs::NS_STYLE_CONTEXT_PROPERTY_FILL as u8;
             } else if servo.0 == atom!("stroke") {

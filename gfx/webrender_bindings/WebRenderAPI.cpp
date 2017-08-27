@@ -28,7 +28,6 @@ public:
               bool* aUseANGLE,
               RefPtr<widget::CompositorWidget>&& aWidget,
               layers::SynchronousTask* aTask,
-              bool aEnableProfiler,
               LayoutDeviceIntSize aSize,
               layers::SyncHandle* aHandle)
     : mDocHandle(aDocHandle)
@@ -37,7 +36,6 @@ public:
     , mBridge(aBridge)
     , mCompositorWidget(Move(aWidget))
     , mTask(aTask)
-    , mEnableProfiler(aEnableProfiler)
     , mSize(aSize)
     , mSyncHandle(aHandle)
   {
@@ -74,7 +72,7 @@ public:
     wr::Renderer* wrRenderer = nullptr;
     if (!wr_window_new(aWindowId, mSize.width, mSize.height, gl.get(),
                        aRenderThread.ThreadPool().Raw(),
-                       this->mEnableProfiler, mDocHandle, &wrRenderer,
+                       mDocHandle, &wrRenderer,
                        mMaxTextureSize)) {
       // wr_window_new puts a message into gfxCriticalNote if it returns false
       return;
@@ -110,7 +108,6 @@ private:
   layers::CompositorBridgeParentBase* mBridge;
   RefPtr<widget::CompositorWidget> mCompositorWidget;
   layers::SynchronousTask* mTask;
-  bool mEnableProfiler;
   LayoutDeviceIntSize mSize;
   layers::SyncHandle* mSyncHandle;
 };
@@ -142,8 +139,7 @@ private:
 
 //static
 already_AddRefed<WebRenderAPI>
-WebRenderAPI::Create(bool aEnableProfiler,
-                     layers::CompositorBridgeParentBase* aBridge,
+WebRenderAPI::Create(layers::CompositorBridgeParentBase* aBridge,
                      RefPtr<widget::CompositorWidget>&& aWidget,
                      LayoutDeviceIntSize aSize)
 {
@@ -163,7 +159,7 @@ WebRenderAPI::Create(bool aEnableProfiler,
   // the next time we need to access the DocumentHandle object.
   layers::SynchronousTask task("Create Renderer");
   auto event = MakeUnique<NewRenderer>(&docHandle, aBridge, &maxTextureSize, &useANGLE,
-                                       Move(aWidget), &task, aEnableProfiler, aSize,
+                                       Move(aWidget), &task, aSize,
                                        &syncHandle);
   RenderThread::Get()->RunEvent(id, Move(event));
 
@@ -528,39 +524,6 @@ WebRenderAPI::DeleteFont(wr::FontKey aKey)
   wr_api_delete_font(mDocHandle, aKey);
 }
 
-class EnableProfiler : public RendererEvent
-{
-public:
-  explicit EnableProfiler(bool aEnabled)
-    : mEnabled(aEnabled)
-  {
-    MOZ_COUNT_CTOR(EnableProfiler);
-  }
-
-  ~EnableProfiler()
-  {
-    MOZ_COUNT_DTOR(EnableProfiler);
-  }
-
-  virtual void Run(RenderThread& aRenderThread, WindowId aWindowId) override
-  {
-    auto renderer = aRenderThread.GetRenderer(aWindowId);
-    if (renderer) {
-      renderer->SetProfilerEnabled(mEnabled);
-    }
-  }
-
-private:
-  bool mEnabled;
-};
-
-void
-WebRenderAPI::SetProfilerEnabled(bool aEnabled)
-{
-  auto event = MakeUnique<EnableProfiler>(aEnabled);
-  RunOnRenderThread(Move(event));
-}
-
 class FrameStartTime : public RendererEvent
 {
 public:
@@ -687,18 +650,22 @@ DisplayListBuilder::DefineClip(const wr::LayoutRect& aClipRect,
 }
 
 void
-DisplayListBuilder::PushClip(const wr::WrClipId& aClipId)
+DisplayListBuilder::PushClip(const wr::WrClipId& aClipId, bool aRecordInStack)
 {
   wr_dp_push_clip(mWrState, aClipId.id);
   WRDL_LOG("PushClip id=%" PRIu64 "\n", aClipId.id);
-  mClipIdStack.push_back(aClipId);
+  if (aRecordInStack) {
+    mClipIdStack.push_back(aClipId);
+  }
 }
 
 void
-DisplayListBuilder::PopClip()
+DisplayListBuilder::PopClip(bool aRecordInStack)
 {
   WRDL_LOG("PopClip id=%" PRIu64 "\n", mClipIdStack.back().id);
-  mClipIdStack.pop_back();
+  if (aRecordInStack) {
+    mClipIdStack.pop_back();
+  }
   wr_dp_pop_clip(mWrState);
 }
 
@@ -744,12 +711,14 @@ DisplayListBuilder::PushClipAndScrollInfo(const layers::FrameMetrics::ViewID& aS
       aClipId ? Stringify(aClipId->id).c_str() : "none");
   wr_dp_push_clip_and_scroll_info(mWrState, aScrollId,
       aClipId ? &(aClipId->id) : nullptr);
+  mScrollIdStack.push_back(aScrollId);
 }
 
 void
 DisplayListBuilder::PopClipAndScrollInfo()
 {
   WRDL_LOG("PopClipAndScroll\n");
+  mScrollIdStack.pop_back();
   wr_dp_pop_clip_and_scroll_info(mWrState);
 }
 
@@ -963,6 +932,45 @@ DisplayListBuilder::PushText(const wr::LayoutRect& aBounds,
 }
 
 void
+DisplayListBuilder::PushLine(const wr::LayoutRect& aClip,
+                             const wr::Line& aLine)
+{
+ wr_dp_push_line(mWrState, aClip, aLine.baseline, aLine.start, aLine.end,
+                 aLine.orientation, aLine.width, aLine.color, aLine.style);
+
+/* TODO(Gankro): remove this
+  LayoutRect rect;
+  if (aLine.orientation == wr::LineOrientation::Horizontal) {
+    rect.origin.x = aLine.start;
+    rect.origin.y = aLine.baseline;
+    rect.size.width = aLine.end - aLine.start;
+    rect.size.height = aLine.width;
+  } else {
+    rect.origin.x = aLine.baseline;
+    rect.origin.y = aLine.start;
+    rect.size.width = aLine.width;
+    rect.size.height = aLine.end - aLine.start;
+  }
+
+  PushRect(rect, aClip, aLine.color);
+*/
+}
+
+void
+DisplayListBuilder::PushTextShadow(const wr::LayoutRect& aRect,
+                                   const wr::LayoutRect& aClip,
+                                   const wr::TextShadow& aShadow)
+{
+  wr_dp_push_text_shadow(mWrState, aRect, aClip, aShadow);
+}
+
+void
+DisplayListBuilder::PopTextShadow()
+{
+  wr_dp_pop_text_shadow(mWrState);
+}
+
+void
 DisplayListBuilder::PushBoxShadow(const wr::LayoutRect& aRect,
                                   const wr::LayoutRect& aClip,
                                   const wr::LayoutRect& aBoxBounds,
@@ -986,6 +994,15 @@ DisplayListBuilder::TopmostClipId()
     return Nothing();
   }
   return Some(mClipIdStack.back());
+}
+
+layers::FrameMetrics::ViewID
+DisplayListBuilder::TopmostScrollId()
+{
+  if (mScrollIdStack.empty()) {
+    return layers::FrameMetrics::NULL_SCROLL_ID;
+  }
+  return mScrollIdStack.back();
 }
 
 Maybe<layers::FrameMetrics::ViewID>

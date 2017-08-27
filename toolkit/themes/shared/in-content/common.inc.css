@@ -8,23 +8,28 @@
 
 *|*:root {
   --in-content-page-color: #0c0c0d;
-  --in-content-page-background: #fafafc;
+  --in-content-page-background: #f9f9fa;
   --in-content-text-color: #0c0c0d;
   --in-content-selected-text: #fff;
-  --in-content-header-border-color: #c8c8c8;
   --in-content-box-background: #fff;
   --in-content-box-background-odd: #f3f6fa;
   --in-content-box-background-hover: #ebebeb;
   --in-content-box-background-active: #dadada;
-  --in-content-box-border-color: #c1c1c1;
+  --in-content-box-border-color: #d7d7db;
   --in-content-item-hover: rgba(0,149,221,0.25);
   --in-content-item-selected: #0a84ff;
   --in-content-border-highlight: #0a84ff;
   --in-content-border-focus: #0a84ff;
-  --in-content-border-color: #c1c1c1;
+  --in-content-border-color: #d7d7db;
   --in-content-category-border-focus: 1px dotted #0a84ff;
-  --in-content-category-text: #0c0c0d;
+  --in-content-category-text: rgba(12,12,13,0.8);
+  --in-content-category-text-active: #0c0c0d;
   --in-content-category-text-selected: #0a84ff;
+  --in-content-category-text-selected-active: #0060df;
+  --in-content-category-background-hover: rgba(12,12,13,0.1);
+  --in-content-category-background-active: rgba(12,12,13,0.15);
+  --in-content-category-background-selected-hover: rgba(12,12,13,0.15);
+  --in-content-category-background-selected-active: rgba(12,12,13,0.2);
   --in-content-tab-color: #424f5a;
   --in-content-link-color: #0a84ff;
   --in-content-link-color-hover: #0060df;
@@ -339,6 +344,7 @@ html|*.help-button:hover {
   fill: white;
   stroke: #808080;
   stroke-opacity: 1;
+  background-color: var(--in-content-category-hover);
 }
 
 html|*.help-button:hover:active {
@@ -636,26 +642,47 @@ xul|*.radio-label-box {
 
 *|*#categories {
   -moz-appearance: none;
-  background-color: var(--in-content-page-background);
+  background-color: initial; /* override the background-color set on all richlistboxes in common.inc.css */
   padding-top: 70px;
   margin: 0;
   border-width: 0;
+  width: 240px;
 }
 
 *|*.category {
-  width: 240px;
   min-height: 48px;
   -moz-appearance: none;
   color: var(--in-content-category-text);
-  padding-inline-start: 44px;
+  margin-inline-start: 34px;
   padding-inline-end: 10px;
+  padding-inline-start: 10px;
   transition: background-color 150ms;
+}
+
+*|*.category:hover {
+  background-color: var(--in-content-category-background-hover);
+  border-radius: 2px;
+}
+
+*|*.category:hover:active {
+  background-color: var(--in-content-category-background-active);
 }
 
 *|*.category[selected],
 *|*.category.selected {
   color: var(--in-content-category-text-selected);
   background: none;
+}
+
+*|*.category[selected]:hover,
+*|*.category.selected:hover {
+  background-color: var(--in-content-category-background-selected-hover);
+}
+
+*|*.category[selected]:hover:active,
+*|*.category.selected:hover:active {
+  color: var(--in-content-category-text-selected-active);
+  background-color: var(--in-content-category-background-selected-active);
 }
 
 *|*#categories[keyboard-navigation="true"]:-moz-focusring > *|*.category[current] {
@@ -684,7 +711,7 @@ xul|*.radio-label-box {
   fill-opacity: 1;
 }
 
-@media (max-width: 960px) {
+@media (max-width: 830px) {
   #categories {
     width: 118px;
   }
@@ -693,15 +720,32 @@ xul|*.radio-label-box {
     display: none;
   }
 
+  .category {
+    padding-inline-start: 13px; /* make category icons align center */
+    margin-inline-end: 35px;
+  }
+
   .help-button {
     font-size: 0 !important;
+    margin-inline-start: 41px !important; /* make the question mark icon align center */
+    background-position: 10px !important;
+    padding-inline-start: 0px !important;
+    width: 36px !important;
+  }
+
+  .main-content {
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .pane-container {
+    margin-inline-end: 10px;
   }
 }
 
 /* header */
 
 *|*.header {
-  border-bottom: 1px solid var(--in-content-header-border-color);
   margin-inline-end: 4px; /* add the 4px end-margin of other elements */
   margin-bottom: 15px;
   padding-bottom: 15px;
@@ -739,23 +783,18 @@ xul|*.fileFieldLabel {
   padding-inline-start: 36px;
 }
 
-xul|textbox:-moz-locale-dir(rtl),
 xul|*.fileFieldLabel:-moz-locale-dir(rtl),
-xul|textbox + xul|button:-moz-locale-dir(ltr),
 xul|filefield + xul|button:-moz-locale-dir(ltr) {
   border-top-left-radius: 0;
   border-bottom-left-radius: 0;
 }
 
-xul|textbox:-moz-locale-dir(ltr),
 xul|*.fileFieldLabel:-moz-locale-dir(ltr),
-xul|textbox + xul|button:-moz-locale-dir(rtl),
 xul|filefield + xul|button:-moz-locale-dir(rtl) {
   border-top-right-radius: 0;
   border-bottom-right-radius: 0;
 }
 
-xul|textbox + xul|button,
 xul|filefield + xul|button {
   border-inline-start: none;
 }

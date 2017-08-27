@@ -11,7 +11,6 @@
 #include "mozilla/dom/nsIContentParent.h"
 #include "mozilla/gfx/gfxVarReceiver.h"
 #include "mozilla/gfx/GPUProcessListener.h"
-#include "mozilla/ipc/CrashReporterHost.h"
 #include "mozilla/ipc/GeckoChildProcessHost.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/FileUtils.h"
@@ -76,6 +75,7 @@ class PrintingParent;
 }
 
 namespace ipc {
+class CrashReporterHost;
 class OptionalURIParams;
 class PFileDescriptorSetParent;
 class URIParams;
@@ -607,12 +607,6 @@ public:
     return PContentParent::SendDeactivate(aTab);
   }
 
-  virtual bool SendParentActivated(PBrowserParent* aTab,
-                                   const bool& aActivated) override
-  {
-    return PContentParent::SendParentActivated(aTab, aActivated);
-  }
-
   virtual bool
   DeallocPURLClassifierLocalParent(PURLClassifierLocalParent* aActor) override;
 
@@ -637,6 +631,15 @@ public:
   nsresult TransmitPermissionsForPrincipal(nsIPrincipal* aPrincipal);
 
   void OnCompositorDeviceReset() override;
+
+  // Control the priority of the IPC messages for input events.
+  void SetInputPriorityEventEnabled(bool aEnabled);
+  bool IsInputPriorityEventEnabled()
+  {
+    return mIsInputPriorityEventEnabled;
+  }
+
+  static bool IsInputEventQueueSupported();
 
 protected:
   void OnChannelConnected(int32_t pid) override;
@@ -1171,6 +1174,11 @@ private:
 
   virtual mozilla::ipc::IPCResult RecvBHRThreadHang(
     const HangDetails& aHangDetails) override;
+
+  // Notify the ContentChild to enable the input event prioritization when
+  // initializing.
+  void MaybeEnableRemoteInputEventQueue();
+
 public:
   void SendGetFilesResponseAndForget(const nsID& aID,
                                      const GetFilesResponseResult& aResult);
@@ -1232,6 +1240,14 @@ private:
   bool mCreatedPairedMinidumps;
   bool mShutdownPending;
   bool mIPCOpen;
+
+  // True if the input event queue on the main thread of the content process is
+  // enabled.
+  bool mIsRemoteInputEventQueueEnabled;
+
+  // True if we send input events with input priority. Otherwise, we send input
+  // events with normal priority.
+  bool mIsInputPriorityEventEnabled;
 
   RefPtr<nsConsoleService>  mConsoleService;
   nsConsoleService* GetConsoleService();

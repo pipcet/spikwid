@@ -15,6 +15,7 @@ use WorkerScriptLoadOrigin;
 use canvas_traits::canvas::CanvasMsg;
 use devtools_traits::{ScriptToDevtoolsControlMsg, WorkerId};
 use euclid::{Point2D, Size2D, TypedSize2D};
+use gfx_traits::Epoch;
 use ipc_channel::ipc::IpcSender;
 use msg::constellation_msg::{BrowsingContextId, FrameType, PipelineId, TraversalDirection};
 use msg::constellation_msg::{Key, KeyModifiers, KeyState};
@@ -35,6 +36,9 @@ pub enum LayoutMsg {
     ChangeRunningAnimationsState(PipelineId, AnimationState),
     /// Inform the constellation of the size of the iframe's viewport.
     IFrameSizes(Vec<(BrowsingContextId, TypedSize2D<f32, CSSPixel>)>),
+    /// Requests that the constellation inform the compositor that it needs to record
+    /// the time when the frame with the given ID (epoch) is painted.
+    PendingPaintMetric(PipelineId, Epoch),
     /// Requests that the constellation inform the compositor of the a cursor change.
     SetCursor(Cursor),
     /// Notifies the constellation that the viewport has been constrained in some manner
@@ -159,7 +163,7 @@ pub enum ScriptMsg {
 }
 
 /// Entities required to spawn service workers
-#[derive(Deserialize, Serialize, Clone)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct ScopeThings {
     /// script resource url
     pub script_url: ServoUrl,
@@ -174,7 +178,7 @@ pub struct ScopeThings {
 }
 
 /// Message that gets passed to service worker scope on postMessage
-#[derive(Deserialize, Serialize, Debug, Clone)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DOMMessage(pub Vec<u8>);
 
 /// Channels to allow service worker manager to communicate with constellation and resource thread

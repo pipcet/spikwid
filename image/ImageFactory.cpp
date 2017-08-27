@@ -74,9 +74,14 @@ ComputeImageFlags(ImageURL* uri, const nsCString& aMimeType, bool isMultiPart)
   if (isMultiPart) {
     imageFlags |= Image::INIT_FLAG_TRANSIENT;
   }
-  imageFlags |= Image::INIT_FLAG_SYNC_LOAD;
-  // Always synchronously decode metadata (including size) so as to avoid
-  // unnecessary reflows.
+
+  // Synchronously decode metadata (including size) if we have a data URI since
+  // the data is immediately available.
+  bool isDataURI = false;
+  rv = uri->SchemeIs("data", &isDataURI);
+  if (NS_SUCCEEDED(rv) && isDataURI) {
+    imageFlags |= Image::INIT_FLAG_SYNC_LOAD;
+  }
 
   return imageFlags;
 }

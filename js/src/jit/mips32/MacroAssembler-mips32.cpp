@@ -1350,7 +1350,7 @@ MacroAssemblerMIPSCompat::unboxPrivate(const ValueOperand& src, Register dest)
 }
 
 void
-MacroAssemblerMIPS64Compat::boxDouble(FloatRegister src, const ValueOperand& dest, FloatRegister)
+MacroAssemblerMIPSCompat::boxDouble(FloatRegister src, const ValueOperand& dest, FloatRegister)
 {
     moveFromDoubleLo(src, dest.payloadReg());
     moveFromDoubleHi(src, dest.typeReg());
@@ -2252,6 +2252,77 @@ MacroAssembler::callWithABINoProfiler(const Address& fun, MoveOp::Type result)
     callWithABIPre(&stackAdjust);
     call(t9);
     callWithABIPost(stackAdjust, result);
+}
+// ===============================================================
+// Move instructions
+
+void
+MacroAssembler::moveValue(const TypedOrValueRegister& src, const ValueOperand& dest)
+{
+    if (src.hasValue()) {
+        moveValue(src.valueReg(), dest);
+        return;
+    }
+
+    MIRType type = src.type();
+    AnyRegister reg = src.typedReg();
+
+    if (!IsFloatingPointType(type)) {
+        mov(ImmWord(MIRTypeToTag(type)), dest.typeReg());
+        if (reg.gpr() != dest.payloadReg())
+            move32(reg.gpr(), dest.payloadReg());
+        return;
+    }
+
+    ScratchDoubleScope scratch(*this);
+    FloatRegister freg = reg.fpu();
+    if (type == MIRType::Float32) {
+        convertFloat32ToDouble(freg, scratch);
+        freg = scratch;
+    }
+    boxDouble(freg, dest, scratch);
+}
+
+void
+MacroAssembler::moveValue(const ValueOperand& src, const ValueOperand& dest)
+{
+    Register s0 = src.typeReg();
+    Register s1 = src.payloadReg();
+    Register d0 = dest.typeReg();
+    Register d1 = dest.payloadReg();
+
+    // Either one or both of the source registers could be the same as a
+    // destination register.
+    if (s1 == d0) {
+        if (s0 == d1) {
+            // If both are, this is just a swap of two registers.
+            ScratchRegisterScope scratch(*this);
+            MOZ_ASSERT(d1 != scratch);
+            MOZ_ASSERT(d0 != scratch);
+            move32(d1, scratch);
+            move32(d0, d1);
+            move32(scratch, d0);
+            return;
+        }
+        // If only one is, copy that source first.
+        mozilla::Swap(s0, s1);
+        mozilla::Swap(d0, d1);
+    }
+
+    if (s0 != d0)
+        move32(s0, d0);
+    if (s1 != d1)
+        move32(s1, d1);
+}
+
+void
+MacroAssembler::moveValue(const Value& src, const ValueOperand& dest)
+{
+    move32(Imm32(src.toNunboxTag()), dest.typeReg());
+    if (src.isGCThing())
+        movePtr(ImmGCPtr(src.toGCThing()), dest.payloadReg());
+    else
+        move32(Imm32(src.toNunboxPayload()), dest.payloadReg());
 }
 
 // ===============================================================

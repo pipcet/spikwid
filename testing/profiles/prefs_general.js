@@ -193,9 +193,6 @@ user_pref("layout.css.prefixes.device-pixel-ratio-webkit", true);
 // Enable CSS shape-outside for testing
 user_pref("layout.css.shape-outside.enabled", true);
 
-// Enable CSS text-justify for testing
-user_pref("layout.css.text-justify.enabled", true);
-
 // Disable spammy layout warnings because they pollute test logs
 user_pref("layout.spammy_warnings.enabled", false);
 
@@ -397,7 +394,3 @@ user_pref("extensions.screenshots.system-disabled", true);
 // The maintenance can take a relatively long time which may cause unnecessary
 // intermittents and slow down tests.
 user_pref("places.database.lastMaintenance", 7258114800);
-
-// Disable the Pocket page action and enable the CUI widget until bug 1385418 is
-// fixed.
-user_pref("extensions.pocket.disablePageAction", true);

@@ -33,6 +33,9 @@ SERVO_BINDING_FUNC(Servo_Element_HasPseudoComputedValues, bool,
 SERVO_BINDING_FUNC(Servo_Element_GetPseudoComputedValues,
                    ServoStyleContextStrong,
                    RawGeckoElementBorrowed node, size_t index)
+SERVO_BINDING_FUNC(Servo_Element_IsDisplayNone,
+                   bool,
+                   RawGeckoElementBorrowed element)
 
 // Styleset and Stylesheet management
 SERVO_BINDING_FUNC(Servo_StyleSheet_FromUTF8Bytes, RawServoStyleSheetContentsStrong,
@@ -42,7 +45,8 @@ SERVO_BINDING_FUNC(Servo_StyleSheet_FromUTF8Bytes, RawServoStyleSheetContentsStr
                    mozilla::css::SheetParsingMode parsing_mode,
                    RawGeckoURLExtraData* extra_data,
                    uint32_t line_number_offset,
-                   nsCompatibility quirks_mode)
+                   nsCompatibility quirks_mode,
+                   mozilla::css::LoaderReusableStyleSheets* reusable_sheets)
 SERVO_BINDING_FUNC(Servo_StyleSheet_Empty, RawServoStyleSheetContentsStrong,
                    mozilla::css::SheetParsingMode parsing_mode)
 SERVO_BINDING_FUNC(Servo_StyleSheet_HasRules, bool,
@@ -55,12 +59,12 @@ SERVO_BINDING_FUNC(Servo_StyleSheet_Clone, RawServoStyleSheetContentsStrong,
 SERVO_BINDING_FUNC(Servo_StyleSheet_SizeOfIncludingThis, size_t,
                    mozilla::MallocSizeOf malloc_size_of,
                    RawServoStyleSheetContentsBorrowed sheet)
-SERVO_BINDING_FUNC(Servo_StyleSheet_GetOrigin,
-                   mozilla::OriginFlags,
+// We'd like to return `OriginFlags` here, but bindgen bitfield enums don't
+// work as return values with the Linux 32-bit ABI at the moment because
+// they wrap the value in a struct.
+SERVO_BINDING_FUNC(Servo_StyleSheet_GetOrigin, uint8_t,
                    RawServoStyleSheetContentsBorrowed sheet)
 SERVO_BINDING_FUNC(Servo_StyleSet_Init, RawServoStyleSet*, RawGeckoPresContextOwned pres_context)
-SERVO_BINDING_FUNC(Servo_StyleSet_Clear, void,
-                   RawServoStyleSetBorrowed set)
 SERVO_BINDING_FUNC(Servo_StyleSet_RebuildCachedData, void,
                    RawServoStyleSetBorrowed set)
 // We'd like to return `OriginFlags` here, but bindgen bitfield enums don't
@@ -100,6 +104,9 @@ SERVO_BINDING_FUNC(Servo_StyleSet_GetFontFaceRules, void,
                    RawGeckoFontFaceRuleListBorrowedMut list)
 SERVO_BINDING_FUNC(Servo_StyleSet_GetCounterStyleRule, nsCSSCounterStyleRule*,
                    RawServoStyleSetBorrowed set, nsIAtom* name)
+SERVO_BINDING_FUNC(Servo_StyleSet_BuildFontFeatureValueSet, bool,
+                   RawServoStyleSetBorrowed set,
+                   gfxFontFeatureValueSet* list)
 SERVO_BINDING_FUNC(Servo_StyleSet_ResolveForDeclarations,
                    ServoStyleContextStrong,
                    RawServoStyleSetBorrowed set,
@@ -356,7 +363,8 @@ SERVO_BINDING_FUNC(Servo_DeclarationBlock_GetCssText, void,
                    nsAString* result)
 SERVO_BINDING_FUNC(Servo_DeclarationBlock_SerializeOneValue, void,
                    RawServoDeclarationBlockBorrowed declarations,
-                   nsCSSPropertyID property, nsAString* buffer)
+                   nsCSSPropertyID property, nsAString* buffer,
+                   ServoStyleContextBorrowedOrNull computed_values)
 SERVO_BINDING_FUNC(Servo_DeclarationBlock_Count, uint32_t,
                    RawServoDeclarationBlockBorrowed declarations)
 SERVO_BINDING_FUNC(Servo_DeclarationBlock_GetNthProperty, bool,

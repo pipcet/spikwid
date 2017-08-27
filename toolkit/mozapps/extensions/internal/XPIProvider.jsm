@@ -110,8 +110,6 @@ const OBSOLETE_PREFERENCES = [
 const URI_EXTENSION_UPDATE_DIALOG     = "chrome://mozapps/content/extensions/update.xul";
 const URI_EXTENSION_STRINGS           = "chrome://mozapps/locale/extensions/extensions.properties";
 
-const STRING_TYPE_NAME                = "type.%ID%.name";
-
 const DIR_EXTENSIONS                  = "extensions";
 const DIR_SYSTEM_ADDONS               = "features";
 const DIR_STAGE                       = "staged";
@@ -6567,8 +6565,11 @@ class SystemAddonInstallLocation extends MutableDirectoryInstallLocation {
     }
 
     try {
-      for (let promise in iterator) {
-        let entry = await promise;
+      for (;;) {
+        let {value: entry, done} = await iterator.next();
+        if (done) {
+          break;
+        }
 
         // Skip the directory currently in use
         if (this._directory && this._directory.path == entry.path) {
@@ -6581,16 +6582,16 @@ class SystemAddonInstallLocation extends MutableDirectoryInstallLocation {
         }
 
         if (entry.isDir) {
-           await OS.File.removeDir(entry.path, {
-             ignoreAbsent: true,
-             ignorePermissions: true,
-           });
-         } else {
-           await OS.File.remove(entry.path, {
-             ignoreAbsent: true,
-           });
-         }
-       }
+          await OS.File.removeDir(entry.path, {
+            ignoreAbsent: true,
+            ignorePermissions: true,
+          });
+        } else {
+          await OS.File.remove(entry.path, {
+            ignoreAbsent: true,
+          });
+        }
+      }
 
     } catch (e) {
       logger.error("Failed to clean updated system add-ons directories.", e);
@@ -6931,18 +6932,18 @@ this.XPIInternal = {
 
 var addonTypes = [
   new AddonManagerPrivate.AddonType("extension", URI_EXTENSION_STRINGS,
-                                    STRING_TYPE_NAME,
+                                    "type.extension.name",
                                     AddonManager.VIEW_TYPE_LIST, 4000,
                                     AddonManager.TYPE_SUPPORTS_UNDO_RESTARTLESS_UNINSTALL),
   new AddonManagerPrivate.AddonType("theme", URI_EXTENSION_STRINGS,
-                                    STRING_TYPE_NAME,
+                                    "type.themes.name",
                                     AddonManager.VIEW_TYPE_LIST, 5000),
   new AddonManagerPrivate.AddonType("dictionary", URI_EXTENSION_STRINGS,
-                                    STRING_TYPE_NAME,
+                                    "type.dictionary.name",
                                     AddonManager.VIEW_TYPE_LIST, 7000,
                                     AddonManager.TYPE_UI_HIDE_EMPTY | AddonManager.TYPE_SUPPORTS_UNDO_RESTARTLESS_UNINSTALL),
   new AddonManagerPrivate.AddonType("locale", URI_EXTENSION_STRINGS,
-                                    STRING_TYPE_NAME,
+                                    "type.locale.name",
                                     AddonManager.VIEW_TYPE_LIST, 8000,
                                     AddonManager.TYPE_UI_HIDE_EMPTY | AddonManager.TYPE_SUPPORTS_UNDO_RESTARTLESS_UNINSTALL),
 ];
@@ -6955,7 +6956,7 @@ if (Services.prefs.getBoolPref("experiments.supported", false)) {
   addonTypes.push(
     new AddonManagerPrivate.AddonType("experiment",
                                       URI_EXTENSION_STRINGS,
-                                      STRING_TYPE_NAME,
+                                      "type.experiment.name",
                                       AddonManager.VIEW_TYPE_LIST, 11000,
                                       AddonManager.TYPE_UI_HIDE_EMPTY | AddonManager.TYPE_SUPPORTS_UNDO_RESTARTLESS_UNINSTALL));
 }

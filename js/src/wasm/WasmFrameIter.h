@@ -20,6 +20,7 @@
 #define wasm_frame_iter_h
 
 #include "js/ProfilingFrameIterator.h"
+#include "wasm/WasmTypes.h"
 
 class JSAtom;
 
@@ -41,14 +42,19 @@ struct Frame;
 struct FuncOffsets;
 struct CallableOffsets;
 
-// Iterates over the frames of a single WasmActivation, called synchronously
-// from C++ in the thread of the asm.js.
+// Iterates over a linear group of wasm frames of a single WasmActivation,
+// called synchronously from C++ in the wasm thread. It will stop at the first
+// frame that is not of the same kind, or at the end of an activation.
+//
+// If you want to handle every kind of frames (including JS jit frames), use
+// JitFrameIter.
 //
 // The one exception is that this iterator may be called from the interrupt
 // callback which may be called asynchronously from asm.js code; in this case,
 // the backtrace may not be correct. That being said, we try our best printing
 // an informative message to the user and at least the name of the innermost
 // function stack frame.
+
 class WasmFrameIter
 {
   public:
@@ -66,7 +72,7 @@ class WasmFrameIter
     void popFrame();
 
   public:
-    explicit WasmFrameIter();
+    // See comment above this class definition.
     explicit WasmFrameIter(WasmActivation* activation, Unwind unwind = Unwind::False);
     void operator++();
     bool done() const;
@@ -180,20 +186,16 @@ GenerateExitEpilogue(jit::MacroAssembler& masm, unsigned framePushed, ExitReason
                      CallableOffsets* offsets);
 void
 GenerateFunctionPrologue(jit::MacroAssembler& masm, unsigned framePushed, const SigIdDesc& sigId,
-                         FuncOffsets* offsets);
+                         FuncOffsets* offsets, CompileMode mode = CompileMode::Once,
+                         uint32_t funcIndex = 0);
 void
 GenerateFunctionEpilogue(jit::MacroAssembler& masm, unsigned framePushed, FuncOffsets* offsets);
-
-// Mark all instance objects live on the stack.
-
-void
-TraceActivations(JSContext* cx, const CooperatingContext& target, JSTracer* trc);
 
 // Given a fault at pc with register fp, return the faulting instance if there
 // is such a plausible instance, and otherwise null.
 
 Instance*
-LookupFaultingInstance(WasmActivation* activation, void* pc, void* fp);
+LookupFaultingInstance(const Code& code, void* pc, void* fp);
 
 // If the innermost (active) Activation is a WasmActivation, return it.
 

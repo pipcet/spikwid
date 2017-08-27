@@ -8,7 +8,7 @@ import sys
 import os
 import stat
 import platform
-import errno
+import re
 
 from mach.decorators import (
     CommandArgument,
@@ -228,7 +228,7 @@ class FormatProvider(MachCommandBase):
         target = os.path.join(self._mach_context.state_dir, os.path.basename(root))
 
         if not os.path.exists(target):
-            tooltool_url = "https://api.pub.build.mozilla.org/tooltool/sha512/"
+            tooltool_url = "https://tooltool.mozilla-releng.net/sha512/"
             if self.prompt and raw_input("Download clang-format executables from {0} (yN)? ".format(tooltool_url)).lower() != 'y':  # noqa: E501,F821
                 print("Download aborted.")
                 return None
@@ -261,7 +261,7 @@ class FormatProvider(MachCommandBase):
         # Note that this will potentially miss a lot things
         from subprocess import Popen, PIPE
 
-        if os.path.exists(".hg"):
+        if self.repository.name == 'hg':
             diff_process = Popen(["hg", "diff", "-U0", "-r", ".^",
                                   "--include", "glob:**.c", "--include", "glob:**.cpp",
                                   "--include", "glob:**.h",
@@ -276,18 +276,22 @@ class FormatProvider(MachCommandBase):
 
     def generate_path_list(self, paths):
         pathToThirdparty = os.path.join(self.topsrcdir,
-                                        "tools",
-                                        "rewriting",
-                                        "ThirdPartyPaths.txt")
-        with open(pathToThirdparty) as f:
-            # Normalize the path (no trailing /)
-            ignored_dir = tuple(d.rstrip('/') for d in f.read().splitlines())
+                                        ".clang-format-ignore")
+        ignored_dir = []
+        for line in open(pathToThirdparty):
+            # Remove comments and empty lines
+            if line.startswith('#') or len(line.strip()) == 0:
+                continue
+            ignored_dir.append(line.rstrip())
 
+        # Generates the list of regexp
+        ignored_dir_re = '(%s)' % '|'.join(ignored_dir)
         extensions = ('.cpp', '.c', '.h')
 
         path_list = []
         for f in paths:
-            if f.startswith(ignored_dir):
+            if re.match(ignored_dir_re, f):
+                # Early exit if we have provided an ignored directory
                 print("clang-format: Ignored third party code '{0}'".format(f))
                 continue
 
@@ -297,8 +301,8 @@ class FormatProvider(MachCommandBase):
                     subs.sort()
                     for filename in sorted(files):
                         f_in_dir = os.path.join(folder, filename)
-                        if f_in_dir.endswith(extensions):
-                            # Supported extension
+                        if f_in_dir.endswith(extensions) and not re.match(ignored_dir_re, f_in_dir):
+                            # Supported extension and accepted path
                             path_list.append(f_in_dir)
             else:
                 if f.endswith(extensions):
@@ -323,9 +327,10 @@ class FormatProvider(MachCommandBase):
         cf_process = Popen(args)
         if show:
             # show the diff
-            if os.path.exists(".hg"):
+            if self.repository.name == 'hg':
                 cf_process = Popen(["hg", "diff"] + path_list)
             else:
+                assert self.repository.name == 'git'
                 cf_process = Popen(["git", "diff"] + path_list)
         return cf_process.communicate()[0]
 

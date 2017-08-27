@@ -34,7 +34,7 @@ use touch::{TouchHandler, TouchAction};
 use webrender;
 use webrender_api::{self, ClipId, DeviceUintRect, DeviceUintSize, LayoutPoint, LayoutVector2D};
 use webrender_api::{ScrollEventPhase, ScrollLocation, ScrollClamping};
-use windowing::{self, MouseWindowEvent, WindowEvent, WindowMethods};
+use windowing::{self, MouseWindowEvent, WebRenderDebugOption, WindowEvent, WindowMethods};
 
 #[derive(Debug, PartialEq)]
 enum UnableToComposite {
@@ -68,14 +68,14 @@ impl ConvertPipelineIdFromWebRender for webrender_api::PipelineId {
 
 /// Holds the state when running reftests that determines when it is
 /// safe to save the output image.
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 enum ReadyState {
     Unknown,
     WaitingForConstellationReply,
     ReadyToSaveImage,
 }
 
-#[derive(PartialEq, Eq, Debug, Copy, Clone)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct FrameTreeId(u32);
 
 impl FrameTreeId {
@@ -88,7 +88,7 @@ impl FrameTreeId {
 ///
 /// This unit corresponds to a "pixel" in layer coordinate space, which after scaling and
 /// transformation becomes a device pixel.
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 enum LayerPixel {}
 
 /// NB: Never block on the constellation, because sometimes the constellation blocks on us.
@@ -186,9 +186,16 @@ pub struct IOCompositor<Window: WindowMethods> {
 
     /// GL functions interface (may be GL or GLES)
     gl: Rc<gl::Gl>,
+
+    /// Map of the pending paint metrics per layout thread.
+    /// The layout thread for each specific pipeline expects the compositor to
+    /// paint frames with specific given IDs (epoch). Once the compositor paints
+    /// these frames, it records the paint time for each of them and sends the
+    /// metric to the corresponding layout thread.
+    pending_paint_metrics: HashMap<PipelineId, Epoch>,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Clone, Copy)]
 struct ScrollZoomEvent {
     /// Change the pinch zoom level by this factor
     magnification: f32,
@@ -202,13 +209,13 @@ struct ScrollZoomEvent {
     event_count: u32,
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(Debug, PartialEq)]
 enum CompositionRequest {
     NoCompositingNecessary,
     CompositeNow(CompositingReason),
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum ShutdownState {
     NotShuttingDown,
     ShuttingDown,
@@ -240,7 +247,7 @@ impl PipelineDetails {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum CompositeTarget {
     /// Normal composition to a window
     Window,
@@ -327,17 +334,6 @@ impl webrender_api::RenderNotifier for RenderNotifier {
     }
 }
 
-// Used to dispatch functions from webrender to the main thread's event loop.
-struct CompositorThreadDispatcher {
-    compositor_proxy: CompositorProxy
-}
-
-impl webrender_api::RenderDispatcher for CompositorThreadDispatcher {
-    fn dispatch(&self, f: Box<Fn() + Send>) {
-        self.compositor_proxy.send(Msg::Dispatch(f));
-    }
-}
-
 impl<Window: WindowMethods> IOCompositor<Window> {
     fn new(window: Rc<Window>, state: InitialCompositorState)
            -> IOCompositor<Window> {
@@ -382,6 +378,7 @@ impl<Window: WindowMethods> IOCompositor<Window> {
             webrender: state.webrender,
             webrender_document: state.webrender_document,
             webrender_api: state.webrender_api,
+            pending_paint_metrics: HashMap::new(),
         }
     }
 
@@ -394,15 +391,6 @@ impl<Window: WindowMethods> IOCompositor<Window> {
                                                   compositor.constellation_chan.clone());
         compositor.webrender.set_render_notifier(Box::new(render_notifier));
 
-        if cfg!(target_os = "windows") {
-            // Used to dispatch functions from webrender to the main thread's event loop.
-            // Required to allow WGL GLContext sharing in Windows.
-            let dispatcher = Box::new(CompositorThreadDispatcher {
-                compositor_proxy: compositor.channel_to_self.clone_compositor_proxy()
-            });
-            compositor.webrender.set_main_thread_dispatcher(dispatcher);
-        }
-
         // Set the size of the root layer.
         compositor.update_zoom_transform();
 
@@ -410,6 +398,10 @@ impl<Window: WindowMethods> IOCompositor<Window> {
         compositor.send_window_size(WindowSizeType::Initial);
 
         compositor
+    }
+
+    pub fn deinit(self) {
+        self.webrender.deinit();
     }
 
     fn start_shutting_down(&mut self) {
@@ -607,6 +599,10 @@ impl<Window: WindowMethods> IOCompositor<Window> {
 
             (Msg::SetFullscreenState(top_level_browsing_context_id, state), ShutdownState::NotShuttingDown) => {
                 self.window.set_fullscreen_state(top_level_browsing_context_id, state);
+            }
+
+            (Msg::PendingPaintMetric(pipeline_id, epoch), _) => {
+                self.pending_paint_metrics.insert(pipeline_id, epoch);
             }
 
             // When we are shutting_down, we need to avoid performing operations
@@ -813,9 +809,14 @@ impl<Window: WindowMethods> IOCompositor<Window> {
                 }
             }
 
-            WindowEvent::ToggleWebRenderProfiler => {
+            WindowEvent::ToggleWebRenderDebug(option) => {
                 let mut flags = self.webrender.get_debug_flags();
-                flags.toggle(webrender::renderer::PROFILER_DBG);
+                let flag = match option {
+                    WebRenderDebugOption::Profiler => webrender::renderer::PROFILER_DBG,
+                    WebRenderDebugOption::TextureCacheDebug => webrender::renderer::TEXTURE_CACHE_DBG,
+                    WebRenderDebugOption::RenderTargetDebug => webrender::renderer::RENDER_TARGET_DBG,
+                };
+                flags.toggle(flag);
                 self.webrender.set_debug_flags(flags);
                 self.webrender_api.generate_frame(self.webrender_document, None);
             }
@@ -824,6 +825,13 @@ impl<Window: WindowMethods> IOCompositor<Window> {
                 let msg = ConstellationMsg::NewBrowser(url, response_chan);
                 if let Err(e) = self.constellation_chan.send(msg) {
                     warn!("Sending NewBrowser message to constellation failed ({}).", e);
+                }
+            }
+
+            WindowEvent::CloseBrowser(ctx) => {
+                let msg = ConstellationMsg::CloseBrowser(ctx);
+                if let Err(e) = self.constellation_chan.send(msg) {
+                    warn!("Sending CloseBrowser message to constellation failed ({}).", e);
                 }
             }
 
@@ -1438,6 +1446,38 @@ impl<Window: WindowMethods> IOCompositor<Window> {
             self.webrender.render(self.frame_size);
         });
 
+        // If there are pending paint metrics, we check if any of the painted epochs is
+        // one of the ones that the paint metrics recorder is expecting . In that case,
+        // we get the current time, inform the layout thread about it and remove the
+        // pending metric from the list.
+        if !self.pending_paint_metrics.is_empty() {
+            let paint_time = precise_time_ns() as f64;
+            let mut to_remove = Vec::new();
+            // For each pending paint metrics pipeline id
+            for (id, pending_epoch) in &self.pending_paint_metrics {
+                // we get the last painted frame id from webrender
+                if let Some(webrender_api::Epoch(epoch)) = self.webrender.current_epoch(id.to_webrender()) {
+                    // and check if it is the one the layout thread is expecting,
+                    let epoch = Epoch(epoch);
+                    if *pending_epoch != epoch {
+                        continue;
+                    }
+                    // in which case, we remove it from the list of pending metrics,
+                    to_remove.push(id.clone());
+                    if let Some(pipeline) = self.pipeline(*id) {
+                        // and inform the layout thread with the measured paint time.
+                        let msg = LayoutControlMsg::PaintMetric(epoch, paint_time);
+                        if let Err(e)  = pipeline.layout_chan.send(msg) {
+                            warn!("Sending PaintMetric message to layout failed ({}).", e);
+                        }
+                    }
+                }
+            }
+            for id in to_remove.iter() {
+                self.pending_paint_metrics.remove(id);
+            }
+        }
+
         let rv = match target {
             CompositeTarget::Window => None,
             CompositeTarget::WindowAndPng => {
@@ -1616,9 +1656,8 @@ impl<Window: WindowMethods> IOCompositor<Window> {
     }
 }
 
-
 /// Why we performed a composite. This is used for debugging.
-#[derive(Copy, Clone, PartialEq, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CompositingReason {
     /// We hit the delayed composition timeout. (See `delayed_composition.rs`.)
     DelayedCompositeTimeout,

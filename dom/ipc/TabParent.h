@@ -194,7 +194,7 @@ public:
   virtual mozilla::ipc::IPCResult
   RecvNotifyIMEFocus(const ContentCache& aContentCache,
                      const widget::IMENotification& aEventMessage,
-                     widget::IMENotificationRequests* aRequests) override;
+                     NotifyIMEFocusResolver&& aResolve) override;
 
   virtual mozilla::ipc::IPCResult
   RecvNotifyIMETextChange(const ContentCache& aContentCache,
@@ -752,6 +752,12 @@ private:
   bool mTabSetsCursor;
 
   bool mHasContentOpener;
+
+  // When dropping links we perform a roundtrip from
+  // Parent (SendRealDragEvent) -> Child -> Parent (RecvDropLinks)
+  // and have to ensure that the child did not modify links to be loaded.
+  bool QueryDropLinksForVerification();
+  nsTArray<nsString> mVerifyDropLinks;
 
 #ifdef DEBUG
   int32_t mActiveSupressDisplayportCount;

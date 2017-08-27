@@ -22,7 +22,6 @@
 #include "jsfriendapi.h"
 #include "js/Value.h"
 #include "Layers.h"
-#include "MediaDecoder.h"
 #include "nsAppRunner.h"
 // nsNPAPIPluginInstance must be included before nsIDocument.h, which is included in mozAutoDocUpdate.h.
 #include "nsNPAPIPluginInstance.h"
@@ -48,7 +47,6 @@
 #include "mozilla/dom/FileSystemSecurity.h"
 #include "mozilla/dom/FileBlobImpl.h"
 #include "mozilla/dom/HTMLInputElement.h"
-#include "mozilla/dom/HTMLMediaElement.h"
 #include "mozilla/dom/HTMLTemplateElement.h"
 #include "mozilla/dom/HTMLContentElement.h"
 #include "mozilla/dom/HTMLShadowElement.h"
@@ -7134,12 +7132,12 @@ nsContentUtils::FindInternalContentViewer(const nsACString& aType,
 
   nsCOMPtr<nsIDocumentLoaderFactory> docFactory;
 
-  nsXPIDLCString contractID;
+  nsCString contractID;
   nsresult rv = catMan->GetCategoryEntry("Gecko-Content-Viewers",
                                          PromiseFlatCString(aType).get(),
                                          getter_Copies(contractID));
   if (NS_SUCCEEDED(rv)) {
-    docFactory = do_GetService(contractID);
+    docFactory = do_GetService(contractID.get());
     if (docFactory && aLoaderType) {
       if (contractID.EqualsLiteral(CONTENT_DLF_CONTRACTID))
         *aLoaderType = TYPE_CONTENT;
@@ -8923,12 +8921,9 @@ nsContentUtils::GetWindowRoot(nsIDocument* aDoc)
 bool
 nsContentUtils::IsPreloadType(nsContentPolicyType aType)
 {
-  if (aType == nsIContentPolicy::TYPE_INTERNAL_SCRIPT_PRELOAD ||
-      aType == nsIContentPolicy::TYPE_INTERNAL_IMAGE_PRELOAD ||
-      aType == nsIContentPolicy::TYPE_INTERNAL_STYLESHEET_PRELOAD) {
-    return true;
-  }
-  return false;
+  return (aType == nsIContentPolicy::TYPE_INTERNAL_SCRIPT_PRELOAD ||
+          aType == nsIContentPolicy::TYPE_INTERNAL_IMAGE_PRELOAD ||
+          aType == nsIContentPolicy::TYPE_INTERNAL_STYLESHEET_PRELOAD);
 }
 
 nsresult

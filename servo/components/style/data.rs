@@ -4,7 +4,7 @@
 
 //! Per-node data used in style calculation.
 
-use context::SharedStyleContext;
+use context::{SharedStyleContext, StackLimitChecker};
 use dom::TElement;
 use invalidation::element::restyle_hints::RestyleHint;
 use properties::ComputedValues;
@@ -72,6 +72,7 @@ impl RestyleData {
     ///
     /// FIXME(bholley): The only caller of this should probably just assert that
     /// the hint is empty and call clear_flags_and_damage().
+    #[inline]
     fn clear_restyle_state(&mut self) {
         self.clear_restyle_flags_and_damage();
         self.hint = RestyleHint::empty();
@@ -83,6 +84,7 @@ impl RestyleData {
     /// set to the correct value on each traversal. There's no reason anyone
     /// needs to clear it, and clearing it accidentally mid-traversal could
     /// cause incorrect style sharing behavior.
+    #[inline]
     fn clear_restyle_flags_and_damage(&mut self) {
         self.damage = RestyleDamage::empty();
         self.flags = self.flags & TRAVERSED_WITHOUT_STYLING;
@@ -124,6 +126,7 @@ impl RestyleData {
     }
 
     /// Returns true if this element was restyled.
+    #[inline]
     pub fn is_restyle(&self) -> bool {
         self.flags.contains(WAS_RESTYLED)
     }
@@ -140,6 +143,7 @@ impl RestyleData {
     }
 
     /// Returns whether this element has been part of a restyle.
+    #[inline]
     pub fn contains_restyle_data(&self) -> bool {
         self.is_restyle() || !self.hint.is_empty() || !self.damage.is_empty()
     }
@@ -323,8 +327,9 @@ impl ElementData {
     pub fn invalidate_style_if_needed<'a, E: TElement>(
         &mut self,
         element: E,
-        shared_context: &SharedStyleContext)
-    {
+        shared_context: &SharedStyleContext,
+        stack_limit_checker: Option<&StackLimitChecker>,
+    ) {
         // In animation-only restyle we shouldn't touch snapshot at all.
         if shared_context.traversal_flags.for_animation_only() {
             return;
@@ -345,6 +350,7 @@ impl ElementData {
                 element,
                 Some(self),
                 shared_context,
+                stack_limit_checker,
             );
             invalidator.invalidate();
             unsafe { element.set_handled_snapshot() }
@@ -353,6 +359,7 @@ impl ElementData {
     }
 
     /// Returns true if this element has styles.
+    #[inline]
     pub fn has_styles(&self) -> bool {
         self.styles.primary.is_some()
     }
@@ -429,11 +436,13 @@ impl ElementData {
     }
 
     /// Drops any restyle state from the element.
+    #[inline]
     pub fn clear_restyle_state(&mut self) {
         self.restyle.clear_restyle_state();
     }
 
     /// Drops restyle flags and damage from the element.
+    #[inline]
     pub fn clear_restyle_flags_and_damage(&mut self) {
         self.restyle.clear_restyle_flags_and_damage();
     }

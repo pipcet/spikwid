@@ -114,7 +114,7 @@ ChannelMediaDecoder::ResourceCallback::NotifyDataEnded(nsresult aStatus)
       // NotifySuspendedStatusChanged will tell the element that download
       // has been suspended "by the cache", which is true since we never
       // download anything. The element can then transition to HAVE_ENOUGH_DATA.
-      self->mDecoder->NotifySuspendedStatusChanged();
+      owner->NotifySuspendedByCache(true);
     }
   });
   mAbstractMainThread->Dispatch(r.forget());
@@ -130,11 +130,14 @@ ChannelMediaDecoder::ResourceCallback::NotifyPrincipalChanged()
 }
 
 void
-ChannelMediaDecoder::ResourceCallback::NotifySuspendedStatusChanged()
+ChannelMediaDecoder::ResourceCallback::NotifySuspendedStatusChanged(
+  bool aSuspendedByCache)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  if (mDecoder) {
-    mDecoder->NotifySuspendedStatusChanged();
+  MediaDecoderOwner* owner = GetMediaOwner();
+  if (owner) {
+    AbstractThread::AutoEnter context(owner->AbstractMainThread());
+    owner->NotifySuspendedByCache(aSuspendedByCache);
   }
 }
 
@@ -174,10 +177,10 @@ ChannelMediaDecoder::CanClone()
 already_AddRefed<ChannelMediaDecoder>
 ChannelMediaDecoder::Clone(MediaDecoderInit& aInit)
 {
-  if (!mResource) {
+  if (!mResource || !DecoderTraits::IsSupportedType(aInit.mContainerType)) {
     return nullptr;
   }
-  RefPtr<ChannelMediaDecoder> decoder = CloneImpl(aInit);
+  RefPtr<ChannelMediaDecoder> decoder = new ChannelMediaDecoder(aInit);
   if (!decoder) {
     return nullptr;
   }
@@ -350,6 +353,13 @@ ChannelMediaDecoder::CanPlayThroughImpl()
   return GetStatistics().CanPlayThrough();
 }
 
+bool
+ChannelMediaDecoder::IsLiveStream()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  return mResource->IsLiveStream();
+}
+
 void
 ChannelMediaDecoder::OnPlaybackEvent(MediaEventType aEvent)
 {
@@ -475,6 +485,13 @@ ChannelMediaDecoder::ShouldThrottleDownload()
   uint32_t factor =
     std::max(2u, Preferences::GetUint("media.throttle-factor", 2));
   return stats.mDownloadRate > factor * stats.mPlaybackRate;
+}
+
+bool
+ChannelMediaDecoder::IsTransportSeekable()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  return mResource->IsTransportSeekable();
 }
 
 void

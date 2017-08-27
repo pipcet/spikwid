@@ -108,10 +108,6 @@ public:
   // Safe to call from any thread.
   const MediaContainerType& ContainerType() const { return mContainerType; }
 
-  // Create a new state machine to run this decoder.
-  // Subclasses must implement this.
-  virtual MediaDecoderStateMachine* CreateStateMachine() = 0;
-
   // Cleanup internal data structures. Must be called on the main
   // thread by the owning object before that object disposes of this object.
   virtual void Shutdown();
@@ -123,15 +119,6 @@ public:
 
   // Called if the media file encounters a network error.
   void NetworkError();
-
-  // Get the current MediaResource being used.
-  // Note: The MediaResource is refcounted, but it outlives the MediaDecoder,
-  // so it's OK to use the reference returned by this function without
-  // refcounting, *unless* you need to store and use the reference after the
-  // MediaDecoder has been destroyed. You might need to do this if you're
-  // wrapping the MediaResource in some kind of byte stream interface to be
-  // passed to a platform decoder.
-  virtual MediaResource* GetResource() const = 0;
 
   // Return the principal of the current URI being played or downloaded.
   virtual already_AddRefed<nsIPrincipal> GetCurrentPrincipal();
@@ -207,13 +194,12 @@ public:
   // Must be called before Shutdown().
   bool OwnerHasError() const;
 
-public:
   // Returns true if this media supports random seeking. False for example with
   // chained ogg files.
   bool IsMediaSeekable();
   // Returns true if seeking is supported on a transport level (e.g. the server
   // supports range requests, we are playing a file, etc.).
-  bool IsTransportSeekable();
+  virtual bool IsTransportSeekable() = 0;
 
   // Return the time ranges that can be seeked into.
   virtual media::TimeIntervals GetSeekable();
@@ -405,13 +391,14 @@ private:
 
   virtual MediaDecoderOwner::NextFrameStatus NextFrameStatus()
   {
-    return mNextFrameStatus;
+    return !IsEnded() ? mNextFrameStatus : MediaDecoderOwner::NEXT_FRAME_UNAVAILABLE;
   }
+
   virtual MediaDecoderOwner::NextFrameStatus NextFrameBufferedStatus();
 
   // Returns a string describing the state of the media player internal
   // data. Used for debugging purposes.
-  virtual void GetMozDebugReaderData(nsACString& aString) { }
+  virtual void GetMozDebugReaderData(nsACString& aString);
 
   virtual void DumpDebugInfo();
 
@@ -494,6 +481,15 @@ protected:
     media::TimeUnit::FromMicroseconds(250000);
 
 private:
+  // Get the current MediaResource being used.
+  // Note: The MediaResource is refcounted, but it outlives the MediaDecoder,
+  // so it's OK to use the reference returned by this function without
+  // refcounting, *unless* you need to store and use the reference after the
+  // MediaDecoder has been destroyed. You might need to do this if you're
+  // wrapping the MediaResource in some kind of byte stream interface to be
+  // passed to a platform decoder.
+  virtual MediaResource* GetResource() const = 0;
+
   nsCString GetDebugInfo();
 
   // Called when the owner's activity changed.
@@ -514,6 +510,7 @@ private:
   void DisconnectMirrors();
 
   virtual bool CanPlayThroughImpl() = 0;
+  virtual bool IsLiveStream() = 0;
 
   // The state machine object for handling the decoding. It is safe to
   // call methods of this object from other threads. Its internal data
@@ -535,12 +532,6 @@ protected:
   // Called to notify fetching media data is in progress.
   // Called on the main thread only.
   virtual void DownloadProgressed();
-
-  // Called by MediaResource when the "cache suspended" status changes.
-  // If MediaResource::IsSuspendedByCache returns true, then the decoder
-  // should stop buffering or otherwise waiting for download progress and
-  // start consuming data, if possible, because the cache is full.
-  void NotifySuspendedStatusChanged();
 
   // Called by MediaResource when the principal of the resource has
   // changed. Called on main thread only.
