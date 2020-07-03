@@ -1313,10 +1313,6 @@ class BuildDriver(MozbuildObject):
             # Just stick with the default
             pass
 
-        if monitor.elapsed > notify_minimum_time:
-            # Display a notification when the build completes.
-            self.notify('Build complete' if not status else 'Build failed')
-
         if status:
             return status
 
@@ -1327,14 +1323,6 @@ class BuildDriver(MozbuildObject):
 
             print('To view resource usage of the build, run |mach '
                   'resource-usage|.')
-
-        long_build = monitor.elapsed > 600
-
-        if long_build:
-            output.on_line(
-                'We know it took a while, but your build finally finished successfully!')
-        else:
-            output.on_line('Your build was successful!')
 
         # Only for full builds because incremental builders likely don't
         # need to be burdened with this.
