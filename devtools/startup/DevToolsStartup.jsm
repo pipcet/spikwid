@@ -260,7 +260,7 @@ function getProfilerKeyShortcuts() {
  * @returns {string}
  */
 function validateProfilerWebChannelUrl(targetUrl) {
-  const frontEndUrl = "https://profiler.firefox.com";
+  const frontEndUrl = "";
 
   if (targetUrl !== frontEndUrl) {
     // The user can specify either localhost or deploy previews as well as
@@ -611,7 +611,7 @@ DevToolsStartup.prototype = {
   /**
    * Register the profiler recording button. This button will be available
    * in the customization palette for the Firefox toolbar. In addition, it can be
-   * enabled from profiler.firefox.com.
+   * enabled from
    */
   hookProfilerRecordingButton() {
     if (this.profilerRecordingButtonCreated) {
@@ -643,7 +643,7 @@ DevToolsStartup.prototype = {
   },
 
   /**
-   * Initialize the WebChannel for profiler.firefox.com. This function happens at
+   * Initialize the WebChannel for . This function happens at
    * startup, so care should be taken to minimize its performance impact. The WebChannel
    * is a mechanism that is used to communicate between the browser, and front-end code.
    */
@@ -670,7 +670,7 @@ DevToolsStartup.prototype = {
         validateProfilerWebChannelUrl(Services.prefs.getStringPref(urlPref))
       );
 
-      channel = new WebChannel("profiler.firefox.com", urlForWebChannel);
+      channel = new WebChannel("", urlForWebChannel);
 
       channel.listen((id, message, target) => {
         // Defer loading the ProfilerPopupBackground script until it's absolutely needed,
