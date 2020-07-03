@@ -37,22 +37,22 @@ pref("extensions.postDownloadThirdPartyPrompt", true);
 
 // Preferences for AMO integration
 pref("extensions.getAddons.cache.enabled", true);
-pref("extensions.getAddons.get.url", "https://services.addons.mozilla.org/api/v4/addons/search/?guid=%IDS%&lang=%LOCALE%");
-pref("extensions.getAddons.search.browseURL", "https://addons.mozilla.org/%LOCALE%/firefox/search?q=%TERMS%&platform=%OS%&appver=%VERSION%");
-pref("extensions.getAddons.link.url", "https://addons.mozilla.org/%LOCALE%/firefox/");
-pref("extensions.getAddons.langpacks.url", "https://services.addons.mozilla.org/api/v4/addons/language-tools/?app=firefox&type=language&appversion=%VERSION%");
-pref("extensions.getAddons.discovery.api_url", "https://services.addons.mozilla.org/api/v4/discovery/?lang=%LOCALE%&edition=%DISTRIBUTION%");
+pref("extensions.getAddons.get.url", "");
+pref("extensions.getAddons.search.browseURL", "");
+pref("extensions.getAddons.link.url", "");
+pref("extensions.getAddons.langpacks.url", "");
+pref("extensions.getAddons.discovery.api_url", "");
 
 // The URL for the privacy policy related to recommended extensions.
-pref("extensions.recommendations.privacyPolicyUrl", "https://www.mozilla.org/privacy/firefox/?utm_source=firefox-browser&utm_medium=firefox-browser&utm_content=privacy-policy-link#addons");
+pref("extensions.recommendations.privacyPolicyUrl", "");
 // The URL for Firefox Color, recommended on the theme page in about:addons.
-pref("extensions.recommendations.themeRecommendationUrl", "https://color.firefox.com/?utm_source=firefox-browser&utm_medium=firefox-browser&utm_content=theme-footer-link");
+pref("extensions.recommendations.themeRecommendationUrl", "");
 
-pref("extensions.update.autoUpdateDefault", true);
+pref("extensions.update.autoUpdateDefault", false);
 
 // Check AUS for system add-on updates.
-pref("extensions.systemAddon.update.url", "https://aus5.mozilla.org/update/3/SystemAddons/%VERSION%/%BUILD_ID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/update.xml");
-pref("extensions.systemAddon.update.enabled", true);
+pref("extensions.systemAddon.update.url", "");
+pref("extensions.systemAddon.update.enabled", false);
 
 // Disable add-ons that are not installed by the user in all scopes by default.
 // See the SCOPE constants in AddonManager.jsm for values to use here.
@@ -68,13 +68,13 @@ pref("extensions.webextensions.remote", true);
 // Require signed add-ons by default
 pref("extensions.langpacks.signatures.required", true);
 pref("xpinstall.signatures.required", true);
-pref("xpinstall.signatures.devInfoURL", "https://wiki.mozilla.org/Addons/Extension_Signing");
+pref("xpinstall.signatures.devInfoURL", "");
 
 // Enable extensionStorage storage actor by default
 pref("devtools.storage.extensionStorage.enabled", true);
 
 // Dictionary download preference
-pref("browser.dictionaries.download.url", "https://addons.mozilla.org/%LOCALE%/firefox/language-tools/");
+pref("browser.dictionaries.download.url", "");
 
 // At startup, should we check to see if the installation
 // date is older than some threshold
@@ -204,12 +204,12 @@ pref("app.update.langpack.enabled", true);
 //  .. etc ..
 //
 pref("extensions.update.enabled", true);
-pref("extensions.update.url", "https://versioncheck.addons.mozilla.org/update/VersionCheck.php?reqVersion=%REQ_VERSION%&id=%ITEM_ID%&version=%ITEM_VERSION%&maxAppVersion=%ITEM_MAXAPPVERSION%&status=%ITEM_STATUS%&appID=%APP_ID%&appVersion=%APP_VERSION%&appOS=%APP_OS%&appABI=%APP_ABI%&locale=%APP_LOCALE%&currentAppVersion=%CURRENT_APP_VERSION%&updateType=%UPDATE_TYPE%&compatMode=%COMPATIBILITY_MODE%");
-pref("extensions.update.background.url", "https://versioncheck-bg.addons.mozilla.org/update/VersionCheck.php?reqVersion=%REQ_VERSION%&id=%ITEM_ID%&version=%ITEM_VERSION%&maxAppVersion=%ITEM_MAXAPPVERSION%&status=%ITEM_STATUS%&appID=%APP_ID%&appVersion=%APP_VERSION%&appOS=%APP_OS%&appABI=%APP_ABI%&locale=%APP_LOCALE%&currentAppVersion=%CURRENT_APP_VERSION%&updateType=%UPDATE_TYPE%&compatMode=%COMPATIBILITY_MODE%");
+pref("extensions.update.url", "");
+pref("extensions.update.background.url", "");
 pref("extensions.update.interval", 86400);  // Check for updates to Extensions and
                                             // Themes every day
 
-pref("lightweightThemes.getMoreURL", "https://addons.mozilla.org/%LOCALE%/firefox/themes");
+pref("lightweightThemes.getMoreURL", "");
 
 #if defined(MOZ_WIDEVINE_EME)
   pref("browser.eme.ui.enabled", true);
@@ -218,11 +218,11 @@ pref("lightweightThemes.getMoreURL", "https://addons.mozilla.org/%LOCALE%/firefo
 #endif
 
 // UI tour experience.
-pref("browser.uitour.enabled", true);
+pref("browser.uitour.enabled", false);
 pref("browser.uitour.loglevel", "Error");
 pref("browser.uitour.requireSecure", true);
-pref("browser.uitour.themeOrigin", "https://addons.mozilla.org/%LOCALE%/firefox/themes/");
-pref("browser.uitour.url", "https://www.mozilla.org/%LOCALE%/firefox/%VERSION%/tour/");
+pref("browser.uitour.themeOrigin", "");
+pref("browser.uitour.url", "");
 // How long to show a Hearbeat survey (two hours, in seconds)
 pref("browser.uitour.surveyDuration", 7200);
 
@@ -262,7 +262,7 @@ pref("browser.touchmode.auto", true);
 pref("browser.compactmode.show", false);
 
 // At startup, check if we're the default browser and prompt user if not.
-pref("browser.shell.checkDefaultBrowser", true);
+pref("browser.shell.checkDefaultBrowser", false);
 pref("browser.shell.shortcutFavicons",true);
 pref("browser.shell.mostRecentDateSetAsDefault", "");
 pref("browser.shell.skipDefaultBrowserCheckOnFirstRun", true);
@@ -564,7 +564,7 @@ pref("browser.download.viewableInternally.enabledTypes", "xml,svg,webp,avif,jxl"
 
 // This controls whether the button is automatically shown/hidden depending
 // on whether there are downloads to show.
-pref("browser.download.autohideButton", true);
+pref("browser.download.autohideButton", false);
 
 // Controls whether to open the downloads panel every time a download begins.
 // The first download ever run in a new profile will still open the panel.
@@ -593,7 +593,11 @@ pref("browser.helperApps.showOpenOptionForViewableInternally", true);
 pref("browser.search.searchEngineRemoval", "https://support.mozilla.org/1/firefox/%VERSION%/%OS%/%LOCALE%/search-engine-removal");
 
 // search engines URL
-pref("browser.search.searchEnginesURL",      "https://addons.mozilla.org/%LOCALE%/firefox/search-engines/");
+pref("browser.search.searchEnginesURL",      "");
+
+// Market-specific search defaults
+pref("browser.search.geoSpecificDefaults", false);
+pref("browser.search.geoSpecificDefaults.url", "");
 
 // search bar results always open in a new tab
 pref("browser.search.openintab", false);
@@ -981,7 +985,7 @@ pref("accessibility.typeaheadfind.linksonly", false);
 pref("accessibility.typeaheadfind.flashBar", 1);
 
 // Accessibility indicator preferences such as support URL, enabled flag.
-pref("accessibility.support.url", "https://support.mozilla.org/%LOCALE%/kb/accessibility-services");
+pref("accessibility.support.url", "");
 pref("accessibility.indicator.enabled", false);
 
 pref("plugins.testmode", false);
@@ -1042,8 +1046,59 @@ pref("layout.spellcheckDefault", 1);
 
 pref("browser.send_pings", false);
 
-pref("browser.geolocation.warning.infoURL", "https://www.mozilla.org/%LOCALE%/firefox/geolocation/");
-pref("browser.xr.warning.infoURL", "https://www.mozilla.org/%LOCALE%/firefox/xr/");
+// At startup, if the handler service notices that the version number in the
+// region.properties file is newer than the version number in the handler
+// service datastore, it will add any new handlers it finds in the prefs (as
+// seeded by this file) to its datastore.
+pref("gecko.handlerService.defaultHandlersVersion", "chrome://browser-region/locale/region.properties");
+
+// The default set of web-based protocol handlers shown in the application
+// selection dialog for webcal: ; I've arbitrarily picked 4 default handlers
+// per protocol, but if some locale wants more than that (or defaults for some
+// protocol not currently listed here), we should go ahead and add those.
+
+// webcal
+pref("gecko.handlerService.schemes.webcal.0.name", "chrome://browser-region/locale/region.properties");
+pref("gecko.handlerService.schemes.webcal.0.uriTemplate", "chrome://browser-region/locale/region.properties");
+pref("gecko.handlerService.schemes.webcal.1.name", "chrome://browser-region/locale/region.properties");
+pref("gecko.handlerService.schemes.webcal.1.uriTemplate", "chrome://browser-region/locale/region.properties");
+pref("gecko.handlerService.schemes.webcal.2.name", "chrome://browser-region/locale/region.properties");
+pref("gecko.handlerService.schemes.webcal.2.uriTemplate", "chrome://browser-region/locale/region.properties");
+pref("gecko.handlerService.schemes.webcal.3.name", "chrome://browser-region/locale/region.properties");
+pref("gecko.handlerService.schemes.webcal.3.uriTemplate", "chrome://browser-region/locale/region.properties");
+
+// mailto
+pref("gecko.handlerService.schemes.mailto.0.name", "chrome://browser-region/locale/region.properties");
+pref("gecko.handlerService.schemes.mailto.0.uriTemplate", "chrome://browser-region/locale/region.properties");
+pref("gecko.handlerService.schemes.mailto.1.name", "chrome://browser-region/locale/region.properties");
+pref("gecko.handlerService.schemes.mailto.1.uriTemplate", "chrome://browser-region/locale/region.properties");
+pref("gecko.handlerService.schemes.mailto.2.name", "chrome://browser-region/locale/region.properties");
+pref("gecko.handlerService.schemes.mailto.2.uriTemplate", "chrome://browser-region/locale/region.properties");
+pref("gecko.handlerService.schemes.mailto.3.name", "chrome://browser-region/locale/region.properties");
+pref("gecko.handlerService.schemes.mailto.3.uriTemplate", "chrome://browser-region/locale/region.properties");
+
+// irc
+pref("gecko.handlerService.schemes.irc.0.name", "chrome://browser-region/locale/region.properties");
+pref("gecko.handlerService.schemes.irc.0.uriTemplate", "chrome://browser-region/locale/region.properties");
+pref("gecko.handlerService.schemes.irc.1.name", "chrome://browser-region/locale/region.properties");
+pref("gecko.handlerService.schemes.irc.1.uriTemplate", "chrome://browser-region/locale/region.properties");
+pref("gecko.handlerService.schemes.irc.2.name", "chrome://browser-region/locale/region.properties");
+pref("gecko.handlerService.schemes.irc.2.uriTemplate", "chrome://browser-region/locale/region.properties");
+pref("gecko.handlerService.schemes.irc.3.name", "chrome://browser-region/locale/region.properties");
+pref("gecko.handlerService.schemes.irc.3.uriTemplate", "chrome://browser-region/locale/region.properties");
+
+// ircs
+pref("gecko.handlerService.schemes.ircs.0.name", "chrome://browser-region/locale/region.properties");
+pref("gecko.handlerService.schemes.ircs.0.uriTemplate", "chrome://browser-region/locale/region.properties");
+pref("gecko.handlerService.schemes.ircs.1.name", "chrome://browser-region/locale/region.properties");
+pref("gecko.handlerService.schemes.ircs.1.uriTemplate", "chrome://browser-region/locale/region.properties");
+pref("gecko.handlerService.schemes.ircs.2.name", "chrome://browser-region/locale/region.properties");
+pref("gecko.handlerService.schemes.ircs.2.uriTemplate", "chrome://browser-region/locale/region.properties");
+pref("gecko.handlerService.schemes.ircs.3.name", "chrome://browser-region/locale/region.properties");
+pref("gecko.handlerService.schemes.ircs.3.uriTemplate", "chrome://browser-region/locale/region.properties");
+
+pref("browser.geolocation.warning.infoURL", "");
+pref("browser.xr.warning.infoURL", "");
 
 pref("browser.sessionstore.resume_from_crash", true);
 pref("browser.sessionstore.resume_session_once", false);
@@ -1168,29 +1223,33 @@ pref("browser.zoom.siteSpecific", true);
 pref("browser.zoom.updateBackgroundTabs", true);
 
 // The breakpad report server to link to in about:crashes
-pref("breakpad.reportURL", "https://crash-stats.mozilla.org/report/index/");
+pref("breakpad.reportURL", "");
 
 // URL for "Learn More" for DataCollection
 pref("toolkit.datacollection.infoURL",
-     "https://www.mozilla.org/legal/privacy/firefox.html");
+     "");
 
 // URL for "Learn More" for Crash Reporter
 pref("toolkit.crashreporter.infoURL",
-     "https://www.mozilla.org/legal/privacy/firefox.html#crash-reporter");
+     "");
 
 // base URL for web-based support pages
-pref("app.support.baseURL", "https://support.mozilla.org/1/firefox/%VERSION%/%OS%/%LOCALE%/");
+pref("app.support.baseURL", "");
 
 // base url for web-based feedback pages
-pref("app.feedback.baseURL", "https://ideas.mozilla.org/");
+#ifdef MOZ_DEV_EDITION
+  pref("app.feedback.baseURL", "");
+#else
+  pref("app.feedback.baseURL", "");
+#endif
 
 // Name of alternate about: page for certificate errors (when undefined, defaults to about:neterror)
 pref("security.alternate_certificate_error_page", "certerror");
 
-pref("security.certerrors.recordEventTelemetry", true);
+pref("security.certerrors.recordEventTelemetry", false);
 pref("security.certerrors.permanentOverride", true);
 pref("security.certerrors.mitm.priming.enabled", true);
-pref("security.certerrors.mitm.priming.endpoint", "https://mitmdetection.services.mozilla.com/");
+pref("security.certerrors.mitm.priming.endpoint", "");
 pref("security.certerrors.mitm.auto_enable_enterprise_roots", true);
 
 // Whether the bookmark panel should be shown when bookmarking a page.
@@ -1489,7 +1548,7 @@ pref("browser.newtabpage.activity-stream.newNewtabExperience.colors", "#0090ED,#
 #endif
 
 // The remote FxA root content URL for the Activity Stream firstrun page.
-pref("browser.newtabpage.activity-stream.fxaccounts.endpoint", "https://accounts.firefox.com/");
+pref("browser.newtabpage.activity-stream.fxaccounts.endpoint", "https");
 
 // The pref that controls if the search shortcuts experiment is on
 pref("browser.newtabpage.activity-stream.improvesearch.topSiteSearchShortcuts", true);
@@ -1501,12 +1560,8 @@ pref("browser.newtabpage.activity-stream.asrouter.providers.message-groups", "{\
 // This url, if changed, MUST continue to point to an https url. Pulling arbitrary content to inject into
 // this page over http opens us up to a man-in-the-middle attack that we'd rather not face. If you are a downstream
 // repackager of this code using an alternate snippet url, please keep your users safe
-pref("browser.newtabpage.activity-stream.asrouter.providers.snippets", "{\"id\":\"snippets\",\"enabled\":false,\"type\":\"remote\",\"url\":\"https://snippets.cdn.mozilla.net/%STARTPAGE_VERSION%/%NAME%/%VERSION%/%APPBUILDID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/\",\"updateCycleInMs\":14400000}");
-pref("browser.newtabpage.activity-stream.asrouter.providers.messaging-experiments", "{\"id\":\"messaging-experiments\",\"enabled\":true,\"type\":\"remote-experiments\",\"messageGroups\":[\"cfr\",\"aboutwelcome\",\"infobar\",\"spotlight\",\"moments-page\",\"pbNewtab\"],\"updateCycleInMs\":3600000}");
-
-// ASRouter user prefs
-pref("browser.newtabpage.activity-stream.asrouter.userprefs.cfr.addons", true);
-pref("browser.newtabpage.activity-stream.asrouter.userprefs.cfr.features", true);
+pref("browser.newtabpage.activity-stream.asrouter.providers.snippets", "{\"id\":\"snippets\",\"enabled\":true,\"type\":\"remote\",\"url\":\"\",\"updateCycleInMs\":14400000}");
+pref("browser.newtabpage.activity-stream.asrouter.providers.messaging-experiments", "{\"id\":\"messaging-experiments\",\"enabled\":true,\"type\":\"remote-experiments\",\"messageGroups\":[\"cfr\",\"whats-new-panel\",\"moments-page\",\"snippets\",\"cfr-fxa\",\"aboutwelcome\"],\"updateCycleInMs\":3600000}");
 
 // The pref that controls if ASRouter uses the remote fluent files.
 // It's enabled by default, but could be disabled to force ASRouter to use the local files.
@@ -1658,28 +1713,28 @@ pref("browser.uiCustomization.state", "");
 
 // If set to false, FxAccounts and Sync will be unavailable.
 // A restart is mandatory after flipping that preference.
-pref("identity.fxaccounts.enabled", true);
+pref("identity.fxaccounts.enabled", false);
 
 // The remote FxA root content URL. Must use HTTPS.
-pref("identity.fxaccounts.remote.root", "https://accounts.firefox.com/");
+pref("identity.fxaccounts.remote.root", "");
 
 // The value of the context query parameter passed in fxa requests.
 pref("identity.fxaccounts.contextParam", "fx_desktop_v3");
 
 // The remote URL of the FxA Profile Server
-pref("identity.fxaccounts.remote.profile.uri", "https://profile.accounts.firefox.com/v1");
+pref("identity.fxaccounts.remote.profile.uri", "");
 
 // The remote URL of the FxA OAuth Server
-pref("identity.fxaccounts.remote.oauth.uri", "https://oauth.accounts.firefox.com/v1");
+pref("identity.fxaccounts.remote.oauth.uri", "");
 
 // Whether FxA pairing using QR codes is enabled.
-pref("identity.fxaccounts.pairing.enabled", true);
+pref("identity.fxaccounts.pairing.enabled", false);
 
 // The remote URI of the FxA pairing server
-pref("identity.fxaccounts.remote.pairing.uri", "wss://channelserver.services.mozilla.com");
+pref("identity.fxaccounts.remote.pairing.uri", "");
 
 // Token server used by the FxA Sync identity.
-pref("identity.sync.tokenserver.uri", "https://token.services.mozilla.com/1.0/sync/1.5");
+pref("identity.sync.tokenserver.uri", "");
 
 // Auto-config URL for FxA self-hosters, makes an HTTP request to
 // [identity.fxaccounts.autoconfig.uri]/.well-known/fxa-client-configuration
@@ -1688,12 +1743,12 @@ pref("identity.sync.tokenserver.uri", "https://token.services.mozilla.com/1.0/sy
 pref("identity.fxaccounts.autoconfig.uri", "");
 
 // URL for help link about Send Tab.
-pref("identity.sendtabpromo.url", "https://support.mozilla.org/1/firefox/%VERSION%/%OS%/%LOCALE%/send-tab");
+pref("identity.sendtabpromo.url", "");
 
 // URLs for promo links to mobile browsers. Note that consumers are expected to
 // append a value for utm_campaign.
-pref("identity.mobilepromo.android", "https://www.mozilla.org/firefox/android/?utm_source=firefox-browser&utm_medium=firefox-browser&utm_campaign=");
-pref("identity.mobilepromo.ios", "https://www.mozilla.org/firefox/ios/?utm_source=firefox-browser&utm_medium=firefox-browser&utm_campaign=");
+pref("identity.mobilepromo.android", "");
+pref("identity.mobilepromo.ios", "");
 
 // Migrate any existing Firefox Account data from the default profile to the
 // Developer Edition profile.
@@ -1872,7 +1927,7 @@ pref("browser.contentblocking.features.strict", "tp,tpPrivate,cookieBehavior5,co
 // lists enabled.
 pref("browser.contentblocking.customBlockList.preferences.ui.enabled", false);
 
-pref("browser.contentblocking.reportBreakage.url", "https://tracking-protection-issues.herokuapp.com/new");
+pref("browser.contentblocking.reportBreakage.url", "");
 
 // Enable Protections report's Lockwise card by default.
 pref("browser.contentblocking.report.lockwise.enabled", true);
@@ -1914,28 +1969,26 @@ pref("browser.contentblocking.report.vpn_platforms", "win,mac,linux");
 pref("browser.contentblocking.report.hide_vpn_banner", false);
 pref("browser.contentblocking.report.vpn_sub_id", "sub_HrfCZF7VPHzZkA");
 
-pref("browser.contentblocking.report.monitor.url", "https://monitor.firefox.com/?entrypoint=protection_report_monitor&utm_source=about-protections");
-pref("browser.contentblocking.report.monitor.how_it_works.url", "https://monitor.firefox.com/about");
-pref("browser.contentblocking.report.monitor.sign_in_url", "https://monitor.firefox.com/oauth/init?entrypoint=protection_report_monitor&utm_source=about-protections&email=");
-pref("browser.contentblocking.report.monitor.preferences_url", "https://monitor.firefox.com/user/preferences");
-pref("browser.contentblocking.report.monitor.home_page_url", "https://monitor.firefox.com/user/dashboard");
-pref("browser.contentblocking.report.manage_devices.url", "https://accounts.firefox.com/settings/clients");
-pref("browser.contentblocking.report.endpoint_url", "https://monitor.firefox.com/user/breach-stats?includeResolved=true");
-pref("browser.contentblocking.report.proxy_extension.url", "https://fpn.firefox.com/browser?utm_source=firefox-desktop&utm_medium=referral&utm_campaign=about-protections&utm_content=about-protections");
-pref("browser.contentblocking.report.mobile-ios.url", "https://apps.apple.com/app/firefox-private-safe-browser/id989804926");
-pref("browser.contentblocking.report.mobile-android.url", "https://play.google.com/store/apps/details?id=org.mozilla.firefox&referrer=utm_source%3Dprotection_report%26utm_content%3Dmobile_promotion");
-pref("browser.contentblocking.report.vpn.url", "https://vpn.mozilla.org/?utm_source=firefox-browser&utm_medium=firefox-browser&utm_campaign=about-protections-card");
-pref("browser.contentblocking.report.vpn-promo.url", "https://vpn.mozilla.org/?utm_source=firefox-browser&utm_medium=firefox-browser&utm_campaign=about-protections-top-promo");
-pref("browser.contentblocking.report.vpn-android.url", "https://play.google.com/store/apps/details?id=org.mozilla.firefox.vpn&referrer=utm_source%3Dfirefox-browser%26utm_medium%3Dfirefox-browser%26utm_campaign%3Dabout-protections-mobile-vpn%26anid%3D--");
-pref("browser.contentblocking.report.vpn-ios.url", "https://apps.apple.com/us/app/firefox-private-network-vpn/id1489407738");
+pref("browser.contentblocking.report.monitor.url", "");
+pref("browser.contentblocking.report.monitor.how_it_works.url", "");
+pref("browser.contentblocking.report.monitor.sign_in_url", "");
+pref("browser.contentblocking.report.monitor.preferences_url", "");
+pref("browser.contentblocking.report.monitor.home_page_url", "");
+pref("browser.contentblocking.report.manage_devices.url", "");
+pref("browser.contentblocking.report.endpoint_url", "");
+pref("browser.contentblocking.report.proxy_extension.url", "");
+pref("browser.contentblocking.report.lockwise.mobile-ios.url", "");
+pref("browser.contentblocking.report.lockwise.mobile-android.url", "");
+pref("browser.contentblocking.report.mobile-ios.url", "");
+pref("browser.contentblocking.report.mobile-android.url", "");
 
 // Protection Report's SUMO urls
-pref("browser.contentblocking.report.lockwise.how_it_works.url", "https://support.mozilla.org/1/firefox/%VERSION%/%OS%/%LOCALE%/password-manager-report");
-pref("browser.contentblocking.report.social.url", "https://support.mozilla.org/1/firefox/%VERSION%/%OS%/%LOCALE%/social-media-tracking-report");
-pref("browser.contentblocking.report.cookie.url", "https://support.mozilla.org/1/firefox/%VERSION%/%OS%/%LOCALE%/cross-site-tracking-report");
-pref("browser.contentblocking.report.tracker.url", "https://support.mozilla.org/1/firefox/%VERSION%/%OS%/%LOCALE%/tracking-content-report");
-pref("browser.contentblocking.report.fingerprinter.url", "https://support.mozilla.org/1/firefox/%VERSION%/%OS%/%LOCALE%/fingerprinters-report");
-pref("browser.contentblocking.report.cryptominer.url", "https://support.mozilla.org/1/firefox/%VERSION%/%OS%/%LOCALE%/cryptominers-report");
+pref("browser.contentblocking.report.lockwise.how_it_works.url", "");
+pref("browser.contentblocking.report.social.url", "");
+pref("browser.contentblocking.report.cookie.url", "");
+pref("browser.contentblocking.report.tracker.url", "");
+pref("browser.contentblocking.report.fingerprinter.url", "");
+pref("browser.contentblocking.report.cryptominer.url", "");
 
 pref("browser.contentblocking.cfr-milestone.enabled", true);
 pref("browser.contentblocking.cfr-milestone.milestone-achieved", 0);
@@ -2059,15 +2112,13 @@ pref("browser.migrate.chrome.history.limit", 2000);
 pref("browser.migrate.chrome.history.maxAgeInDays", 180);
 pref("browser.migrate.showBookmarksToolbarAfterMigration", true);
 
-pref("extensions.pocket.api", "api.getpocket.com");
-pref("extensions.pocket.enabled", true);
-pref("extensions.pocket.oAuthConsumerKey", "40249-e88c401e1b1f2242d9e441c4");
-pref("extensions.pocket.site", "getpocket.com");
-pref("extensions.pocket.onSaveRecs", true);
-pref("extensions.pocket.onSaveRecs.locales", "en-US,en-GB,en-CA");
+pref("extensions.pocket.api", "");
+pref("extensions.pocket.enabled", false);
+pref("extensions.pocket.oAuthConsumerKey", "");
+pref("extensions.pocket.site", "");
 
 // Enable Pocket button home panel for non link pages.
-pref("extensions.pocket.showHome", true);
+pref("extensions.pocket.showHome", false);
 
 // Control what version of the logged out doorhanger is displayed
 // Possibilities are: `control`, `control-one-button`, `variant_a`, `variant_b`, `variant_c`
@@ -2098,8 +2149,12 @@ pref("signon.management.page.sort", "name");
 // The utm_creative value is appended within the code (specific to the location on
 // where it is clicked). Be sure that if these two prefs are updated, that
 // the utm_creative param be last.
+pref("signon.management.page.mobileAndroidURL", "");
+pref("signon.management.page.mobileAppleURL", "");
 pref("signon.management.page.breachAlertUrl",
-     "https://monitor.firefox.com/breach-details/");
+     "");
+pref("signon.management.page.hideMobileFooter", false);
+pref("signon.management.page.showPasswordSyncNotification", true);
 pref("signon.passwordEditCapture.enabled", true);
 pref("signon.relatedRealms.enabled", false);
 pref("signon.showAutoCompleteFooter", true);
@@ -2112,7 +2167,7 @@ pref("print.use_simplify_page", true);
 
 // Space separated list of URLS that are allowed to send objects (instead of
 // only strings) through webchannels. This list is duplicated in mobile/android/app/mobile.js
-pref("webchannel.allowObject.urlWhitelist", "https://content.cdn.mozilla.net https://support.mozilla.org https://install.mozilla.org");
+pref("webchannel.allowObject.urlWhitelist", "");
 
 // Whether or not the browser should scan for unsubmitted
 // crash reports, and then show a notification for submitting
@@ -2152,16 +2207,16 @@ pref("doh-rollout.clearModeOnShutdown", false);
 
 // URL for Learn More link for browser error logging in preferences
 pref("browser.chrome.errorReporter.infoURL",
-     "https://support.mozilla.org/1/firefox/%VERSION%/%OS%/%LOCALE%/nightly-error-collection");
+     "");
 
 // Normandy client preferences
-pref("app.normandy.api_url", "https://normandy.cdn.mozilla.net/api/v1");
+pref("app.normandy.api_url", "");
 pref("app.normandy.dev_mode", false);
 pref("app.normandy.enabled", true);
 pref("app.normandy.first_run", true);
 pref("app.normandy.logging.level", 50); // Warn
 pref("app.normandy.run_interval_seconds", 21600); // 6 hours
-pref("app.normandy.shieldLearnMoreUrl", "https://support.mozilla.org/1/firefox/%VERSION%/%OS%/%LOCALE%/shield");
+pref("app.normandy.shieldLearnMoreUrl", "");
 pref("app.normandy.last_seen_buildid", "");
 pref("app.normandy.onsync_skew_sec", 600);
 #ifdef MOZ_DATA_REPORTING
@@ -2208,7 +2263,7 @@ pref("fission.frontend.simulate-messages", false);
 
 // Coverage ping is disabled by default.
 pref("toolkit.coverage.enabled", false);
-pref("toolkit.coverage.endpoint.base", "https://coverage.mozilla.org");
+pref("toolkit.coverage.endpoint.base", "");
 
 // Discovery prefs
 pref("browser.discovery.enabled", true);
@@ -2223,7 +2278,7 @@ pref("browser.engagement.sidebar-button.has-used", false);
 pref("browser.engagement.library-button.has-used", false);
 pref("browser.engagement.ctrlTab.has-used", false);
 
-pref("browser.aboutConfig.showWarning", true);
+pref("browser.aboutConfig.showWarning", false);
 
 pref("browser.toolbars.keyboard_navigation", true);
 
@@ -2245,7 +2300,8 @@ pref("identity.fxaccounts.toolbar.enabled", true);
 pref("identity.fxaccounts.toolbar.accessed", false);
 
 // Prefs for different services supported by Firefox Account
-pref("identity.fxaccounts.service.monitorLoginUrl", "https://monitor.firefox.com/");
+pref("identity.fxaccounts.service.sendLoginUrl", "");
+pref("identity.fxaccounts.service.monitorLoginUrl", "");
 
 // Check bundled omni JARs for corruption.
 pref("corroborator.enabled", true);
