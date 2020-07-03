@@ -759,6 +759,7 @@ pref("browser.preferences.experimental", true);
 #else
 pref("browser.preferences.experimental", false);
 #endif
+pref("browser.preferences.experimental.hidden", false);
 pref("browser.preferences.defaultPerformanceSettings.enabled", true);
 
 pref("browser.download.show_plugins_in_list", true);
@@ -1882,6 +1883,13 @@ pref("doh-rollout.profileCreationThreshold", "1572476400000");
 // This pref is controlled by a Normandy rollout so we don't overload providers.
 pref("doh-rollout.trr-selection.enabled", false);
 
+// DoH Rollout: whether to enable automatic steering to provider endpoints.
+// This pref is also controlled by a Normandy rollout.
+pref("doh-rollout.provider-steering.enabled", false);
+
+// DoH Rollout: provider details for automatic steering.
+pref("doh-rollout.provider-steering.provider-list", "[{ \"name\": \"comcast\", \"canonicalName\": \"doh-discovery.xfinity.com\", \"uri\": \"https://doh.xfinity.com/dns-query\" }]");
+
 // URL for Learn More link for browser error logging in preferences
 pref("browser.chrome.errorReporter.infoURL",
      "");
@@ -2177,6 +2185,9 @@ pref("devtools.netmonitor.har.pageLoadedTimeout", 1500);
 pref("devtools.netmonitor.har.enableAutoExportToFile", false);
 
 pref("devtools.netmonitor.features.webSockets", true);
+
+// netmonitor audit
+pref("devtools.netmonitor.audits.slow", 500);
 
 // Disable the EventSource Inspector.
 pref("devtools.netmonitor.features.serverSentEvents", false);

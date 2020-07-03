@@ -480,6 +480,14 @@ bool WebGLContext::CreateAndInitGL(
     return false;
   }
 
+  const auto val = StaticPrefs::webgl_debug_incomplete_tex_color();
+  if (val) {
+    mIncompleteTexOverride.reset(new gl::Texture(*gl));
+    const gl::ScopedBindTexture autoBind(gl, mIncompleteTexOverride->name);
+    const auto heapVal = std::make_unique<uint32_t>(val);
+    gl->fTexImage2D(LOCAL_GL_TEXTURE_2D, 0, LOCAL_GL_RGBA, 1, 1, 0, LOCAL_GL_RGBA, LOCAL_GL_UNSIGNED_BYTE, heapVal.get());
+  }
+
   return true;
 }
 
@@ -560,7 +568,7 @@ UniquePtr<webgl::FormatUsageAuthority> WebGLContext::CreateFormatUsage(
 RefPtr<WebGLContext> WebGLContext::Create(HostWebGLContext& host,
                                           const webgl::InitContextDesc& desc,
                                           webgl::InitContextResult* const out) {
-  nsCString failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_WEBGL_UNKOWN");
+  nsCString failureId = "FEATURE_FAILURE_WEBGL_UNKOWN"_ns;
   const bool forceEnabled = StaticPrefs::webgl_force_enabled();
   ScopedGfxFeatureReporter reporter("WebGL", forceEnabled);
 
@@ -572,9 +580,9 @@ RefPtr<WebGLContext> WebGLContext::Create(HostWebGLContext& host,
 
     if (disabled) {
       if (gfxPlatform::InSafeMode()) {
-        failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_WEBGL_SAFEMODE");
+        failureId = "FEATURE_FAILURE_WEBGL_SAFEMODE"_ns;
       } else {
-        failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_WEBGL_DISABLED");
+        failureId = "FEATURE_FAILURE_WEBGL_DISABLED"_ns;
       }
       return Err("WebGL is currently disabled.");
     }
@@ -582,7 +590,7 @@ RefPtr<WebGLContext> WebGLContext::Create(HostWebGLContext& host,
     if (desc.options.failIfMajorPerformanceCaveat) {
       nsCOMPtr<nsIGfxInfo> gfxInfo = services::GetGfxInfo();
       if (!HasAcceleratedLayers(gfxInfo)) {
-        failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_WEBGL_PERF_CAVEAT");
+        failureId = "FEATURE_FAILURE_WEBGL_PERF_CAVEAT"_ns;
         return Err(
             "failIfMajorPerformanceCaveat: Compositor is not"
             " hardware-accelerated.");
@@ -605,9 +613,8 @@ RefPtr<WebGLContext> WebGLContext::Create(HostWebGLContext& host,
       for (const auto& cur : failReasons) {
         // Don't try to accumulate using an empty key if |cur.key| is empty.
         if (cur.key.IsEmpty()) {
-          Telemetry::Accumulate(
-              Telemetry::CANVAS_WEBGL_FAILURE_ID,
-              NS_LITERAL_CSTRING("FEATURE_FAILURE_REASON_UNKNOWN"));
+          Telemetry::Accumulate(Telemetry::CANVAS_WEBGL_FAILURE_ID,
+                                "FEATURE_FAILURE_REASON_UNKNOWN"_ns);
         } else {
           Telemetry::Accumulate(Telemetry::CANVAS_WEBGL_FAILURE_ID, cur.key);
         }
@@ -615,14 +622,14 @@ RefPtr<WebGLContext> WebGLContext::Create(HostWebGLContext& host,
         text.AppendLiteral("\n* ");
         text.Append(cur.info);
       }
-      failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_REASON");
+      failureId = "FEATURE_FAILURE_REASON"_ns;
       return Err(text.BeginReading());
     }
     MOZ_ASSERT(webgl->gl);
 
     if (desc.options.failIfMajorPerformanceCaveat) {
       if (webgl->gl->IsWARP()) {
-        failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_WEBGL_PERF_WARP");
+        failureId = "FEATURE_FAILURE_WEBGL_PERF_WARP"_ns;
         return Err(
             "failIfMajorPerformanceCaveat: Driver is not"
             " hardware-accelerated.");
@@ -631,7 +638,7 @@ RefPtr<WebGLContext> WebGLContext::Create(HostWebGLContext& host,
 #ifdef XP_WIN
       if (webgl->gl->GetContextType() == gl::GLContextType::WGL &&
           !gl::sWGLLib.HasDXInterop2()) {
-        failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_WEBGL_DXGL_INTEROP2");
+        failureId = "FEATURE_FAILURE_WEBGL_DXGL_INTEROP2"_ns;
         return Err("Caveat: WGL without DXGLInterop2.");
       }
 #endif
@@ -643,14 +650,14 @@ RefPtr<WebGLContext> WebGLContext::Create(HostWebGLContext& host,
     if (!webgl->EnsureDefaultFB()) {
       MOZ_ASSERT(!webgl->mDefaultFB);
       MOZ_ASSERT(webgl->IsContextLost());
-      failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_WEBGL_BACKBUFFER");
+      failureId = "FEATURE_FAILURE_WEBGL_BACKBUFFER"_ns;
       return Err("Initializing WebGL backbuffer failed.");
     }
 
     return webgl;
   }();
   if (res.isOk()) {
-    failureId = NS_LITERAL_CSTRING("SUCCESS");
+    failureId = "SUCCESS"_ns;
   }
   Telemetry::Accumulate(Telemetry::CANVAS_WEBGL_FAILURE_ID, failureId);
 

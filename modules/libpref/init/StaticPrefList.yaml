@@ -1068,11 +1068,19 @@
   value: true
   mirror: always
 
-# If set, use DocumentChannel to directly initiate loads from
-# parent-process BrowsingContexts
+# If set, use DocumentChannel to initiate loads from
+# parent-process BrowsingContexts in parallel with the content
+# process.
 - name: browser.tabs.documentchannel.parent-initiated
   type: bool
   value: true
+  mirror: always
+
+# If set, use DocumentChannel to directly initiate loads entirely
+# from parent-process BrowsingContexts
+- name: browser.tabs.documentchannel.parent-controlled
+  type: bool
+  value: false 
   mirror: always
 
 - name: browser.tabs.remote.desktopbehavior
@@ -3427,6 +3435,22 @@
   value: false
   mirror: always
 
+# Whether the background.service_worker in the extension manifest.json file
+# is enabled.
+- name: extensions.backgroundServiceWorker.enabled
+  type: bool
+  value: false
+  mirror: once
+
+# Whether the extensions can register a service worker on its own.
+# NOTE: WebExtensions Framework ability to register a background service worker
+# is not controlled by this pref, only the extension code ability to use
+# navigator.serviceWorker.register is locked behind this pref.
+- name: extensions.serviceWorkerRegister.allowed
+  type: bool
+  value: false
+  mirror: always
+
 # This pref governs whether we enable content script CSP in extensions.
 - name: extensions.content_script_csp.enabled
   type: bool
@@ -3477,7 +3501,7 @@
 # between process swaps.
 - name: fission.preserve_browsing_contexts
   type: bool
-  value: true
+  value: @IS_NIGHTLY_BUILD@
   mirror: always
 
 # Store the session history in the parent process, and access it over IPC
@@ -4189,6 +4213,11 @@
   mirror: once
 
 - name: gfx.use-mutex-on-present
+  type: bool
+  value: false
+  mirror: once
+
+- name: gfx.use-ahardwarebuffer-content
   type: bool
   value: false
   mirror: once
@@ -5884,6 +5913,17 @@
   value: true
   mirror: always
 
+# Dictates whether or not the prefers contrast media query will be
+# usable.
+#   true: prefers-contrast will toggle based on OS and browser settings.
+#   false: prefers-contrast will only parse and toggle in the browser
+#   chrome and ua.
+- name: layout.css.prefers-contrast.enabled
+  type: RelaxedAtomicBool
+  value: false
+  mirror: always
+  rust: true
+
 # Is support for -moz-prefixed animation properties enabled?
 - name: layout.css.prefixes.animations
   type: bool
@@ -6845,6 +6885,26 @@
     type: bool
     value: false
     mirror: always
+
+#ifdef MOZ_WAYLAND
+# Use DMABuf for ffmpeg video textures on Linux
+- name: media.ffmpeg.dmabuf-textures.enabled
+  type: RelaxedAtomicBool
+  value: false
+  mirror: always
+
+# Use VA-API for ffmpeg video playback on Linux
+- name: media.ffmpeg.vaapi.enabled
+  type: RelaxedAtomicBool
+  value: false
+  mirror: always
+
+# Use DRM display for VA-API ffmpeg video decoding on Linux
+- name: media.ffmpeg.vaapi-drm-display.enabled
+  type: RelaxedAtomicBool
+  value: false
+  mirror: always
+#endif # MOZ_WAYLAND
 #endif  # MOZ_FFMPEG
 
 #ifdef MOZ_FFVPX
@@ -7970,9 +8030,20 @@
   value: 2000
   mirror: always
 
+# The proxy type. See nsIProtocolProxyService.idl
+#     PROXYCONFIG_DIRECT   = 0
+#     PROXYCONFIG_MANUAL   = 1
+#     PROXYCONFIG_PAC      = 2
+#     PROXYCONFIG_WPAD     = 4
+#     PROXYCONFIG_SYSTEM   = 5
+- name: network.proxy.type
+  type: RelaxedAtomicUint32
+  value: 5
+  mirror: always
+
 # Whether the SOCKS proxy should be in charge of DNS resolution.
 - name: network.proxy.socks_remote_dns
-  type: bool
+  type: RelaxedAtomicBool
   value: false
   mirror: always
 
@@ -9356,6 +9427,11 @@
   value: true
   mirror: always
 
+- name: webgl.debug.incomplete-tex-color
+  type: RelaxedAtomicUint32
+  value: 0
+  mirror: always
+
 - name: webgl.default-antialias
   type: RelaxedAtomicBool
   value: @IS_NOT_ANDROID@
@@ -9574,34 +9650,22 @@
 
 # Use DMABuf for content textures.
 # For testing purposes only.
-- name: widget.wayland-dmabuf-textures.enabled
+- name: widget.dmabuf-textures.enabled
   type: RelaxedAtomicBool
   value: false
   mirror: always
 #endif
 
-# Use DMABuf backend for WebGL on Wayland.
-- name: widget.wayland-dmabuf-webgl.enabled
-  type: RelaxedAtomicBool
-  value: true
-  mirror: always
-
-# Use VA-API for video playback on Wayland.
-- name: widget.wayland-dmabuf-vaapi.enabled
-  type: RelaxedAtomicBool
-  value: false
-  mirror: always
-
-# Use DMABuf for video textures.
-- name: widget.wayland-dmabuf-video-textures.enabled
-  type: RelaxedAtomicBool
-  value: false
-  mirror: always
-
-# Use smooth rendering for basic compositor.
+# Use smooth rendering for Wayland basic compositor.
 - name: widget.wayland-smooth-rendering
   type: RelaxedAtomicBool
   value: false
+  mirror: always
+
+# Use DMABuf backend for WebGL.
+- name: widget.dmabuf-webgl.enabled
+  type: RelaxedAtomicBool
+  value: true
   mirror: always
 #endif
 

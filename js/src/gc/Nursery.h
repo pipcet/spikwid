@@ -9,6 +9,7 @@
 #define gc_Nursery_h
 
 #include "mozilla/EnumeratedArray.h"
+#include "mozilla/Maybe.h"
 #include "mozilla/TimeStamp.h"
 
 #include "gc/GCParallelTask.h"
@@ -514,6 +515,8 @@ class Nursery {
   };
   PreviousGC previousGC;
 
+  mozilla::Maybe<double> smoothedGrowthFactor;
+
   // Calculate the promotion rate of the most recent minor GC.
   // The valid_for_tenuring parameter is used to return whether this
   // promotion rate is accurate enough (the nursery was full enough) to be
@@ -633,6 +636,8 @@ class Nursery {
   // current chunk, or the whole chunk if fullPoison is true or it is not
   // the current chunk.
   void setCurrentChunk(unsigned chunkno);
+
+  bool initFirstChunk(AutoLockGCBgAlloc& lock);
 
   // extent is advisory, it will be ignored in sub-chunk and generational zeal
   // modes. It will be clamped to Min(NurseryChunkUsableSize, capacity_).

@@ -22,6 +22,7 @@
 #include "mozilla/ipc/ProtocolUtils.h"
 #include "mozilla/net/DocumentLoadListener.h"
 #include "mozilla/NullPrincipal.h"
+#include "nsIWebNavigation.h"
 #include "mozilla/MozPromiseInlines.h"
 #include "nsGlobalWindowOuter.h"
 #include "nsIWebBrowserChrome.h"
@@ -348,8 +349,7 @@ void CanonicalBrowsingContext::DispatchWheelZoomChange(bool aIncrease) {
     return;
   }
 
-  auto event = aIncrease ? NS_LITERAL_STRING("DoZoomEnlargeBy10")
-                         : NS_LITERAL_STRING("DoZoomReduceBy10");
+  auto event = aIncrease ? u"DoZoomEnlargeBy10"_ns : u"DoZoomReduceBy10"_ns;
   auto dispatcher = MakeRefPtr<AsyncEventDispatcher>(
       element, event, CanBubble::eYes, ChromeOnlyDispatch::eYes);
   dispatcher->PostDOMEvent();
@@ -441,6 +441,118 @@ void CanonicalBrowsingContext::LoadURI(const nsAString& aURI,
   LoadURI(loadState, true);
 }
 
+void CanonicalBrowsingContext::GoBack(
+    const Optional<int32_t>& aCancelContentJSEpoch,
+    bool aRequireUserInteraction) {
+  if (IsDiscarded()) {
+    return;
+  }
+
+  // Stop any known network loads if necessary.
+  if (mCurrentLoad) {
+    mCurrentLoad->Cancel(NS_BINDING_ABORTED);
+  }
+
+  if (nsDocShell* docShell = nsDocShell::Cast(GetDocShell())) {
+    if (aCancelContentJSEpoch.WasPassed()) {
+      docShell->SetCancelContentJSEpoch(aCancelContentJSEpoch.Value());
+    }
+    docShell->GoBack(aRequireUserInteraction);
+  } else if (ContentParent* cp = GetContentParent()) {
+    Maybe<int32_t> cancelContentJSEpoch;
+    if (aCancelContentJSEpoch.WasPassed()) {
+      cancelContentJSEpoch = Some(aCancelContentJSEpoch.Value());
+    }
+    Unused << cp->SendGoBack(this, cancelContentJSEpoch,
+                             aRequireUserInteraction);
+  }
+}
+void CanonicalBrowsingContext::GoForward(
+    const Optional<int32_t>& aCancelContentJSEpoch,
+    bool aRequireUserInteraction) {
+  if (IsDiscarded()) {
+    return;
+  }
+
+  // Stop any known network loads if necessary.
+  if (mCurrentLoad) {
+    mCurrentLoad->Cancel(NS_BINDING_ABORTED);
+  }
+
+  if (auto* docShell = nsDocShell::Cast(GetDocShell())) {
+    if (aCancelContentJSEpoch.WasPassed()) {
+      docShell->SetCancelContentJSEpoch(aCancelContentJSEpoch.Value());
+    }
+    docShell->GoForward(aRequireUserInteraction);
+  } else if (ContentParent* cp = GetContentParent()) {
+    Maybe<int32_t> cancelContentJSEpoch;
+    if (aCancelContentJSEpoch.WasPassed()) {
+      cancelContentJSEpoch.emplace(aCancelContentJSEpoch.Value());
+    }
+    Unused << cp->SendGoForward(this, cancelContentJSEpoch,
+                                aRequireUserInteraction);
+  }
+}
+void CanonicalBrowsingContext::GoToIndex(
+    int32_t aIndex, const Optional<int32_t>& aCancelContentJSEpoch) {
+  if (IsDiscarded()) {
+    return;
+  }
+
+  // Stop any known network loads if necessary.
+  if (mCurrentLoad) {
+    mCurrentLoad->Cancel(NS_BINDING_ABORTED);
+  }
+
+  if (auto* docShell = nsDocShell::Cast(GetDocShell())) {
+    if (aCancelContentJSEpoch.WasPassed()) {
+      docShell->SetCancelContentJSEpoch(aCancelContentJSEpoch.Value());
+    }
+    docShell->GotoIndex(aIndex);
+  } else if (ContentParent* cp = GetContentParent()) {
+    Maybe<int32_t> cancelContentJSEpoch;
+    if (aCancelContentJSEpoch.WasPassed()) {
+      cancelContentJSEpoch.emplace(aCancelContentJSEpoch.Value());
+    }
+    Unused << cp->SendGoToIndex(this, aIndex, cancelContentJSEpoch);
+  }
+}
+void CanonicalBrowsingContext::Reload(uint32_t aReloadFlags) {
+  if (IsDiscarded()) {
+    return;
+  }
+
+  // Stop any known network loads if necessary.
+  if (mCurrentLoad) {
+    mCurrentLoad->Cancel(NS_BINDING_ABORTED);
+  }
+
+  if (auto* docShell = nsDocShell::Cast(GetDocShell())) {
+    docShell->Reload(aReloadFlags);
+  } else if (ContentParent* cp = GetContentParent()) {
+    Unused << cp->SendReload(this, aReloadFlags);
+  }
+}
+
+void CanonicalBrowsingContext::Stop(uint32_t aStopFlags) {
+  if (IsDiscarded()) {
+    return;
+  }
+
+  // Stop any known network loads if necessary.
+  if (mCurrentLoad && (aStopFlags & nsIWebNavigation::STOP_NETWORK)) {
+    mCurrentLoad->Cancel(NS_BINDING_ABORTED);
+  }
+
+  // Ask the docshell to stop to handle loads that haven't
+  // yet reached here, as well as non-network activity.
+  if (auto* docShell = nsDocShell::Cast(GetDocShell())) {
+    docShell->Stop(aStopFlags);
+  } else if (ContentParent* cp = GetContentParent()) {
+    Unused << cp->SendStopLoad(this, aStopFlags);
+  }
+}
+
 void CanonicalBrowsingContext::PendingRemotenessChange::ProcessReady() {
   if (!mPromise) {
     return;
@@ -496,10 +608,9 @@ void CanonicalBrowsingContext::PendingRemotenessChange::Finish() {
 
     // Some frontend code checks the value of the `remote` attribute on the
     // browser to determine if it is remote, so update the value.
-    browserElement->SetAttr(
-        kNameSpaceID_None, nsGkAtoms::remote,
-        mContentParent ? NS_LITERAL_STRING("true") : NS_LITERAL_STRING("false"),
-        /* notify */ true);
+    browserElement->SetAttr(kNameSpaceID_None, nsGkAtoms::remote,
+                            mContentParent ? u"true"_ns : u"false"_ns,
+                            /* notify */ true);
 
     // The process has been created, hand off to nsFrameLoaderOwner to finish
     // the process switch.
@@ -829,16 +940,8 @@ MediaController* CanonicalBrowsingContext::GetMediaController() {
   return mTabMediaController;
 }
 
-bool CanonicalBrowsingContext::AttemptLoadURIInParent(
-    nsDocShellLoadState* aLoadState) {
-  // We currently only support starting loads directly from the
-  // CanonicalBrowsingContext for top-level BCs.
-  if (!IsTopContent() || !GetContentParent() ||
-      !StaticPrefs::browser_tabs_documentchannel() ||
-      !StaticPrefs::browser_tabs_documentchannel_parent_initiated()) {
-    return false;
-  }
-
+bool CanonicalBrowsingContext::SupportsLoadingInParent(
+    nsDocShellLoadState* aLoadState, uint64_t* aOuterWindowId) {
   // We currently don't support initiating loads in the parent when they are
   // watched by devtools. This is because devtools tracks loads using content
   // process notifications, which happens after the load is initiated in this
@@ -856,7 +959,6 @@ bool CanonicalBrowsingContext::AttemptLoadURIInParent(
     return false;
   }
 
-  uint64_t outerWindowId = 0;
   if (WindowGlobalParent* global = GetCurrentWindowGlobal()) {
     nsCOMPtr<nsIURI> currentURI = global->GetDocumentURI();
     if (currentURI) {
@@ -877,20 +979,72 @@ bool CanonicalBrowsingContext::AttemptLoadURIInParent(
       return false;
     }
 
-    outerWindowId = global->OuterWindowId();
+    *aOuterWindowId = global->OuterWindowId();
+  }
+  return true;
+}
+
+bool CanonicalBrowsingContext::LoadInParent(nsDocShellLoadState* aLoadState,
+                                            bool aSetNavigating) {
+  // We currently only support starting loads directly from the
+  // CanonicalBrowsingContext for top-level BCs.
+  // We currently only support starting loads directly from the
+  // CanonicalBrowsingContext for top-level BCs.
+  if (!IsTopContent() || !GetContentParent() ||
+      !StaticPrefs::browser_tabs_documentchannel() ||
+      !StaticPrefs::browser_tabs_documentchannel_parent_controlled()) {
+    return false;
+  }
+
+  uint64_t outerWindowId = 0;
+  if (!SupportsLoadingInParent(aLoadState, &outerWindowId)) {
+    return false;
+  }
+
+  // Note: If successful, this will recurse into StartDocumentLoad and
+  // set mCurrentLoad to the DocumentLoadListener instance created.
+  // Ideally in the future we will only start loads from here, and we can
+  // just set this directly instead.
+  return net::DocumentLoadListener::LoadInParent(this, aLoadState,
+                                                 outerWindowId, aSetNavigating);
+}
+
+bool CanonicalBrowsingContext::AttemptSpeculativeLoadInParent(
+    nsDocShellLoadState* aLoadState) {
+  // We currently only support starting loads directly from the
+  // CanonicalBrowsingContext for top-level BCs.
+  // We currently only support starting loads directly from the
+  // CanonicalBrowsingContext for top-level BCs.
+  if (!IsTopContent() || !GetContentParent() ||
+      !StaticPrefs::browser_tabs_documentchannel() ||
+      !StaticPrefs::browser_tabs_documentchannel_parent_initiated() ||
+      StaticPrefs::browser_tabs_documentchannel_parent_controlled()) {
+    return false;
+  }
+
+  uint64_t outerWindowId = 0;
+  if (!SupportsLoadingInParent(aLoadState, &outerWindowId)) {
+    return false;
   }
 
   // If we successfully open the DocumentChannel, then it'll register
   // itself using aLoadIdentifier and be kept alive until it completes
   // loading.
-  return net::DocumentLoadListener::OpenFromParent(this, aLoadState,
-                                                   outerWindowId);
+  return net::DocumentLoadListener::SpeculativeLoadInParent(this, aLoadState,
+                                                            outerWindowId);
 }
 
-void CanonicalBrowsingContext::StartDocumentLoad(
+bool CanonicalBrowsingContext::StartDocumentLoad(
     net::DocumentLoadListener* aLoad) {
+  // If we're controlling loads from the parent, then starting a new load means
+  // that we need to cancel any existing ones.
+  if (StaticPrefs::browser_tabs_documentchannel_parent_controlled() &&
+      mCurrentLoad) {
+    mCurrentLoad->Cancel(NS_BINDING_ABORTED);
+  }
   mCurrentLoad = aLoad;
   SetCurrentLoadIdentifier(Some(aLoad->GetLoadIdentifier()));
+  return true;
 }
 
 void CanonicalBrowsingContext::EndDocumentLoad(bool aForProcessSwitch) {

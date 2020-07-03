@@ -505,9 +505,9 @@ class ReportErrorToConsoleRunnable final : public WorkerRunnable {
     }
 
     // Log a warning to the console.
-    nsContentUtils::ReportToConsole(
-        nsIScriptError::warningFlag, NS_LITERAL_CSTRING("DOM"), nullptr,
-        nsContentUtils::eDOM_PROPERTIES, aMessage, aParams);
+    nsContentUtils::ReportToConsole(nsIScriptError::warningFlag, "DOM"_ns,
+                                    nullptr, nsContentUtils::eDOM_PROPERTIES,
+                                    aMessage, aParams);
   }
 
  private:
@@ -796,7 +796,7 @@ class MemoryPressureRunnable : public WorkerControlRunnable {
 
 #ifdef DEBUG
 static bool StartsWithExplicit(nsACString& s) {
-  return StringBeginsWith(s, NS_LITERAL_CSTRING("explicit/"));
+  return StringBeginsWith(s, "explicit/"_ns);
 }
 #endif
 
@@ -1022,7 +1022,7 @@ class WorkerJSContextStats final : public JS::RuntimeStats {
     extras->jsPathPrefix.Assign(mRtPath);
     extras->jsPathPrefix +=
         nsPrintfCString("zone(0x%p)/", (void*)js::GetRealmZone(aRealm));
-    extras->jsPathPrefix += NS_LITERAL_CSTRING("realm(web-worker)/");
+    extras->jsPathPrefix += "realm(web-worker)/"_ns;
 
     // This should never be used when reporting with workers (hence the "?!").
     extras->domPathPrefix.AssignLiteral("explicit/workers/?!/");
@@ -1242,8 +1242,7 @@ WorkerPrivate::MemoryReporter::FinishCollectRunnable::Run() {
       mHandleReport->Callback(
           EmptyCString(), path, nsIMemoryReporter::KIND_HEAP,
           nsIMemoryReporter::UNITS_BYTES, mPerformanceUserEntries,
-          NS_LITERAL_CSTRING("Memory used for performance user entries."),
-          mHandlerData);
+          "Memory used for performance user entries."_ns, mHandlerData);
     }
 
     if (mPerformanceResourceEntries) {
@@ -1252,8 +1251,7 @@ WorkerPrivate::MemoryReporter::FinishCollectRunnable::Run() {
       mHandleReport->Callback(
           EmptyCString(), path, nsIMemoryReporter::KIND_HEAP,
           nsIMemoryReporter::UNITS_BYTES, mPerformanceResourceEntries,
-          NS_LITERAL_CSTRING("Memory used for performance resource entries."),
-          mHandlerData);
+          "Memory used for performance resource entries."_ns, mHandlerData);
     }
   }
 
@@ -1370,7 +1368,7 @@ nsresult WorkerPrivate::SetCSPFromHeaderValues(
 }
 
 void WorkerPrivate::StoreCSPOnClient() {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
   MOZ_ASSERT(data->mScope);
   if (mLoadInfo.mCSPInfo) {
     data->mScope->GetClientSource()->SetCspInfo(*mLoadInfo.mCSPInfo);
@@ -1919,7 +1917,7 @@ void WorkerPrivate::OfflineStatusChangeEvent(bool aIsOffline) {
 }
 
 void WorkerPrivate::OfflineStatusChangeEventInternal(bool aIsOffline) {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
 
   // The worker is already in this state. No need to dispatch an event.
   if (data->mOnLine == !aIsOffline) {
@@ -2655,8 +2653,8 @@ nsresult WorkerPrivate::GetLoadInfo(JSContext* aCx, nsPIDOMWindowInner* aWindow,
       NS_ENSURE_SUCCESS(rv, rv);
 
       uint32_t perm;
-      rv = permMgr->TestPermissionFromPrincipal(
-          loadInfo.mLoadingPrincipal, NS_LITERAL_CSTRING("systemXHR"), &perm);
+      rv = permMgr->TestPermissionFromPrincipal(loadInfo.mLoadingPrincipal,
+                                                "systemXHR"_ns, &perm);
       NS_ENSURE_SUCCESS(rv, rv);
 
       loadInfo.mXHRParamsAllowed = perm == nsIPermissionManager::ALLOW_ACTION;
@@ -2830,7 +2828,7 @@ void WorkerPrivate::RunLoopNeverRan() {
 }
 
 void WorkerPrivate::DoRunLoop(JSContext* aCx) {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
   MOZ_ASSERT(mThread);
 
   MOZ_RELEASE_ASSERT(!GetExecutionManager());
@@ -3117,7 +3115,7 @@ ClientType WorkerPrivate::GetClientType() const {
 }
 
 UniquePtr<ClientSource> WorkerPrivate::CreateClientSource() {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
   MOZ_ASSERT(!data->mScope, "Client should be created before the global");
 
   auto clientSource = ClientManager::CreateSource(
@@ -3180,17 +3178,17 @@ void WorkerPrivate::EnsurePerformanceStorage() {
 }
 
 bool WorkerPrivate::GetExecutionGranted() const {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
   return data->mJSThreadExecutionGranted;
 }
 
 void WorkerPrivate::SetExecutionGranted(bool aGranted) {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
   data->mJSThreadExecutionGranted = aGranted;
 }
 
 void WorkerPrivate::ScheduleTimeSliceExpiration(uint32_t aDelay) {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
 
   if (!data->mTSTimer) {
     data->mTSTimer = NS_NewTimer();
@@ -3208,22 +3206,22 @@ void WorkerPrivate::ScheduleTimeSliceExpiration(uint32_t aDelay) {
 }
 
 void WorkerPrivate::CancelTimeSliceExpiration() {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
   MOZ_ALWAYS_SUCCEEDS(data->mTSTimer->Cancel());
 }
 
 JSExecutionManager* WorkerPrivate::GetExecutionManager() const {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
   return data->mExecutionManager.get();
 }
 
 void WorkerPrivate::SetExecutionManager(JSExecutionManager* aManager) {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
   data->mExecutionManager = aManager;
 }
 
 void WorkerPrivate::ExecutionReady() {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
   {
     MutexAutoLock lock(mMutex);
     if (mStatus >= Canceling) {
@@ -3238,7 +3236,7 @@ void WorkerPrivate::ExecutionReady() {
 }
 
 void WorkerPrivate::InitializeGCTimers() {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
 
   // We need a timer for GC. The basic plan is to run a non-shrinking GC
   // periodically (PERIODIC_GC_TIMER_DELAY_SEC) while the worker is running.
@@ -3253,7 +3251,7 @@ void WorkerPrivate::InitializeGCTimers() {
 }
 
 void WorkerPrivate::SetGCTimerMode(GCTimerMode aMode) {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
   MOZ_ASSERT(data->mGCTimer);
 
   if ((aMode == PeriodicTimer && data->mPeriodicGCTimerRunning) ||
@@ -3307,7 +3305,7 @@ void WorkerPrivate::SetGCTimerMode(GCTimerMode aMode) {
 }
 
 void WorkerPrivate::ShutdownGCTimers() {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
 
   MOZ_ASSERT(data->mGCTimer);
 
@@ -3322,7 +3320,7 @@ void WorkerPrivate::ShutdownGCTimers() {
 }
 
 bool WorkerPrivate::InterruptCallback(JSContext* aCx) {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
 
   AutoYieldJSThreadExecution yield;
 
@@ -3409,7 +3407,7 @@ void WorkerPrivate::ScheduleDeletion(WorkerRanOrNot aRanOrNot) {
   {
     // mWorkerThreadAccessible's accessor must be destructed before
     // the scheduled Runnable gets to run.
-    MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+    auto data = mWorkerThreadAccessible.Access();
     MOZ_ASSERT(data->mChildWorkers.IsEmpty());
   }
   MOZ_ASSERT(mSyncLoopStack.IsEmpty());
@@ -3452,7 +3450,7 @@ bool WorkerPrivate::CollectRuntimeStats(JS::RuntimeStats* aRtStats,
 }
 
 void WorkerPrivate::EnableMemoryReporter() {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
   MOZ_ASSERT(!data->mMemoryReporter);
 
   // No need to lock here since the main thread can't race until we've
@@ -3468,7 +3466,7 @@ void WorkerPrivate::EnableMemoryReporter() {
 }
 
 void WorkerPrivate::DisableMemoryReporter() {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
 
   RefPtr<MemoryReporter> memoryReporter;
   {
@@ -3591,7 +3589,7 @@ void WorkerPrivate::ClearDebuggerEventQueue() {
 }
 
 bool WorkerPrivate::FreezeInternal() {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
   MOZ_ASSERT(data->mScope);
   NS_ASSERTION(!data->mFrozen, "Already frozen!");
 
@@ -3612,7 +3610,7 @@ bool WorkerPrivate::FreezeInternal() {
 }
 
 bool WorkerPrivate::ThawInternal() {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
   MOZ_ASSERT(data->mScope);
   NS_ASSERTION(data->mFrozen, "Not yet frozen!");
 
@@ -3631,7 +3629,7 @@ bool WorkerPrivate::ThawInternal() {
 }
 
 void WorkerPrivate::PropagateStorageAccessPermissionGrantedInternal() {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
 
   mLoadInfo.mUseRegularPrincipal = true;
   mLoadInfo.mHasStorageAccessPermissionGranted = true;
@@ -3647,7 +3645,7 @@ void WorkerPrivate::PropagateStorageAccessPermissionGrantedInternal() {
 }
 
 void WorkerPrivate::TraverseTimeouts(nsCycleCollectionTraversalCallback& cb) {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
   for (uint32_t i = 0; i < data->mTimeouts.Length(); ++i) {
     // TODO(erahm): No idea what's going on here.
     TimeoutInfo* tmp = data->mTimeouts[i].get();
@@ -3656,7 +3654,7 @@ void WorkerPrivate::TraverseTimeouts(nsCycleCollectionTraversalCallback& cb) {
 }
 
 void WorkerPrivate::UnlinkTimeouts() {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
   data->mTimeouts.Clear();
 }
 
@@ -3679,7 +3677,7 @@ bool WorkerPrivate::ModifyBusyCountFromWorker(bool aIncrease) {
 }
 
 bool WorkerPrivate::AddChildWorker(WorkerPrivate* aChildWorker) {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
 
 #ifdef DEBUG
   {
@@ -3702,7 +3700,7 @@ bool WorkerPrivate::AddChildWorker(WorkerPrivate* aChildWorker) {
 }
 
 void WorkerPrivate::RemoveChildWorker(WorkerPrivate* aChildWorker) {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
 
   NS_ASSERTION(data->mChildWorkers.Contains(aChildWorker),
                "Didn't know about this one!");
@@ -3716,7 +3714,7 @@ void WorkerPrivate::RemoveChildWorker(WorkerPrivate* aChildWorker) {
 bool WorkerPrivate::AddWorkerRef(WorkerRef* aWorkerRef,
                                  WorkerStatus aFailStatus) {
   MOZ_ASSERT(aWorkerRef);
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
 
   {
     MutexAutoLock lock(mMutex);
@@ -3752,7 +3750,7 @@ bool WorkerPrivate::AddWorkerRef(WorkerRef* aWorkerRef,
 
 void WorkerPrivate::RemoveWorkerRef(WorkerRef* aWorkerRef) {
   MOZ_ASSERT(aWorkerRef);
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
 
   MOZ_ASSERT(data->mWorkerRefs.Contains(aWorkerRef),
              "Didn't know about this one!");
@@ -3768,7 +3766,7 @@ void WorkerPrivate::RemoveWorkerRef(WorkerRef* aWorkerRef) {
 }
 
 void WorkerPrivate::NotifyWorkerRefs(WorkerStatus aStatus) {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
 
   NS_ASSERTION(aStatus > Closing, "Bad status!");
 
@@ -3787,7 +3785,7 @@ void WorkerPrivate::NotifyWorkerRefs(WorkerStatus aStatus) {
 }
 
 void WorkerPrivate::CancelAllTimeouts() {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
 
   LOG(TimeoutsLog(), ("Worker %p CancelAllTimeouts.\n", this));
 
@@ -4205,7 +4203,7 @@ void WorkerPrivate::PostMessageToParent(
 }
 
 void WorkerPrivate::EnterDebuggerEventLoop() {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
 
   JSContext* cx = GetJSContext();
   MOZ_ASSERT(cx);
@@ -4278,7 +4276,7 @@ void WorkerPrivate::EnterDebuggerEventLoop() {
 }
 
 void WorkerPrivate::LeaveDebuggerEventLoop() {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
 
   // TODO: Why lock the mutex if we're accessing data accessible to one thread
   // only?
@@ -4311,7 +4309,7 @@ void WorkerPrivate::ReportErrorToDebugger(const nsAString& aFilename,
 }
 
 bool WorkerPrivate::NotifyInternal(WorkerStatus aStatus) {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
 
   // Yield execution while notifying out-of-module WorkerRefs and cancelling
   // runnables.
@@ -4418,7 +4416,7 @@ bool WorkerPrivate::NotifyInternal(WorkerStatus aStatus) {
 void WorkerPrivate::ReportError(JSContext* aCx,
                                 JS::ConstUTF8CharsZ aToStringResult,
                                 JSErrorReport* aReport) {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
 
   if (!MayContinueRunning() || data->mErrorHandlerRecursionCount == 2) {
     return;
@@ -4505,7 +4503,7 @@ void WorkerPrivate::ReportErrorToConsole(const char* aMessage,
 int32_t WorkerPrivate::SetTimeout(JSContext* aCx, TimeoutHandler* aHandler,
                                   int32_t aTimeout, bool aIsInterval,
                                   ErrorResult& aRv) {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
   MOZ_ASSERT(aHandler);
 
   const int32_t timerId = data->mNextTimeoutId++;
@@ -4577,7 +4575,7 @@ int32_t WorkerPrivate::SetTimeout(JSContext* aCx, TimeoutHandler* aHandler,
 }
 
 void WorkerPrivate::ClearTimeout(int32_t aId) {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
 
   if (!data->mTimeouts.IsEmpty()) {
     NS_ASSERTION(data->mTimerRunning, "Huh?!");
@@ -4593,7 +4591,7 @@ void WorkerPrivate::ClearTimeout(int32_t aId) {
 }
 
 bool WorkerPrivate::RunExpiredTimeouts(JSContext* aCx) {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
 
   // We may be called recursively (e.g. close() inside a timeout) or we could
   // have been canceled while this event was pending, bail out if there is
@@ -4720,7 +4718,7 @@ bool WorkerPrivate::RunExpiredTimeouts(JSContext* aCx) {
 }
 
 bool WorkerPrivate::RescheduleTimeoutTimer(JSContext* aCx) {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
   MOZ_ASSERT(!data->mRunningExpiredTimeouts);
   NS_ASSERTION(!data->mTimeouts.IsEmpty(), "Should have some timeouts!");
   NS_ASSERTION(data->mTimer && data->mTimerRunnable, "Should have a timer!");
@@ -4791,7 +4789,7 @@ void WorkerPrivate::StartCancelingTimer() {
 
 void WorkerPrivate::UpdateContextOptionsInternal(
     JSContext* aCx, const JS::ContextOptions& aContextOptions) {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
 
   JS::ContextOptionsRef(aCx) = aContextOptions;
 
@@ -4808,14 +4806,14 @@ void WorkerPrivate::UpdateLanguagesInternal(
     nav->SetLanguages(aLanguages);
   }
 
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
   for (uint32_t index = 0; index < data->mChildWorkers.Length(); index++) {
     data->mChildWorkers[index]->UpdateLanguages(aLanguages);
   }
 
   RefPtr<Event> event = NS_NewDOMEvent(globalScope, nullptr, nullptr);
 
-  event->InitEvent(NS_LITERAL_STRING("languagechange"), false, false);
+  event->InitEvent(u"languagechange"_ns, false, false);
   event->SetTrusted(true);
 
   globalScope->DispatchEvent(*event);
@@ -4823,7 +4821,7 @@ void WorkerPrivate::UpdateLanguagesInternal(
 
 void WorkerPrivate::UpdateJSWorkerMemoryParameterInternal(
     JSContext* aCx, JSGCParamKey aKey, Maybe<uint32_t> aValue) {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
 
   if (aValue) {
     JS_SetGCParameter(aCx, aKey, *aValue);
@@ -4839,7 +4837,7 @@ void WorkerPrivate::UpdateJSWorkerMemoryParameterInternal(
 #ifdef JS_GC_ZEAL
 void WorkerPrivate::UpdateGCZealInternal(JSContext* aCx, uint8_t aGCZeal,
                                          uint32_t aFrequency) {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
 
   JS_SetGCZeal(aCx, aGCZeal, aFrequency);
 
@@ -4850,7 +4848,7 @@ void WorkerPrivate::UpdateGCZealInternal(JSContext* aCx, uint8_t aGCZeal,
 #endif
 
 void WorkerPrivate::SetLowMemoryStateInternal(JSContext* aCx, bool aState) {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
 
   JS::SetLowMemoryState(aCx, aState);
 
@@ -4861,7 +4859,7 @@ void WorkerPrivate::SetLowMemoryStateInternal(JSContext* aCx, bool aState) {
 
 void WorkerPrivate::GarbageCollectInternal(JSContext* aCx, bool aShrinking,
                                            bool aCollectChildren) {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
 
   if (!GlobalScope()) {
     // We haven't compiled anything yet. Just bail out.
@@ -4894,7 +4892,7 @@ void WorkerPrivate::GarbageCollectInternal(JSContext* aCx, bool aShrinking,
 }
 
 void WorkerPrivate::CycleCollectInternal(bool aCollectChildren) {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
 
   nsCycleCollector_collect(nullptr);
 
@@ -4906,7 +4904,7 @@ void WorkerPrivate::CycleCollectInternal(bool aCollectChildren) {
 }
 
 void WorkerPrivate::MemoryPressureInternal() {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
 
   if (data->mScope) {
     RefPtr<Console> console = data->mScope->GetConsoleIfExists();
@@ -4987,7 +4985,7 @@ void WorkerPrivate::ResetWorkerPrivateInWorkerThread() {
 
 void WorkerPrivate::BeginCTypesCall() {
   AssertIsOnWorkerThread();
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
 
   // Don't try to GC while we're blocked in a ctypes call.
   SetGCTimerMode(NoTimer);
@@ -4997,7 +4995,7 @@ void WorkerPrivate::BeginCTypesCall() {
 
 void WorkerPrivate::EndCTypesCall() {
   AssertIsOnWorkerThread();
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
 
   data->mYieldJSThreadExecution.RemoveLastElement();
 
@@ -5054,8 +5052,8 @@ bool WorkerPrivate::ConnectMessagePort(JSContext* aCx,
     return false;
   }
 
-  RefPtr<MessageEvent> event = MessageEvent::Constructor(
-      globalObject, NS_LITERAL_STRING("connect"), init);
+  RefPtr<MessageEvent> event =
+      MessageEvent::Constructor(globalObject, u"connect"_ns, init);
 
   event->SetTrusted(true);
 
@@ -5065,7 +5063,7 @@ bool WorkerPrivate::ConnectMessagePort(JSContext* aCx,
 }
 
 WorkerGlobalScope* WorkerPrivate::GetOrCreateGlobalScope(JSContext* aCx) {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
 
   if (data->mScope) {
     return data->mScope;
@@ -5100,7 +5098,7 @@ WorkerGlobalScope* WorkerPrivate::GetOrCreateGlobalScope(JSContext* aCx) {
 
 WorkerDebuggerGlobalScope* WorkerPrivate::CreateDebuggerGlobalScope(
     JSContext* aCx) {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
   MOZ_ASSERT(!data->mDebuggerScope);
 
   // The debugger global gets a dummy client, not the "real" client used by the
@@ -5143,7 +5141,7 @@ void WorkerPrivate::AssertIsOnWorkerThread() const {
 #endif  // DEBUG
 
 void WorkerPrivate::DumpCrashInformation(nsACString& aString) {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerThreadAccessible, data);
+  auto data = mWorkerThreadAccessible.Access();
 
   for (const auto* workerRef : data->mWorkerRefs.NonObservingRange()) {
     if (workerRef->IsPreventingShutdown()) {
@@ -5465,7 +5463,7 @@ WorkerPrivate::EventTarget::IsOnCurrentThreadInfallible() {
 WorkerPrivate::AutoPushEventLoopGlobal::AutoPushEventLoopGlobal(
     WorkerPrivate* aWorkerPrivate, JSContext* aCx)
     : mWorkerPrivate(aWorkerPrivate) {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerPrivate->mWorkerThreadAccessible, data);
+  auto data = mWorkerPrivate->mWorkerThreadAccessible.Access();
   mOldEventLoopGlobal = std::move(data->mCurrentEventLoopGlobal);
   if (JSObject* global = JS::CurrentGlobalOrNull(aCx)) {
     data->mCurrentEventLoopGlobal = xpc::NativeGlobal(global);
@@ -5473,7 +5471,7 @@ WorkerPrivate::AutoPushEventLoopGlobal::AutoPushEventLoopGlobal(
 }
 
 WorkerPrivate::AutoPushEventLoopGlobal::~AutoPushEventLoopGlobal() {
-  MOZ_ACCESS_THREAD_BOUND(mWorkerPrivate->mWorkerThreadAccessible, data);
+  auto data = mWorkerPrivate->mWorkerThreadAccessible.Access();
   data->mCurrentEventLoopGlobal = std::move(mOldEventLoopGlobal);
 }
 

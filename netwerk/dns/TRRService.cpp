@@ -48,7 +48,7 @@ TRRService::TRRService()
     : mInitialized(false),
       mTRRBlacklistExpireTime(72 * 3600),
       mLock("trrservice"),
-      mConfirmationNS(NS_LITERAL_CSTRING("example.com")),
+      mConfirmationNS("example.com"_ns),
       mWaitForCaptive(true),
       mRfc1918(false),
       mCaptiveIsPassed(false),
@@ -108,8 +108,8 @@ bool TRRService::CheckCaptivePortalIsPassed() {
   return result;
 }
 
-NS_NAMED_LITERAL_CSTRING(kTRRIsAutoDetectedKey, "(auto-detected)");
-NS_NAMED_LITERAL_CSTRING(kTRRNotAutoDetectedKey, "(default)");
+constexpr auto kTRRIsAutoDetectedKey = "(auto-detected)"_ns;
+constexpr auto kTRRNotAutoDetectedKey = "(default)"_ns;
 // static
 const nsCString& TRRService::AutoDetectedKey() {
   if (gTRRService && gTRRService->IsUsingAutoDetectedURL()) {

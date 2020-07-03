@@ -183,12 +183,9 @@ nsString OptimizeFileName(const nsAString& aFileName) {
       sCSMLog, LogLevel::Verbose,
       ("Optimizing FileName: %s", NS_ConvertUTF16toUTF8(optimizedName).get()));
 
-  optimizedName.ReplaceSubstring(NS_LITERAL_STRING(".xpi!"),
-                                 NS_LITERAL_STRING("!"));
-  optimizedName.ReplaceSubstring(NS_LITERAL_STRING("shield.mozilla.org!"),
-                                 NS_LITERAL_STRING("s!"));
-  optimizedName.ReplaceSubstring(NS_LITERAL_STRING("mozilla.org!"),
-                                 NS_LITERAL_STRING("m!"));
+  optimizedName.ReplaceSubstring(u".xpi!"_ns, u"!"_ns);
+  optimizedName.ReplaceSubstring(u"shield.mozilla.org!"_ns, u"s!"_ns);
+  optimizedName.ReplaceSubstring(u"mozilla.org!"_ns, u"m!"_ns);
   if (optimizedName.Length() > 80) {
     optimizedName.Truncate(80);
   }
@@ -215,41 +212,39 @@ nsString OptimizeFileName(const nsAString& aFileName) {
 FilenameTypeAndDetails nsContentSecurityUtils::FilenameToFilenameType(
     const nsString& fileName, bool collectAdditionalExtensionData) {
   // These are strings because the Telemetry Events API only accepts strings
-  static NS_NAMED_LITERAL_CSTRING(kChromeURI, "chromeuri");
-  static NS_NAMED_LITERAL_CSTRING(kResourceURI, "resourceuri");
-  static NS_NAMED_LITERAL_CSTRING(kBlobUri, "bloburi");
-  static NS_NAMED_LITERAL_CSTRING(kDataUri, "dataurl");
-  static NS_NAMED_LITERAL_CSTRING(kSingleString, "singlestring");
-  static NS_NAMED_LITERAL_CSTRING(kMozillaExtension, "mozillaextension");
-  static NS_NAMED_LITERAL_CSTRING(kOtherExtension, "otherextension");
-  static NS_NAMED_LITERAL_CSTRING(kSuspectedUserChromeJS,
-                                  "suspectedUserChromeJS");
+  static constexpr auto kChromeURI = "chromeuri"_ns;
+  static constexpr auto kResourceURI = "resourceuri"_ns;
+  static constexpr auto kBlobUri = "bloburi"_ns;
+  static constexpr auto kDataUri = "dataurl"_ns;
+  static constexpr auto kSingleString = "singlestring"_ns;
+  static constexpr auto kMozillaExtension = "mozillaextension"_ns;
+  static constexpr auto kOtherExtension = "otherextension"_ns;
+  static constexpr auto kSuspectedUserChromeJS = "suspectedUserChromeJS"_ns;
 #if defined(XP_WIN)
-  static NS_NAMED_LITERAL_CSTRING(kSanitizedWindowsURL, "sanitizedWindowsURL");
-  static NS_NAMED_LITERAL_CSTRING(kSanitizedWindowsPath,
-                                  "sanitizedWindowsPath");
+  static constexpr auto kSanitizedWindowsURL = "sanitizedWindowsURL"_ns;
+  static constexpr auto kSanitizedWindowsPath = "sanitizedWindowsPath"_ns;
 #endif
-  static NS_NAMED_LITERAL_CSTRING(kOther, "other");
-  static NS_NAMED_LITERAL_CSTRING(kOtherWorker, "other-on-worker");
-  static NS_NAMED_LITERAL_CSTRING(kRegexFailure, "regexfailure");
+  static constexpr auto kOther = "other"_ns;
+  static constexpr auto kOtherWorker = "other-on-worker"_ns;
+  static constexpr auto kRegexFailure = "regexfailure"_ns;
 
-  static NS_NAMED_LITERAL_STRING(kUCJSRegex, "(.+).uc.js\\?*[0-9]*$");
-  static NS_NAMED_LITERAL_STRING(kExtensionRegex, "extensions/(.+)@(.+)!(.+)$");
-  static NS_NAMED_LITERAL_STRING(kSingleFileRegex, "^[a-zA-Z0-9.?]+$");
+  static constexpr auto kUCJSRegex = u"(.+).uc.js\\?*[0-9]*$"_ns;
+  static constexpr auto kExtensionRegex = u"extensions/(.+)@(.+)!(.+)$"_ns;
+  static constexpr auto kSingleFileRegex = u"^[a-zA-Z0-9.?]+$"_ns;
 
   // resource:// and chrome://
-  if (StringBeginsWith(fileName, NS_LITERAL_STRING("chrome://"))) {
+  if (StringBeginsWith(fileName, u"chrome://"_ns)) {
     return FilenameTypeAndDetails(kChromeURI, Some(fileName));
   }
-  if (StringBeginsWith(fileName, NS_LITERAL_STRING("resource://"))) {
+  if (StringBeginsWith(fileName, u"resource://"_ns)) {
     return FilenameTypeAndDetails(kResourceURI, Some(fileName));
   }
 
   // blob: and data:
-  if (StringBeginsWith(fileName, NS_LITERAL_STRING("blob:"))) {
+  if (StringBeginsWith(fileName, u"blob:"_ns)) {
     return FilenameTypeAndDetails(kBlobUri, Nothing());
   }
-  if (StringBeginsWith(fileName, NS_LITERAL_STRING("data:"))) {
+  if (StringBeginsWith(fileName, u"data:"_ns)) {
     return FilenameTypeAndDetails(kDataUri, Nothing());
   }
 
@@ -267,10 +262,9 @@ FilenameTypeAndDetails nsContentSecurityUtils::FilenameToFilenameType(
     return FilenameTypeAndDetails(kRegexFailure, Nothing());
   }
   if (regexMatch) {
-    nsCString type =
-        StringEndsWith(regexResults[2], NS_LITERAL_STRING("mozilla.org.xpi"))
-            ? kMozillaExtension
-            : kOtherExtension;
+    nsCString type = StringEndsWith(regexResults[2], u"mozilla.org.xpi"_ns)
+                         ? kMozillaExtension
+                         : kOtherExtension;
     auto& extensionNameAndPath =
         Substring(regexResults[0], ArrayLength("extensions/") - 1);
     return FilenameTypeAndDetails(type,
@@ -309,12 +303,12 @@ FilenameTypeAndDetails nsContentSecurityUtils::FilenameToFilenameType(
     if (hr == S_OK && cchDecodedUrl) {
       nsAutoString sanitizedPathAndScheme;
       sanitizedPathAndScheme.Append(szOut);
-      if (sanitizedPathAndScheme == NS_LITERAL_STRING("file")) {
-        sanitizedPathAndScheme.Append(NS_LITERAL_STRING("://.../"));
+      if (sanitizedPathAndScheme == u"file"_ns) {
+        sanitizedPathAndScheme.Append(u"://.../"_ns);
         sanitizedPathAndScheme.Append(strSanitizedPath);
-      } else if (sanitizedPathAndScheme == NS_LITERAL_STRING("moz-extension") &&
+      } else if (sanitizedPathAndScheme == u"moz-extension"_ns &&
                  collectAdditionalExtensionData) {
-        sanitizedPathAndScheme.Append(NS_LITERAL_STRING("://["));
+        sanitizedPathAndScheme.Append(u"://["_ns);
 
         nsCOMPtr<nsIURI> uri;
         nsresult rv = NS_NewURI(getter_AddRefs(uri), fileName);
@@ -334,17 +328,15 @@ FilenameTypeAndDetails nsContentSecurityUtils::FilenameToFilenameType(
             policy->GetId(addOnId);
 
             sanitizedPathAndScheme.Append(addOnId);
-            sanitizedPathAndScheme.Append(NS_LITERAL_STRING(": "));
+            sanitizedPathAndScheme.Append(u": "_ns);
             sanitizedPathAndScheme.Append(policy->Name());
           } else {
-            sanitizedPathAndScheme.Append(
-                NS_LITERAL_STRING("failed finding addon by host"));
+            sanitizedPathAndScheme.Append(u"failed finding addon by host"_ns);
           }
         } else {
-          sanitizedPathAndScheme.Append(
-              NS_LITERAL_STRING("can't get addon off main thread"));
+          sanitizedPathAndScheme.Append(u"can't get addon off main thread"_ns);
         }
-        sanitizedPathAndScheme.Append(NS_LITERAL_STRING("]"));
+        sanitizedPathAndScheme.Append(u"]"_ns);
         sanitizedPathAndScheme.Append(url.FilePath());
       }
       return FilenameTypeAndDetails(kSanitizedWindowsURL,
@@ -402,32 +394,32 @@ bool nsContentSecurityUtils::IsEvalAllowed(JSContext* cx,
   // exclusively used in testing contexts.
   static nsLiteralCString evalAllowlist[] = {
       // Test-only third-party library
-      NS_LITERAL_CSTRING("resource://testing-common/sinon-7.2.7.js"),
+      "resource://testing-common/sinon-7.2.7.js"_ns,
       // Test-only third-party library
-      NS_LITERAL_CSTRING("resource://testing-common/ajv-4.1.1.js"),
+      "resource://testing-common/ajv-4.1.1.js"_ns,
       // Test-only utility
-      NS_LITERAL_CSTRING("resource://testing-common/content-task.js"),
+      "resource://testing-common/content-task.js"_ns,
 
       // Tracked by Bug 1584605
-      NS_LITERAL_CSTRING("resource:///modules/translation/cld-worker.js"),
+      "resource:///modules/translation/cld-worker.js"_ns,
 
       // require.js implements a script loader for workers. It uses eval
       // to load the script; but injection is only possible in situations
       // that you could otherwise control script that gets executed, so
       // it is okay to allow eval() as it adds no additional attack surface.
       // Bug 1584564 tracks requiring safe usage of require.js
-      NS_LITERAL_CSTRING("resource://gre/modules/workers/require.js"),
+      "resource://gre/modules/workers/require.js"_ns,
 
       // The Browser Toolbox/Console
-      NS_LITERAL_CSTRING("debugger"),
+      "debugger"_ns,
   };
 
   // We also permit two specific idioms in eval()-like contexts. We'd like to
   // elminate these too; but there are in-the-wild Mozilla privileged extensions
   // that use them.
-  static NS_NAMED_LITERAL_STRING(sAllowedEval1, "this");
-  static NS_NAMED_LITERAL_STRING(sAllowedEval2,
-                                 "function anonymous(\n) {\nreturn this\n}");
+  static constexpr auto sAllowedEval1 = u"this"_ns;
+  static constexpr auto sAllowedEval2 =
+      u"function anonymous(\n) {\nreturn this\n}"_ns;
 
   if (MOZ_LIKELY(!aIsSystemPrincipal && !XRE_IsE10sParentProcess())) {
     // We restrict eval in the system principal and parent process.
@@ -515,7 +507,7 @@ bool nsContentSecurityUtils::IsEvalAllowed(JSContext* cx,
   uint32_t lineNumber = 0, columnNumber = 0;
   nsJSUtils::GetCallingLocation(cx, fileName, &lineNumber, &columnNumber);
   if (fileName.IsEmpty()) {
-    fileName = NS_LITERAL_CSTRING("unknown-file");
+    fileName = "unknown-file"_ns;
   }
 
   NS_ConvertUTF8toUTF16 fileNameA(fileName);
@@ -595,14 +587,14 @@ void nsContentSecurityUtils::NotifyEvalUsage(bool aIsSystemPrincipal,
   mozilla::Maybe<nsTArray<EventExtraEntry>> extra;
   if (fileNameTypeAndDetails.second.isSome()) {
     extra = Some<nsTArray<EventExtraEntry>>({EventExtraEntry{
-        NS_LITERAL_CSTRING("fileinfo"),
+        "fileinfo"_ns,
         NS_ConvertUTF16toUTF8(fileNameTypeAndDetails.second.value())}});
   } else {
     extra = Nothing();
   }
   if (!sTelemetryEventEnabled.exchange(true)) {
     sTelemetryEventEnabled = true;
-    Telemetry::SetEventRecordingEnabled(NS_LITERAL_CSTRING("security"), true);
+    Telemetry::SetEventRecordingEnabled("security"_ns, true);
   }
   Telemetry::RecordEvent(eventType, mozilla::Some(fileNameTypeAndDetails.first),
                          extra);
@@ -702,12 +694,11 @@ nsresult ParseCSPAndEnforceFrameAncestorCheck(
 
   nsAutoCString tCspHeaderValue, tCspROHeaderValue;
 
-  Unused << httpChannel->GetResponseHeader(
-      NS_LITERAL_CSTRING("content-security-policy"), tCspHeaderValue);
+  Unused << httpChannel->GetResponseHeader("content-security-policy"_ns,
+                                           tCspHeaderValue);
 
   Unused << httpChannel->GetResponseHeader(
-      NS_LITERAL_CSTRING("content-security-policy-report-only"),
-      tCspROHeaderValue);
+      "content-security-policy-report-only"_ns, tCspROHeaderValue);
 
   // if there are no CSP values, then there is nothing to do here.
   if (tCspHeaderValue.IsEmpty() && tCspROHeaderValue.IsEmpty()) {
@@ -857,17 +848,17 @@ void nsContentSecurityUtils::AssertAboutPageHasCSP(Document* aDocument) {
   // render without a CSP applied.
   static nsLiteralCString sAllowedAboutPagesWithNoCSP[] = {
     // about:blank is a special about page -> no CSP
-    NS_LITERAL_CSTRING("about:blank"),
+    "about:blank"_ns,
     // about:srcdoc is a special about page -> no CSP
-    NS_LITERAL_CSTRING("about:srcdoc"),
+    "about:srcdoc"_ns,
     // about:sync-log displays plain text only -> no CSP
-    NS_LITERAL_CSTRING("about:sync-log"),
+    "about:sync-log"_ns,
     // about:printpreview displays plain text only -> no CSP
-    NS_LITERAL_CSTRING("about:printpreview"),
+    "about:printpreview"_ns,
     // about:logo just displays the firefox logo -> no CSP
-    NS_LITERAL_CSTRING("about:logo"),
+    "about:logo"_ns,
 #  if defined(ANDROID)
-    NS_LITERAL_CSTRING("about:config"),
+    "about:config"_ns,
 #  endif
   };
 
@@ -899,16 +890,16 @@ void nsContentSecurityUtils::AssertAboutPageHasCSP(Document* aDocument) {
   static nsLiteralCString sLegacyUnsafeInlineAllowList[] = {
       // Bug 1579160: Remove 'unsafe-inline' from style-src within
       // about:preferences
-      NS_LITERAL_CSTRING("about:preferences"),
+      "about:preferences"_ns,
       // Bug 1571346: Remove 'unsafe-inline' from style-src within about:addons
-      NS_LITERAL_CSTRING("about:addons"),
+      "about:addons"_ns,
       // Bug 1584485: Remove 'unsafe-inline' from style-src within:
       // * about:newtab
       // * about:welcome
       // * about:home
-      NS_LITERAL_CSTRING("about:newtab"),
-      NS_LITERAL_CSTRING("about:welcome"),
-      NS_LITERAL_CSTRING("about:home"),
+      "about:newtab"_ns,
+      "about:welcome"_ns,
+      "about:home"_ns,
   };
 
   for (const nsLiteralCString& aUnsafeInlineEntry :
@@ -984,23 +975,23 @@ bool nsContentSecurityUtils::ValidateScriptFilename(const char* aFilename,
   }
 
   NS_ConvertUTF8toUTF16 filenameU(aFilename);
-  if (StringBeginsWith(filenameU, NS_LITERAL_STRING("chrome://"))) {
+  if (StringBeginsWith(filenameU, u"chrome://"_ns)) {
     // If it's a chrome:// url, allow it
     return true;
   }
-  if (StringBeginsWith(filenameU, NS_LITERAL_STRING("resource://"))) {
+  if (StringBeginsWith(filenameU, u"resource://"_ns)) {
     // If it's a resource:// url, allow it
     return true;
   }
-  if (StringBeginsWith(filenameU, NS_LITERAL_STRING("file://"))) {
+  if (StringBeginsWith(filenameU, u"file://"_ns)) {
     // We will temporarily allow all file:// URIs through for now
     return true;
   }
-  if (StringBeginsWith(filenameU, NS_LITERAL_STRING("jar:file://"))) {
+  if (StringBeginsWith(filenameU, u"jar:file://"_ns)) {
     // We will temporarily allow all jar URIs through for now
     return true;
   }
-  if (filenameU.Equals(NS_LITERAL_STRING("about:sync-log"))) {
+  if (filenameU.Equals(u"about:sync-log"_ns)) {
     // about:sync-log runs in the parent process and displays a directory
     // listing. The listing has inline javascript that executes on load.
     return true;
@@ -1021,7 +1012,7 @@ bool nsContentSecurityUtils::ValidateScriptFilename(const char* aFilename,
   mozilla::Maybe<nsTArray<EventExtraEntry>> extra;
   if (fileNameTypeAndDetails.second.isSome()) {
     extra = Some<nsTArray<EventExtraEntry>>({EventExtraEntry{
-        NS_LITERAL_CSTRING("fileinfo"),
+        "fileinfo"_ns,
         NS_ConvertUTF16toUTF8(fileNameTypeAndDetails.second.value())}});
   } else {
     extra = Nothing();
@@ -1029,7 +1020,7 @@ bool nsContentSecurityUtils::ValidateScriptFilename(const char* aFilename,
 
   if (!sTelemetryEventEnabled.exchange(true)) {
     sTelemetryEventEnabled = true;
-    Telemetry::SetEventRecordingEnabled(NS_LITERAL_CSTRING("security"), true);
+    Telemetry::SetEventRecordingEnabled("security"_ns, true);
   }
   Telemetry::RecordEvent(eventType, mozilla::Some(fileNameTypeAndDetails.first),
                          extra);

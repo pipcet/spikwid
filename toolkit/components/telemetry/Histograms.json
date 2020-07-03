@@ -677,16 +677,6 @@
     "bug_numbers": [1545093],
     "description": "Time from the beginning of the first slice to the end of the last slice (ms)"
   },
-  "GC_BUDGET_MS": {
-    "record_in_processes": ["main", "content"],
-    "products": ["firefox", "fennec"],
-    "alert_emails": ["dev-telemetry-gc-alerts@mozilla.org"],
-    "expires_in_version": "81",
-    "kind": "linear",
-    "high": 100,
-    "n_buckets": 10,
-    "description": "Requested GC slice budget (ms)"
-  },
   "GC_BUDGET_MS_2": {
     "record_in_processes": ["main", "content"],
     "products": ["firefox"],
@@ -765,16 +755,6 @@
     "n_buckets": 50,
     "description": "Time spent running JS GC compact phase (ms)"
   },
-  "GC_MARK_ROOTS_MS": {
-    "record_in_processes": ["main", "content"],
-    "products": ["firefox", "fennec", "geckoview_streaming"],
-    "alert_emails": ["dev-telemetry-gc-alerts@mozilla.org"],
-    "expires_in_version": "81",
-    "kind": "linear",
-    "high": 200,
-    "n_buckets": 50,
-    "description": "Time spent marking GC roots (ms)"
-  },
   "GC_MARK_ROOTS_US": {
     "record_in_processes": ["main", "content"],
     "products": ["firefox", "geckoview_streaming"],
@@ -786,16 +766,6 @@
     "n_buckets": 50,
     "description": "Time spent marking GC roots (us)",
     "bug_numbers": [1637318]
-  },
-  "GC_MARK_GRAY_MS": {
-    "record_in_processes": ["main", "content"],
-    "products": ["firefox", "fennec"],
-    "alert_emails": ["dev-telemetry-gc-alerts@mozilla.org"],
-    "expires_in_version": "81",
-    "kind": "linear",
-    "high": 200,
-    "n_buckets": 50,
-    "description": "Time spent marking gray GC objects (ms)"
   },
   "GC_MARK_GRAY_MS_2": {
     "record_in_processes": ["main", "content"],
@@ -936,16 +906,6 @@
     "bug_numbers": [1528867],
     "description": "Size of the GC nursery (bytes)"
   },
-  "GC_PRETENURE_COUNT": {
-    "record_in_processes": ["main", "content"],
-    "products": ["firefox", "fennec"],
-    "alert_emails": ["dev-telemetry-gc-alerts@mozilla.org"],
-    "expires_in_version": "81",
-    "kind": "enumerated",
-    "n_values": 32,
-    "bug_numbers": [1293262],
-    "description": "How many objects groups were selected for pretenuring by a minor GC"
-  },
   "GC_PRETENURE_COUNT_2": {
     "record_in_processes": ["main", "content"],
     "products": ["firefox"],
@@ -1002,18 +962,6 @@
     "releaseChannelCollection": "opt-out",
     "bug_numbers": [1563755],
     "description": "The percentage of tenured GC things that survived a collection."
-  },
-  "GC_MARK_RATE": {
-    "record_in_processes": ["main", "content"],
-    "products": ["firefox", "fennec"],
-    "alert_emails": ["dev-telemetry-gc-alerts@mozilla.org", "jcoppeard@mozilla.com"],
-    "expires_in_version": "81",
-    "kind": "linear",
-    "low": 1000,
-    "high": 1000000,
-    "n_buckets": 100,
-    "bug_numbers": [1475896],
-    "description": "The number of objects marked per ms during GC."
   },
   "GC_MARK_RATE_2": {
     "record_in_processes": ["main", "content"],

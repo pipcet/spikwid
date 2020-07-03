@@ -341,6 +341,7 @@ already_AddRefed<BrowsingContext> BrowsingContext::CreateIndependent(
   RefPtr<BrowsingContext> bc(
       CreateDetached(nullptr, nullptr, EmptyString(), aType));
   bc->mWindowless = bc->IsContent();
+  bc->mEmbeddedByThisProcess = true;
   bc->EnsureAttached();
   return bc.forget();
 }
@@ -1043,8 +1044,9 @@ bool BrowsingContext::CrossOriginIsolated() {
              nsILoadInfo::
                  OPENER_POLICY_SAME_ORIGIN_EMBEDDER_POLICY_REQUIRE_CORP &&
          XRE_IsContentProcess() &&
-         StringBeginsWith(ContentChild::GetSingleton()->GetRemoteType(),
-                          NS_LITERAL_STRING(WITH_COOP_COEP_REMOTE_TYPE_PREFIX));
+         StringBeginsWith(
+             ContentChild::GetSingleton()->GetRemoteType(),
+             NS_LITERAL_STRING_FROM_CSTRING(WITH_COOP_COEP_REMOTE_TYPE_PREFIX));
 }
 
 BrowsingContext::~BrowsingContext() {
@@ -1584,11 +1586,15 @@ nsresult BrowsingContext::LoadURI(nsDocShellLoadState* aLoadState,
       return NS_ERROR_UNEXPECTED;
     }
 
+    if (Canonical()->LoadInParent(aLoadState, aSetNavigating)) {
+      return NS_OK;
+    }
+
     if (ContentParent* cp = Canonical()->GetContentParent()) {
       // Attempt to initiate this load immediately in the parent, if it succeeds
       // it'll return a unique identifier so that we can find it later.
       uint64_t loadIdentifier = 0;
-      if (Canonical()->AttemptLoadURIInParent(aLoadState)) {
+      if (Canonical()->AttemptSpeculativeLoadInParent(aLoadState)) {
         MOZ_DIAGNOSTIC_ASSERT(GetCurrentLoadIdentifier().isSome());
         loadIdentifier = GetCurrentLoadIdentifier().value();
         aLoadState->SetChannelInitialized(true);
@@ -1865,7 +1871,7 @@ void BrowsingContext::PostMessageMoz(JSContext* aCx,
       messageData = ErrorMessageData();
 
       nsContentUtils::ReportToConsole(
-          nsIScriptError::warningFlag, NS_LITERAL_CSTRING("DOM Window"),
+          nsIScriptError::warningFlag, "DOM Window"_ns,
           callerInnerWindow ? callerInnerWindow->GetDocument() : nullptr,
           nsContentUtils::eDOM_PROPERTIES,
           "PostMessageSharedMemoryObjectToCrossOriginWarning");
@@ -1889,7 +1895,7 @@ void BrowsingContext::PostMessageMoz(JSContext* aCx,
       messageData = ErrorMessageData();
 
       nsContentUtils::ReportToConsole(
-          nsIScriptError::warningFlag, NS_LITERAL_CSTRING("DOM Window"),
+          nsIScriptError::warningFlag, "DOM Window"_ns,
           callerInnerWindow ? callerInnerWindow->GetDocument() : nullptr,
           nsContentUtils::eDOM_PROPERTIES,
           "PostMessageSharedMemoryObjectToCrossOriginWarning");
@@ -2174,13 +2180,10 @@ bool BrowsingContext::CanSet(FieldIndex<IDX_PlatformOverride>,
 }
 
 bool BrowsingContext::CheckOnlyEmbedderCanSet(ContentParent* aSource) {
-  if (aSource) {
-    // Set by a content process, verify that it's this BC's embedder.
-    MOZ_ASSERT(XRE_IsParentProcess());
-    return Canonical()->IsEmbeddedInProcess(aSource->ChildID());
+  if (XRE_IsParentProcess()) {
+    uint64_t childId = aSource ? aSource->ChildID() : 0;
+    return Canonical()->IsEmbeddedInProcess(childId);
   }
-
-  // In-process case, verify that we've been embedded in this process.
   return mEmbeddedByThisProcess;
 }
 
@@ -2355,7 +2358,7 @@ void BrowsingContext::DidSet(FieldIndex<IDX_TextZoom>, float aOldValue) {
   if (IsTop() && XRE_IsParentProcess()) {
     if (Element* element = GetEmbedderElement()) {
       auto dispatcher = MakeRefPtr<AsyncEventDispatcher>(
-          element, NS_LITERAL_STRING("TextZoomChange"), CanBubble::eYes,
+          element, u"TextZoomChange"_ns, CanBubble::eYes,
           ChromeOnlyDispatch::eYes);
       dispatcher->RunDOMEventWhenSafe();
     }
@@ -2385,7 +2388,7 @@ void BrowsingContext::DidSet(FieldIndex<IDX_FullZoom>, float aOldValue) {
   if (IsTop() && XRE_IsParentProcess()) {
     if (Element* element = GetEmbedderElement()) {
       auto dispatcher = MakeRefPtr<AsyncEventDispatcher>(
-          element, NS_LITERAL_STRING("FullZoomChange"), CanBubble::eYes,
+          element, u"FullZoomChange"_ns, CanBubble::eYes,
           ChromeOnlyDispatch::eYes);
       dispatcher->RunDOMEventWhenSafe();
     }

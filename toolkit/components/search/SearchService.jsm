@@ -16,8 +16,8 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   AddonManager: "resource://gre/modules/AddonManager.jsm",
   clearTimeout: "resource://gre/modules/Timer.jsm",
   ExtensionParent: "resource://gre/modules/ExtensionParent.jsm",
-  getVerificationHash: "resource://gre/modules/SearchEngine.jsm",
   IgnoreLists: "resource://gre/modules/IgnoreLists.jsm",
+  OpenSearchEngine: "resource://gre/modules/OpenSearchEngine.jsm",
   OS: "resource://gre/modules/osfile.jsm",
   Region: "resource://gre/modules/Region.jsm",
   RemoteSettings: "resource://services-settings/remote-settings.js",
@@ -556,7 +556,6 @@ SearchService.prototype = {
 
       // Make sure the current list of engines is persisted, without the need to wait.
       logConsole.debug("_init: engines loaded, writing cache");
-      this._cache.write();
       this._addObservers();
     } catch (ex) {
       this._initRV = ex.result !== undefined ? ex.result : Cr.NS_ERROR_FAILURE;
@@ -591,9 +590,12 @@ SearchService.prototype = {
    */
   async _setupRemoteSettings() {
     // Now we have the values, listen for future updates.
-    this._ignoreListListener = this._handleIgnoreListUpdated.bind(this);
+    let listener = this._handleIgnoreListUpdated.bind(this);
 
-    const current = await IgnoreLists.getAndSubscribe(this._ignoreListListener);
+    const current = await IgnoreLists.getAndSubscribe(listener);
+    // Only save the listener after the subscribe, otherwise for tests it might
+    // not be fully set up by the time we remove it again.
+    this._ignoreListListener = listener;
 
     await this._handleIgnoreListUpdated({ data: { current } });
     Services.obs.notifyObservers(
@@ -1292,8 +1294,6 @@ SearchService.prototype = {
       return;
     }
 
-    await this._cache.ensurePendingWritesCompleted();
-
     // Capture the current engine state, in case we need to notify below.
     const prevCurrentEngine = this._currentEngine;
     const prevPrivateEngine = this._currentPrivateEngine;
@@ -1305,8 +1305,6 @@ SearchService.prototype = {
     // engine order.
     this.__sortedEngines = null;
     await this._loadEngines(await this._cache.get(), true);
-    // Make sure the current list of engines is persisted.
-    await this._cache.write();
 
     // If the defaultEngine has changed between the previous load and this one,
     // dispatch the appropriate notifications.
@@ -1371,7 +1369,6 @@ SearchService.prototype = {
         }
 
         this._initObservers = PromiseUtils.defer();
-        await this._cache.ensurePendingWritesCompleted(origin);
 
         // Clear the engines, too, so we don't stick with the stale ones.
         this._resetLocalData();
@@ -1384,7 +1381,7 @@ SearchService.prototype = {
           "uninit-complete"
         );
 
-        let cache = await this._cache.get();
+        let cache = await this._cache.get(origin);
         // The init flow is not going to block on a fetch from an external service,
         // but we're kicking it off as soon as possible to prevent UI flickering as
         // much as possible.
@@ -1410,9 +1407,6 @@ SearchService.prototype = {
           this._initObservers.reject(Cr.NS_ERROR_ABORT);
           return;
         }
-
-        // Make sure the current list of engines is persisted.
-        await this._cache.write();
 
         // Typically we'll re-init as a result of a pref observer,
         // so signal to 'callers' that we're done.
@@ -1582,6 +1576,7 @@ SearchService.prototype = {
         // We renamed isBuiltin to isAppProvided in 1631898,
         // keep checking isBuiltin for older caches.
         isAppProvided: !!json._isAppProvided || !!json._isBuiltin,
+        loadPath: json._loadPath,
       });
       engine._initWithJSON(json);
       this._addEngineToStore(engine);
@@ -1632,7 +1627,7 @@ SearchService.prototype = {
       try {
         let file = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
         file.initWithPath(osfile.path);
-        addedEngine = new SearchEngine({
+        addedEngine = new OpenSearchEngine({
           fileURI: file,
           isAppProvided: true,
         });
@@ -2251,7 +2246,12 @@ SearchService.prototype = {
     return null;
   },
 
-  async addEngineWithDetails(name, details, isReload = false) {
+  async addEngineWithDetails(
+    name,
+    details,
+    initEngine = false,
+    isReload = false
+  ) {
     if (!name) {
       throw Components.Exception(
         "Empty name passed to addEngineWithDetails!",
@@ -2272,7 +2272,7 @@ SearchService.prototype = {
     // We install search extensions during the init phase, both built in
     // web extensions freshly installed (via addEnginesFromExtension) or
     // user installed extensions being reenabled calling this directly.
-    if (!gInitialized && !isAppProvided && !params.initEngine) {
+    if (!gInitialized && !isAppProvided && !initEngine) {
       await this.init();
     }
     let existingEngine = this._engines.get(name);
@@ -2306,15 +2306,17 @@ SearchService.prototype = {
       }
     }
 
+    let loadPath = "[other]addEngineWithDetails";
+    if (params.extensionID) {
+      loadPath += ":" + params.extensionID;
+    }
+
     let newEngine = new SearchEngine({
       name,
       isAppProvided,
+      loadPath,
     });
     newEngine._initFromMetadata(name, params);
-    newEngine._loadPath = "[other]addEngineWithDetails";
-    if (params.extensionID) {
-      newEngine._loadPath += ":" + params.extensionID;
-    }
     if (isReload && this._engines.has(newEngine.name)) {
       newEngine._engineToUpdate = this._engines.get(newEngine.name);
     }
@@ -2448,24 +2450,31 @@ SearchService.prototype = {
       params
     );
 
+    let loadPath = "[other]addEngineWithDetails";
+    if (engineParams.extensionID) {
+      loadPath += ":" + engineParams.extensionID;
+    }
+
     let engine = new SearchEngine({
       // No need to sanitize the name, as shortName uses the WebExtension id
       // which should already be sanitized.
       shortName: engineParams.shortName,
       isAppProvided: engineParams.isAppProvided,
+      loadPath,
     });
     engine._initFromMetadata(engineParams.name, engineParams);
-    engine._loadPath = "[other]addEngineWithDetails";
-    if (engineParams.extensionID) {
-      engine._loadPath += ":" + engineParams.extensionID;
-    }
     if (isReload && this._engines.has(engine.name)) {
       engine._engineToUpdate = this._engines.get(engine.name);
     }
     return engine;
   },
 
-  async _installExtensionEngine(extension, locales, initEngine, isReload) {
+  async _installExtensionEngine(
+    extension,
+    locales,
+    initEngine = false,
+    isReload = false
+  ) {
     logConsole.debug("installExtensionEngine:", extension.id);
 
     let installLocale = async locale => {
@@ -2518,10 +2527,8 @@ SearchService.prototype = {
         return engine;
       }
     }
-    let params = this.getEngineParams(extension, manifest, locale, {
-      initEngine,
-    });
-    return this.addEngineWithDetails(params.name, params, isReload);
+    let params = this.getEngineParams(extension, manifest, locale);
+    return this.addEngineWithDetails(params.name, params, initEngine, isReload);
   },
 
   getEngineParams(extension, manifest, locale, engineParams = {}) {
@@ -2607,7 +2614,6 @@ SearchService.prototype = {
       queryCharset: searchProvider.encoding || "UTF-8",
       mozParams,
       telemetryId: engineParams.telemetryId,
-      initEngine: engineParams.initEngine || false,
     };
 
     return params;
@@ -2618,7 +2624,7 @@ SearchService.prototype = {
     await this.init();
     let errCode;
     try {
-      var engine = new SearchEngine({
+      var engine = new OpenSearchEngine({
         uri: engineURL,
         isAppProvided: false,
       });
@@ -2838,7 +2844,7 @@ SearchService.prototype = {
         engine &&
         (engine.isAppProvided ||
           this._cache.getAttribute(this._cache.getHashName(attributeName)) ==
-            getVerificationHash(name))
+            SearchUtils.getVerificationHash(name))
       ) {
         // If the current engine is a default one, we can relax the
         // verification hash check to reduce the annoyance for users who
@@ -2931,7 +2937,9 @@ SearchService.prototype = {
       if (!newCurrentEngine._loadPath) {
         newCurrentEngine._loadPath = "[other]unknown";
       }
-      let loadPathHash = getVerificationHash(newCurrentEngine._loadPath);
+      let loadPathHash = SearchUtils.getVerificationHash(
+        newCurrentEngine._loadPath
+      );
       let currentHash = newCurrentEngine.getAttr("loadPathHash");
       if (!currentHash || currentHash != loadPathHash) {
         newCurrentEngine.setAttr("loadPathHash", loadPathHash);
@@ -3061,7 +3069,7 @@ SearchService.prototype = {
       if (!currentHash) {
         engineData.origin = "unverified";
       } else {
-        let loadPathHash = getVerificationHash(engine._loadPath);
+        let loadPathHash = SearchUtils.getVerificationHash(engine._loadPath);
         engineData.origin =
           currentHash == loadPathHash ? "verified" : "invalid";
       }
@@ -3344,7 +3352,6 @@ SearchService.prototype = {
           case SearchUtils.MODIFIED_TYPE.ADDED:
           case SearchUtils.MODIFIED_TYPE.CHANGED:
           case SearchUtils.MODIFIED_TYPE.REMOVED:
-            this._cache.delayedWrite();
             // Invalidate the map used to parse URLs to search engines.
             this._parseSubmissionMap = null;
             break;
@@ -3457,6 +3464,8 @@ SearchService.prototype = {
     Services.obs.addObserver(this, QUIT_APPLICATION_TOPIC);
     Services.obs.addObserver(this, TOPIC_LOCALES_CHANGE);
 
+    this._cache.addObservers();
+
     // The current stage of shutdown. Used to help analyze crash
     // signatures in case of shutdown timeout.
     let shutdownState = {
@@ -3509,6 +3518,8 @@ SearchService.prototype = {
       this._queuedIdle = false;
     }
 
+    this._cache.removeObservers();
+
     Services.obs.removeObserver(this, SearchUtils.TOPIC_ENGINE_MODIFIED);
     Services.obs.removeObserver(this, QUIT_APPLICATION_TOPIC);
     Services.obs.removeObserver(this, TOPIC_LOCALES_CHANGE);
@@ -3555,7 +3566,7 @@ var engineUpdateService = {
       }
 
       logConsole.debug("updating", engine.name, updateURI.spec);
-      testEngine = new SearchEngine({
+      testEngine = new OpenSearchEngine({
         uri: updateURI,
         isAppProvided: false,
       });

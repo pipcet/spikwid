@@ -54,11 +54,11 @@ namespace net {
 
 static StaticRefPtr<CookieService> gCookieService;
 
-constexpr auto CONSOLE_SAMESITE_CATEGORY = NS_LITERAL_CSTRING("cookieSameSite");
-constexpr auto CONSOLE_OVERSIZE_CATEGORY =
-    NS_LITERAL_CSTRING("cookiesOversize");
-constexpr auto SAMESITE_MDN_URL = NS_LITERAL_STRING(
-    "https://developer.mozilla.org/docs/Web/HTTP/Headers/Set-Cookie/SameSite");
+constexpr auto CONSOLE_SAMESITE_CATEGORY = "cookieSameSite"_ns;
+constexpr auto CONSOLE_OVERSIZE_CATEGORY = "cookiesOversize"_ns;
+constexpr auto SAMESITE_MDN_URL =
+    "https://developer.mozilla.org/docs/Web/HTTP/Headers/Set-Cookie/"
+    u"SameSite"_ns;
 
 namespace {
 
@@ -75,8 +75,7 @@ void ComposeCookieString(nsTArray<Cookie*>& aCookieList,
 
       if (!cookie->Name().IsEmpty()) {
         // we have a name and value - write both
-        aCookieString +=
-            cookie->Name() + NS_LITERAL_CSTRING("=") + cookie->Value();
+        aCookieString += cookie->Name() + "="_ns + cookie->Value();
       } else {
         // just write value
         aCookieString += cookie->Value();
@@ -1063,7 +1062,7 @@ bool CookieService::CanSetCookie(
 
     CookieLogging::LogMessageToConsole(
         aCRC, aHostURI, nsIScriptError::warningFlag, CONSOLE_OVERSIZE_CATEGORY,
-        NS_LITERAL_CSTRING("CookieOversize"), params);
+        "CookieOversize"_ns, params);
     return newCookie;
   }
 
@@ -1387,7 +1386,7 @@ bool CookieService::ParseAttributes(nsIConsoleReportCollector* aCRC,
       } else {
         CookieLogging::LogMessageToConsole(
             aCRC, aHostURI, nsIScriptError::infoFlag, CONSOLE_SAMESITE_CATEGORY,
-            NS_LITERAL_CSTRING("CookieSameSiteValueInvalid"),
+            "CookieSameSiteValueInvalid"_ns,
             AutoTArray<nsString, 1>{NS_ConvertUTF8toUTF16(aCookieData.name())});
       }
     }
@@ -1407,7 +1406,7 @@ bool CookieService::ParseAttributes(nsIConsoleReportCollector* aCRC,
         StaticPrefs::network_cookie_sameSite_noneRequiresSecure()) {
       CookieLogging::LogMessageToConsole(
           aCRC, aHostURI, nsIScriptError::infoFlag, CONSOLE_SAMESITE_CATEGORY,
-          NS_LITERAL_CSTRING("CookieRejectedNonRequiresSecure"),
+          "CookieRejectedNonRequiresSecure"_ns,
           AutoTArray<nsString, 1>{NS_ConvertUTF8toUTF16(aCookieData.name())});
       return newCookie;
     }
@@ -1415,7 +1414,7 @@ bool CookieService::ParseAttributes(nsIConsoleReportCollector* aCRC,
     // if sameSite=lax by default is disabled, we want to warn the user.
     CookieLogging::LogMessageToConsole(
         aCRC, aHostURI, nsIScriptError::warningFlag, CONSOLE_SAMESITE_CATEGORY,
-        NS_LITERAL_CSTRING("CookieRejectedNonRequiresSecureForBeta"),
+        "CookieRejectedNonRequiresSecureForBeta"_ns,
         AutoTArray<nsString, 2>{NS_ConvertUTF8toUTF16(aCookieData.name()),
                                 SAMESITE_MDN_URL});
   }
@@ -1425,13 +1424,12 @@ bool CookieService::ParseAttributes(nsIConsoleReportCollector* aCRC,
     if (laxByDefault) {
       CookieLogging::LogMessageToConsole(
           aCRC, aHostURI, nsIScriptError::infoFlag, CONSOLE_SAMESITE_CATEGORY,
-          NS_LITERAL_CSTRING("CookieLaxForced"),
+          "CookieLaxForced"_ns,
           AutoTArray<nsString, 1>{NS_ConvertUTF8toUTF16(aCookieData.name())});
     } else {
       CookieLogging::LogMessageToConsole(
           aCRC, aHostURI, nsIScriptError::warningFlag,
-          CONSOLE_SAMESITE_CATEGORY,
-          NS_LITERAL_CSTRING("CookieLaxForcedForBeta"),
+          CONSOLE_SAMESITE_CATEGORY, "CookieLaxForcedForBeta"_ns,
           AutoTArray<nsString, 2>{NS_ConvertUTF8toUTF16(aCookieData.name()),
                                   SAMESITE_MDN_URL});
     }
@@ -1738,7 +1736,7 @@ bool CookieService::CheckPath(CookieStruct& aCookieData,
 
     CookieLogging::LogMessageToConsole(
         aCRC, aHostURI, nsIScriptError::warningFlag, CONSOLE_OVERSIZE_CATEGORY,
-        NS_LITERAL_CSTRING("CookiePathOversize"), params);
+        "CookiePathOversize"_ns, params);
     return false;
   }
 

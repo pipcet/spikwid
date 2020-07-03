@@ -96,7 +96,7 @@ void nsDisplayMathMLError::Paint(nsDisplayListBuilder* aBuilder,
 
   aCtx->SetColor(sRGBColor::OpaqueWhite());
   nscoord ascent = fm->MaxAscent();
-  NS_NAMED_LITERAL_STRING(errorMsg, "invalid-markup");
+  constexpr auto errorMsg = u"invalid-markup"_ns;
   nsLayoutUtils::DrawUniDirString(errorMsg.get(), uint32_t(errorMsg.Length()),
                                   nsPoint(pt.x, pt.y + ascent), *fm, *aCtx);
 }
@@ -1432,9 +1432,8 @@ void nsMathMLContainerFrame::PropagateFrameFlagFor(nsIFrame* aFrame,
 nsresult nsMathMLContainerFrame::ReportErrorToConsole(
     const char* errorMsgId, const nsTArray<nsString>& aParams) {
   return nsContentUtils::ReportToConsole(
-      nsIScriptError::errorFlag, NS_LITERAL_CSTRING("Layout: MathML"),
-      mContent->OwnerDoc(), nsContentUtils::eMATHML_PROPERTIES, errorMsgId,
-      aParams);
+      nsIScriptError::errorFlag, "Layout: MathML"_ns, mContent->OwnerDoc(),
+      nsContentUtils::eMATHML_PROPERTIES, errorMsgId, aParams);
 }
 
 nsresult nsMathMLContainerFrame::ReportParseError(const char16_t* aAttribute,

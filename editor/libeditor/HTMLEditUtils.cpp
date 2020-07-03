@@ -146,9 +146,9 @@ bool HTMLEditUtils::IsListItem(nsINode* aNode) {
 }
 
 /**
- * IsTableElement() returns true if aNode is an html table, td, tr, ...
+ * IsAnyTableElement() returns true if aNode is an html table, td, tr, ...
  */
-bool HTMLEditUtils::IsTableElement(nsINode* aNode) {
+bool HTMLEditUtils::IsAnyTableElement(nsINode* aNode) {
   MOZ_ASSERT(aNode);
   return aNode->IsAnyOfHTMLElements(
       nsGkAtoms::table, nsGkAtoms::tr, nsGkAtoms::td, nsGkAtoms::th,
@@ -156,10 +156,10 @@ bool HTMLEditUtils::IsTableElement(nsINode* aNode) {
 }
 
 /**
- * IsTableElementButNotTable() returns true if aNode is an html td, tr, ...
+ * IsAnyTableElementButNotTable() returns true if aNode is an html td, tr, ...
  * (doesn't include table)
  */
-bool HTMLEditUtils::IsTableElementButNotTable(nsINode* aNode) {
+bool HTMLEditUtils::IsAnyTableElementButNotTable(nsINode* aNode) {
   MOZ_ASSERT(aNode);
   return aNode->IsAnyOfHTMLElements(nsGkAtoms::tr, nsGkAtoms::td, nsGkAtoms::th,
                                     nsGkAtoms::thead, nsGkAtoms::tfoot,
@@ -197,9 +197,9 @@ bool HTMLEditUtils::IsTableCellOrCaption(nsINode& aNode) {
 }
 
 /**
- * IsList() returns true if aNode is an html list.
+ * IsAnyListElement() returns true if aNode is an html list.
  */
-bool HTMLEditUtils::IsList(nsINode* aNode) {
+bool HTMLEditUtils::IsAnyListElement(nsINode* aNode) {
   MOZ_ASSERT(aNode);
   return aNode->IsAnyOfHTMLElements(nsGkAtoms::ul, nsGkAtoms::ol,
                                     nsGkAtoms::dl);
@@ -256,8 +256,7 @@ bool HTMLEditUtils::IsMozDiv(nsINode* aNode) {
   MOZ_ASSERT(aNode);
   return aNode->IsHTMLElement(nsGkAtoms::div) &&
          aNode->AsElement()->AttrValueIs(kNameSpaceID_None, nsGkAtoms::type,
-                                         NS_LITERAL_STRING("_moz"),
-                                         eIgnoreCase);
+                                         u"_moz"_ns, eIgnoreCase);
 }
 
 /**
@@ -269,14 +268,14 @@ bool HTMLEditUtils::IsMailCite(nsINode* aNode) {
   // don't ask me why, but our html mailcites are id'd by "type=cite"...
   if (aNode->IsElement() &&
       aNode->AsElement()->AttrValueIs(kNameSpaceID_None, nsGkAtoms::type,
-                                      NS_LITERAL_STRING("cite"), eIgnoreCase)) {
+                                      u"cite"_ns, eIgnoreCase)) {
     return true;
   }
 
   // ... but our plaintext mailcites by "_moz_quote=true".  go figure.
   if (aNode->IsElement() &&
       aNode->AsElement()->AttrValueIs(kNameSpaceID_None, nsGkAtoms::mozquote,
-                                      NS_LITERAL_STRING("true"), eIgnoreCase)) {
+                                      u"true"_ns, eIgnoreCase)) {
     return true;
   }
 

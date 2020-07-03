@@ -6,6 +6,8 @@
 
 #import <Cocoa/Cocoa.h>
 
+#import "MOXTextMarkerDelegate.h"
+
 #include "Platform.h"
 #include "ProxyAccessible.h"
 #include "AccessibleOrProxy.h"
@@ -63,6 +65,10 @@ void ProxyDestroyed(ProxyAccessible* aProxy) {
   [wrapper expire];
   [wrapper release];
   aProxy->SetWrapper(0);
+
+  if (aProxy->IsDoc()) {
+    [MOXTextMarkerDelegate destroyForDoc:aProxy];
+  }
 }
 
 void ProxyEvent(ProxyAccessible* aProxy, uint32_t aEventType) {
@@ -91,7 +97,7 @@ void ProxyStateChangeEvent(ProxyAccessible* aProxy, uint64_t aState, bool aEnabl
   }
 }
 
-void ProxyCaretMoveEvent(ProxyAccessible* aTarget, int32_t aOffset) {
+void ProxyCaretMoveEvent(ProxyAccessible* aTarget, int32_t aOffset, bool aIsSelectionCollapsed) {
   mozAccessible* wrapper = GetNativeFromGeckoAccessible(aTarget);
   if (wrapper) {
     [wrapper handleAccessibleEvent:nsIAccessibleEvent::EVENT_TEXT_CARET_MOVED];

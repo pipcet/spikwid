@@ -1289,12 +1289,22 @@ public class GeckoSession implements Parcelable {
         session.mWindow = null;
     }
 
+    /**
+     * @deprecated Use {@link ProgressDelegate#onSessionStateChange(GeckoSession, GeckoSession.SessionState)} and
+     * {@link #restoreState} instead. This method will be removed in GeckoView 82.
+     */
+    @Deprecated // Bug 1650108
     @Override // Parcelable
     @AnyThread
     public int describeContents() {
         return 0;
     }
 
+    /**
+     * @deprecated Use {@link ProgressDelegate#onSessionStateChange(GeckoSession, GeckoSession.SessionState)} and
+     * {@link #restoreState} instead. This method will be removed in GeckoView 82.
+     */
+    @Deprecated // Bug 1650108
     @Override // Parcelable
     @AnyThread
     public void writeToParcel(final Parcel out, final int flags) {
@@ -1304,6 +1314,11 @@ public class GeckoSession implements Parcelable {
     }
 
     // AIDL code may call readFromParcel even though it's not part of Parcelable.
+    /**
+     * @deprecated Use {@link ProgressDelegate#onSessionStateChange(GeckoSession, GeckoSession.SessionState)} and
+     * {@link #restoreState} instead. This method will be removed in GeckoView 82.
+     */
+    @Deprecated // Bug 1650108
     @AnyThread
     @SuppressWarnings("checkstyle:javadocmethod")
     public void readFromParcel(final @NonNull Parcel source) {
@@ -1317,6 +1332,11 @@ public class GeckoSession implements Parcelable {
         transferFrom(window, settings, id);
     }
 
+    /**
+     * @deprecated Use {@link ProgressDelegate#onSessionStateChange(GeckoSession, GeckoSession.SessionState)} and
+     * {@link #restoreState} instead. This field will be removed in GeckoView 82.
+     */
+    @Deprecated // Bug 1650108
     public static final Creator<GeckoSession> CREATOR = new Creator<GeckoSession>() {
         @Override
         @AnyThread
@@ -1333,16 +1353,12 @@ public class GeckoSession implements Parcelable {
         }
     };
 
-    @Override
-    @AnyThread
-    public int hashCode() {
-        return mId.hashCode();
-    }
+    /* package */ boolean equalsId(final GeckoSession other) {
+        if (other == null) {
+            return false;
+        }
 
-    @Override
-    @AnyThread
-    public boolean equals(final Object obj) {
-        return obj instanceof GeckoSession && mId.equals(((GeckoSession) obj).mId);
+        return mId.equals(other.mId);
     }
 
     /**

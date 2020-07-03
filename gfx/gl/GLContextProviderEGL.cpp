@@ -75,20 +75,14 @@
 
 #if defined(MOZ_WIDGET_GTK)
 #  include "mozilla/widget/GtkCompositorWidget.h"
-#endif
-
-#if defined(MOZ_WAYLAND)
-#  include "nsDataHashtable.h"
-
-#  include <gtk/gtk.h>
-#  include <gdk/gdkx.h>
-#  include <gdk/gdkwayland.h>
-#  include <wayland-egl.h>
-#  include <dlfcn.h>
-
-#  define IS_WAYLAND_DISPLAY()    \
-    (gdk_display_get_default() && \
-     !GDK_IS_X11_DISPLAY(gdk_display_get_default()))
+#  if defined(MOZ_WAYLAND)
+#    include <dlfcn.h>
+#    include <gdk/gdkwayland.h>
+#    include <wayland-egl.h>
+#    define IS_WAYLAND_DISPLAY()    \
+      (gdk_display_get_default() && \
+       GDK_IS_WAYLAND_DISPLAY(gdk_display_get_default()))
+#  endif
 #endif
 
 using namespace mozilla::gfx;
@@ -218,6 +212,11 @@ static EGLSurface CreateFallbackSurface(GLLibraryEGL* const egl,
 static EGLSurface CreateSurfaceFromNativeWindow(
     GLLibraryEGL* const egl, const EGLNativeWindowType window,
     const EGLConfig config) {
+  nsCString discardFailureId;
+  if (!GLLibraryEGL::EnsureInitialized(false, &discardFailureId)) {
+    gfxCriticalNote << "Failed to load EGL library 7!";
+    return EGL_NO_SURFACE;
+  }
   MOZ_ASSERT(window);
   EGLSurface newSurface = EGL_NO_SURFACE;
 
@@ -242,9 +241,10 @@ static EGLSurface CreateSurfaceFromNativeWindow(
 class GLContextEGLFactory {
  public:
   static already_AddRefed<GLContext> Create(EGLNativeWindowType aWindow,
-                                            bool aWebRender);
+                                            bool aWebRender, int32_t aDepth);
   static already_AddRefed<GLContext> CreateImpl(EGLNativeWindowType aWindow,
-                                                bool aWebRender, bool aUseGles);
+                                                bool aWebRender, bool aUseGles,
+                                                int32_t aDepth);
 
  private:
   GLContextEGLFactory() = default;
@@ -252,7 +252,8 @@ class GLContextEGLFactory {
 };
 
 already_AddRefed<GLContext> GLContextEGLFactory::CreateImpl(
-    EGLNativeWindowType aWindow, bool aWebRender, bool aUseGles) {
+    EGLNativeWindowType aWindow, bool aWebRender, bool aUseGles,
+    int32_t aDepth) {
   nsCString discardFailureId;
   if (!GLLibraryEGL::EnsureInitialized(false, &discardFailureId)) {
     gfxCriticalNote << "Failed to load EGL library 3!";
@@ -273,10 +274,18 @@ already_AddRefed<GLContext> GLContextEGLFactory::CreateImpl(
       return nullptr;
     }
   } else {
-    if (!CreateConfigScreen(egl, &config, /* aEnableDepthBuffer */ aWebRender,
-                            aUseGles)) {
-      gfxCriticalNote << "Failed to create EGLConfig!";
-      return nullptr;
+    if (aDepth) {
+      if (!CreateConfig(egl, &config, aDepth, aWebRender, aUseGles)) {
+        gfxCriticalNote
+            << "Failed to create EGLConfig for WebRender with depth!";
+        return nullptr;
+      }
+    } else {
+      if (!CreateConfigScreen(egl, &config, /* aEnableDepthBuffer */ aWebRender,
+                              aUseGles)) {
+        gfxCriticalNote << "Failed to create EGLConfig!";
+        return nullptr;
+      }
     }
   }
 
@@ -320,11 +329,14 @@ already_AddRefed<GLContext> GLContextEGLFactory::CreateImpl(
 }
 
 already_AddRefed<GLContext> GLContextEGLFactory::Create(
-    EGLNativeWindowType aWindow, bool aWebRender) {
-  RefPtr<GLContext> glContext = CreateImpl(aWindow, aWebRender,
-                                           /* aUseGles */ false);
+    EGLNativeWindowType aWindow, bool aWebRender, int32_t aDepth) {
+  RefPtr<GLContext> glContext;
+#if !defined(MOZ_WIDGET_ANDROID)
+  glContext = CreateImpl(aWindow, aWebRender, /* aUseGles */ false, aDepth);
+#endif  // !defined(MOZ_WIDGET_ANDROID)
+
   if (!glContext) {
-    glContext = CreateImpl(aWindow, aWebRender, /* aUseGles */ true);
+    glContext = CreateImpl(aWindow, aWebRender, /* aUseGles */ true, aDepth);
   }
   return glContext.forget();
 }
@@ -397,8 +409,7 @@ bool GLContextEGL::Init() {
 
   bool current = MakeCurrent();
   if (!current) {
-    gfx::LogFailure(
-        NS_LITERAL_CSTRING("Couldn't get device attachments for device."));
+    gfx::LogFailure("Couldn't get device attachments for device."_ns);
     return false;
   }
 
@@ -597,7 +608,7 @@ already_AddRefed<GLContextEGL> GLContextEGL::CreateGLContext(
 
   if (useGles) {
     if (egl->fBindAPI(LOCAL_EGL_OPENGL_ES_API) == LOCAL_EGL_FALSE) {
-      *out_failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_EGL_ES");
+      *out_failureId = "FEATURE_FAILURE_EGL_ES"_ns;
       NS_WARNING("Failed to bind API to GLES!");
       return nullptr;
     }
@@ -609,7 +620,7 @@ already_AddRefed<GLContextEGL> GLContextEGL::CreateGLContext(
     }
   } else {
     if (egl->fBindAPI(LOCAL_EGL_OPENGL_API) == LOCAL_EGL_FALSE) {
-      *out_failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_EGL");
+      *out_failureId = "FEATURE_FAILURE_EGL"_ns;
       NS_WARNING("Failed to bind API to GL!");
       return nullptr;
     }
@@ -709,7 +720,7 @@ already_AddRefed<GLContextEGL> GLContextEGL::CreateGLContext(
     if (context) break;
     NS_WARNING("Failed to create EGLContext with required_attribs");
 
-    *out_failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_EGL_CREATE");
+    *out_failureId = "FEATURE_FAILURE_EGL_CREATE"_ns;
     return nullptr;
   } while (false);
   MOZ_ASSERT(context);
@@ -717,7 +728,7 @@ already_AddRefed<GLContextEGL> GLContextEGL::CreateGLContext(
   RefPtr<GLContextEGL> glContext =
       new GLContextEGL(egl, desc, config, surface, context);
   if (!glContext->Init()) {
-    *out_failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_EGL_INIT");
+    *out_failureId = "FEATURE_FAILURE_EGL_INIT"_ns;
     return nullptr;
   }
 
@@ -951,10 +962,14 @@ already_AddRefed<GLContext> GLContextProviderEGL::CreateForCompositorWidget(
     CompositorWidget* aCompositorWidget, bool aWebRender,
     bool aForceAccelerated) {
   EGLNativeWindowType window = nullptr;
+  int32_t depth = 0;
   if (aCompositorWidget) {
     window = GET_NATIVE_WINDOW_FROM_COMPOSITOR_WIDGET(aCompositorWidget);
+#if defined(MOZ_WIDGET_GTK)
+    depth = aCompositorWidget->AsX11()->GetDepth();
+#endif
   }
-  return GLContextEGLFactory::Create(window, aWebRender);
+  return GLContextEGLFactory::Create(window, aWebRender, depth);
 }
 
 #if defined(MOZ_WIDGET_ANDROID)
@@ -1109,7 +1124,7 @@ GLContextEGL::CreateEGLPBufferOffscreenContextImpl(
   auto* egl = gl::GLLibraryEGL::Get();
   const EGLConfig config = ChooseConfig(egl, desc, useGles);
   if (config == EGL_NO_CONFIG) {
-    *out_failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_EGL_NO_CONFIG");
+    *out_failureId = "FEATURE_FAILURE_EGL_NO_CONFIG"_ns;
     NS_WARNING("Failed to find a compatible config.");
     return nullptr;
   }
@@ -1130,7 +1145,7 @@ GLContextEGL::CreateEGLPBufferOffscreenContextImpl(
         egl, config, LOCAL_EGL_NONE, pbSize);
   }
   if (!surface) {
-    *out_failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_EGL_POT");
+    *out_failureId = "FEATURE_FAILURE_EGL_POT"_ns;
     NS_WARNING("Failed to create PBuffer for context!");
     return nullptr;
   }

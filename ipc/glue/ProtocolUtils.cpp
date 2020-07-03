@@ -86,7 +86,7 @@ bool DuplicateHandle(HANDLE aSourceHandle, DWORD aTargetProcessId,
   if (!targetProcess) {
     CrashReporter::AnnotateCrashReport(
         CrashReporter::Annotation::IPCTransportFailureReason,
-        NS_LITERAL_CSTRING("Failed to open target process."));
+        "Failed to open target process."_ns);
     return false;
   }
 
@@ -587,14 +587,6 @@ bool IToplevelProtocol::Open(UniquePtr<Transport> aTransport,
                              mozilla::ipc::Side aSide) {
   SetOtherProcessId(aOtherPid);
   return GetIPCChannel()->Open(std::move(aTransport), aThread, aSide);
-}
-
-bool IToplevelProtocol::Open(MessageChannel* aChannel,
-                             MessageLoop* aMessageLoop,
-                             mozilla::ipc::Side aSide) {
-  SetOtherProcessId(base::GetCurrentProcId());
-  return GetIPCChannel()->Open(aChannel, aMessageLoop->SerialEventTarget(),
-                               aSide);
 }
 
 bool IToplevelProtocol::Open(MessageChannel* aChannel,

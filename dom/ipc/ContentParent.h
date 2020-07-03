@@ -47,8 +47,7 @@
 #include "DriverCrashGuard.h"
 #include "nsIReferrerInfo.h"
 
-#define CHILD_PROCESS_SHUTDOWN_MESSAGE \
-  NS_LITERAL_STRING("child-process-shutdown")
+#define CHILD_PROCESS_SHUTDOWN_MESSAGE u"child-process-shutdown"_ns
 
 // These must match the similar ones in E10SUtils.jsm and ProcInfo.h.
 // Process names as reported by about:memory are defined in
@@ -1245,6 +1244,9 @@ class ContentParent final
       const MaybeDiscarded<BrowsingContext>& aParentContext,
       const Principal& aTrackingPrincipal, const nsCString& aTrackingOrigin,
       const int& aAllowMode,
+      const Maybe<
+          ContentBlockingNotifier::StorageAccessPermissionGrantedReason>&
+          aReason,
       StorageAccessPermissionGrantedForOriginResolver&& aResolver);
 
   mozilla::ipc::IPCResult RecvCompleteAllowAccessFor(
@@ -1286,6 +1288,10 @@ class ContentParent final
 
   mozilla::ipc::IPCResult RecvNotifyMediaFullScreenState(
       const MaybeDiscarded<BrowsingContext>& aContext, bool aIsInFullScreen);
+
+  mozilla::ipc::IPCResult RecvNotifyPositionStateChanged(
+      const MaybeDiscarded<BrowsingContext>& aContext,
+      const PositionState& aState);
 
   mozilla::ipc::IPCResult RecvGetModulesTrust(
       ModulePaths&& aModPaths, bool aRunAtNormalPriority,

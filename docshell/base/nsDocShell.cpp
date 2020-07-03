@@ -2339,8 +2339,7 @@ void nsDocShell::MaybeCreateInitialClientSource(nsIPrincipal* aPrincipal) {
   }
 
   nsCOMPtr<nsIURI> uri;
-  MOZ_ALWAYS_SUCCEEDS(
-      NS_NewURI(getter_AddRefs(uri), NS_LITERAL_CSTRING("about:blank")));
+  MOZ_ALWAYS_SUCCEEDS(NS_NewURI(getter_AddRefs(uri), "about:blank"_ns));
 
   // We're done if there is no parent controller or if this docshell
   // is not permitted to control for some reason.
@@ -3432,7 +3431,7 @@ nsDocShell::DisplayLoadError(nsresult aError, nsIURI* aURI,
     RefPtr<EventTarget> handler = mChromeEventHandler;
     if (handler) {
       nsCOMPtr<Element> element = do_QueryInterface(handler);
-      element->GetAttribute(NS_LITERAL_STRING("crashedPageTitle"), messageStr);
+      element->GetAttribute(u"crashedPageTitle"_ns, messageStr);
     }
 
     // DisplayLoadError requires a non-empty messageStr to proceed and call
@@ -3585,7 +3584,7 @@ nsDocShell::DisplayLoadError(nsresult aError, nsIURI* aURI,
   }
 
   Telemetry::AccumulateCategoricalKeyed(
-      IsFrame() ? NS_LITERAL_CSTRING("frame") : NS_LITERAL_CSTRING("top"),
+      IsFrame() ? "frame"_ns : "top"_ns,
       mozilla::dom::LoadErrorToTelemetryLabel(aError));
 
   // Test if the error needs to be formatted
@@ -4013,7 +4012,7 @@ nsDocShell::GetSessionHistoryXPCOM(nsISupports** aSessionHistory) {
 //*****************************************************************************
 
 NS_IMETHODIMP
-nsDocShell::LoadPage(nsISupports* aPageDescriptor, uint32_t aDisplayType) {
+nsDocShell::LoadPageAsViewSource(nsISupports* aPageDescriptor) {
   nsCOMPtr<nsISHEntry> shEntryIn(do_QueryInterface(aPageDescriptor));
 
   // Currently, the opaque 'page descriptor' is an nsISHEntry...
@@ -4036,30 +4035,28 @@ nsDocShell::LoadPage(nsISupports* aPageDescriptor, uint32_t aDisplayType) {
   //
   // load the page as view-source
   //
-  if (nsIWebPageDescriptor::DISPLAY_AS_SOURCE == aDisplayType) {
-    nsCString spec, newSpec;
+  nsCString spec, newSpec;
 
-    // Create a new view-source URI and replace the original.
-    nsCOMPtr<nsIURI> oldUri = shEntry->GetURI();
+  // Create a new view-source URI and replace the original.
+  nsCOMPtr<nsIURI> oldUri = shEntry->GetURI();
 
-    oldUri->GetSpec(spec);
-    newSpec.AppendLiteral("view-source:");
-    newSpec.Append(spec);
+  oldUri->GetSpec(spec);
+  newSpec.AppendLiteral("view-source:");
+  newSpec.Append(spec);
 
-    nsCOMPtr<nsIURI> newUri;
-    rv = NS_NewURI(getter_AddRefs(newUri), newSpec);
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-    shEntry->SetURI(newUri);
-    shEntry->SetOriginalURI(nullptr);
-    shEntry->SetResultPrincipalURI(nullptr);
-    // shEntry's current triggering principal is whoever loaded that page
-    // initially. But now we're doing another load of the page, via an API that
-    // is only exposed to system code.  The triggering principal for this load
-    // should be the system principal.
-    shEntry->SetTriggeringPrincipal(nsContentUtils::GetSystemPrincipal());
+  nsCOMPtr<nsIURI> newUri;
+  rv = NS_NewURI(getter_AddRefs(newUri), newSpec);
+  if (NS_FAILED(rv)) {
+    return rv;
   }
+  shEntry->SetURI(newUri);
+  shEntry->SetOriginalURI(nullptr);
+  shEntry->SetResultPrincipalURI(nullptr);
+  // shEntry's current triggering principal is whoever loaded that page
+  // initially. But now we're doing another load of the page, via an API that
+  // is only exposed to system code.  The triggering principal for this load
+  // should be the system principal.
+  shEntry->SetTriggeringPrincipal(nsContentUtils::GetSystemPrincipal());
 
   rv = LoadHistoryEntry(shEntry, LOAD_HISTORY);
   return rv;
@@ -5217,8 +5214,7 @@ nsDocShell::SetupRefreshURI(nsIChannel* aChannel) {
   nsCOMPtr<nsIHttpChannel> httpChannel(do_QueryInterface(aChannel, &rv));
   if (NS_SUCCEEDED(rv)) {
     nsAutoCString refreshHeader;
-    rv = httpChannel->GetResponseHeader(NS_LITERAL_CSTRING("refresh"),
-                                        refreshHeader);
+    rv = httpChannel->GetResponseHeader("refresh"_ns, refreshHeader);
 
     if (!refreshHeader.IsEmpty()) {
       nsCOMPtr<nsIScriptSecurityManager> secMan =
@@ -5739,7 +5735,7 @@ already_AddRefed<nsIURI> nsDocShell::AttemptURIFixup(
     nsAutoCString scheme;
     Unused << url->GetScheme(scheme);
     if (Preferences::GetBool("keyword.enabled", false) &&
-        StringBeginsWith(scheme, NS_LITERAL_CSTRING("http"))) {
+        StringBeginsWith(scheme, "http"_ns)) {
       bool attemptFixup = false;
       nsAutoCString host;
       Unused << url->GetHost(host);
@@ -5855,7 +5851,7 @@ already_AddRefed<nsIURI> nsDocShell::AttemptURIFixup(
         newURI = nullptr;
         newPostData = nullptr;
         Unused << NS_MutateURI(url)
-                      .SetScheme(NS_LITERAL_CSTRING("https"))
+                      .SetScheme("https"_ns)
                       .Finalize(getter_AddRefs(newURI));
       }
     }
@@ -6122,7 +6118,7 @@ nsresult nsDocShell::EndPageLoad(nsIWebProgress* aProgress,
         if (NS_SUCCEEDED(rv) && port == -1) {
           nsCOMPtr<nsIURI> httpsURI;
           rv = NS_MutateURI(url)
-                   .SetScheme(NS_LITERAL_CSTRING("https"))
+                   .SetScheme("https"_ns)
                    .Finalize(getter_AddRefs(httpsURI));
 
           if (NS_SUCCEEDED(rv)) {
@@ -6175,9 +6171,9 @@ nsresult nsDocShell::EndPageLoad(nsIWebProgress* aProgress,
         params.LastElement().AssignLiteral(u"(unknown uri)");
       }
       nsContentUtils::ReportToConsole(
-          nsIScriptError::warningFlag, NS_LITERAL_CSTRING("DOM"),
-          GetExtantDocument(), nsContentUtils::eDOM_PROPERTIES,
-          "UnknownProtocolNavigationPrevented", params);
+          nsIScriptError::warningFlag, "DOM"_ns, GetExtantDocument(),
+          nsContentUtils::eDOM_PROPERTIES, "UnknownProtocolNavigationPrevented",
+          params);
     }
   } else {
     // If we have a host
@@ -6335,8 +6331,7 @@ nsresult nsDocShell::CreateAboutBlankContentViewer(
   mFiredUnloadEvent = false;
 
   nsCOMPtr<nsIDocumentLoaderFactory> docFactory =
-      nsContentUtils::FindInternalContentViewer(
-          NS_LITERAL_CSTRING("text/html"));
+      nsContentUtils::FindInternalContentViewer("text/html"_ns);
 
   if (docFactory) {
     nsCOMPtr<nsIPrincipal> principal, partitionedPrincipal;
@@ -7697,7 +7692,6 @@ nsresult nsDocShell::SetupNewViewer(nsIContentViewer* aNewViewer,
                     NS_ERROR_FAILURE);
   nsCOMPtr<nsIDocShell> parent(do_QueryInterface(parentAsItem));
 
-  const Encoding* forceCharset = nullptr;
   const Encoding* hintCharset = nullptr;
   int32_t hintCharsetSource = kCharsetUninitialized;
   float overrideDPPX = 1.0;
@@ -7730,7 +7724,6 @@ nsresult nsDocShell::SetupNewViewer(nsIContentViewer* aNewViewer,
     if (oldCv) {
       newCv = aNewViewer;
       if (newCv) {
-        forceCharset = oldCv->GetForceCharset();
         hintCharset = oldCv->GetHintCharset();
         NS_ENSURE_SUCCESS(oldCv->GetHintCharacterSetSource(&hintCharsetSource),
                           NS_ERROR_FAILURE);
@@ -7791,7 +7784,6 @@ nsresult nsDocShell::SetupNewViewer(nsIContentViewer* aNewViewer,
   // If we have old state to copy, set the old state onto the new content
   // viewer
   if (newCv) {
-    newCv->SetForceCharset(forceCharset);
     newCv->SetHintCharset(hintCharset);
     NS_ENSURE_SUCCESS(newCv->SetHintCharacterSetSource(hintCharsetSource),
                       NS_ERROR_FAILURE);
@@ -8892,7 +8884,7 @@ bool nsDocShell::CanLoadInParentProcess(nsIURI* aURI) {
   uri->GetScheme(scheme);
   // Allow ext+foo URIs (extension-registered custom protocols). See
   // https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/manifest.json/protocol_handlers
-  if (StringBeginsWith(scheme, NS_LITERAL_CSTRING("ext+")) &&
+  if (StringBeginsWith(scheme, "ext+"_ns) &&
       !StaticPrefs::extensions_webextensions_remote()) {
     return true;
   }
@@ -8981,9 +8973,9 @@ nsIPrincipal* nsDocShell::GetInheritedPrincipal(
     MOZ_TRY(vsh->NewSrcdocChannel(aURI, aBaseURI, aSrcdoc, aLoadInfo,
                                   getter_AddRefs(channel)));
   } else {
-    MOZ_TRY(NS_NewInputStreamChannelInternal(
-        getter_AddRefs(channel), aURI, aSrcdoc, NS_LITERAL_CSTRING("text/html"),
-        aLoadInfo, true));
+    MOZ_TRY(NS_NewInputStreamChannelInternal(getter_AddRefs(channel), aURI,
+                                             aSrcdoc, "text/html"_ns, aLoadInfo,
+                                             true));
     nsCOMPtr<nsIInputStreamChannel> isc = do_QueryInterface(channel);
     MOZ_ASSERT(isc);
     isc->SetBaseURI(aBaseURI);
@@ -9071,9 +9063,8 @@ nsIPrincipal* nsDocShell::GetInheritedPrincipal(
     nsCOMPtr<nsIPrincipal> permissionPrincipal =
         BasePrincipal::CreateContentPrincipal(aLoadState->URI(), attrs);
 
-    if (nsContentUtils::IsExactSitePermAllow(
-            permissionPrincipal,
-            NS_LITERAL_CSTRING("https-only-mode-exception"))) {
+    if (nsContentUtils::IsExactSitePermAllow(permissionPrincipal,
+                                             "https-only-mode-exception"_ns)) {
       uint32_t httpsOnlyStatus = aLoadInfo->GetHttpsOnlyStatus();
       httpsOnlyStatus |= nsILoadInfo::HTTPS_ONLY_EXEMPT;
       aLoadInfo->SetHttpsOnlyStatus(httpsOnlyStatus);
@@ -9190,12 +9181,10 @@ nsIPrincipal* nsDocShell::GetInheritedPrincipal(
     }
     // save true referrer for those who need it (e.g. xpinstall whitelisting)
     // Currently only http and ftp channels support this.
-    props->SetPropertyAsInterface(
-        NS_LITERAL_STRING("docshell.internalReferrer"), referrer);
+    props->SetPropertyAsInterface(u"docshell.internalReferrer"_ns, referrer);
 
     if (aLoadState->HasLoadFlags(INTERNAL_LOAD_FLAGS_FIRST_LOAD)) {
-      props->SetPropertyAsBool(NS_LITERAL_STRING("docshell.newWindowTarget"),
-                               true);
+      props->SetPropertyAsBool(u"docshell.newWindowTarget"_ns, true);
     }
   }
 
@@ -11138,7 +11127,7 @@ nsDocShell::MakeEditable(bool aInWaitForUriLoad) {
   nsCOMPtr<nsIPropertyBag2> props(do_QueryInterface(aChannel));
   if (props) {
     mozilla::Unused << props->GetPropertyAsBool(
-        NS_LITERAL_STRING("docshell.needToAddURIVisit"), &needToAddURIVisit);
+        u"docshell.needToAddURIVisit"_ns, &needToAddURIVisit);
   }
 
   return needToAddURIVisit;
@@ -11151,9 +11140,9 @@ nsDocShell::MakeEditable(bool aInWaitForUriLoad) {
     return;
   }
 
-  nsresult rv = props->GetPropertyAsInterface(
-      NS_LITERAL_STRING("docshell.previousURI"), NS_GET_IID(nsIURI),
-      reinterpret_cast<void**>(aURI));
+  nsresult rv = props->GetPropertyAsInterface(u"docshell.previousURI"_ns,
+                                              NS_GET_IID(nsIURI),
+                                              reinterpret_cast<void**>(aURI));
 
   if (NS_FAILED(rv)) {
     // There is no last visit for this channel, so this must be the first
@@ -11161,7 +11150,7 @@ nsDocShell::MakeEditable(bool aInWaitForUriLoad) {
     // Treat referrer as null if there is an error getting it.
     (void)NS_GetReferrerFromChannel(aChannel, aURI);
   } else {
-    rv = props->GetPropertyAsUint32(NS_LITERAL_STRING("docshell.previousFlags"),
+    rv = props->GetPropertyAsUint32(u"docshell.previousFlags"_ns,
                                     aChannelRedirectFlags);
 
     NS_WARNING_ASSERTION(
@@ -11177,9 +11166,8 @@ void nsDocShell::SaveLastVisit(nsIChannel* aChannel, nsIURI* aURI,
     return;
   }
 
-  props->SetPropertyAsInterface(NS_LITERAL_STRING("docshell.previousURI"),
-                                aURI);
-  props->SetPropertyAsUint32(NS_LITERAL_STRING("docshell.previousFlags"),
+  props->SetPropertyAsInterface(u"docshell.previousURI"_ns, aURI);
+  props->SetPropertyAsUint32(u"docshell.previousFlags"_ns,
                              aChannelRedirectFlags);
 }
 
@@ -11326,7 +11314,7 @@ nsresult nsDocShell::ConfirmRepost(bool* aRepost) {
   // locking up the browser, see bug 1412559 for an example.
   if (nsCOMPtr<nsIWritablePropertyBag2> promptBag =
           do_QueryInterface(prompter)) {
-    promptBag->SetPropertyAsUint32(NS_LITERAL_STRING("modalType"),
+    promptBag->SetPropertyAsUint32(u"modalType"_ns,
                                    nsIPrompt::MODAL_TYPE_CONTENT);
   }
 
@@ -12074,7 +12062,7 @@ nsDocShell::InitOrReusePrintPreviewViewer(nsIWebBrowserPrint** aPrintPreview) {
     nsCOMPtr<nsIPrincipal> principal =
         NullPrincipal::CreateWithInheritedAttributes(this);
     nsCOMPtr<nsIURI> uri;
-    NS_NewURI(getter_AddRefs(uri), NS_LITERAL_CSTRING("about:printpreview"));
+    NS_NewURI(getter_AddRefs(uri), "about:printpreview"_ns);
     // Reuse the null principal for the partitioned principal.
     // XXXehsan is that the right principal to use here?
     nsresult rv = CreateAboutBlankContentViewer(principal, principal,
@@ -12199,6 +12187,7 @@ nsDocShell::ResumeRedirectedLoad(uint64_t aIdentifier, int32_t aHistoryIndex) {
 
         if (aTiming) {
           self->mTiming = new nsDOMNavigationTiming(self, aTiming);
+          self->mBlankTiming = false;
         }
 
         // If we're performing a history load, locate the correct history entry,

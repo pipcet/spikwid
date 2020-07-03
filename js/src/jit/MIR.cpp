@@ -3587,6 +3587,7 @@ MDefinition* MTypeOf::foldsTo(TempAllocator& alloc) {
         switch (known) {
           case KnownClass::Array:
           case KnownClass::PlainObject:
+          case KnownClass::RegExp:
             type = JSTYPE_OBJECT;
             break;
           case KnownClass::Function:
@@ -5908,6 +5909,30 @@ MDefinition* MGuardToClass::foldsTo(TempAllocator& alloc) {
   return object();
 }
 
+MDefinition* MHasClass::foldsTo(TempAllocator& alloc) {
+  const JSClass* clasp = GetObjectKnownJSClass(object());
+  if (!clasp) {
+    return this;
+  }
+
+  AssertKnownClass(alloc, this, object());
+  return MConstant::New(alloc, BooleanValue(getClass() == clasp));
+}
+
+MDefinition* MIsCallable::foldsTo(TempAllocator& alloc) {
+  if (input()->type() != MIRType::Object) {
+    return this;
+  }
+
+  KnownClass known = GetObjectKnownClass(input());
+  if (known == KnownClass::None) {
+    return this;
+  }
+
+  AssertKnownClass(alloc, this, input());
+  return MConstant::New(alloc, BooleanValue(known == KnownClass::Function));
+}
+
 MDefinition* MIsArray::foldsTo(TempAllocator& alloc) {
   if (input()->type() != MIRType::Object) {
     return this;
@@ -6484,7 +6509,7 @@ static MInstruction* AddGroupGuard(TempAllocator& alloc, MBasicBlock* current,
 
   if (key->isGroup()) {
     guard = MGuardObjectGroup::New(alloc, obj, key->group(), bailOnEquality,
-                                   Bailout_ObjectIdentityOrTypeGuard);
+                                   BailoutKind::ObjectIdentityOrTypeGuard);
   } else {
     MConstant* singletonConst =
         MConstant::NewConstraintlessObject(alloc, key->singleton());

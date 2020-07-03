@@ -158,14 +158,32 @@ nsProfiler::IsPaused(bool* aIsPaused) {
 }
 
 NS_IMETHODIMP
-nsProfiler::PauseSampling() {
+nsProfiler::Pause() {
   profiler_pause();
   return NS_OK;
 }
 
 NS_IMETHODIMP
-nsProfiler::ResumeSampling() {
+nsProfiler::Resume() {
   profiler_resume();
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsProfiler::IsSamplingPaused(bool* aIsSamplingPaused) {
+  *aIsSamplingPaused = profiler_is_sampling_paused();
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsProfiler::PauseSampling() {
+  profiler_pause_sampling();
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsProfiler::ResumeSampling() {
+  profiler_resume_sampling();
   return NS_OK;
 }
 
@@ -850,7 +868,7 @@ RefPtr<nsProfiler::GatheringPromise> nsProfiler::StartGathering(
           self->GatheredOOPProfile(profileString);
         },
         [self](ipc::ResponseRejectReason&& aReason) {
-          self->GatheredOOPProfile(NS_LITERAL_CSTRING(""));
+          self->GatheredOOPProfile(""_ns);
         });
   }
   if (!mPendingProfiles) {

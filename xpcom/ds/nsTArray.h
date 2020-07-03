@@ -2304,6 +2304,21 @@ class nsTArray_Impl
   // 'operator<' is defined for elem_type.
   void Sort() { Sort(nsDefaultComparator<elem_type, elem_type>()); }
 
+  // This method sorts the elements of the array in a stable way (i.e. not
+  // changing the relative order of elements considered equal by the
+  // Comparator).  It uses the LessThan
+  // method defined on the given Comparator object to collate elements.
+  // @param aComp The Comparator used to collate elements.
+  template <class Comparator>
+  void StableSort(const Comparator& aComp) {
+    const ::detail::CompareWrapper<Comparator, elem_type> comp(aComp);
+
+    std::stable_sort(Elements(), Elements() + Length(),
+                     [&comp](const auto& lhs, const auto& rhs) {
+                       return comp.LessThan(lhs, rhs);
+                     });
+  }
+
   // This method reverses the array in place.
   void Reverse() {
     elem_type* elements = Elements();
@@ -2415,18 +2430,26 @@ void nsTArray_Impl<E, Alloc>::RemoveElementsBy(Predicate aPredicate) {
   }
 
   index_type j = 0;
-  index_type len = Length();
+  const index_type len = Length();
+  elem_type* const elements = Elements();
   for (index_type i = 0; i < len; ++i) {
-    if (aPredicate(Elements()[i])) {
-      elem_traits::Destruct(Elements() + i);
+    const bool result = aPredicate(elements[i]);
+
+    // Check that the array has not been modified by the predicate.
+    MOZ_DIAGNOSTIC_ASSERT(len == base_type::mHdr->mLength &&
+                          elements == Elements());
+
+    if (result) {
+      elem_traits::Destruct(elements + i);
     } else {
       if (j < i) {
         relocation_type::RelocateNonOverlappingRegion(
-            Elements() + j, Elements() + i, 1, sizeof(elem_type));
+            elements + j, elements + i, 1, sizeof(elem_type));
       }
       ++j;
     }
   }
+
   base_type::mHdr->mLength = j;
 }
 

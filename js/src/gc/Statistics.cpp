@@ -1074,17 +1074,14 @@ void Statistics::sendGCTelemetry() {
   double markRate = markCount / t(markTotal);
   runtime->addTelemetry(JS_TELEMETRY_GC_PREPARE_MS, t(prepareTotal));
   runtime->addTelemetry(JS_TELEMETRY_GC_MARK_MS, t(markTotal));
-  runtime->addTelemetry(JS_TELEMETRY_GC_MARK_RATE, markRate);
   runtime->addTelemetry(JS_TELEMETRY_GC_MARK_RATE_2, markRate);
   runtime->addTelemetry(JS_TELEMETRY_GC_SWEEP_MS, t(phaseTimes[Phase::SWEEP]));
   if (gc->didCompactZones()) {
     runtime->addTelemetry(JS_TELEMETRY_GC_COMPACT_MS,
                           t(phaseTimes[Phase::COMPACT]));
   }
-  runtime->addTelemetry(JS_TELEMETRY_GC_MARK_ROOTS_MS, t(markRootsTotal));
   runtime->addTelemetry(JS_TELEMETRY_GC_MARK_ROOTS_US,
                         markRootsTotal.ToMicroseconds());
-  runtime->addTelemetry(JS_TELEMETRY_GC_MARK_GRAY_MS, t(markGrayTotal));
   runtime->addTelemetry(JS_TELEMETRY_GC_MARK_GRAY_MS_2, t(markGrayTotal));
   runtime->addTelemetry(JS_TELEMETRY_GC_MARK_WEAK_MS, t(markWeakTotal));
   runtime->addTelemetry(JS_TELEMETRY_GC_NON_INCREMENTAL, nonincremental());
@@ -1311,7 +1308,6 @@ void Statistics::sendSliceTelemetry(const SliceData& slice) {
 
   if (slice.budget.isTimeBudget()) {
     int64_t budget_ms = slice.budget.timeBudget.budget;
-    runtime->addTelemetry(JS_TELEMETRY_GC_BUDGET_MS, budget_ms);
     runtime->addTelemetry(JS_TELEMETRY_GC_BUDGET_MS_2, budget_ms);
     if (IsCurrentlyAnimating(runtime->lastAnimationTime, slice.end)) {
       runtime->addTelemetry(JS_TELEMETRY_GC_ANIMATION_MS, t(sliceTime));

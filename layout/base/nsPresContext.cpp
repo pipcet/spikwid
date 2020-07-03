@@ -499,6 +499,15 @@ void nsPresContext::PreferenceChanged(const char* aPrefName) {
     }
     return;
   }
+  // Changing any of these potentially changes the value of @media
+  // (prefers-contrast).
+  if (prefName.EqualsLiteral("layout.css.prefers-contrast.enabled") ||
+      prefName.EqualsLiteral("browser.display.document_color_use") ||
+      prefName.EqualsLiteral("privacy.resistFingerprinting") ||
+      prefName.EqualsLiteral("browser.display.foreground_color") ||
+      prefName.EqualsLiteral("browser.display.background_color")) {
+    MediaFeatureValuesChanged({MediaFeatureChangeReason::PreferenceChange});
+  }
   if (prefName.EqualsLiteral(GFX_MISSING_FONTS_NOTIFY_PREF)) {
     if (Preferences::GetBool(GFX_MISSING_FONTS_NOTIFY_PREF)) {
       if (!mMissingFonts) {
@@ -513,7 +522,7 @@ void nsPresContext::PreferenceChanged(const char* aPrefName) {
       mMissingFonts = nullptr;
     }
   }
-  if (StringBeginsWith(prefName, NS_LITERAL_CSTRING("font.")) ||
+  if (StringBeginsWith(prefName, "font."_ns) ||
       prefName.EqualsLiteral("intl.accept_languages")) {
     // Changes to font family preferences don't change anything in the
     // computed style data, so the style system won't generate a reflow
@@ -525,14 +534,14 @@ void nsPresContext::PreferenceChanged(const char* aPrefName) {
     // bother (yet, anyway).
     mPrefChangePendingNeedsReflow = true;
   }
-  if (StringBeginsWith(prefName, NS_LITERAL_CSTRING("bidi."))) {
+  if (StringBeginsWith(prefName, "bidi."_ns)) {
     // Changes to bidi prefs need to trigger a reflow (see bug 443629)
     mPrefChangePendingNeedsReflow = true;
 
     // Changes to bidi.numeral also needs to empty the text run cache.
     // This is handled in gfxTextRunWordCache.cpp.
   }
-  if (StringBeginsWith(prefName, NS_LITERAL_CSTRING("gfx.font_rendering."))) {
+  if (StringBeginsWith(prefName, "gfx.font_rendering."_ns)) {
     // Changes to font_rendering prefs need to trigger a reflow
     mPrefChangePendingNeedsReflow = true;
   }
@@ -2343,8 +2352,7 @@ void nsPresContext::NotifyNonBlankPaint() {
 void nsPresContext::NotifyContentfulPaint() {
   if (!mHadContentfulPaint) {
 #if defined(MOZ_WIDGET_ANDROID)
-    (new AsyncEventDispatcher(mDocument,
-                              NS_LITERAL_STRING("MozFirstContentfulPaint"),
+    (new AsyncEventDispatcher(mDocument, u"MozFirstContentfulPaint"_ns,
                               CanBubble::eYes, ChromeOnlyDispatch::eYes))
         ->PostDOMEvent();
 #endif

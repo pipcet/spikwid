@@ -24,10 +24,10 @@ namespace quota {
 namespace {
 
 #ifdef DEBUG
-constexpr auto kDSStoreFileName = NS_LITERAL_STRING(".DS_Store");
-constexpr auto kDesktopFileName = NS_LITERAL_STRING(".desktop");
-constexpr auto kDesktopIniFileName = NS_LITERAL_STRING("desktop.ini");
-constexpr auto kThumbsDbFileName = NS_LITERAL_STRING("thumbs.db");
+constexpr auto kDSStoreFileName = u".DS_Store"_ns;
+constexpr auto kDesktopFileName = u".desktop"_ns;
+constexpr auto kDesktopIniFileName = u"desktop.ini"_ns;
+constexpr auto kThumbsDbFileName = u"thumbs.db"_ns;
 #endif
 
 #ifdef XP_WIN
@@ -61,8 +61,8 @@ void AnonymizeCString(nsACString& aCString, uint32_t aStart) {
 const char kQuotaGenericDelimiter = '|';
 
 #ifdef NIGHTLY_BUILD
-NS_NAMED_LITERAL_CSTRING(kQuotaInternalError, "internal");
-NS_NAMED_LITERAL_CSTRING(kQuotaExternalError, "external");
+const nsLiteralCString kQuotaInternalError = "internal"_ns;
+const nsLiteralCString kQuotaExternalError = "external"_ns;
 #endif
 
 LogModule* GetQuotaManagerLogger() { return gLogger; }

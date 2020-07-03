@@ -36,6 +36,10 @@ ChromeUtils.defineModuleGetter(
   "resource://gre/modules/FormLikeFactory.jsm"
 );
 
+const formFillController = Cc[
+  "@mozilla.org/satchel/form-fill-controller;1"
+].getService(Ci.nsIFormFillController);
+
 XPCOMUtils.defineLazyGetter(this, "reauthPasswordPromptMessage", () => {
   const brandShortName = FormAutofillUtils.brandBundle.GetStringFromName(
     "brandShortName"
@@ -46,6 +50,10 @@ XPCOMUtils.defineLazyGetter(this, "reauthPasswordPromptMessage", () => {
     `useCreditCardPasswordPrompt.${platform}`,
     [brandShortName]
   );
+});
+
+XPCOMUtils.defineLazyModuleGetters(this, {
+  CreditCard: "resource://gre/modules/CreditCard.jsm",
 });
 
 this.log = null;
@@ -293,6 +301,8 @@ class FormAutofillSection {
     }
     log.debug("profile in autofillFields:", profile);
 
+    let focusedInput = focusedDetail.elementWeakRef.get();
+
     this.filledRecordGUID = profile.guid;
     for (let fieldDetail of this.fieldDetails) {
       // Avoid filling field value in the following cases:
@@ -312,12 +322,13 @@ class FormAutofillSection {
         // For the focused input element, it will be filled with a valid value
         // anyway.
         // For the others, the fields should be only filled when their values
-        // are empty.
-        let focusedInput = focusedDetail.elementWeakRef.get();
+        // are empty or are the result of an earlier auto-fill.
         if (
           element == focusedInput ||
-          (element != focusedInput && !element.value)
+          (element != focusedInput && !element.value) ||
+          fieldDetail.state == FIELD_STATES.AUTO_FILLED
         ) {
+          element.focus({ preventScroll: true });
           element.setUserInput(value);
           this._changeFieldState(fieldDetail, FIELD_STATES.AUTO_FILLED);
         }
@@ -331,6 +342,7 @@ class FormAutofillSection {
         // Use case for multiple select is not considered here.
         if (!option.selected) {
           option.selected = true;
+          element.focus({ preventScroll: true });
           element.dispatchEvent(
             new element.ownerGlobal.Event("input", { bubbles: true })
           );
@@ -342,6 +354,7 @@ class FormAutofillSection {
         this._changeFieldState(fieldDetail, FIELD_STATES.AUTO_FILLED);
       }
     }
+    focusedInput.focus({ preventScroll: true });
   }
 
   /**
@@ -474,17 +487,8 @@ class FormAutofillSection {
       }
     }
 
-    switch (nextState) {
-      case FIELD_STATES.NORMAL: {
-        if (fieldDetail.state == FIELD_STATES.AUTO_FILLED) {
-          element.removeEventListener("input", this, { mozSystemGroup: true });
-        }
-        break;
-      }
-      case FIELD_STATES.AUTO_FILLED: {
-        element.addEventListener("input", this, { mozSystemGroup: true });
-        break;
-      }
+    if (nextState == FIELD_STATES.AUTO_FILLED) {
+      element.addEventListener("input", this, { mozSystemGroup: true });
     }
 
     fieldDetail.state = nextState;
@@ -562,6 +566,23 @@ class FormAutofillSection {
         }
         const target = event.target;
         const targetFieldDetail = this.getFieldDetailByElement(target);
+        const isCreditCardField = FormAutofillUtils.isCreditCardField(
+          targetFieldDetail.fieldName
+        );
+
+        // If the user manually blanks a credit card field, then
+        // we want the popup to be activated.
+        if (
+          ChromeUtils.getClassName(target) !== "HTMLSelectElement" &&
+          isCreditCardField &&
+          target.value === ""
+        ) {
+          formFillController.showPopup();
+        }
+
+        if (targetFieldDetail.state == FIELD_STATES.NORMAL) {
+          return;
+        }
 
         this._changeFieldState(targetFieldDetail, FIELD_STATES.NORMAL);
 
@@ -937,6 +958,35 @@ class FormAutofillCreditCardSection extends FormAutofillSection {
     this.matchSelectOptions(profile);
     this.creditCardExpDateTransformer(profile);
     this.adaptFieldMaxLength(profile);
+  }
+
+  computeFillingValue(value, fieldDetail, element) {
+    if (
+      fieldDetail.fieldName != "cc-type" ||
+      ChromeUtils.getClassName(element) !== "HTMLSelectElement"
+    ) {
+      return value;
+    }
+
+    if (CreditCard.isValidNetwork(value)) {
+      return value;
+    }
+
+    // Don't save the record when the option value is empty *OR* there
+    // are multiple options being selected. The empty option is usually
+    // assumed to be default along with a meaningless text to users.
+    if (value && element.selectedOptions.length == 1) {
+      let selectedOption = element.selectedOptions[0];
+      let networkType =
+        CreditCard.getNetworkFromName(selectedOption.text) ??
+        CreditCard.getNetworkFromName(selectedOption.value);
+      if (networkType) {
+        return networkType;
+      }
+    }
+    // If we couldn't match the value to any network, we'll
+    // strip this field when submitting.
+    return value;
   }
 
   /**

@@ -50,6 +50,12 @@ module.exports = [
     description: "Measure first open toolbox on netmonitor panel",
     cold: true,
   },
+  {
+    name: "accessibility.cold-open",
+    path: "accessibility/cold-open.js",
+    description: "Measure first open toolbox on accessibility panel",
+    cold: true,
+  },
   // Run all tests against "simple" document
   {
     name: "simple.webconsole",
@@ -80,6 +86,12 @@ module.exports = [
     path: "netmonitor/simple.js",
     description:
       "Measure open/close toolbox on network monitor panel against simple document",
+  },
+  {
+    name: "simple.accessibility",
+    path: "accessibility/simple.js",
+    description:
+      "Measure open/close toolbox on accessibility panel against simple document",
   },
   // Run all tests against "complicated" document
   {

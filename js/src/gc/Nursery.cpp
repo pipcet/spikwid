@@ -247,16 +247,6 @@ js::Nursery::Nursery(GCRuntime* gc)
 }
 
 bool js::Nursery::init(AutoLockGCBgAlloc& lock) {
-  capacity_ = tunables().gcMinNurseryBytes();
-  if (!allocateNextChunk(0, lock)) {
-    capacity_ = 0;
-    return false;
-  }
-  // After this point the Nursery has been enabled.
-
-  setCurrentChunk(0);
-  setStartPosition();
-  poisonAndInitCurrentChunk();
 
   char* env = getenv("JS_GC_PROFILE_NURSERY");
   if (env) {
@@ -286,8 +276,7 @@ bool js::Nursery::init(AutoLockGCBgAlloc& lock) {
     return false;
   }
 
-  MOZ_ASSERT(isEnabled());
-  return true;
+  return initFirstChunk(lock);
 }
 
 js::Nursery::~Nursery() { disable(); }
@@ -301,23 +290,39 @@ void js::Nursery::enable() {
 
   {
     AutoLockGCBgAlloc lock(gc);
-    capacity_ = tunables().gcMinNurseryBytes();
-    if (!allocateNextChunk(0, lock)) {
-      capacity_ = 0;
+    if (!initFirstChunk(lock)) {
+      // If we fail to allocate memory, the nursery will not be enabled.
       return;
     }
   }
 
-  setCurrentChunk(0);
-  setStartPosition();
-  poisonAndInitCurrentChunk();
 #ifdef JS_GC_ZEAL
   if (gc->hasZealMode(ZealMode::GenerationalGC)) {
     enterZealMode();
   }
 #endif
 
+  // This should always succeed after the first time it's called.
   MOZ_ALWAYS_TRUE(gc->storeBuffer().enable());
+}
+
+bool js::Nursery::initFirstChunk(AutoLockGCBgAlloc& lock) {
+  MOZ_ASSERT(!isEnabled());
+
+  capacity_ = tunables().gcMinNurseryBytes();
+  if (!allocateNextChunk(0, lock)) {
+    capacity_ = 0;
+    return false;
+  }
+
+  setCurrentChunk(0);
+  setStartPosition();
+  poisonAndInitCurrentChunk();
+
+  // Clear any information about previous collections.
+  smoothedGrowthFactor.reset();
+
+  return true;
 }
 
 void js::Nursery::disable() {
@@ -1074,7 +1079,6 @@ void js::Nursery::sendTelemetry(JS::GCReason reason, TimeDuration totalTime,
   rt->addTelemetry(JS_TELEMETRY_GC_NURSERY_BYTES, committed());
 
   if (!wasEmpty) {
-    rt->addTelemetry(JS_TELEMETRY_GC_PRETENURE_COUNT, pretenureCount);
     rt->addTelemetry(JS_TELEMETRY_GC_PRETENURE_COUNT_2, pretenureCount);
     rt->addTelemetry(JS_TELEMETRY_GC_NURSERY_PROMOTION_RATE,
                      promotionRate * 100);
@@ -1527,34 +1531,50 @@ static inline double ClampDouble(double value, double min, double max) {
 }
 
 size_t js::Nursery::targetSize(JS::GCReason reason) {
+  // Shrink the nursery as much as possible in low memory situations.
   if (gc::IsOOMReason(reason) || gc->systemHasLowMemory()) {
-    // Shrink the nursery as much as possible in low memory situations.
+    smoothedGrowthFactor.reset();
     return 0;
+  }
+
+  // Don't resize the nursery during shutdown.
+  if (gc::IsShutdownReason(reason)) {
+    return capacity();
   }
 
   // Calculate the fraction of the nursery promoted out of its entire
   // capacity. This gives better results than using the promotion rate (based on
   // the amount of nursery used) in cases where we collect before the nursery is
   // full.
-  const double fractionPromoted =
+  double fractionPromoted =
       double(previousGC.tenuredBytes) / double(previousGC.nurseryCapacity);
 
-  // Object lifetimes aren't going to behave linearly, but a better relationship
-  // that works for all programs and can be predicted in advance doesn't exist.
-  static const double GrowThreshold = 0.03;
-  static const double ShrinkThreshold = 0.01;
-  static const double PromotionGoal = (GrowThreshold + ShrinkThreshold) / 2.0;
+  // Adjust the nursery size to try to achieve a target promotion rate.
+  static const double PromotionGoal = 0.02;
 
-  // Leave size untouched if we don't cross either threshold.
-  if (fractionPromoted > ShrinkThreshold && fractionPromoted < GrowThreshold) {
+  double growthFactor = fractionPromoted / PromotionGoal;
+
+  // Limit the range of the growth factor to prevent transient high promotion
+  // rates from affecting the nursery size too far into the future.
+  static const double GrowthRange = 2.0;
+  growthFactor = ClampDouble(growthFactor, 1.0 / GrowthRange, GrowthRange);
+
+  // Use exponential smoothing on the desired growth rate to take into account
+  // the promotion rate from previous collections, if any.
+  if (smoothedGrowthFactor) {
+    growthFactor = 0.75 * smoothedGrowthFactor.value() + 0.25 * growthFactor;
+  }
+  smoothedGrowthFactor = mozilla::Some(growthFactor);
+
+  // Leave size untouched if we are close to the promotion goal.
+  static const double GoalWidth = 1.5;
+  if (growthFactor > (1.0 / GoalWidth) && growthFactor < GoalWidth) {
     return capacity();
   }
 
-  const double growthFactor =
-      ClampDouble(fractionPromoted / PromotionGoal, 0.5, 2.0);
-
-  // The multiplication below cannot overflow because growthFactor is at most
-  // two.
+  // The multiplication below cannot overflow because growthFactor is at
+  // most two.
+  MOZ_ASSERT(growthFactor <= 2.0);
   MOZ_ASSERT(capacity() < SIZE_MAX / 2);
 
   return roundSize(size_t(double(capacity()) * growthFactor));

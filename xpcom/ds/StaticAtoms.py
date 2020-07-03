@@ -990,6 +990,7 @@ STATIC_ATOMS = [
     Atom("precedingSibling", "preceding-sibling"),
     Atom("prefersReducedMotion", "prefers-reduced-motion"),
     Atom("prefersColorScheme", "prefers-color-scheme"),
+    Atom("prefersContrast", "prefers-contrast"),
     Atom("prefix", "prefix"),
     Atom("preload", "preload"),
     Atom("mozpresentation", "mozpresentation"),
@@ -2382,6 +2383,7 @@ STATIC_ATOMS = [
     Atom("onboundary", "onboundary"),
 
     # Media Controller
+    Atom("onpositionstatechange", "onpositionstatechange"),
     Atom("onsupportedkeyschange", "onsupportedkeyschange"),
 
     # Contextual Identity / Containers

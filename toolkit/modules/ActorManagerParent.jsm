@@ -33,7 +33,16 @@ const { DefaultMap } = ExtensionUtils;
  * Detailed documentation of these options is in dom/docs/Fission.rst,
  * available at https://firefox-source-docs.mozilla.org/dom/Fission.html#jsprocessactor
  */
-let JSPROCESSACTORS = {};
+let JSPROCESSACTORS = {
+  ContentPrefs: {
+    parent: {
+      moduleURI: "resource://gre/modules/ContentPrefServiceParent.jsm",
+    },
+    child: {
+      moduleURI: "resource://gre/modules/ContentPrefServiceChild.jsm",
+    },
+  },
+};
 
 /**
  * Fission-compatible JSWindowActor implementations.
@@ -435,12 +444,6 @@ let JSWINDOWACTORS = {
     },
 
     allFrames: true,
-  },
-
-  WebNavigation: {
-    child: {
-      moduleURI: "resource://gre/actors/WebNavigationChild.jsm",
-    },
   },
 };
 

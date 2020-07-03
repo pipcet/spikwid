@@ -1985,26 +1985,6 @@ class MTest : public MAryControlInstruction<1, 2>, public TestPolicy::Data {
 #endif
 };
 
-// Equivalent to MTest(true, successor, fake), except without the foldsTo
-// method. This allows IonBuilder to insert fake CFG edges to magically protect
-// control flow for try-catch blocks.
-class MGotoWithFake : public MAryControlInstruction<0, 2>,
-                      public NoTypePolicy::Data {
-  MGotoWithFake(MBasicBlock* successor, MBasicBlock* fake)
-      : MAryControlInstruction(classOpcode) {
-    setSuccessor(0, successor);
-    setSuccessor(1, fake);
-  }
-
- public:
-  INSTRUCTION_HEADER(GotoWithFake)
-  TRIVIAL_NEW_WRAPPERS
-
-  MBasicBlock* target() const { return getSuccessor(0); }
-
-  AliasSet getAliasSet() const override { return AliasSet::None(); }
-};
-
 // Returns from this function to the previous caller.
 class MReturn : public MAryControlInstruction<1, 0>,
                 public BoxInputsPolicy::Data {
@@ -2975,7 +2955,7 @@ class MBail : public MNullaryInstruction {
     return new (alloc) MBail(kind);
   }
   static MBail* New(TempAllocator& alloc) {
-    return new (alloc) MBail(Bailout_Inevitable);
+    return new (alloc) MBail(BailoutKind::Inevitable);
   }
 
   AliasSet getAliasSet() const override { return AliasSet::None(); }
@@ -3396,25 +3376,25 @@ class MUnbox final : public MUnaryInstruction, public BoxInputsPolicy::Data {
     BailoutKind kind;
     switch (type) {
       case MIRType::Boolean:
-        kind = Bailout_NonBooleanInput;
+        kind = BailoutKind::NonBooleanInput;
         break;
       case MIRType::Int32:
-        kind = Bailout_NonInt32Input;
+        kind = BailoutKind::NonInt32Input;
         break;
       case MIRType::Double:
-        kind = Bailout_NonNumericInput;  // Int32s are fine too
+        kind = BailoutKind::NonNumericInput;  // Int32s are fine too
         break;
       case MIRType::String:
-        kind = Bailout_NonStringInput;
+        kind = BailoutKind::NonStringInput;
         break;
       case MIRType::Symbol:
-        kind = Bailout_NonSymbolInput;
+        kind = BailoutKind::NonSymbolInput;
         break;
       case MIRType::BigInt:
-        kind = Bailout_NonBigIntInput;
+        kind = BailoutKind::NonBigIntInput;
         break;
       case MIRType::Object:
-        kind = Bailout_NonObjectInput;
+        kind = BailoutKind::NonObjectInput;
         break;
       default:
         MOZ_CRASH("Given MIRType cannot be unboxed.");
@@ -6438,7 +6418,7 @@ class MWasmTrap : public MAryControlInstruction<0, 0>,
 class MLexicalCheck : public MUnaryInstruction, public BoxPolicy<0>::Data {
   BailoutKind kind_;
   explicit MLexicalCheck(MDefinition* input,
-                         BailoutKind kind = Bailout_UninitializedLexical)
+                         BailoutKind kind = BailoutKind::UninitializedLexical)
       : MUnaryInstruction(classOpcode, input), kind_(kind) {
     setResultType(MIRType::Value);
     setResultTypeSet(input->resultTypeSet());
@@ -10796,6 +10776,7 @@ class MIsCallable : public MUnaryInstruction,
   TRIVIAL_NEW_WRAPPERS
   NAMED_OPERANDS((0, object))
 
+  MDefinition* foldsTo(TempAllocator& alloc) override;
   AliasSet getAliasSet() const override { return AliasSet::None(); }
 };
 
@@ -10873,6 +10854,8 @@ class MHasClass : public MUnaryInstruction, public SingleObjectPolicy::Data {
   NAMED_OPERANDS((0, object))
 
   const JSClass* getClass() const { return class_; }
+
+  MDefinition* foldsTo(TempAllocator& alloc) override;
   AliasSet getAliasSet() const override { return AliasSet::None(); }
   bool congruentTo(const MDefinition* ins) const override {
     if (!ins->isHasClass()) {
@@ -12765,6 +12748,25 @@ class MUnknownValue : public MNullaryInstruction {
  public:
   INSTRUCTION_HEADER(UnknownValue)
   TRIVIAL_NEW_WRAPPERS
+};
+
+// Used by MIR building to represent the bytecode result of an operation for
+// which an MBail was generated, to balance the basic block's MDefinition stack.
+class MUnreachableResult : public MNullaryInstruction {
+ protected:
+  explicit MUnreachableResult(MIRType type) : MNullaryInstruction(classOpcode) {
+    MOZ_ASSERT(type != MIRType::None);
+    setResultType(type);
+  }
+
+ public:
+  INSTRUCTION_HEADER(UnreachableResult)
+  TRIVIAL_NEW_WRAPPERS
+
+  bool congruentTo(const MDefinition* ins) const override {
+    return congruentIfOperandsEqual(ins);
+  }
+  AliasSet getAliasSet() const override { return AliasSet::None(); }
 };
 
 class MIonToWasmCall final : public MVariadicInstruction,

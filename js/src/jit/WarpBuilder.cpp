@@ -39,7 +39,8 @@ BytecodeSite* WarpBuilder::newBytecodeSite(BytecodeLocation loc) {
   return new (alloc()) BytecodeSite(info().inlineScriptTree(), pc);
 }
 
-const WarpOpSnapshot* WarpBuilder::getOpSnapshotImpl(BytecodeLocation loc) {
+const WarpOpSnapshot* WarpBuilder::getOpSnapshotImpl(
+    BytecodeLocation loc, WarpOpSnapshot::Kind kind) {
   uint32_t offset = loc.bytecodeToOffset(script_);
 
   // Skip snapshots until we get to a snapshot with offset >= offset. This is
@@ -48,7 +49,8 @@ const WarpOpSnapshot* WarpBuilder::getOpSnapshotImpl(BytecodeLocation loc) {
     opSnapshotIter_ = opSnapshotIter_->getNext();
   }
 
-  if (!opSnapshotIter_ || opSnapshotIter_->offset() != offset) {
+  if (!opSnapshotIter_ || opSnapshotIter_->offset() != offset ||
+      opSnapshotIter_->kind() != kind) {
     return nullptr;
   }
 
@@ -284,6 +286,7 @@ bool WarpBuilder::build() {
     return false;
   }
 
+  MOZ_ASSERT_IF(info().osrPc(), graph().osrBlock());
   MOZ_ASSERT(loopStack_.empty());
   MOZ_ASSERT(loopDepth_ == 0);
 
@@ -1106,13 +1109,6 @@ bool WarpBuilder::build_JumpTarget(BytecodeLocation loc) {
         }
         lastIns->toGoto()->initSuccessor(0, joinBlock);
         continue;
-
-      case PendingEdge::Kind::GotoWithFake:
-        if (!addEdge(source, /* numToPop = */ 0)) {
-          return false;
-        }
-        lastIns->toGotoWithFake()->initSuccessor(1, joinBlock);
-        continue;
     }
     MOZ_CRASH("Invalid kind");
   }
@@ -1685,6 +1681,11 @@ bool WarpBuilder::buildCallOp(BytecodeLocation loc) {
   if (auto* cacheIRSnapshot = getOpSnapshot<WarpCacheIR>(loc)) {
     return TranspileCacheIRToMIR(snapshot(), mirGen(), loc, current,
                                  cacheIRSnapshot, callInfo);
+  }
+
+  if (getOpSnapshot<WarpBailout>(loc)) {
+    callInfo.setImplicitlyUsedUnchecked();
+    return buildBailoutForColdIC(loc, CacheKind::Call);
   }
 
   // TODO: consider adding a Call IC like Baseline has.
@@ -2673,42 +2674,15 @@ bool WarpBuilder::build_Try(BytecodeLocation loc) {
   // TODO: IonBuilder doesn't support try-catch in inlined functions. This is
   // most likely not a hard limitation. Re-evaluate this when we can inline.
 
-  // Get the location of the last instruction in the try block. It's a
-  // JSOp::Goto to jump over the catch block.
-  BytecodeLocation endOfTryLoc = loc.getEndOfTryLocation();
-  MOZ_ASSERT(endOfTryLoc.is(JSOp::Goto));
-
-  BytecodeLocation afterTryLoc = endOfTryLoc.getJumpTarget();
-  MOZ_ASSERT(afterTryLoc > endOfTryLoc);
-
-  // The Baseline compiler should not attempt to enter the catch block via OSR.
-  MOZ_ASSERT(info().osrPc() < endOfTryLoc.toRawBytecode() ||
-             info().osrPc() >= afterTryLoc.toRawBytecode());
-
   graph().setHasTryBlock();
-
-  // If control flow in the try body is terminated (by a return or throw
-  // statement), the code after the try-statement may still be reachable via the
-  // catch block (which we don't compile) and OSR can enter it.
-  // For example:
-  //
-  //     try {
-  //         throw 3;
-  //     } catch(e) { }
-  //
-  //     for (var i=0; i<1000; i++) {} // OSR
-  //
-  // To handle this, we create two blocks: one for the try block and one
-  // for the code following the try-catch statement. MGotoWithFake is used to
-  // link both blocks to the predecessor block.
 
   MBasicBlock* pred = current;
   if (!startNewBlock(pred, loc.next())) {
     return false;
   }
 
-  pred->end(MGotoWithFake::New(alloc(), current, nullptr));
-  return addPendingEdge(PendingEdge::NewGotoWithFake(pred), afterTryLoc);
+  pred->end(MGoto::New(alloc(), current));
+  return true;
 }
 
 bool WarpBuilder::build_Exception(BytecodeLocation) {
@@ -2757,6 +2731,13 @@ bool WarpBuilder::buildIC(BytecodeLocation loc, CacheKind kind,
     }
     return TranspileCacheIRToMIR(snapshot(), mirGen(), loc, current,
                                  cacheIRSnapshot, inputs_);
+  }
+
+  if (getOpSnapshot<WarpBailout>(loc)) {
+    for (MDefinition* input : inputs) {
+      input->setImplicitlyUsedUnchecked();
+    }
+    return buildBailoutForColdIC(loc, kind);
   }
 
   // Work around std::initializer_list not defining operator[].
@@ -2916,6 +2897,55 @@ bool WarpBuilder::buildIC(BytecodeLocation loc, CacheKind kind,
       // We're currently not using an IC or transpiling CacheIR for these kinds.
       MOZ_CRASH("Unexpected kind");
   }
+
+  return true;
+}
+
+bool WarpBuilder::buildBailoutForColdIC(BytecodeLocation loc, CacheKind kind) {
+  MOZ_ASSERT(loc.opHasIC());
+
+  // TODO: ideally we would terminate the block here and set the implicitly-used
+  // flag for skipped bytecode ops. OSR makes this more tricky though.
+  MBail* bail = MBail::New(alloc(), BailoutKind::FirstExecution);
+  current->add(bail);
+
+  MIRType resultType;
+  switch (kind) {
+    case CacheKind::UnaryArith:
+    case CacheKind::BinaryArith:
+    case CacheKind::GetName:
+    case CacheKind::GetProp:
+    case CacheKind::GetElem:
+    case CacheKind::GetPropSuper:
+    case CacheKind::GetElemSuper:
+    case CacheKind::GetIntrinsic:
+    case CacheKind::Call:
+    case CacheKind::ToPropertyKey:
+      resultType = MIRType::Value;
+      break;
+    case CacheKind::BindName:
+    case CacheKind::GetIterator:
+    case CacheKind::NewObject:
+      resultType = MIRType::Object;
+      break;
+    case CacheKind::TypeOf:
+      resultType = MIRType::String;
+      break;
+    case CacheKind::ToBool:
+    case CacheKind::Compare:
+    case CacheKind::In:
+    case CacheKind::HasOwn:
+    case CacheKind::InstanceOf:
+      resultType = MIRType::Boolean;
+      break;
+    case CacheKind::SetProp:
+    case CacheKind::SetElem:
+      return true;  // No result.
+  }
+
+  auto* ins = MUnreachableResult::New(alloc(), resultType);
+  current->add(ins);
+  current->push(ins);
 
   return true;
 }

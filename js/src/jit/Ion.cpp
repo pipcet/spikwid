@@ -579,7 +579,7 @@ void JitCode::finalize(JSFreeOp* fop) {
                                                headerSize_ + bufferSize_))) {
     pool_->addRef();
   }
-  cellHeaderAndCode_.setPtr(nullptr);
+  setHeaderPtr(nullptr);
 
   // Code buffers are stored inside ExecutablePools. Pools are refcounted.
   // Releasing the pool may free it. Horrible hack: if we are using perf
@@ -2114,7 +2114,8 @@ static MethodStatus BaselineCanEnterAtBranch(JSContext* cx, HandleScript script,
   bool force = false;
   if (script->hasIonScript() && pc != script->ionScript()->osrPc()) {
     uint32_t count = script->ionScript()->incrOsrPcMismatchCounter();
-    if (count <= JitOptions.osrPcMismatchesBeforeRecompile) {
+    if (count <= JitOptions.osrPcMismatchesBeforeRecompile &&
+        !JitOptions.eagerIonCompilation()) {
       return Method_Skipped;
     }
     force = true;

@@ -118,6 +118,7 @@ using mozilla::dom::MediaAudibleState from "ipc/MediaControlIPC.h";
 using mozilla::dom::MaybeMediaMetadataBase from "mozilla/dom/MediaSessionIPCUtils.h";
 using mozilla::dom::MediaSessionAction from "mozilla/dom/MediaSessionIPCUtils.h";
 using mozilla::dom::MediaSessionPlaybackState from "mozilla/dom/MediaSessionIPCUtils.h";
+using mozilla::dom::PositionState from "mozilla/dom/MediaSessionIPCUtils.h";
 using refcounted class nsDocShellLoadState from "nsDocShellLoadState.h";
 using mozilla::dom::ServiceWorkerShutdownState::Progress from "mozilla/dom/ServiceWorkerShutdownState.h";
 using mozilla::ContentBlockingNotifier::StorageAccessPermissionGrantedReason from "mozilla/ContentBlockingNotifier.h";
@@ -883,6 +884,12 @@ child:
 
     async DisplayLoadError(MaybeDiscardedBrowsingContext aContext, nsString aURI);
 
+    async GoBack(MaybeDiscardedBrowsingContext aContext, int32_t? aCancelContentJSEpoch, bool aRequireUserInteraction);
+    async GoForward(MaybeDiscardedBrowsingContext aContext, int32_t? aCancelContentJSEpoch, bool aRequireUserInteraction);
+    async GoToIndex(MaybeDiscardedBrowsingContext aContext, int32_t aIndex, int32_t? aCancelContentJSEpoch);
+    async Reload(MaybeDiscardedBrowsingContext aContext, uint32_t aReloadFlags);
+    async StopLoad(MaybeDiscardedBrowsingContext aContext, uint32_t aStopFlags);
+
     async OnAllowAccessFor(MaybeDiscardedBrowsingContext aParentContext,
                            nsCString aTrackingOrigin,
                            uint32_t aCookieBehavior,
@@ -1511,7 +1518,8 @@ parent:
                                                   MaybeDiscardedBrowsingContext aParentContext,
                                                   Principal aTrackingPrincipal,
                                                   nsCString aTrackingOrigin,
-                                                  int aAllowMode)
+                                                  int aAllowMode,
+                                                  StorageAccessPermissionGrantedReason? aReason)
           returns (bool unused);
 
     async CompleteAllowAccessFor(MaybeDiscardedBrowsingContext aParentContext,
@@ -1585,6 +1593,14 @@ parent:
     async NotifyMediaFullScreenState(
         MaybeDiscardedBrowsingContext aContext,
         bool aIsInFullScreen);
+
+    /**
+     * This method is used to update media session's position state whenever its
+     * position state is being updated.
+     */
+    async NotifyPositionStateChanged(
+        MaybeDiscardedBrowsingContext aContext,
+        PositionState aState);
 
     /**
      * Due to sandboxing, a child process's UntrustedModulesProcessor cannot

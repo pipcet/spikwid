@@ -1209,6 +1209,10 @@ IdlArray.prototype.assert_type_is = function(value, type)
             assert_regexp_match(value, /^([\x00-\ud7ff\ue000-\uffff]|[\ud800-\udbff][\udc00-\udfff])*$/);
             return;
 
+        case "ArrayBufferView":
+            assert_true(ArrayBuffer.isView(value));
+            return;
+
         case "object":
             assert_in_array(typeof value, ["object", "function"], "wrong type: not object or function");
             return;
@@ -1339,8 +1343,7 @@ function IdlInterface(obj, is_callback, is_mixin)
 
     /** An array of IdlInterfaceMembers. */
     this.members = obj.members.map(function(m){return new IdlInterfaceMember(m); });
-    if (this.has_extended_attribute("Unforgeable") ||
-        this.has_extended_attribute("LegacyUnforgeable")) {
+    if (this.has_extended_attribute("LegacyUnforgeable")) {
         this.members
             .filter(function(m) { return m.special !== "static" && (m.type == "attribute" || m.type == "operation"); })
             .forEach(function(m) { return m.isUnforgeable = true; });
@@ -1802,10 +1805,9 @@ IdlInterface.prototype.test_self = function()
         }.bind(this), this.name + " interface: legacy window alias");
     }
 
-    if (this.has_extended_attribute("NamedConstructor") ||
-        this.has_extended_attribute("LegacyFactoryFunction")) {
+    if (this.has_extended_attribute("LegacyFactoryFunction")) {
         var constructors = this.extAttrs
-            .filter(function(attr) { return attr.name == "NamedConstructor" || attr.name == "LegacyFactoryFunction"; });
+            .filter(function(attr) { return attr.name == "LegacyFactoryFunction"; });
         if (constructors.length !== 1) {
             throw new IdlHarnessError("Internal error: missing support for multiple LegacyFactoryFunction extended attributes");
         }
@@ -2379,8 +2381,7 @@ IdlInterface.prototype.test_member_attribute = function(member)
                 "The prototype object must have a property " +
                 format_value(member.name));
 
-            if (!member.has_extended_attribute("LenientThis") &&
-                !member.has_extended_attribute("LegacyLenientThis")) {
+            if (!member.has_extended_attribute("LegacyLenientThis")) {
                 if (member.idlType.generic !== "Promise") {
                     // this.get_interface_object() returns a thing in our global
                     assert_throws_js(TypeError, function() {
@@ -2392,12 +2393,12 @@ IdlInterface.prototype.test_member_attribute = function(member)
                 } else {
                     promise_rejects_js(a_test, TypeError,
                                     this.get_interface_object().prototype[member.name])
-                        .then(function() {
+                        .then(a_test.step_func(function() {
                             // do_interface_attribute_asserts must be the last
                             // thing we do, since it will call done() on a_test.
                             this.do_interface_attribute_asserts(this.get_interface_object().prototype,
                                                                 member, a_test);
-                        }.bind(this));
+                        }.bind(this)));
                 }
             } else {
                 assert_equals(this.get_interface_object().prototype[member.name], undefined,
@@ -3109,8 +3110,7 @@ IdlInterface.prototype.do_interface_attribute_asserts = function(obj, member, a_
         // "If the attribute was specified with the [LegacyLenientThis] extended
         // attribute, then return undefined.
         // "Otherwise, throw a TypeError."
-        if (!member.has_extended_attribute("LenientThis") &&
-            !member.has_extended_attribute("LegacyLenientThis")) {
+        if (!member.has_extended_attribute("LegacyLenientThis")) {
             if (member.idlType.generic !== "Promise") {
                 assert_throws_js(globalOf(desc.get).TypeError, function() {
                     desc.get.call({});
@@ -3139,7 +3139,6 @@ IdlInterface.prototype.do_interface_attribute_asserts = function(obj, member, a_
     // TODO: Test calling setter on the interface prototype (should throw
     // TypeError in most cases).
     if (member.readonly
-    && !member.has_extended_attribute("LenientSetter")
     && !member.has_extended_attribute("LegacyLenientSetter")
     && !member.has_extended_attribute("PutForwards")
     && !member.has_extended_attribute("Replaceable"))
@@ -3163,8 +3162,7 @@ IdlInterface.prototype.do_interface_attribute_asserts = function(obj, member, a_
             // "If the attribute is declared with a [Replaceable] extended
             // attribute, then: ..."
             // "If validThis is false, then return."
-            if (!member.has_extended_attribute("LenientThis") &&
-                !member.has_extended_attribute("LegacyLenientThis")) {
+            if (!member.has_extended_attribute("LegacyLenientThis")) {
                 assert_throws_js(globalOf(desc.set).TypeError, function() {
                     desc.set.call({});
                 }.bind(this), "calling setter on wrong object type must throw TypeError");
@@ -3204,8 +3202,7 @@ function IdlInterfaceMember(obj)
         this.extAttrs = [];
     }
 
-    this.isUnforgeable = this.has_extended_attribute("Unforgeable") ||
-        this.has_extended_attribute("LegacyUnforgeable");
+    this.isUnforgeable = this.has_extended_attribute("LegacyUnforgeable");
     this.isUnscopable = this.has_extended_attribute("Unscopable");
 }
 

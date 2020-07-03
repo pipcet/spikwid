@@ -2046,6 +2046,44 @@ void nsContainerFrame::MergeSortedExcessOverflowContainers(nsFrameList& aList) {
   }
 }
 
+nsIFrame* nsContainerFrame::GetFirstNonAnonBoxInSubtree(nsIFrame* aFrame) {
+  while (aFrame) {
+    // If aFrame isn't an anonymous container, or it's text or such, then it'll
+    // do.
+    if (!aFrame->Style()->IsAnonBox() ||
+        nsCSSAnonBoxes::IsNonElement(aFrame->Style()->GetPseudoType())) {
+      break;
+    }
+
+    // Otherwise, descend to its first child and repeat.
+
+    // SPECIAL CASE: if we're dealing with an anonymous table, then it might
+    // be wrapping something non-anonymous in its caption or col-group lists
+    // (instead of its principal child list), so we have to look there.
+    // (Note: For anonymous tables that have a non-anon cell *and* a non-anon
+    // column, we'll always return the column. This is fine; we're really just
+    // looking for a handle to *anything* with a meaningful content node inside
+    // the table, for use in DOM comparisons to things outside of the table.)
+    if (MOZ_UNLIKELY(aFrame->IsTableWrapperFrame())) {
+      nsIFrame* captionDescendant = GetFirstNonAnonBoxInSubtree(
+          aFrame->GetChildList(kCaptionList).FirstChild());
+      if (captionDescendant) {
+        return captionDescendant;
+      }
+    } else if (MOZ_UNLIKELY(aFrame->IsTableFrame())) {
+      nsIFrame* colgroupDescendant = GetFirstNonAnonBoxInSubtree(
+          aFrame->GetChildList(kColGroupList).FirstChild());
+      if (colgroupDescendant) {
+        return colgroupDescendant;
+      }
+    }
+
+    // USUAL CASE: Descend to the first child in principal list.
+    aFrame = aFrame->PrincipalChildList().FirstChild();
+  }
+  return aFrame;
+}
+
 /**
  * Is aFrame1 a prev-continuation of aFrame2?
  */
@@ -2062,14 +2100,38 @@ static bool IsPrevContinuationOf(nsIFrame* aFrame1, nsIFrame* aFrame2) {
 void nsContainerFrame::MergeSortedFrameLists(nsFrameList& aDest,
                                              nsFrameList& aSrc,
                                              nsIContent* aCommonAncestor) {
+  // Returns a frame whose DOM node can be used for the purpose of ordering
+  // aFrame among its sibling frames by DOM position. If aFrame is
+  // non-anonymous, this just returns aFrame itself. Otherwise, this returns the
+  // first non-anonymous descendant in aFrame's continuation chain.
+  auto FrameForDOMPositionComparison = [](nsIFrame* aFrame) {
+    if (!aFrame->Style()->IsAnonBox()) {
+      // The usual case.
+      return aFrame;
+    }
+
+    // Walk the continuation chain from the start, and return the first
+    // non-anonymous descendant that we find.
+    for (nsIFrame* f = aFrame->FirstContinuation(); f;
+         f = f->GetNextContinuation()) {
+      if (nsIFrame* nonAnonBox = GetFirstNonAnonBoxInSubtree(f)) {
+        return nonAnonBox;
+      }
+    }
+
+    MOZ_ASSERT_UNREACHABLE(
+        "Why is there no non-anonymous descendants in the continuation chain?");
+    return aFrame;
+  };
+
   nsIFrame* dest = aDest.FirstChild();
   for (nsIFrame* src = aSrc.FirstChild(); src;) {
     if (!dest) {
       aDest.AppendFrames(nullptr, aSrc);
       break;
     }
-    nsIContent* srcContent = src->GetContent();
-    nsIContent* destContent = dest->GetContent();
+    nsIContent* srcContent = FrameForDOMPositionComparison(src)->GetContent();
+    nsIContent* destContent = FrameForDOMPositionComparison(dest)->GetContent();
     int32_t result = nsLayoutUtils::CompareTreePosition(srcContent, destContent,
                                                         aCommonAncestor);
     if (MOZ_UNLIKELY(result == 0)) {

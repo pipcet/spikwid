@@ -70,7 +70,7 @@ if (AppConstants.platform == "macosx") {
 // referencing the whitelisted file in a way that the test can't detect, or a
 // bug number to remove or use the file if it is indeed currently unreferenced.
 var whitelist = [
-  // browser/extensions/pdfjs/content/PdfStreamConverter.jsm
+  // toolkt/components/pdfjs/content/PdfStreamConverter.jsm
   { file: "chrome://pdf.js/locale/chrome.properties" },
   { file: "chrome://pdf.js/locale/viewer.properties" },
 
@@ -157,7 +157,7 @@ var whitelist = [
     platforms: ["linux", "macosx"],
   },
 
-  // browser/extensions/pdfjs/content/web/viewer.js#7450
+  // toolkt/components/pdfjs/content/web/viewer.js#7450
   { file: "resource://pdf.js/web/debugger.js" },
 
   // resource://app/modules/translation/TranslationContentHandler.jsm
@@ -178,6 +178,8 @@ var whitelist = [
   },
   // Bug 1356031 (only used by devtools)
   { file: "chrome://global/skin/icons/error-16.png" },
+  // Bug 1641777 (only used by devtools)
+  { file: "chrome://global/content/third_party/d3/d3.js" },
   // Bug 1344267
   { file: "chrome://marionette/content/test.xhtml" },
   { file: "chrome://marionette/content/test_dialog.properties" },

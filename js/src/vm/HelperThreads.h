@@ -61,6 +61,7 @@ typedef Fifo<CompileTask*, 0, SystemAllocPolicy> CompileTaskPtrFifo;
 
 struct Tier2GeneratorTask : public RunnableTask {
   virtual ~Tier2GeneratorTask() = default;
+  virtual void runTaskLocked(AutoLockHelperThreadState& locked) = 0;
   virtual void cancel() = 0;
 };
 
@@ -543,6 +544,9 @@ bool StartOffThreadIonCompile(jit::IonCompileTask* task,
 bool StartOffThreadIonFree(jit::IonCompileTask* task,
                            const AutoLockHelperThreadState& lock);
 
+void FinishOffThreadIonCompile(jit::IonCompileTask* task,
+                               const AutoLockHelperThreadState& lock);
+
 struct ZonesInState {
   JSRuntime* runtime;
   JS::shadow::Zone::GCState state;
@@ -753,6 +757,7 @@ struct ParseTask : public mozilla::LinkedListElement<ParseTask>,
     return mallocSizeOf(this) + sizeOfExcludingThis(mallocSizeOf);
   }
 
+  void runTaskLocked(AutoLockHelperThreadState& locked);
   void runTask() override;
   ThreadType threadType() override { return ThreadType::THREAD_TYPE_PARSE; }
 };

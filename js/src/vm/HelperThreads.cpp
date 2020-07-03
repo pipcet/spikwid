@@ -240,8 +240,8 @@ bool js::StartOffThreadIonFree(jit::IonCompileTask* task,
  * or been cancelled into the global finished compilation list. All off thread
  * compilations which are started must eventually be finished.
  */
-static void FinishOffThreadIonCompile(jit::IonCompileTask* task,
-                                      const AutoLockHelperThreadState& lock) {
+void js::FinishOffThreadIonCompile(jit::IonCompileTask* task,
+                                   const AutoLockHelperThreadState& lock) {
   AutoEnterOOMUnsafeRegion oomUnsafe;
   if (!HelperThreadState().ionFinishedList(lock).append(task)) {
     oomUnsafe.crash("FinishOffThreadIonCompile");
@@ -532,6 +532,29 @@ size_t ParseTask::sizeOfExcludingThis(
     mozilla::MallocSizeOf mallocSizeOf) const {
   return options.sizeOfExcludingThis(mallocSizeOf) +
          errors.sizeOfExcludingThis(mallocSizeOf);
+}
+
+void ParseTask::runTaskLocked(AutoLockHelperThreadState& locked) {
+#ifdef DEBUG
+  JSRuntime* runtime = parseGlobal->runtimeFromAnyThread();
+  runtime->incOffThreadParsesRunning();
+#endif
+
+  {
+    AutoUnlockHelperThreadState unlock(locked);
+    runTask();
+  }
+
+  // The callback is invoked while we are still off thread.
+  callback(this, callbackData);
+
+  // FinishOffThreadScript will need to be called on the script to
+  // migrate it into the correct compartment.
+  HelperThreadState().parseFinishedList(locked).insertBack(this);
+
+#ifdef DEBUG
+  runtime->decOffThreadParsesRunning();
+#endif
 }
 
 void ParseTask::runTask() {
@@ -2039,18 +2062,12 @@ void HelperThread::handleWasmTier2GeneratorWorkload(
       HelperThreadState().wasmTier2GeneratorWorklist(locked).popCopy());
 
   wasm::Tier2GeneratorTask* task = wasmTier2GeneratorTask();
-  {
-    AutoUnlockHelperThreadState unlock(locked);
-    task->runTask();
-  }
+
+  // 'task' will be released inside runTaskLocked().
+  task->runTaskLocked(locked);
 
   currentTask.reset();
-  js_delete(task);
 
-  // During shutdown the main thread will wait for any ongoing (cancelled)
-  // tier-2 generation to shut down normally.  To do so, it waits on the
-  // CONSUMER condition for the count of finished generators to rise.
-  HelperThreadState().incWasmTier2GeneratorsFinished(locked);
   HelperThreadState().notifyAll(GlobalHelperThreadState::CONSUMER, locked);
 }
 
@@ -2083,31 +2100,9 @@ void HelperThread::handleIonWorkload(AutoLockHelperThreadState& locked) {
   jit::IonCompileTask* task =
       HelperThreadState().highestPriorityPendingIonCompile(locked);
 
-  // The build is taken by this thread. Unfreeze the LifoAlloc to allow
-  // mutations.
-  task->alloc().lifoAlloc()->setReadWrite();
-
   currentTask.emplace(task);
 
-  JSRuntime* rt = task->script()->runtimeFromAnyThread();
-
-  {
-    AutoUnlockHelperThreadState unlock(locked);
-
-    task->runTask();
-  }
-
-  FinishOffThreadIonCompile(task, locked);
-
-  // Ping the main thread so that the compiled code can be incorporated at the
-  // next interrupt callback.
-  //
-  // This must happen before the current task is reset. DestroyContext
-  // cancels in progress Ion compilations before destroying its target
-  // context, and after we reset the current task we are no longer considered
-  // to be Ion compiling.
-  rt->mainContextFromAnyThread()->requestInterrupt(
-      InterruptReason::AttachIonCompilations);
+  task->runTaskLocked(locked);
 
   currentTask.reset();
 
@@ -2178,25 +2173,7 @@ void HelperThread::handleParseWorkload(AutoLockHelperThreadState& locked) {
   currentTask.emplace(HelperThreadState().parseWorklist(locked).popCopy());
   ParseTask* task = parseTask();
 
-#ifdef DEBUG
-  JSRuntime* runtime = task->parseGlobal->runtimeFromAnyThread();
-  runtime->incOffThreadParsesRunning();
-#endif
-
-  {
-    AutoUnlockHelperThreadState unlock(locked);
-    task->runTask();
-  }
-  // The callback is invoked while we are still off thread.
-  task->callback(task, task->callbackData);
-
-  // FinishOffThreadScript will need to be called on the script to
-  // migrate it into the correct compartment.
-  HelperThreadState().parseFinishedList(locked).insertBack(task);
-
-#ifdef DEBUG
-  runtime->decOffThreadParsesRunning();
-#endif
+  task->runTaskLocked(locked);
 
   currentTask.reset();
 

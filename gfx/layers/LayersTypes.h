@@ -166,6 +166,7 @@ enum class TextureType : int8_t {
   X11,
   MacIOSurface,
   AndroidNativeWindow,
+  AndroidHardwareBuffer,
   DMABUF,
   EGLImage,
   Last
@@ -450,6 +451,8 @@ MOZ_DEFINE_ENUM_CLASS_WITH_BASE(CompositionPayloadType, uint8_t, (
   eContentPaint
 ));
 // clang-format on
+
+extern const char* kCompositionPayloadTypeNames[kCompositionPayloadTypeCount];
 
 struct CompositionPayload {
   bool operator==(const CompositionPayload& aOther) const {

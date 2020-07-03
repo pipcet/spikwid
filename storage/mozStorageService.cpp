@@ -127,28 +127,22 @@ Service::CollectReports(nsIHandleReportCallback* aHandleReport,
 
       SQLiteMutexAutoLock lockedScope(conn->sharedDBMutex);
 
-      NS_NAMED_LITERAL_CSTRING(
-          stmtDesc,
+      constexpr auto stmtDesc =
           "Memory (approximate) used by all prepared statements used by "
-          "connections to this database.");
-      ReportConn(aHandleReport, aData, conn, pathHead,
-                 NS_LITERAL_CSTRING("stmt"), stmtDesc,
+          "connections to this database."_ns;
+      ReportConn(aHandleReport, aData, conn, pathHead, "stmt"_ns, stmtDesc,
                  SQLITE_DBSTATUS_STMT_USED, &totalConnSize);
 
-      NS_NAMED_LITERAL_CSTRING(
-          cacheDesc,
+      constexpr auto cacheDesc =
           "Memory (approximate) used by all pager caches used by connections "
-          "to this database.");
-      ReportConn(aHandleReport, aData, conn, pathHead,
-                 NS_LITERAL_CSTRING("cache"), cacheDesc,
+          "to this database."_ns;
+      ReportConn(aHandleReport, aData, conn, pathHead, "cache"_ns, cacheDesc,
                  SQLITE_DBSTATUS_CACHE_USED_SHARED, &totalConnSize);
 
-      NS_NAMED_LITERAL_CSTRING(
-          schemaDesc,
+      constexpr auto schemaDesc =
           "Memory (approximate) used to store the schema for all databases "
-          "associated with connections to this database.");
-      ReportConn(aHandleReport, aData, conn, pathHead,
-                 NS_LITERAL_CSTRING("schema"), schemaDesc,
+          "associated with connections to this database."_ns;
+      ReportConn(aHandleReport, aData, conn, pathHead, "schema"_ns, schemaDesc,
                  SQLITE_DBSTATUS_SCHEMA_USED, &totalConnSize);
     }
 
@@ -279,7 +273,7 @@ void Service::minimizeMemory() {
       continue;
     }
 
-    NS_NAMED_LITERAL_CSTRING(shrinkPragma, "PRAGMA shrink_memory");
+    constexpr auto shrinkPragma = "PRAGMA shrink_memory"_ns;
     bool onOpenedThread = false;
 
     if (!conn->operationSupported(Connection::SYNCHRONOUS)) {
@@ -516,10 +510,10 @@ Service::OpenAsyncDatabase(nsIVariant* aDatabaseStore,
 
   // Deal with options first:
   if (aOptions) {
-    rv = aOptions->GetPropertyAsBool(NS_LITERAL_STRING("readOnly"), &readOnly);
+    rv = aOptions->GetPropertyAsBool(u"readOnly"_ns, &readOnly);
     FAIL_IF_SET_BUT_INVALID(rv);
 
-    rv = aOptions->GetPropertyAsBool(NS_LITERAL_STRING("ignoreLockingMode"),
+    rv = aOptions->GetPropertyAsBool(u"ignoreLockingMode"_ns,
                                      &ignoreLockingMode);
     FAIL_IF_SET_BUT_INVALID(rv);
     // Specifying ignoreLockingMode will force use of the readOnly flag:
@@ -527,12 +521,11 @@ Service::OpenAsyncDatabase(nsIVariant* aDatabaseStore,
       readOnly = true;
     }
 
-    rv = aOptions->GetPropertyAsBool(NS_LITERAL_STRING("shared"), &shared);
+    rv = aOptions->GetPropertyAsBool(u"shared"_ns, &shared);
     FAIL_IF_SET_BUT_INVALID(rv);
 
     // NB: we re-set to -1 if we don't have a storage file later on.
-    rv = aOptions->GetPropertyAsInt32(NS_LITERAL_STRING("growthIncrement"),
-                                      &growthIncrement);
+    rv = aOptions->GetPropertyAsInt32(u"growthIncrement"_ns, &growthIncrement);
     FAIL_IF_SET_BUT_INVALID(rv);
   }
   int flags = readOnly ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE;

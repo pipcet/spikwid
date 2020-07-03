@@ -79,7 +79,7 @@ void WorkerNavigator::GetAppName(nsString& aAppName,
     // We will spoof this value when 'privacy.resistFingerprinting' is true.
     // See nsRFPService.h for spoofed value.
     aAppName = StaticPrefs::privacy_resistFingerprinting()
-                   ? NS_LITERAL_STRING(SPOOFED_APPNAME)
+                   ? NS_LITERAL_STRING_FROM_CSTRING(SPOOFED_APPNAME)
                    : mProperties.mAppNameOverridden;
   } else {
     aAppName = mProperties.mAppName;
@@ -98,7 +98,7 @@ void WorkerNavigator::GetAppVersion(nsString& aAppVersion,
     // We will spoof this value when 'privacy.resistFingerprinting' is true.
     // See nsRFPService.h for spoofed value.
     aAppVersion = StaticPrefs::privacy_resistFingerprinting()
-                      ? NS_LITERAL_STRING(SPOOFED_APPVERSION)
+                      ? NS_LITERAL_STRING_FROM_CSTRING(SPOOFED_APPVERSION)
                       : mProperties.mAppVersionOverridden;
   } else {
     aAppVersion = mProperties.mAppVersion;
@@ -116,7 +116,7 @@ void WorkerNavigator::GetPlatform(nsString& aPlatform, CallerType aCallerType,
     // We will spoof this value when 'privacy.resistFingerprinting' is true.
     // See nsRFPService.h for spoofed value.
     aPlatform = StaticPrefs::privacy_resistFingerprinting()
-                    ? NS_LITERAL_STRING(SPOOFED_PLATFORM)
+                    ? NS_LITERAL_STRING_FROM_CSTRING(SPOOFED_PLATFORM)
                     : mProperties.mPlatformOverridden;
   } else {
     aPlatform = mProperties.mPlatform;
@@ -130,8 +130,7 @@ class GetUserAgentRunnable final : public WorkerMainThreadRunnable {
 
  public:
   GetUserAgentRunnable(WorkerPrivate* aWorkerPrivate, nsString& aUA)
-      : WorkerMainThreadRunnable(aWorkerPrivate,
-                                 NS_LITERAL_CSTRING("UserAgent getter")),
+      : WorkerMainThreadRunnable(aWorkerPrivate, "UserAgent getter"_ns),
         mUA(aUA) {
     MOZ_ASSERT(aWorkerPrivate);
     aWorkerPrivate->AssertIsOnWorkerThread();

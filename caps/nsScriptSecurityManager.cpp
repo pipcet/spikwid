@@ -172,7 +172,7 @@ static nsresult GetOriginFromURI(nsIURI* aURI, nsACString& aOrigin) {
     nsAutoCString scheme;
     rv = uri->GetScheme(scheme);
     NS_ENSURE_SUCCESS(rv, rv);
-    aOrigin = scheme + NS_LITERAL_CSTRING("://") + hostPort;
+    aOrigin = scheme + "://"_ns + hostPort;
   } else {
     // Some URIs (e.g., nsSimpleURI) don't support host. Just
     // get the full spec.
@@ -881,24 +881,12 @@ nsresult nsScriptSecurityManager::CheckLoadURIFlags(
                            &targetURIIsUIResource);
   NS_ENSURE_SUCCESS(rv, rv);
   if (targetURIIsUIResource) {
+    // ALLOW_CHROME is a flag that we pass on all loads _except_ docshell
+    // loads (since docshell loads run the loaded content with its origin
+    // principal). We are effectively allowing resource:// and chrome://
+    // URIs to load as long as they are content accessible and as long
+    // they're not loading it as a document.
     if (aFlags & nsIScriptSecurityManager::ALLOW_CHROME) {
-      // Allow a URI_IS_UI_RESOURCE source to link to a URI_IS_UI_RESOURCE
-      // target if ALLOW_CHROME is set.
-      //
-      // ALLOW_CHROME is a flag that we pass on all loads _except_ docshell
-      // loads (since docshell loads run the loaded content with its origin
-      // principal). So we're effectively allowing resource://, chrome://,
-      // and moz-icon:// source URIs to load resource://, chrome://, and
-      // moz-icon:// files, so long as they're not loading it as a document.
-      bool sourceIsUIResource;
-      rv = NS_URIChainHasFlags(aSourceBaseURI,
-                               nsIProtocolHandler::URI_IS_UI_RESOURCE,
-                               &sourceIsUIResource);
-      NS_ENSURE_SUCCESS(rv, rv);
-      if (sourceIsUIResource) {
-        return NS_OK;
-      }
-
       if (targetScheme.EqualsLiteral("resource")) {
         if (StaticPrefs::security_all_resource_uri_content_accessible()) {
           return NS_OK;
@@ -1029,10 +1017,9 @@ nsresult nsScriptSecurityManager::ReportError(const char* aMessageTag,
 
   // using category of "SOP" so we can link to MDN
   if (aInnerWindowID != 0) {
-    rv = error->InitWithWindowID(message, EmptyString(), EmptyString(), 0, 0,
-                                 nsIScriptError::errorFlag,
-                                 NS_LITERAL_CSTRING("SOP"), aInnerWindowID,
-                                 true /* From chrome context */);
+    rv = error->InitWithWindowID(
+        message, EmptyString(), EmptyString(), 0, 0, nsIScriptError::errorFlag,
+        "SOP"_ns, aInnerWindowID, true /* From chrome context */);
   } else {
     rv = error->Init(message, EmptyString(), EmptyString(), 0, 0,
                      nsIScriptError::errorFlag, "SOP", aFromPrivateWindow,
@@ -1157,12 +1144,12 @@ nsScriptSecurityManager::CreateContentPrincipal(
 NS_IMETHODIMP
 nsScriptSecurityManager::CreateContentPrincipalFromOrigin(
     const nsACString& aOrigin, nsIPrincipal** aPrincipal) {
-  if (StringBeginsWith(aOrigin, NS_LITERAL_CSTRING("["))) {
+  if (StringBeginsWith(aOrigin, "["_ns)) {
     return NS_ERROR_INVALID_ARG;
   }
 
   if (StringBeginsWith(aOrigin,
-                       NS_LITERAL_CSTRING(NS_NULLPRINCIPAL_SCHEME ":"))) {
+                       nsLiteralCString(NS_NULLPRINCIPAL_SCHEME ":"))) {
     return NS_ERROR_INVALID_ARG;
   }
 
@@ -1506,8 +1493,8 @@ void nsScriptSecurityManager::AddSitesToFileURIAllowlist(
     // Check if the URI is schemeless. If so, add both http and https.
     nsAutoCString unused;
     if (NS_FAILED(sIOService->ExtractScheme(site, unused))) {
-      AddSitesToFileURIAllowlist(NS_LITERAL_CSTRING("http://") + site);
-      AddSitesToFileURIAllowlist(NS_LITERAL_CSTRING("https://") + site);
+      AddSitesToFileURIAllowlist("http://"_ns + site);
+      AddSitesToFileURIAllowlist("https://"_ns + site);
       continue;
     }
 
@@ -1521,8 +1508,7 @@ void nsScriptSecurityManager::AddSitesToFileURIAllowlist(
           do_GetService("@mozilla.org/consoleservice;1"));
       if (console) {
         nsAutoString msg =
-            NS_LITERAL_STRING(
-                "Unable to to add site to file:// URI allowlist: ") +
+            u"Unable to to add site to file:// URI allowlist: "_ns +
             NS_ConvertASCIItoUTF16(site);
         console->LogStringMessage(msg.get());
       }
@@ -1655,8 +1641,7 @@ nsScriptSecurityManager::EnsureFileURIAllowlist() {
     // Figure out if this policy allows loading file:// URIs. If not, we can
     // skip it.
     nsCString checkLoadURIPrefName =
-        NS_LITERAL_CSTRING("capability.policy.") + policyName +
-        NS_LITERAL_CSTRING(".checkloaduri.enabled");
+        "capability.policy."_ns + policyName + ".checkloaduri.enabled"_ns;
     nsAutoString value;
     nsresult rv = Preferences::GetString(checkLoadURIPrefName.get(), value);
     if (NS_FAILED(rv) || !value.LowerCaseEqualsLiteral("allaccess")) {
@@ -1664,8 +1649,8 @@ nsScriptSecurityManager::EnsureFileURIAllowlist() {
     }
 
     // Grab the list of domains associated with this policy.
-    nsCString domainPrefName = NS_LITERAL_CSTRING("capability.policy.") +
-                               policyName + NS_LITERAL_CSTRING(".sites");
+    nsCString domainPrefName =
+        "capability.policy."_ns + policyName + ".sites"_ns;
     nsAutoCString siteList;
     Preferences::GetCString(domainPrefName.get(), siteList);
     AddSitesToFileURIAllowlist(siteList);

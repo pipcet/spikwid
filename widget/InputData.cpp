@@ -185,51 +185,10 @@ WidgetTouchEvent MultiTouchInput::ToWidgetTouchEvent(nsIWidget* aWidget) const {
   event.mTimeStamp = this->mTimeStamp;
   event.mFlags.mHandledByAPZ = mHandledByAPZ;
   event.mFocusSequenceNumber = mFocusSequenceNumber;
+  event.mLayersId = mLayersId;
 
   for (size_t i = 0; i < mTouches.Length(); i++) {
     *event.mTouches.AppendElement() = mTouches[i].ToNewDOMTouch();
-  }
-
-  return event;
-}
-
-WidgetMouseEvent MultiTouchInput::ToWidgetMouseEvent(nsIWidget* aWidget) const {
-  MOZ_ASSERT(NS_IsMainThread(),
-             "Can only convert To WidgetMouseEvent on main thread");
-
-  EventMessage mouseEventMessage = eVoidEvent;
-  switch (mType) {
-    case MultiTouchInput::MULTITOUCH_START:
-      mouseEventMessage = eMouseDown;
-      break;
-    case MultiTouchInput::MULTITOUCH_MOVE:
-      mouseEventMessage = eMouseMove;
-      break;
-    case MultiTouchInput::MULTITOUCH_CANCEL:
-    case MultiTouchInput::MULTITOUCH_END:
-      mouseEventMessage = eMouseUp;
-      break;
-    default:
-      MOZ_ASSERT_UNREACHABLE("Did not assign a type to WidgetMouseEvent");
-      break;
-  }
-
-  WidgetMouseEvent event(true, mouseEventMessage, aWidget,
-                         WidgetMouseEvent::eReal, WidgetMouseEvent::eNormal);
-
-  const SingleTouchData& firstTouch = mTouches[0];
-  event.mRefPoint.x = firstTouch.mScreenPoint.x;
-  event.mRefPoint.y = firstTouch.mScreenPoint.y;
-
-  event.mTime = mTime;
-  event.mButton = MouseButton::ePrimary;
-  event.mInputSource = MouseEvent_Binding::MOZ_SOURCE_TOUCH;
-  event.mModifiers = modifiers;
-  event.mFlags.mHandledByAPZ = mHandledByAPZ;
-  event.mFocusSequenceNumber = mFocusSequenceNumber;
-
-  if (mouseEventMessage != eMouseMove) {
-    event.mClickCount = 1;
   }
 
   return event;
@@ -627,6 +586,8 @@ WidgetWheelEvent PinchGestureInput::ToWidgetWheelEvent(
   wheelEvent.mDeltaY = (mPreviousSpan - mCurrentSpan) *
                        (aWidget ? aWidget->GetDefaultScaleInternal() : 1.f);
 #endif
+
+  MOZ_ASSERT(mType == PINCHGESTURE_END || wheelEvent.mDeltaY != 0.0);
 
   return wheelEvent;
 }

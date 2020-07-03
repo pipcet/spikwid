@@ -475,7 +475,6 @@ class nsDocumentViewer final : public nsIContentViewer,
   /* character set member data */
   int32_t mHintCharsetSource;
   const Encoding* mHintCharset;
-  const Encoding* mForceCharacterSet;
 
   bool mIsPageMode;
   bool mInitializedForPrintPreview;
@@ -494,11 +493,9 @@ namespace mozilla {
 class AutoPrintEventDispatcher {
  public:
   explicit AutoPrintEventDispatcher(Document* aTop) : mTop(aTop) {
-    DispatchEventToWindowTree(NS_LITERAL_STRING("beforeprint"));
+    DispatchEventToWindowTree(u"beforeprint"_ns);
   }
-  ~AutoPrintEventDispatcher() {
-    DispatchEventToWindowTree(NS_LITERAL_STRING("afterprint"));
-  }
+  ~AutoPrintEventDispatcher() { DispatchEventToWindowTree(u"afterprint"_ns); }
 
  private:
   static CallState CollectDocuments(Document& aDoc,
@@ -593,7 +590,6 @@ nsDocumentViewer::nsDocumentViewer()
 #endif    // NS_PRINTING
       mHintCharsetSource(kCharsetUninitialized),
       mHintCharset(nullptr),
-      mForceCharacterSet(nullptr),
       mIsPageMode(false),
       mInitializedForPrintPreview(false),
       mHidden(false) {
@@ -668,10 +664,8 @@ void nsDocumentViewer::RemoveFocusListener() {
           std::move(mFocusListener)) {
     oldListener->Disconnect();
     if (mDocument) {
-      mDocument->RemoveEventListener(NS_LITERAL_STRING("focus"), oldListener,
-                                     false);
-      mDocument->RemoveEventListener(NS_LITERAL_STRING("blur"), oldListener,
-                                     false);
+      mDocument->RemoveEventListener(u"focus"_ns, oldListener, false);
+      mDocument->RemoveEventListener(u"blur"_ns, oldListener, false);
     }
   }
 }
@@ -680,10 +674,8 @@ void nsDocumentViewer::ReinitializeFocusListener() {
   RemoveFocusListener();
   mFocusListener = new nsDocViewerFocusListener(this);
   if (mDocument) {
-    mDocument->AddEventListener(NS_LITERAL_STRING("focus"), mFocusListener,
-                                false, false);
-    mDocument->AddEventListener(NS_LITERAL_STRING("blur"), mFocusListener,
-                                false, false);
+    mDocument->AddEventListener(u"focus"_ns, mFocusListener, false, false);
+    mDocument->AddEventListener(u"blur"_ns, mFocusListener, false, false);
   }
 }
 
@@ -1282,7 +1274,7 @@ nsresult nsDocumentViewer::PermitUnloadInternal(uint32_t* aPermitUnloadFlags,
   nsPresContext* presContext = mDocument->GetPresContext();
   RefPtr<BeforeUnloadEvent> event =
       new BeforeUnloadEvent(mDocument, presContext, nullptr);
-  event->InitEvent(NS_LITERAL_STRING("beforeunload"), false, true);
+  event->InitEvent(u"beforeunload"_ns, false, true);
 
   // Dispatching to |window|, but using |document| as the target.
   event->SetTarget(mDocument);
@@ -2766,46 +2758,6 @@ void nsDocumentViewer::EmulatePrefersColorSchemeInternal(
   PropagateToPresContextsHelper(childFn, presContextFn);
 }
 
-NS_IMETHODIMP nsDocumentViewer::GetForceCharacterSet(
-    nsACString& aForceCharacterSet) {
-  auto encoding = nsDocumentViewer::GetForceCharset();
-  if (encoding) {
-    encoding->Name(aForceCharacterSet);
-  } else {
-    aForceCharacterSet.Truncate();
-  }
-  return NS_OK;
-}
-
-/* [noscript,notxpcom] Encoding getForceCharset (); */
-NS_IMETHODIMP_(const Encoding*)
-nsDocumentViewer::GetForceCharset() { return mForceCharacterSet; }
-
-NS_IMETHODIMP
-nsDocumentViewer::SetForceCharacterSet(const nsACString& aForceCharacterSet) {
-  // The empty string means no hint.
-  const Encoding* encoding = nullptr;
-  if (!aForceCharacterSet.IsEmpty()) {
-    if (!(encoding = Encoding::ForLabel(aForceCharacterSet))) {
-      // Reject unknown labels
-      return NS_ERROR_INVALID_ARG;
-    }
-  }
-  nsDocumentViewer::SetForceCharset(encoding);
-  return NS_OK;
-}
-
-/* [noscript,notxpcom] void setForceCharset (in Encoding aEncoding); */
-NS_IMETHODIMP_(void)
-nsDocumentViewer::SetForceCharset(const Encoding* aEncoding) {
-  mForceCharacterSet = aEncoding;
-  auto childFn = [aEncoding](nsDocumentViewer* aChild) {
-    aChild->SetForceCharset(aEncoding);
-  };
-  // now set the force char set on all children of mContainer
-  CallChildren(childFn);
-}
-
 NS_IMETHODIMP nsDocumentViewer::GetHintCharacterSet(
     nsACString& aHintCharacterSet) {
   auto encoding = nsDocumentViewer::GetHintCharset();
@@ -3154,7 +3106,7 @@ NS_IMETHODIMP nsDocViewerSelectionListener::NotifySelectionChanged(
   // might need another update string for simple selection changes, but that
   // would be expenseive.
   if (mSelectionWasCollapsed != selectionCollapsed) {
-    domWindow->UpdateCommands(NS_LITERAL_STRING("select"), selection, aReason);
+    domWindow->UpdateCommands(u"select"_ns, selection, aReason);
     mSelectionWasCollapsed = selectionCollapsed;
   }
 

@@ -88,8 +88,16 @@ html {
   border-color: black;
 }
 
+.peer-connection-config div {
+  margin-inline: 1em;
+}
+
+.peer-connection-config div:nth-of-type(odd) {
+  background-color: #ddd;
+}
+
 .ice-trickled { background-color: hsla(210, 66%, 75%, 1); }
-.ice-success { background-color: hsla(120, 66%, 75%, 1); }
+.ice-succeeded { background-color: hsla(120, 66%, 75%, 1); }
 .ice-failed { background-color: hsla(0, 66%, 75%, 1); }
 .ice-cancelled { background-color: hsla(60, 66%, 75%, 1); }
 

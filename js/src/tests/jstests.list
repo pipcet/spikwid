@@ -634,14 +634,6 @@ skip script test262/intl402/DisplayNames/prototype/resolvedOptions/return-object
 # https://bugzilla.mozilla.org/show_bug.cgi?id=1648202
 skip script test262/built-ins/RegExp/named-groups/non-unicode-property-names-valid.js
 
-# https://bugzilla.mozilla.org/show_bug.cgi?id=1648203
-skip script test262/intl402/RelativeTimeFormat/prototype/formatToParts/pl-pl-style-short.js
-skip script test262/intl402/RelativeTimeFormat/prototype/formatToParts/pl-pl-style-long.js
-skip script test262/intl402/RelativeTimeFormat/prototype/formatToParts/pl-pl-style-narrow.js
-skip script test262/intl402/RelativeTimeFormat/prototype/format/pl-pl-style-short.js
-skip script test262/intl402/RelativeTimeFormat/prototype/format/pl-pl-style-long.js
-skip script test262/intl402/RelativeTimeFormat/prototype/format/pl-pl-style-narrow.js
-
 
 ###########################################################
 # Tests disabled due to issues in test262 importer script #
@@ -667,6 +659,10 @@ skip script test262/intl402/DateTimeFormat/prototype/resolvedOptions/hourCycle-d
 
 # https://github.com/tc39/test262/pull/2680
 skip script test262/built-ins/Atomics/exchange/nonshared-int-views.js
+
+# Tests not yet updated for https://github.com/tc39/proposal-intl-DateTimeFormat-formatRange/issues/15
+skip script test262/intl402/DateTimeFormat/prototype/formatRange/date-undefined-throws.js
+skip script test262/intl402/DateTimeFormat/prototype/formatRangeToParts/date-undefined-throws.js
 
 
 ##############################################

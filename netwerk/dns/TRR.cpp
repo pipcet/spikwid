@@ -304,9 +304,9 @@ nsresult TRR::SendHTTPRequest() {
     }
 
     if (query.IsEmpty()) {
-      query.Assign(NS_LITERAL_CSTRING("?dns="));
+      query.Assign("?dns="_ns);
     } else {
-      query.Append(NS_LITERAL_CSTRING("&dns="));
+      query.Append("&dns="_ns);
     }
     query.Append(body);
 
@@ -353,9 +353,8 @@ nsresult TRR::SendHTTPRequest() {
   rv = httpChannel->SetTRRMode(nsIRequest::TRR_DISABLED_MODE);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  rv = httpChannel->SetRequestHeader(
-      NS_LITERAL_CSTRING("Accept"),
-      NS_LITERAL_CSTRING("application/dns-message"), false);
+  rv = httpChannel->SetRequestHeader("Accept"_ns, "application/dns-message"_ns,
+                                     false);
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsAutoCString cred;
@@ -363,8 +362,7 @@ nsresult TRR::SendHTTPRequest() {
     gTRRService->GetCredentials(cred);
   }
   if (!cred.IsEmpty()) {
-    rv = httpChannel->SetRequestHeader(NS_LITERAL_CSTRING("Authorization"),
-                                       cred, false);
+    rv = httpChannel->SetRequestHeader("Authorization"_ns, cred, false);
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
@@ -383,7 +381,7 @@ nsresult TRR::SendHTTPRequest() {
   mAllowRFC1918 = gTRRService->AllowRFC1918();
 
   if (useGet) {
-    rv = httpChannel->SetRequestMethod(NS_LITERAL_CSTRING("GET"));
+    rv = httpChannel->SetRequestMethod("GET"_ns);
     NS_ENSURE_SUCCESS(rv, rv);
   } else {
     nsCOMPtr<nsIUploadChannel2> uploadChannel = do_QueryInterface(httpChannel);
@@ -396,9 +394,9 @@ nsresult TRR::SendHTTPRequest() {
         NS_NewCStringInputStream(getter_AddRefs(uploadStream), std::move(body));
     NS_ENSURE_SUCCESS(rv, rv);
 
-    rv = uploadChannel->ExplicitSetUploadStream(
-        uploadStream, NS_LITERAL_CSTRING("application/dns-message"),
-        streamLength, NS_LITERAL_CSTRING("POST"), false);
+    rv = uploadChannel->ExplicitSetUploadStream(uploadStream,
+                                                "application/dns-message"_ns,
+                                                streamLength, "POST"_ns, false);
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
@@ -428,35 +426,32 @@ nsresult TRR::SetupTRRServiceChannelInternal(nsIHttpChannel* aChannel,
 
   nsresult rv = NS_OK;
   if (!aUseGet) {
-    rv = httpChannel->SetRequestHeader(NS_LITERAL_CSTRING("Cache-Control"),
-                                       NS_LITERAL_CSTRING("no-store"), false);
+    rv =
+        httpChannel->SetRequestHeader("Cache-Control"_ns, "no-store"_ns, false);
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
   // Sanitize the request by removing the Accept-Language header so we minimize
   // the amount of fingerprintable information we send to the server.
   if (!StaticPrefs::network_trr_send_accept_language_headers()) {
-    rv = httpChannel->SetRequestHeader(NS_LITERAL_CSTRING("Accept-Language"),
-                                       EmptyCString(), false);
+    rv = httpChannel->SetRequestHeader("Accept-Language"_ns, EmptyCString(),
+                                       false);
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
   // Sanitize the request by removing the User-Agent
   if (!StaticPrefs::network_trr_send_user_agent_headers()) {
-    rv = httpChannel->SetRequestHeader(NS_LITERAL_CSTRING("User-Agent"),
-                                       EmptyCString(), false);
+    rv = httpChannel->SetRequestHeader("User-Agent"_ns, EmptyCString(), false);
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
   if (StaticPrefs::network_trr_send_empty_accept_encoding_headers()) {
-    rv = httpChannel->SetEmptyRequestHeader(
-        NS_LITERAL_CSTRING("Accept-Encoding"));
+    rv = httpChannel->SetEmptyRequestHeader("Accept-Encoding"_ns);
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
   // set the *default* response content type
-  if (NS_FAILED(httpChannel->SetContentType(
-          NS_LITERAL_CSTRING("application/dns-message")))) {
+  if (NS_FAILED(httpChannel->SetContentType("application/dns-message"_ns))) {
     LOG(("TRR::SetupTRRServiceChannelInternal: couldn't set content-type!\n"));
   }
 
@@ -644,7 +639,6 @@ TRR::OnPush(nsIHttpChannel* associated, nsIHttpChannel* pushed) {
 NS_IMETHODIMP
 TRR::OnStartRequest(nsIRequest* aRequest) {
   LOG(("TRR::OnStartRequest %p %s %d\n", this, mHost.get(), mType));
-  mStartTime = TimeStamp::Now();
   return NS_OK;
 }
 
@@ -832,7 +826,8 @@ nsresult TRR::DohDecode(nsCString& aHost) {
     }
     uint16_t TYPE = get16bit(mResponse, index);
 
-    if ((TYPE != TRRTYPE_CNAME) && (TYPE != static_cast<uint16_t>(mType))) {
+    if ((TYPE != TRRTYPE_CNAME) && (TYPE != TRRTYPE_HTTPSSVC) &&
+        (TYPE != static_cast<uint16_t>(mType))) {
       // Not the same type as was asked for nor CNAME
       LOG(("TRR: Dohdecode:%d asked for type %d got %d\n", __LINE__, mType,
            TYPE));
@@ -1022,6 +1017,24 @@ nsresult TRR::DohDecode(nsCString& aHost) {
               continue;
             }
             parsed.mSvcFieldValue.AppendElement(value);
+          }
+
+          // Check for AliasForm
+          if (mCname.IsEmpty() && parsed.mSvcFieldPriority == 0) {
+            // Alias form SvcDomainName must not have the "." value (empty)
+            if (parsed.mSvcDomainName.IsEmpty()) {
+              return NS_ERROR_UNEXPECTED;
+            }
+            mCname = parsed.mSvcDomainName;
+            ToLowerCase(mCname);
+            LOG(("TRR::DohDecode HTTPSSVC AliasForm host %s => %s\n",
+                 host.get(), mCname.get()));
+            break;
+          }
+
+          if (mType != TRRTYPE_HTTPSSVC) {
+            // Ignore the entry that we just parsed if we didn't ask for it.
+            break;
           }
 
           if (!mResult.is<TypeRecordHTTPSSVC>()) {
@@ -1274,48 +1287,64 @@ nsresult TRR::FailData(nsresult error) {
   return NS_OK;
 }
 
+nsresult TRR::FollowCname(nsIChannel* aChannel) {
+  nsresult rv = NS_OK;
+  nsAutoCString cname;
+  while (NS_SUCCEEDED(rv) && !mDNS.mAddresses.getFirst() && !mCname.IsEmpty() &&
+         mCnameLoop > 0) {
+    mCnameLoop--;
+    LOG(("TRR::On200Response CNAME %s => %s (%u)\n", mHost.get(), mCname.get(),
+         mCnameLoop));
+    cname = mCname;
+    mCname = EmptyCString();
+
+    LOG(("TRR: check for CNAME record for %s within previous response\n",
+         cname.get()));
+    rv = DohDecode(cname);
+    if (NS_FAILED(rv)) {
+      LOG(("TRR::On200Response DohDecode %x\n", (int)rv));
+    }
+  }
+
+  // restore mCname as DohDecode() change it
+  mCname = cname;
+  if (NS_SUCCEEDED(rv) && mDNS.mAddresses.getFirst()) {
+    ReturnData(aChannel);
+    return NS_OK;
+  }
+
+  if (!mCnameLoop) {
+    LOG(("TRR::On200Response CNAME loop, eject!\n"));
+    return NS_ERROR_REDIRECT_LOOP;
+  }
+
+  LOG(("TRR::On200Response CNAME %s => %s (%u)\n", mHost.get(), mCname.get(),
+       mCnameLoop));
+  RefPtr<TRR> trr =
+      new TRR(mHostResolver, mRec, mCname, mType, mCnameLoop, mPB);
+  if (!gTRRService) {
+    return NS_ERROR_FAILURE;
+  }
+  return gTRRService->DispatchTRRRequest(trr);
+}
+
 nsresult TRR::On200Response(nsIChannel* aChannel) {
   // decode body and create an AddrInfo struct for the response
   nsresult rv = DohDecode(mHost);
 
-  if (NS_SUCCEEDED(rv)) {
-    if (!mDNS.mAddresses.getFirst() && !mCname.IsEmpty() &&
-        mType != TRRTYPE_TXT && mType != TRRTYPE_HTTPSSVC) {
-      nsCString cname = mCname;
-      LOG(("TRR: check for CNAME record for %s within previous response\n",
-           cname.get()));
-      rv = DohDecode(cname);
-      if (NS_SUCCEEDED(rv) && mDNS.mAddresses.getFirst()) {
-        LOG(("TRR: Got the CNAME record without asking for it\n"));
-        ReturnData(aChannel);
-        return NS_OK;
-      }
-      // restore mCname as DohDecode() change it
-      mCname = cname;
-      if (!--mCnameLoop) {
-        LOG(("TRR::On200Response CNAME loop, eject!\n"));
-      } else {
-        LOG(("TRR::On200Response CNAME %s => %s (%u)\n", mHost.get(),
-             mCname.get(), mCnameLoop));
-        RefPtr<TRR> trr =
-            new TRR(mHostResolver, mRec, mCname, mType, mCnameLoop, mPB);
-        if (!gTRRService) {
-          return NS_ERROR_FAILURE;
-        }
-        rv = gTRRService->DispatchTRRRequest(trr);
-        if (NS_SUCCEEDED(rv)) {
-          return rv;
-        }
-      }
-    } else {
-      // pass back the response data
-      ReturnData(aChannel);
-      return NS_OK;
-    }
-  } else {
+  if (NS_FAILED(rv)) {
     LOG(("TRR::On200Response DohDecode %x\n", (int)rv));
+    return NS_ERROR_FAILURE;
   }
-  return NS_ERROR_FAILURE;
+
+  if (mDNS.mAddresses.getFirst() || mType == TRRTYPE_TXT || mCname.IsEmpty()) {
+    // pass back the response data
+    ReturnData(aChannel);
+    return NS_OK;
+  }
+
+  LOG(("TRR::On200Response trying CNAME %s", mCname.get()));
+  return FollowCname(aChannel);
 }
 
 static void RecordProcessingTime(nsIChannel* aChannel) {

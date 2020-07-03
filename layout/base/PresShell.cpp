@@ -1228,9 +1228,7 @@ void PresShell::Destroy() {
             !uri->SchemeIs("resource") &&
             !(uri->SchemeIs("moz-extension") &&
               (NS_SUCCEEDED(uri->GetFilePath(path)) &&
-               StringEndsWith(
-                   path,
-                   NS_LITERAL_CSTRING("/_generated_background_page.html"))))) {
+               StringEndsWith(path, "/_generated_background_page.html"_ns)))) {
           Telemetry::Accumulate(Telemetry::BASE_FONT_FAMILIES_PER_PAGE,
                                 stats->mBaseFonts);
           Telemetry::Accumulate(Telemetry::LANGPACK_FONT_FAMILIES_PER_PAGE,
@@ -1955,9 +1953,6 @@ nsresult PresShell::ResizeReflow(nscoord aWidth, nscoord aHeight,
     MOZ_ASSERT(mMobileViewportManager);
     mMobileViewportManager->RequestReflow(false);
     return NS_OK;
-  }
-  if (mMobileViewportManager) {
-    mMobileViewportManager->NotifyResizeReflow();
   }
 
   return ResizeReflowIgnoreOverride(aWidth, aHeight, aOptions);
@@ -3130,10 +3125,10 @@ nsresult PresShell::GoToAnchor(const nsAString& aAnchorName, bool aScroll,
 
   // Search for anchor in the HTML namespace with a matching name
   if (!content && !mDocument->IsHTMLDocument()) {
-    NS_NAMED_LITERAL_STRING(nameSpace, "http://www.w3.org/1999/xhtml");
+    constexpr auto nameSpace = u"http://www.w3.org/1999/xhtml"_ns;
     // Get the list of anchor elements
     nsCOMPtr<nsINodeList> list =
-        mDocument->GetElementsByTagNameNS(nameSpace, NS_LITERAL_STRING("a"));
+        mDocument->GetElementsByTagNameNS(nameSpace, u"a"_ns);
     // Loop through the anchors looking for the first one with the given name.
     for (uint32_t i = 0; true; i++) {
       nsIContent* node = list->Item(i);
@@ -3220,7 +3215,7 @@ nsresult PresShell::GoToAnchor(const nsAString& aAnchorName, bool aScroll,
     }
   } else {
     rv = NS_ERROR_FAILURE;
-    NS_NAMED_LITERAL_STRING(top, "top");
+    constexpr auto top = u"top"_ns;
     if (nsContentUtils::EqualsIgnoreASCIICase(aAnchorName, top)) {
       // Scroll to the top/left if aAnchorName is "top" and there is no element
       // with such a name or id.
@@ -6213,7 +6208,7 @@ void PresShell::Paint(nsView* aViewToPaint, const nsRegion& aDirtyRegion,
   if (contentRoot) {
     uri = contentRoot->GetDocumentURI();
   }
-  url = uri ? uri->GetSpecOrDefault() : NS_LITERAL_CSTRING("N/A");
+  url = uri ? uri->GetSpecOrDefault() : "N/A"_ns;
 #ifdef MOZ_GECKO_PROFILER
   AUTO_PROFILER_LABEL_DYNAMIC_NSCSTRING("PresShell::Paint", GRAPHICS, url);
 #endif
@@ -9472,8 +9467,7 @@ bool PresShell::DoReflow(nsIFrame* target, bool aInterruptible,
 #ifdef MOZ_GECKO_PROFILER
   nsIURI* uri = mDocument->GetDocumentURI();
   AUTO_PROFILER_LABEL_DYNAMIC_NSCSTRING(
-      "Reflow", LAYOUT_Reflow,
-      uri ? uri->GetSpecOrDefault() : NS_LITERAL_CSTRING("N/A"));
+      "Reflow", LAYOUT_Reflow, uri ? uri->GetSpecOrDefault() : "N/A"_ns);
 #endif
 
   LAYOUT_TELEMETRY_RECORD_BASE(Reflow);
@@ -9486,6 +9480,10 @@ bool PresShell::DoReflow(nsIFrame* target, bool aInterruptible,
     tp->Accumulate();
     tp->reflowCount++;
     timeStart = TimeStamp::Now();
+  }
+
+  if (mMobileViewportManager) {
+    mMobileViewportManager->UpdateSizesBeforeReflow();
   }
 
   // Schedule a paint, but don't actually mark this frame as changed for

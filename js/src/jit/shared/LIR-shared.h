@@ -1107,6 +1107,20 @@ class LEncodeSnapshot : public LInstructionHelper<0, 0, 0> {
   LEncodeSnapshot() : LInstructionHelper(classOpcode) {}
 };
 
+class LUnreachableResultV : public LInstructionHelper<BOX_PIECES, 0, 0> {
+ public:
+  LIR_HEADER(UnreachableResultV)
+
+  LUnreachableResultV() : LInstructionHelper(classOpcode) {}
+};
+
+class LUnreachableResultT : public LInstructionHelper<1, 0, 0> {
+ public:
+  LIR_HEADER(UnreachableResultT)
+
+  LUnreachableResultT() : LInstructionHelper(classOpcode) {}
+};
+
 template <size_t defs, size_t ops>
 class LDOMPropertyInstructionHelper
     : public LCallInstructionHelper<defs, 1 + ops, 3> {
@@ -6053,15 +6067,18 @@ class LGuardSpecificFunction : public LInstructionHelper<0, 2, 0> {
   const LAllocation* expected() { return getOperand(1); }
 };
 
-class LGuardSpecificAtom : public LInstructionHelper<0, 1, 0> {
+class LGuardSpecificAtom : public LInstructionHelper<0, 1, 1> {
  public:
   LIR_HEADER(GuardSpecificAtom)
 
-  explicit LGuardSpecificAtom(const LAllocation& str)
+  LGuardSpecificAtom(const LAllocation& str, const LDefinition& temp)
       : LInstructionHelper(classOpcode) {
     setOperand(0, str);
+    setTemp(0, temp);
   }
   const LAllocation* str() { return getOperand(0); }
+  const LDefinition* temp() { return getTemp(0); }
+
   const MGuardSpecificAtom* mir() const { return mir_->toGuardSpecificAtom(); }
 };
 

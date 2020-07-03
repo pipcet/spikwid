@@ -26,6 +26,7 @@
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/IdleDeadline.h"
+#include "mozilla/dom/InProcessParent.h"
 #include "mozilla/dom/InProcessChild.h"
 #include "mozilla/dom/JSActorService.h"
 #include "mozilla/dom/MediaControlUtils.h"
@@ -178,7 +179,7 @@ void ChromeUtils::ReleaseAssert(GlobalObject& aGlobal, bool aCondition,
     location->GetFilename(aGlobal.Context(), filename);
     lineNo = location->GetLineNumber(aGlobal.Context());
   } else {
-    filename.Assign(NS_LITERAL_STRING("<unknown>"));
+    filename.Assign(u"<unknown>"_ns);
   }
 
   // Convert to utf-8 for adding as the MozCrashReason.
@@ -794,8 +795,7 @@ already_AddRefed<Promise> ChromeUtils::RequestProcInfo(GlobalObject& aGlobal,
       global->EventTargetFor(TaskCategory::Performance);
 
   // Getting the parent proc info
-  mozilla::GetProcInfo(parentPid, 0, mozilla::ProcType::Browser,
-                       NS_LITERAL_STRING(""))
+  mozilla::GetProcInfo(parentPid, 0, mozilla::ProcType::Browser, u""_ns)
       ->Then(
           target, __func__,
           [target, domPromise, parentPid](ProcInfo aParentInfo) {
@@ -833,16 +833,16 @@ already_AddRefed<Promise> ChromeUtils::RequestProcInfo(GlobalObject& aGlobal,
                       // Ideally, the remoteType should be strongly typed
                       // upstream, this would make the conversion less brittle.
                       nsAutoString remoteType(contentParent->GetRemoteType());
-                      if (StringBeginsWith(
-                              remoteType,
-                              NS_LITERAL_STRING(FISSION_WEB_REMOTE_TYPE))) {
+                      if (StringBeginsWith(remoteType,
+                                           NS_LITERAL_STRING_FROM_CSTRING(
+                                               FISSION_WEB_REMOTE_TYPE))) {
                         // WARNING: Do not change the order, as
                         // `DEFAULT_REMOTE_TYPE` is a prefix of
                         // `FISSION_WEB_REMOTE_TYPE`.
                         type = mozilla::ProcType::WebIsolated;
                       } else if (StringBeginsWith(
-                                     remoteType,
-                                     NS_LITERAL_STRING(DEFAULT_REMOTE_TYPE))) {
+                                     remoteType, NS_LITERAL_STRING_FROM_CSTRING(
+                                                     DEFAULT_REMOTE_TYPE))) {
                         type = mozilla::ProcType::Web;
                       } else if (remoteType.EqualsLiteral(FILE_REMOTE_TYPE)) {
                         type = mozilla::ProcType::File;
@@ -857,7 +857,7 @@ already_AddRefed<Promise> ChromeUtils::RequestProcInfo(GlobalObject& aGlobal,
                         type = mozilla::ProcType::PrivilegedMozilla;
                       } else if (StringBeginsWith(
                                      remoteType,
-                                     NS_LITERAL_STRING(
+                                     NS_LITERAL_STRING_FROM_CSTRING(
                                          WITH_COOP_COEP_REMOTE_TYPE_PREFIX))) {
                         type = mozilla::ProcType::WebCOOPCOEP;
                       } else if (remoteType.EqualsLiteral(
@@ -1309,6 +1309,25 @@ nsIDOMProcessChild* ChromeUtils::GetDomProcessChild(const GlobalObject&) {
     return InProcessChild::Singleton();
   }
   return ContentChild::GetSingleton();
+}
+
+/* static */
+void ChromeUtils::GetAllDOMProcesses(
+    GlobalObject& aGlobal, nsTArray<RefPtr<nsIDOMProcessParent>>& aParents,
+    ErrorResult& aRv) {
+  if (!XRE_IsParentProcess()) {
+    aRv.ThrowNotAllowedError(
+        "getAllDOMProcesses() may only be called in the parent process");
+    return;
+  }
+  aParents.Clear();
+  // Always add the parent process nsIDOMProcessParent first
+  aParents.AppendElement(InProcessParent::Singleton());
+
+  // Before adding nsIDOMProcessParent for all the content processes
+  for (auto* cp : ContentParent::AllProcesses(ContentParent::eLive)) {
+    aParents.AppendElement(cp);
+  }
 }
 
 /* static */

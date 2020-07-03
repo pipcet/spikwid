@@ -147,7 +147,8 @@ nsresult GfxDeviceFamily::Contains(nsAString& aDeviceId) const {
 
 // Macros for appending a device to the DeviceFamily.
 #define APPEND_DEVICE(device) APPEND_DEVICE2(#device)
-#define APPEND_DEVICE2(device) deviceFamily->Append(NS_LITERAL_STRING(device))
+#define APPEND_DEVICE2(device) \
+  deviceFamily->Append(NS_LITERAL_STRING_FROM_CSTRING(device))
 #define APPEND_RANGE(start, end) deviceFamily->AppendRange(start, end)
 
 const GfxDeviceFamily* GfxDriverInfo::GetDeviceFamily(DeviceFamily id) {
@@ -670,12 +671,15 @@ const GfxDeviceFamily* GfxDriverInfo::GetDeviceFamily(DeviceFamily id) {
       APPEND_RANGE(0x6860, 0x687f);
       APPEND_RANGE(0x6900, 0x69ff);
       APPEND_DEVICE(0x7300);
-      APPEND_RANGE(0x7310, 0x731f);
+      APPEND_RANGE(0x7310, 0x738e);
       APPEND_RANGE(0x9830, 0x986f);
       APPEND_RANGE(0x9900, 0x99ff);
       // Raven
       APPEND_DEVICE(0x15dd);
       APPEND_DEVICE(0x15d8);
+      // Renoir
+      APPEND_DEVICE(0x1636);
+
 
 #ifdef EARLY_BETA_OR_EARLIER
       // Stoney

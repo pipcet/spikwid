@@ -30,6 +30,9 @@ class MediaControlKeyManager final : public MediaControlKeySource,
   bool Open() override;
   bool IsOpened() const override;
 
+  void SetControlledTabBrowsingContextId(
+      Maybe<uint64_t> aTopLevelBrowsingContextId) override;
+
   void SetPlaybackState(MediaSessionPlaybackState aState) override;
   MediaSessionPlaybackState GetPlaybackState() const override;
 
@@ -42,6 +45,9 @@ class MediaControlKeyManager final : public MediaControlKeySource,
 
   void SetMediaMetadata(const MediaMetadataBase& aMetadata) override;
   void SetSupportedMediaKeys(const MediaKeysArray& aSupportedKeys) override;
+  void SetEnableFullScreen(bool aIsEnabled) override;
+  void SetEnablePictureInPictureMode(bool aIsEnabled) override;
+  void SetPositionState(const PositionState& aState) override;
 
  private:
   ~MediaControlKeyManager();

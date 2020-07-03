@@ -287,9 +287,9 @@ void PreallocatedProcessManagerImpl::RemoveBlocker(ContentParent* aParent) {
     MOZ_LOG(ContentParent::GetLog(), LogLevel::Debug,
             ("Blocked preallocation for %fms",
              (TimeStamp::Now() - mBlockingStartTime).ToMilliseconds()));
-    PROFILER_ADD_TEXT_MARKER(
-        "Process", NS_LITERAL_CSTRING("Blocked preallocation"),
-        JS::ProfilingCategoryPair::DOM, mBlockingStartTime, TimeStamp::Now());
+    PROFILER_ADD_TEXT_MARKER("Process", "Blocked preallocation"_ns,
+                             JS::ProfilingCategoryPair::DOM, mBlockingStartTime,
+                             TimeStamp::Now());
     if (IsEmpty()) {
       AllocateAfterDelay();
     }
@@ -299,8 +299,9 @@ void PreallocatedProcessManagerImpl::RemoveBlocker(ContentParent* aParent) {
 bool PreallocatedProcessManagerImpl::CanAllocate() {
   return mEnabled && sNumBlockers == 0 &&
          mPreallocatedProcesses.size() < mNumberPreallocs && !sShutdown &&
-         (FissionAutostart() || !ContentParent::IsMaxProcessCountReached(
-                                    NS_LITERAL_STRING(DEFAULT_REMOTE_TYPE)));
+         (FissionAutostart() ||
+          !ContentParent::IsMaxProcessCountReached(
+              NS_LITERAL_STRING_FROM_CSTRING(DEFAULT_REMOTE_TYPE)));
 }
 
 void PreallocatedProcessManagerImpl::AllocateAfterDelay() {

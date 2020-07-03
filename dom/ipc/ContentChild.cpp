@@ -415,18 +415,6 @@ class AlertObserver {
 
   ~AlertObserver() = default;
 
-  bool ShouldRemoveFrom(nsIObserver* aObserver, const nsString& aData) const {
-    return (mObserver == aObserver && mData == aData);
-  }
-
-  bool Observes(const nsString& aData) const { return mData.Equals(aData); }
-
-  bool Notify(const nsCString& aType) const {
-    mObserver->Observe(nullptr, aType.get(), mData.get());
-    return true;
-  }
-
- private:
   nsCOMPtr<nsIObserver> mObserver;
   nsString mData;
 };
@@ -554,7 +542,7 @@ class PendingInputEventHangAnnotator final : public BackgroundHangAnnotator {
   virtual void AnnotateHang(BackgroundHangAnnotations& aAnnotations) override {
     int32_t pending = ContentChild::GetSingleton()->GetPendingInputEvents();
     if (pending > 0) {
-      aAnnotations.AddAnnotation(NS_LITERAL_STRING("PendingInput"), pending);
+      aAnnotations.AddAnnotation(u"PendingInput"_ns, pending);
     }
   }
 
@@ -748,7 +736,7 @@ bool ContentChild::Init(MessageLoop* aIOLoop, base::ProcessId aParentPid,
   RefPtr<nsPrintingProxy> printingProxy = nsPrintingProxy::GetInstance();
 #endif
 
-  SetProcessName(NS_LITERAL_STRING("Web Content"));
+  SetProcessName(u"Web Content"_ns);
 
 #ifdef NIGHTLY_BUILD
   // NOTE: We have to register the annotator on the main thread, as annotators
@@ -2270,12 +2258,22 @@ mozilla::ipc::IPCResult ContentChild::RecvDataStorageClear(
 
 mozilla::ipc::IPCResult ContentChild::RecvNotifyAlertsObserver(
     const nsCString& aType, const nsString& aData) {
-  mAlertObservers.RemoveElementsBy([&aData, &aType](const auto& observer) {
-    const bool notified = observer->Observes(aData) && observer->Notify(aType);
-    // if the observer was notified and aType == alertfinished, this alert is
-    // done.  we can remove the observer.
-    return notified && aType.EqualsLiteral("alertfinished");
+  nsTArray<nsCOMPtr<nsIObserver>> observersToNotify;
+
+  mAlertObservers.RemoveElementsBy([&](UniquePtr<AlertObserver>& observer) {
+    if (!observer->mData.Equals(aData)) {
+      return false;
+    }
+
+    // aType == alertfinished, this alert is done and we can remove the
+    // observer.
+    observersToNotify.AppendElement(observer->mObserver);
+    return aType.EqualsLiteral("alertfinished");
   });
+
+  for (auto& observer : observersToNotify) {
+    observer->Observe(nullptr, aType.get(), aData.get());
+  }
 
   return IPC_OK();
 }
@@ -2581,16 +2579,16 @@ mozilla::ipc::IPCResult ContentChild::RecvRemoteType(
 
   // Update the process name so about:memory's process names are more obvious.
   if (aRemoteType.EqualsLiteral(FILE_REMOTE_TYPE)) {
-    SetProcessName(NS_LITERAL_STRING("file:// Content"));
+    SetProcessName(u"file:// Content"_ns);
   } else if (aRemoteType.EqualsLiteral(EXTENSION_REMOTE_TYPE)) {
-    SetProcessName(NS_LITERAL_STRING("WebExtensions"));
+    SetProcessName(u"WebExtensions"_ns);
   } else if (aRemoteType.EqualsLiteral(PRIVILEGEDABOUT_REMOTE_TYPE)) {
-    SetProcessName(NS_LITERAL_STRING("Privileged Content"));
+    SetProcessName(u"Privileged Content"_ns);
   } else if (aRemoteType.EqualsLiteral(LARGE_ALLOCATION_REMOTE_TYPE)) {
-    SetProcessName(NS_LITERAL_STRING("Large Allocation Web Content"));
+    SetProcessName(u"Large Allocation Web Content"_ns);
   } else if (RemoteTypePrefix(aRemoteType)
                  .EqualsLiteral(FISSION_WEB_REMOTE_TYPE)) {
-    SetProcessName(NS_LITERAL_STRING("Isolated Web Content"));
+    SetProcessName(u"Isolated Web Content"_ns);
   }
   // else "prealloc", "web" or "webCOOP+COEP" type -> "Web Content" already set
 
@@ -2668,8 +2666,7 @@ mozilla::ipc::IPCResult ContentChild::RecvNotifyProcessPriorityChanged(
   NS_ENSURE_TRUE(os, IPC_OK());
 
   RefPtr<nsHashPropertyBag> props = new nsHashPropertyBag();
-  props->SetPropertyAsInt32(NS_LITERAL_STRING("priority"),
-                            static_cast<int32_t>(aPriority));
+  props->SetPropertyAsInt32(u"priority"_ns, static_cast<int32_t>(aPriority));
 
   os->NotifyObservers(static_cast<nsIPropertyBag2*>(props),
                       "ipc:process-priority-changed", nullptr);
@@ -2849,8 +2846,7 @@ void ContentChild::ShutdownInternal() {
   // terminate an "unload" or "pagehide" event handler (which might be doing a
   // sync XHR, for example).
   CrashReporter::AnnotateCrashReport(
-      CrashReporter::Annotation::IPCShutdownState,
-      NS_LITERAL_CSTRING("RecvShutdown"));
+      CrashReporter::Annotation::IPCShutdownState, "RecvShutdown"_ns);
 
   MOZ_ASSERT(NS_IsMainThread());
   RefPtr<nsThread> mainThread = nsThreadManager::get().GetCurrentThread();
@@ -2862,7 +2858,7 @@ void ContentChild::ShutdownInternal() {
     // We're in a nested event loop. Let's delay for an arbitrary period of
     // time (100ms) in the hopes that the event loop will have finished by
     // then.
-    MessageLoop::current()->PostDelayedTask(
+    GetCurrentSerialEventTarget()->DelayedDispatch(
         NewRunnableMethod("dom::ContentChild::RecvShutdown", this,
                           &ContentChild::ShutdownInternal),
         100);
@@ -2910,12 +2906,11 @@ void ContentChild::ShutdownInternal() {
 
   CrashReporter::AnnotateCrashReport(
       CrashReporter::Annotation::IPCShutdownState,
-      NS_LITERAL_CSTRING("SendFinishShutdown (sending)"));
+      "SendFinishShutdown (sending)"_ns);
   bool sent = SendFinishShutdown();
   CrashReporter::AnnotateCrashReport(
       CrashReporter::Annotation::IPCShutdownState,
-      sent ? NS_LITERAL_CSTRING("SendFinishShutdown (sent)")
-           : NS_LITERAL_CSTRING("SendFinishShutdown (failed)"));
+      sent ? "SendFinishShutdown (sent)"_ns : "SendFinishShutdown (failed)"_ns);
 }
 
 mozilla::ipc::IPCResult ContentChild::RecvUpdateWindow(
@@ -3468,7 +3463,7 @@ mozilla::ipc::IPCResult ContentChild::RecvCrossProcessRedirect(
       ChildProcessChannelListener::GetSingleton();
   // The listener will call completeRedirectSetup or asyncOpen on the channel.
   processListener->OnChannelReady(
-      loadState, aArgs.redirectIdentifier(), std::move(aEndpoints),
+      loadState, aArgs.loadIdentifier(), std::move(aEndpoints),
       aArgs.timing().refOr(nullptr), std::move(resolve));
   scopeExit.release();
 
@@ -4141,6 +4136,102 @@ mozilla::ipc::IPCResult ContentChild::RecvHistoryCommitLength(
   if (!aContext.IsNullOrDiscarded()) {
     aContext.get()->GetChildSessionHistory()->SetLength(aLength);
   }
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult ContentChild::RecvGoBack(
+    const MaybeDiscarded<BrowsingContext>& aContext,
+    const Maybe<int32_t>& aCancelContentJSEpoch, bool aRequireUserInteraction) {
+  if (aContext.IsNullOrDiscarded()) {
+    return IPC_OK();
+  }
+  BrowsingContext* bc = aContext.get();
+
+  if (auto* docShell = nsDocShell::Cast(bc->GetDocShell())) {
+    if (aCancelContentJSEpoch) {
+      docShell->SetCancelContentJSEpoch(*aCancelContentJSEpoch);
+    }
+    docShell->GoBack(aRequireUserInteraction);
+
+    if (BrowserChild* browserChild = BrowserChild::GetFrom(docShell)) {
+      browserChild->NotifyNavigationFinished();
+    }
+  }
+
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult ContentChild::RecvGoForward(
+    const MaybeDiscarded<BrowsingContext>& aContext,
+    const Maybe<int32_t>& aCancelContentJSEpoch, bool aRequireUserInteraction) {
+  if (aContext.IsNullOrDiscarded()) {
+    return IPC_OK();
+  }
+  BrowsingContext* bc = aContext.get();
+
+  if (auto* docShell = nsDocShell::Cast(bc->GetDocShell())) {
+    if (aCancelContentJSEpoch) {
+      docShell->SetCancelContentJSEpoch(*aCancelContentJSEpoch);
+    }
+    docShell->GoForward(aRequireUserInteraction);
+
+    if (BrowserChild* browserChild = BrowserChild::GetFrom(docShell)) {
+      browserChild->NotifyNavigationFinished();
+    }
+  }
+
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult ContentChild::RecvGoToIndex(
+    const MaybeDiscarded<BrowsingContext>& aContext, const int32_t& aIndex,
+    const Maybe<int32_t>& aCancelContentJSEpoch) {
+  if (aContext.IsNullOrDiscarded()) {
+    return IPC_OK();
+  }
+  BrowsingContext* bc = aContext.get();
+
+  if (auto* docShell = nsDocShell::Cast(bc->GetDocShell())) {
+    if (aCancelContentJSEpoch) {
+      docShell->SetCancelContentJSEpoch(*aCancelContentJSEpoch);
+    }
+    docShell->GotoIndex(aIndex);
+
+    if (BrowserChild* browserChild = BrowserChild::GetFrom(docShell)) {
+      browserChild->NotifyNavigationFinished();
+    }
+  }
+
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult ContentChild::RecvReload(
+    const MaybeDiscarded<BrowsingContext>& aContext,
+    const uint32_t aReloadFlags) {
+  if (aContext.IsNullOrDiscarded()) {
+    return IPC_OK();
+  }
+  BrowsingContext* bc = aContext.get();
+
+  if (auto* docShell = nsDocShell::Cast(bc->GetDocShell())) {
+    docShell->Reload(aReloadFlags);
+  }
+
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult ContentChild::RecvStopLoad(
+    const MaybeDiscarded<BrowsingContext>& aContext,
+    const uint32_t aStopFlags) {
+  if (aContext.IsNullOrDiscarded()) {
+    return IPC_OK();
+  }
+  BrowsingContext* bc = aContext.get();
+
+  if (auto* docShell = nsDocShell::Cast(bc->GetDocShell())) {
+    docShell->Stop(aStopFlags);
+  }
+
   return IPC_OK();
 }
 
