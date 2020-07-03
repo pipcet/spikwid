@@ -103,8 +103,6 @@ if CONFIG['BUILD_CTYPES']:
 if CONFIG['MOZ_XUL']:
     DIRS += ['autocomplete', 'printingui', 'satchel']
 
-DIRS += ['captivedetect']
-
 if CONFIG['OS_TARGET'] != 'Android':
     DIRS += ['terminator']
 
