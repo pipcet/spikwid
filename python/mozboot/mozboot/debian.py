@@ -99,11 +99,6 @@ class DebianBootstrapper(LinuxBootstrapper, BaseBootstrapper):
         # 2. Android SDK. Android NDK only if we are not in artifact mode. Android packages.
         self.apt_install(*self.MOBILE_ANDROID_COMMON_PACKAGES)
 
-        # 2. Android pieces.
-        super().install_mobile_android_packages(
-            mozconfig_builder, artifact_mode=artifact_mode
-        )
-
     def _update_package_manager(self):
         self.apt_update()
 
