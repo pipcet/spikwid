@@ -4,8 +4,11 @@
 
 ## App Menu
 
-appmenuitem-banner-update-downloading =
-    .label = Downloading { -brand-shorter-name } update
+appmenuitem-update-banner =
+    .label-update-downloading = Downloading { -brand-shorter-name } update
+appmenuitem-protection-dashboard-title = "Protections" Dashboard
+appmenuitem-customize-mode =
+    .label = Customize…
 
 appmenuitem-banner-update-available =
     .label = Update available — download now
