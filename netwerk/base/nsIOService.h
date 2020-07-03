@@ -21,7 +21,6 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/Mutex.h"
 #include "prtime.h"
-#include "nsICaptivePortalService.h"
 #include "nsIObserverService.h"
 
 #define NS_N(x) (sizeof(x) / sizeof(*x))
@@ -118,9 +117,6 @@ class nsIOService final : public nsIIOService,
   void IncrementNetWonRequestNumber() { mNetWon++; }
   uint32_t GetNetWonRequestNumber() { return mNetWon; }
 
-  // Used to trigger a recheck of the captive portal status
-  nsresult RecheckCaptivePortal();
-
   void OnProcessLaunchComplete(SocketProcessHost* aHost, bool aSucceeded);
   void OnProcessUnexpectedShutdown(SocketProcessHost* aHost);
   bool SocketProcessReady();
@@ -159,9 +155,6 @@ class nsIOService final : public nsIIOService,
                                     nsIProtocolHandler** hdlrResult,
                                     uint32_t start = 0, uint32_t end = 0);
   nsresult CacheProtocolHandler(const char* scheme, nsIProtocolHandler* hdlr);
-
-  nsresult InitializeCaptivePortalService();
-  nsresult RecheckCaptivePortalIfLocalRedirect(nsIChannel* newChan);
 
   // Prefs wrangling
   static void PrefsChanged(const char* pref, void* self);
@@ -214,7 +207,6 @@ class nsIOService final : public nsIIOService,
   mozilla::Atomic<bool, mozilla::Relaxed> mHttpHandlerAlreadyShutingDown;
 
   nsCOMPtr<nsPISocketTransportService> mSocketTransportService;
-  nsCOMPtr<nsICaptivePortalService> mCaptivePortalService;
   nsCOMPtr<nsINetworkLinkService> mNetworkLinkService;
   bool mNetworkLinkServiceInitialized;
 
