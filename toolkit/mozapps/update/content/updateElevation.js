@@ -66,7 +66,7 @@ const gUpdateElevationDialog = {
     let button = document.getElementById("elevateExtra2");
     this._setButton(button, "restartLaterButton");
     button = document.getElementById("elevateExtra1");
-    this._setButton(button, "noThanksButton");
+    this._setButton(button, "noButton");
     button = document.getElementById("elevateAccept");
     this._setButton(button, "restartNowButton");
     button.focus();
@@ -74,14 +74,14 @@ const gUpdateElevationDialog = {
   onRestartLater() {
     window.close();
   },
-  onNoThanks() {
+  onNo() {
     Services.obs.notifyObservers(null, "update-canceled");
     let um = Cc["@mozilla.org/updates/update-manager;1"].getService(
       Ci.nsIUpdateManager
     );
     let update = um.activeUpdate;
     um.cleanupActiveUpdate();
-    // Since the user has clicked "No Thanks", we should not prompt them to update to
+    // Since the user has clicked "No", we should not prompt them to update to
     // this version again unless they manually select "Check for Updates..."
     // which will clear app.update.elevate.never preference.
     let aus = Cc["@mozilla.org/updates/update-service;1"].getService(
