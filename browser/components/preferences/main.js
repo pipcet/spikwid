@@ -267,46 +267,6 @@ var gMainPane = {
         .addEventListener(aEventType, aCallback.bind(gMainPane));
     }
 
-    if (AppConstants.HAVE_SHELL_SERVICE) {
-      this.updateSetDefaultBrowser();
-      let win = Services.wm.getMostRecentWindow("navigator:browser");
-
-      // Exponential backoff mechanism will delay the polling times if user doesn't
-      // trigger SetDefaultBrowser for a long time.
-      let backoffTimes = [
-        1000,
-        1000,
-        1000,
-        1000,
-        2000,
-        2000,
-        2000,
-        5000,
-        5000,
-        10000,
-      ];
-
-      let pollForDefaultBrowser = () => {
-        let uri = win.gBrowser.currentURI.spec;
-
-        if (
-          (uri == "about:preferences" || uri == "about:preferences#general") &&
-          document.visibilityState == "visible"
-        ) {
-          this.updateSetDefaultBrowser();
-        }
-
-        // approximately a "requestIdleInterval"
-        window.setTimeout(() => {
-          window.requestIdleCallback(pollForDefaultBrowser);
-        }, backoffTimes[this._backoffIndex + 1 < backoffTimes.length ? this._backoffIndex++ : backoffTimes.length - 1]);
-      };
-
-      window.setTimeout(() => {
-        window.requestIdleCallback(pollForDefaultBrowser);
-      }, backoffTimes[this._backoffIndex]);
-    }
-
     this.initBrowserContainers();
     this.buildContentProcessCountMenuList();
 
@@ -409,24 +369,6 @@ var gMainPane = {
     setEventListener("manageBrowserLanguagesButton", "command", function() {
       gMainPane.showBrowserLanguagesSubDialog({ search: false });
     });
-    if (AppConstants.MOZ_UPDATER) {
-      // These elements are only compiled in when the updater is enabled
-      setEventListener("checkForUpdatesButton", "command", function() {
-        gAppUpdater.checkForUpdates();
-      });
-      setEventListener("downloadAndInstallButton", "command", function() {
-        gAppUpdater.startDownload();
-      });
-      setEventListener("updateButton", "command", function() {
-        gAppUpdater.buttonRestartAfterDownload();
-      });
-      setEventListener("checkForUpdatesButton2", "command", function() {
-        gAppUpdater.checkForUpdates();
-      });
-      setEventListener("checkForUpdatesButton3", "command", function() {
-        gAppUpdater.checkForUpdates();
-      });
-    }
 
     // Startup pref
     setEventListener(
@@ -451,13 +393,6 @@ var gMainPane = {
     );
     gMainPane.updateBrowserStartupUI();
 
-    if (AppConstants.HAVE_SHELL_SERVICE) {
-      setEventListener(
-        "setDefaultButton",
-        "command",
-        gMainPane.setDefaultBrowser
-      );
-    }
     setEventListener(
       "disableContainersExtension",
       "command",
@@ -626,90 +561,6 @@ var gMainPane = {
         let distroField = document.getElementById("distribution");
         distroField.value = distroAbout;
         distroField.hidden = false;
-      }
-    }
-
-    if (AppConstants.MOZ_UPDATER) {
-      gAppUpdater = new appUpdater();
-      setEventListener("showUpdateHistory", "command", gMainPane.showUpdates);
-
-      let updateDisabled =
-        Services.policies && !Services.policies.isAllowed("appUpdate");
-
-      if (gHasWinPackageId) {
-        // When we're running inside an app package, there's no point in
-        // displaying any update content here, and it would get confusing if we
-        // did, because our updater is not enabled.
-        // We can't rely on the hidden attribute for the toplevel elements,
-        // because of the pane hiding/showing code interfering.
-        document
-          .getElementById("updatesCategory")
-          .setAttribute("style", "display: none !important");
-        document
-          .getElementById("updateApp")
-          .setAttribute("style", "display: none !important");
-      } else if (
-        updateDisabled ||
-        UpdateUtils.appUpdateAutoSettingIsLocked() ||
-        gApplicationUpdateService.manualUpdateOnly
-      ) {
-        document.getElementById("updateAllowDescription").hidden = true;
-        document.getElementById("updateSettingsContainer").hidden = true;
-        if (updateDisabled && AppConstants.MOZ_MAINTENANCE_SERVICE) {
-          document.getElementById("useService").hidden = true;
-        }
-      } else {
-        // Start with no option selected since we are still reading the value
-        document.getElementById("autoDesktop").removeAttribute("selected");
-        document.getElementById("manualDesktop").removeAttribute("selected");
-        // Start reading the correct value from the disk
-        this.readUpdateAutoPref();
-        setEventListener("updateRadioGroup", "command", event => {
-          if (event.target.id == "backgroundUpdate") {
-            this.writeBackgroundUpdatePref();
-          } else {
-            this.writeUpdateAutoPref();
-          }
-        });
-        if (this.isBackgroundUpdateUIAvailable()) {
-          document.getElementById("backgroundUpdate").hidden = false;
-          // Start reading the background update pref's value from the disk.
-          this.readBackgroundUpdatePref();
-        }
-      }
-
-      if (AppConstants.platform == "win") {
-        // On Windows, the Application Update setting is an installation-
-        // specific preference, not a profile-specific one. Show a warning to
-        // inform users of this.
-        let updateContainer = document.getElementById(
-          "updateSettingsContainer"
-        );
-        updateContainer.classList.add("updateSettingCrossUserWarningContainer");
-        document.getElementById(
-          "updateSettingCrossUserWarningDesc"
-        ).hidden = false;
-      }
-
-      if (AppConstants.MOZ_MAINTENANCE_SERVICE) {
-        // Check to see if the maintenance service is installed.
-        // If it isn't installed, don't show the preference at all.
-        let installed;
-        try {
-          let wrk = Cc["@mozilla.org/windows-registry-key;1"].createInstance(
-            Ci.nsIWindowsRegKey
-          );
-          wrk.open(
-            wrk.ROOT_KEY_LOCAL_MACHINE,
-            "SOFTWARE\\Mozilla\\MaintenanceService",
-            wrk.ACCESS_READ | wrk.WOW64_64
-          );
-          installed = wrk.readIntValue("Installed");
-          wrk.close();
-        } catch (e) {}
-        if (installed != 1) {
-          document.getElementById("useService").hidden = true;
-        }
       }
     }
 
@@ -1301,52 +1152,12 @@ var gMainPane = {
    * browser is already the default browser.
    */
   updateSetDefaultBrowser() {
-    if (AppConstants.HAVE_SHELL_SERVICE) {
-      let shellSvc = getShellService();
-      let defaultBrowserBox = document.getElementById("defaultBrowserBox");
-      if (!shellSvc) {
-        defaultBrowserBox.hidden = true;
-        return;
-      }
-      let isDefault = shellSvc.isDefaultBrowser(false, true);
-      let setDefaultPane = document.getElementById("setDefaultPane");
-      setDefaultPane.classList.toggle("is-default", isDefault);
-      let alwaysCheck = document.getElementById("alwaysCheckDefault");
-      let alwaysCheckPref = Preferences.get(
-        "browser.shell.checkDefaultBrowser"
-      );
-      alwaysCheck.disabled = alwaysCheckPref.locked || isDefault;
-    }
   },
 
   /**
    * Set browser as the operating system default browser.
    */
   setDefaultBrowser() {
-    if (AppConstants.HAVE_SHELL_SERVICE) {
-      let alwaysCheckPref = Preferences.get(
-        "browser.shell.checkDefaultBrowser"
-      );
-      alwaysCheckPref.value = true;
-
-      // Reset exponential backoff delay time in order to do visual update in pollForDefaultBrowser.
-      this._backoffIndex = 0;
-
-      let shellSvc = getShellService();
-      if (!shellSvc) {
-        return;
-      }
-      try {
-        shellSvc.setDefaultBrowser(true, false);
-      } catch (ex) {
-        Cu.reportError(ex);
-        return;
-      }
-
-      let isDefault = shellSvc.isDefaultBrowser(false, true);
-      let setDefaultPane = document.getElementById("setDefaultPane");
-      setDefaultPane.classList.toggle("is-default", isDefault);
-    }
   },
 
   /**
