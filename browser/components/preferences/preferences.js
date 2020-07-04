@@ -187,36 +187,9 @@ function init_all() {
   Services.telemetry.setEventRecordingEnabled("aboutpreferences", true);
 
   register_module("paneGeneral", gMainPane);
-  register_module("paneHome", gHomePane);
   register_module("paneSearch", gSearchPane);
   register_module("panePrivacy", gPrivacyPane);
   register_module("paneContainers", gContainersPane);
-  if (Services.prefs.getBoolPref("browser.preferences.experimental")) {
-    // Set hidden based on previous load's hidden value.
-    document.getElementById(
-      "category-experimental"
-    ).hidden = Services.prefs.getBoolPref(
-      "browser.preferences.experimental.hidden",
-      false
-    );
-    register_module("paneExperimental", gExperimentalPane);
-  }
-
-  NimbusFeatures.moreFromMozilla.recordExposureEvent({ once: true });
-  if (NimbusFeatures.moreFromMozilla.getVariable("enabled")) {
-    document.getElementById("category-more-from-mozilla").hidden = false;
-    gMoreFromMozillaPane.option = NimbusFeatures.moreFromMozilla.getVariable(
-      "template"
-    );
-    register_module("paneMoreFromMozilla", gMoreFromMozillaPane);
-  }
-  // The Sync category needs to be the last of the "real" categories
-  // registered and inititalized since many tests wait for the
-  // "sync-pane-loaded" observer notification before starting the test.
-  if (Services.prefs.getBoolPref("identity.fxaccounts.enabled")) {
-    document.getElementById("category-sync").hidden = false;
-    register_module("paneSync", gSyncPane);
-  }
   register_module("paneSearchResults", gSearchResultsPane);
   gSearchResultsPane.init();
   gMainPane.preInit();
@@ -243,6 +216,8 @@ function init_all() {
 
   gotoPref().then(() => {
     let helpButton = document.getElementById("helpButton");
+    if (!helpButton)
+      return;
     let helpUrl =
       Services.urlFormatter.formatURLPref("app.support.baseURL") +
       "preferences";
