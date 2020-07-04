@@ -270,23 +270,6 @@ var gMainPane = {
     this.initBrowserContainers();
     this.buildContentProcessCountMenuList();
 
-    let performanceSettingsLink = document.getElementById(
-      "performanceSettingsLearnMore"
-    );
-    let performanceSettingsUrl =
-      Services.urlFormatter.formatURLPref("app.support.baseURL") +
-      "performance";
-    performanceSettingsLink.setAttribute("href", performanceSettingsUrl);
-
-    this.updateDefaultPerformanceSettingsPref();
-
-    let defaultPerformancePref = Preferences.get(
-      "browser.preferences.defaultPerformanceSettings.enabled"
-    );
-    defaultPerformancePref.on("change", () => {
-      this.updatePerformanceSettingsBox({ duringChangeEvent: true });
-    });
-    this.updatePerformanceSettingsBox({ duringChangeEvent: false });
     this.displayUseSystemLocale();
     let connectionSettingsLink = document.getElementById(
       "connectionSettingsLearnMore"
@@ -523,12 +506,6 @@ var gMainPane = {
     let arch = bundle.GetStringFromName(archResource);
     version += ` (${arch})`;
 
-    document.l10n.setAttributes(
-      document.getElementById("updateAppInfo"),
-      "update-application-version",
-      { version }
-    );
-
     // Show a release notes link if we have a URL.
     let relNotesLink = document.getElementById("releasenotes");
     let relNotesPrefType = Services.prefs.getPrefType("app.releaseNotesURL");
@@ -568,8 +545,8 @@ var gMainPane = {
 
     // Observe preferences that influence what we display so we can rebuild
     // the view when they change.
-    Services.obs.addObserver(this, AUTO_UPDATE_CHANGED_TOPIC);
-    Services.obs.addObserver(this, BACKGROUND_UPDATE_CHANGED_TOPIC);
+    Services.prefs.addObserver(PREF_SHOW_PLUGINS_IN_LIST, this);
+    Services.prefs.addObserver(PREF_HIDE_PLUGINS_WITHOUT_EXTENSIONS, this);
 
     setEventListener("filter", "command", gMainPane.filter);
     setEventListener("typeColumn", "click", gMainPane.sort);
@@ -1598,140 +1575,25 @@ var gMainPane = {
   },
 
   updateDefaultPerformanceSettingsPref() {
-    let defaultPerformancePref = Preferences.get(
-      "browser.preferences.defaultPerformanceSettings.enabled"
-    );
-    let processCountPref = Preferences.get("dom.ipc.processCount");
-    let accelerationPref = Preferences.get("layers.acceleration.disabled");
-    if (
-      processCountPref.value != processCountPref.defaultValue ||
-      accelerationPref.value != accelerationPref.defaultValue
-    ) {
-      defaultPerformancePref.value = false;
-    }
   },
 
   updatePerformanceSettingsBox({ duringChangeEvent }) {
-    let defaultPerformancePref = Preferences.get(
-      "browser.preferences.defaultPerformanceSettings.enabled"
-    );
-    let performanceSettings = document.getElementById("performanceSettings");
-    let processCountPref = Preferences.get("dom.ipc.processCount");
-    if (defaultPerformancePref.value) {
-      let accelerationPref = Preferences.get("layers.acceleration.disabled");
-      // Unset the value so process count will be decided by the platform.
-      processCountPref.value = processCountPref.defaultValue;
-      accelerationPref.value = accelerationPref.defaultValue;
-      performanceSettings.hidden = true;
-    } else {
-      performanceSettings.hidden = false;
-    }
   },
 
   buildContentProcessCountMenuList() {
-    if (Services.appinfo.fissionAutostart) {
-      document.getElementById("limitContentProcess").hidden = true;
-      document.getElementById("contentProcessCount").hidden = true;
-      document.getElementById(
-        "contentProcessCountEnabledDescription"
-      ).hidden = true;
-      document.getElementById(
-        "contentProcessCountDisabledDescription"
-      ).hidden = true;
-      return;
-    }
-    if (Services.appinfo.browserTabsRemoteAutostart) {
-      let processCountPref = Preferences.get("dom.ipc.processCount");
-      let defaultProcessCount = processCountPref.defaultValue;
-
-      let contentProcessCount = document.querySelector(`#contentProcessCount > menupopup >
-                                menuitem[value="${defaultProcessCount}"]`);
-
-      document.l10n.setAttributes(
-        contentProcessCount,
-        "performance-default-content-process-count",
-        { num: defaultProcessCount }
-      );
-
-      document.getElementById("limitContentProcess").disabled = false;
-      document.getElementById("contentProcessCount").disabled = false;
-      document.getElementById(
-        "contentProcessCountEnabledDescription"
-      ).hidden = false;
-      document.getElementById(
-        "contentProcessCountDisabledDescription"
-      ).hidden = true;
-    } else {
-      document.getElementById("limitContentProcess").disabled = true;
-      document.getElementById("contentProcessCount").disabled = true;
-      document.getElementById(
-        "contentProcessCountEnabledDescription"
-      ).hidden = true;
-      document.getElementById(
-        "contentProcessCountDisabledDescription"
-      ).hidden = false;
-    }
   },
 
   _minUpdatePrefDisableTime: 1000,
   /**
    * Selects the correct item in the update radio group
    */
-  async readUpdateAutoPref() {
-    if (
-      AppConstants.MOZ_UPDATER &&
-      (!Services.policies || Services.policies.isAllowed("appUpdate")) &&
-      !gHasWinPackageId
-    ) {
-      let radiogroup = document.getElementById("updateRadioGroup");
-
-      radiogroup.disabled = true;
-      let enabled = await UpdateUtils.getAppUpdateAutoEnabled();
-      radiogroup.value = enabled;
-      radiogroup.disabled = false;
-
-      this.maybeDisableBackgroundUpdateControls();
-    }
+  async updateReadPrefs() {
   },
 
   /**
    * Writes the value of the automatic update radio group to the disk
    */
-  async writeUpdateAutoPref() {
-    if (
-      AppConstants.MOZ_UPDATER &&
-      (!Services.policies || Services.policies.isAllowed("appUpdate")) &&
-      !gHasWinPackageId
-    ) {
-      let radiogroup = document.getElementById("updateRadioGroup");
-      let updateAutoValue = radiogroup.value == "true";
-      let _disableTimeOverPromise = new Promise(r =>
-        setTimeout(r, this._minUpdatePrefDisableTime)
-      );
-      radiogroup.disabled = true;
-      try {
-        await UpdateUtils.setAppUpdateAutoEnabled(updateAutoValue);
-        await _disableTimeOverPromise;
-        radiogroup.disabled = false;
-      } catch (error) {
-        Cu.reportError(error);
-        await Promise.all([
-          this.readUpdateAutoPref(),
-          this.reportUpdatePrefWriteError(),
-        ]);
-        return;
-      }
-
-      this.maybeDisableBackgroundUpdateControls();
-
-      // If the value was changed to false the user should be given the option
-      // to discard an update if there is one.
-      if (!updateAutoValue) {
-        await this.checkUpdateInProgress();
-      }
-      // For tests:
-      radiogroup.dispatchEvent(new CustomEvent("ProcessedUpdatePrefChange"));
-    }
+  async updateWritePrefs() {
   },
 
   isBackgroundUpdateUIAvailable() {
@@ -1892,9 +1754,6 @@ var gMainPane = {
   destroy() {
     window.removeEventListener("unload", this);
     Services.prefs.removeObserver(PREF_CONTAINERS_EXTENSION, this);
-    Services.obs.removeObserver(this, AUTO_UPDATE_CHANGED_TOPIC);
-    Services.obs.removeObserver(this, BACKGROUND_UPDATE_CHANGED_TOPIC);
-    AppearanceChooser.destroy();
   },
 
   // nsISupports
@@ -1941,9 +1800,6 @@ var gMainPane = {
   handleEvent(aEvent) {
     if (aEvent.type == "unload") {
       this.destroy();
-      if (AppConstants.MOZ_UPDATER) {
-        onUnload();
-      }
     }
   },
 
