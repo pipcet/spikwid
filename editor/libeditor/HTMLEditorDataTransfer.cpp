@@ -200,6 +200,83 @@ nsresult HTMLEditor::InsertHTMLAsAction(const nsAString& aInString,
   return EditorBase::ToGenericNSResult(rv);
 }
 
+EditorDOMPoint HTMLEditor::GetNewCaretPointAfterInsertingHTML(
+    const EditorDOMPoint& aLastInsertedPoint) const {
+  EditorDOMPoint pointToPutCaret;
+
+  // but don't cross tables
+  nsIContent* containerContent = nullptr;
+  if (!HTMLEditUtils::IsTable(aLastInsertedPoint.GetChild())) {
+    containerContent = GetLastEditableLeaf(*aLastInsertedPoint.GetChild());
+    if (containerContent) {
+      Element* mostDistantInclusiveAncestorTableElement = nullptr;
+      for (Element* maybeTableElement =
+               containerContent->GetAsElementOrParentElement();
+           maybeTableElement &&
+           maybeTableElement != aLastInsertedPoint.GetChild();
+           maybeTableElement = maybeTableElement->GetParentElement()) {
+        if (HTMLEditUtils::IsTable(maybeTableElement)) {
+          mostDistantInclusiveAncestorTableElement = maybeTableElement;
+        }
+      }
+      // If we're in table elements, we should put caret into the most ancestor
+      // table element.
+      if (mostDistantInclusiveAncestorTableElement) {
+        containerContent = mostDistantInclusiveAncestorTableElement;
+      }
+    }
+  }
+  // If we are not in table elements, we should put caret in the last inserted
+  // node.
+  if (!containerContent) {
+    containerContent = aLastInsertedPoint.GetChild();
+  }
+
+  // If the container is a text node or a container element except `<table>`
+  // element, put caret a end of it.
+  if (containerContent->IsText() ||
+      (HTMLEditUtils::IsContainerNode(*containerContent) &&
+       !HTMLEditUtils::IsTable(containerContent))) {
+    pointToPutCaret.SetToEndOf(containerContent);
+  }
+  // Otherwise, i.e., it's an atomic element, `<table>` element or data node,
+  // put caret after it.
+  else {
+    pointToPutCaret.Set(containerContent);
+    DebugOnly<bool> advanced = pointToPutCaret.AdvanceOffset();
+    NS_WARNING_ASSERTION(advanced, "Failed to advance offset from found node");
+  }
+
+  // Make sure we don't end up with selection collapsed after an invisible
+  // `<br>` element.
+  WSRunScanner wsRunScannerAtCaret(this, pointToPutCaret);
+  if (wsRunScannerAtCaret
+          .ScanPreviousVisibleNodeOrBlockBoundaryFrom(pointToPutCaret)
+          .ReachedBRElement() &&
+      !IsVisibleBRElement(wsRunScannerAtCaret.GetStartReasonContent())) {
+    WSRunScanner wsRunScannerAtStartReason(
+        this, EditorDOMPoint(wsRunScannerAtCaret.GetStartReasonContent()));
+    WSScanResult backwardScanFromPointToCaretResult =
+        wsRunScannerAtStartReason.ScanPreviousVisibleNodeOrBlockBoundaryFrom(
+            pointToPutCaret);
+    if (backwardScanFromPointToCaretResult.InNormalWhiteSpacesOrText()) {
+      pointToPutCaret = backwardScanFromPointToCaretResult.Point();
+    } else if (backwardScanFromPointToCaretResult.ReachedSpecialContent()) {
+      // XXX In my understanding, this is odd.  The end reason may not be
+      //     same as the reached special content because the equality is
+      //     guaranteed only when ReachedCurrentBlockBoundary() returns true.
+      //     However, looks like that this code assumes that
+      //     GetStartReasonContent() returns the content.
+      NS_ASSERTION(wsRunScannerAtStartReason.GetStartReasonContent() ==
+                       backwardScanFromPointToCaretResult.GetContent(),
+                   "Start reason is not the reached special content");
+      pointToPutCaret.SetAfter(
+          wsRunScannerAtStartReason.GetStartReasonContent());
+    }
+  }
+
+  return pointToPutCaret;
+}
 nsresult HTMLEditor::DoInsertHTMLWithContext(
     const nsAString& aInputString, const nsAString& aContextStr,
     const nsAString& aInfoStr, const nsAString& aFlavor, Document* aSourceDoc,
@@ -662,80 +739,9 @@ nsresult HTMLEditor::DoInsertHTMLWithContext(
     return NS_OK;
   }
 
+  const EditorDOMPoint pointToPutCaret =
+      GetNewCaretPointAfterInsertingHTML(lastInsertedPoint);
   // Now collapse the selection to the end of what we just inserted.
-  EditorDOMPoint pointToPutCaret;
-
-  // but don't cross tables
-  nsIContent* containerContent = nullptr;
-  if (!HTMLEditUtils::IsTable(lastInsertedPoint.GetChild())) {
-    containerContent = GetLastEditableLeaf(*lastInsertedPoint.GetChild());
-    if (containerContent) {
-      Element* mostAncestorTableRelatedElement = nullptr;
-      for (Element* maybeTableRelatedElement =
-               containerContent->GetAsElementOrParentElement();
-           maybeTableRelatedElement &&
-           maybeTableRelatedElement != lastInsertedPoint.GetChild();
-           maybeTableRelatedElement =
-               maybeTableRelatedElement->GetParentElement()) {
-        if (HTMLEditUtils::IsTable(maybeTableRelatedElement)) {
-          mostAncestorTableRelatedElement = maybeTableRelatedElement;
-        }
-      }
-      // If we're in table elements, we should put caret into the most ancestor
-      // table element.
-      if (mostAncestorTableRelatedElement) {
-        containerContent = mostAncestorTableRelatedElement;
-      }
-    }
-  }
-  // If we are not in table elements, we should put caret in the last inserted
-  // node.
-  if (!containerContent) {
-    containerContent = lastInsertedPoint.GetChild();
-  }
-
-  // If the container is a text node or a container element except `<table>`
-  // element, put caret a end of it.
-  if (containerContent->IsText() ||
-      (HTMLEditUtils::IsContainerNode(*containerContent) &&
-       !HTMLEditUtils::IsTable(containerContent))) {
-    pointToPutCaret.SetToEndOf(containerContent);
-  }
-  // Otherwise, i.e., it's an atomic element, `<table>` element or data node,
-  // put caret after it.
-  else {
-    pointToPutCaret.Set(containerContent);
-    DebugOnly<bool> advanced = pointToPutCaret.AdvanceOffset();
-    NS_WARNING_ASSERTION(advanced, "Failed to advance offset from found node");
-  }
-
-  // Make sure we don't end up with selection collapsed after an invisible
-  // `<br>` element.
-  WSRunScanner wsRunScannerAtCaret(this, pointToPutCaret);
-  if (wsRunScannerAtCaret
-          .ScanPreviousVisibleNodeOrBlockBoundaryFrom(pointToPutCaret)
-          .ReachedBRElement() &&
-      !IsVisibleBRElement(wsRunScannerAtCaret.GetStartReasonContent())) {
-    WSRunScanner wsRunScannerAtStartReason(
-        this, EditorDOMPoint(wsRunScannerAtCaret.GetStartReasonContent()));
-    WSScanResult backwardScanFromPointToCaretResult =
-        wsRunScannerAtStartReason.ScanPreviousVisibleNodeOrBlockBoundaryFrom(
-            pointToPutCaret);
-    if (backwardScanFromPointToCaretResult.InNormalWhiteSpacesOrText()) {
-      pointToPutCaret = backwardScanFromPointToCaretResult.Point();
-    } else if (backwardScanFromPointToCaretResult.ReachedSpecialContent()) {
-      // XXX In my understanding, this is odd.  The end reason may not be
-      //     same as the reached special content because the equality is
-      //     guaranteed only when ReachedCurrentBlockBoundary() returns true.
-      //     However, looks like that this code assumes that
-      //     GetStartReasonContent() returns the content.
-      NS_ASSERTION(wsRunScannerAtStartReason.GetStartReasonContent() ==
-                       backwardScanFromPointToCaretResult.GetContent(),
-                   "Start reason is not the reached special content");
-      pointToPutCaret.SetAfter(
-          wsRunScannerAtStartReason.GetStartReasonContent());
-    }
-  }
   rv = CollapseSelectionTo(pointToPutCaret);
   if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
     return NS_ERROR_EDITOR_DESTROYED;
@@ -3122,23 +3128,16 @@ void HTMLEditor::AutoHTMLFragmentBoundariesFixer::
 }
 
 // static
-Element*
-HTMLEditor::AutoHTMLFragmentBoundariesFixer::GetMostAncestorListOrTableElement(
-    const nsTArray<OwningNonNull<nsIContent>>& aArrayOfTopMostChildContents,
-    const nsTArray<OwningNonNull<Element>>&
-        aArrayOfListAndTableRelatedElements) {
+Element* HTMLEditor::AutoHTMLFragmentBoundariesFixer::
+    GetMostDistantAncestorListOrTableElement(
+        const nsTArray<OwningNonNull<nsIContent>>& aArrayOfTopMostChildContents,
+        const nsTArray<OwningNonNull<Element>>&
+            aInclusiveAncestorsTableOrListElements) {
   Element* lastFoundAncestorListOrTableElement = nullptr;
   for (auto& content : aArrayOfTopMostChildContents) {
     if (HTMLEditUtils::IsAnyTableElementButNotTable(content)) {
-      Element* tableElement = nullptr;
-      for (Element* maybeTableElement = content->GetParentElement();
-           maybeTableElement;
-           maybeTableElement = maybeTableElement->GetParentElement()) {
-        if (maybeTableElement->IsHTMLElement(nsGkAtoms::table)) {
-          tableElement = maybeTableElement;
-          break;
-        }
-      }
+      Element* tableElement =
+          HTMLEditUtils::GetClosestAncestorTableElement(*content);
       if (!tableElement) {
         continue;
       }
@@ -3147,12 +3146,12 @@ HTMLEditor::AutoHTMLFragmentBoundariesFixer::GetMostAncestorListOrTableElement(
       // aArrayOfNodes, return the last found list or `<table>` element.
       // XXX Is that really expected that this returns a list element in this
       //     case?
-      if (!aArrayOfListAndTableRelatedElements.Contains(tableElement)) {
+      if (!aInclusiveAncestorsTableOrListElements.Contains(tableElement)) {
         return lastFoundAncestorListOrTableElement;
       }
       // If we find a `<table>` element which is topmost list or `<table>`
       // element at first or last of aArrayOfNodes, return it.
-      if (aArrayOfListAndTableRelatedElements.LastElement().get() ==
+      if (aInclusiveAncestorsTableOrListElements.LastElement().get() ==
           tableElement) {
         return tableElement;
       }
@@ -3165,15 +3164,8 @@ HTMLEditor::AutoHTMLFragmentBoundariesFixer::GetMostAncestorListOrTableElement(
     if (!HTMLEditUtils::IsListItem(content)) {
       continue;
     }
-    Element* listElement = nullptr;
-    for (Element* maybeListElement = content->GetParentElement();
-         maybeListElement;
-         maybeListElement = maybeListElement->GetParentElement()) {
-      if (HTMLEditUtils::IsAnyListElement(maybeListElement)) {
-        listElement = maybeListElement;
-        break;
-      }
-    }
+    Element* listElement =
+        HTMLEditUtils::GetClosestAncestorAnyListElement(*content);
     if (!listElement) {
       continue;
     }
@@ -3182,12 +3174,12 @@ HTMLEditor::AutoHTMLFragmentBoundariesFixer::GetMostAncestorListOrTableElement(
     // found list or `<table>` element.
     // XXX Is that really expected that this returns a `<table>` element in
     //     this case?
-    if (!aArrayOfListAndTableRelatedElements.Contains(listElement)) {
+    if (!aInclusiveAncestorsTableOrListElements.Contains(listElement)) {
       return lastFoundAncestorListOrTableElement;
     }
     // If we find a list element which is topmost list or `<table>` element at
     // first or last of aArrayOfNodes, return it.
-    if (aArrayOfListAndTableRelatedElements.LastElement().get() ==
+    if (aInclusiveAncestorsTableOrListElements.LastElement().get() ==
         listElement) {
       return listElement;
     }
@@ -3262,15 +3254,8 @@ bool HTMLEditor::AutoHTMLFragmentBoundariesFixer::IsReplaceableListElement(
                    "The list element which is looking for is ignored");
       continue;
     }
-    Element* listElement = nullptr;
-    for (Element* maybeListElement = element->GetParentElement();
-         maybeListElement;
-         maybeListElement = maybeListElement->GetParentElement()) {
-      if (HTMLEditUtils::IsAnyListElement(maybeListElement)) {
-        listElement = maybeListElement;
-        break;
-      }
-    }
+    Element* listElement =
+        HTMLEditUtils::GetClosestAncestorAnyListElement(*element);
     if (listElement == &aListElement) {
       return true;
     }
@@ -3288,21 +3273,20 @@ void HTMLEditor::AutoHTMLFragmentBoundariesFixer::
 
   // Collect list elements and table related elements at first or last node
   // in aArrayOfTopMostChildContents.
-  AutoTArray<OwningNonNull<Element>, 4>
-      arrayOfListAndTableRelatedElementsAtEdge;
+  AutoTArray<OwningNonNull<Element>, 4> inclusiveAncestorsListOrTableElements;
   CollectTableAndAnyListElementsOfInclusiveAncestorsAt(
       aStartOrEnd == StartOrEnd::end
           ? aArrayOfTopMostChildContents.LastElement()
           : aArrayOfTopMostChildContents[0],
-      arrayOfListAndTableRelatedElementsAtEdge);
-  if (arrayOfListAndTableRelatedElementsAtEdge.IsEmpty()) {
+      inclusiveAncestorsListOrTableElements);
+  if (inclusiveAncestorsListOrTableElements.IsEmpty()) {
     return;
   }
 
   // Get most ancestor list or `<table>` element in
-  // arrayOfListAndTableRelatedElementsAtEdge which contains earlier
+  // inclusiveAncestorsListOrTableElements which contains earlier
   // node in aArrayOfTopMostChildContents as far as possible.
-  // XXX With arrayOfListAndTableRelatedElementsAtEdge, this returns a
+  // XXX With inclusiveAncestorsListOrTableElements, this returns a
   //     list or `<table>` element which contains first or last node of
   //     aArrayOfTopMostChildContents.  However, this seems slow when
   //     aStartOrEnd is StartOrEnd::end and only the last node is in
@@ -3310,8 +3294,8 @@ void HTMLEditor::AutoHTMLFragmentBoundariesFixer::
   //     possible case or not.  We need to add tests to
   //     test_content_iterator_subtree.html for checking how
   //     SubtreeContentIterator works.
-  Element* listOrTableElement = GetMostAncestorListOrTableElement(
-      aArrayOfTopMostChildContents, arrayOfListAndTableRelatedElementsAtEdge);
+  Element* listOrTableElement = GetMostDistantAncestorListOrTableElement(
+      aArrayOfTopMostChildContents, inclusiveAncestorsListOrTableElements);
   if (!listOrTableElement) {
     return;
   }

@@ -24,6 +24,7 @@
 #include "mozilla/gfx/PathHelpers.h"
 #include "mozilla/PresShell.h"
 #include "mozilla/PresShellInlines.h"
+#include "mozilla/ResultExtensions.h"
 #include "mozilla/Sprintf.h"
 #include "mozilla/StaticPrefs_layout.h"
 #include "mozilla/SVGMaskFrame.h"
@@ -7981,7 +7982,7 @@ nsresult nsIFrame::GetNextPrevLineFromeBlockFrame(nsPresContext* aPresContext,
           return NS_ERROR_FAILURE;
         }
       }
-      GetLastLeaf(aPresContext, &lastFrame);
+      GetLastLeaf(&lastFrame);
 
       if (aPos->mDirection == eDirNext) {
         nearStoppingFrame = firstFrame;
@@ -8110,8 +8111,7 @@ nsresult nsIFrame::GetNextPrevLineFromeBlockFrame(nsPresContext* aPresContext,
         if (aPos->mDirection == eDirNext && (resultFrame == nearStoppingFrame))
           break;
         // always try previous on THAT line if that fails go the other way
-        frameTraversal->Prev();
-        resultFrame = frameTraversal->CurrentItem();
+        resultFrame = frameTraversal->Traverse(/* aForward = */ false);
         if (!resultFrame) return NS_ERROR_FAILURE;
       }
 
@@ -8150,8 +8150,7 @@ nsresult nsIFrame::GetNextPrevLineFromeBlockFrame(nsPresContext* aPresContext,
         if (aPos->mDirection == eDirNext && (resultFrame == farStoppingFrame))
           break;
         // previous didnt work now we try "next"
-        frameTraversal->Next();
-        nsIFrame* tempFrame = frameTraversal->CurrentItem();
+        nsIFrame* tempFrame = frameTraversal->Traverse(/* aForward = */ true);
         if (!tempFrame) break;
         resultFrame = tempFrame;
       }
@@ -8497,11 +8496,11 @@ nsresult nsIFrame::PeekOffset(nsPeekOffsetStruct* aPos) {
       nsIFrame* blockFrame = this;
 
       while (NS_FAILED(result)) {
-        int32_t thisLine = nsIFrame::GetLineNumber(
-            blockFrame, aPos->mScrollViewStop, &blockFrame);
-        if (thisLine < 0) return NS_ERROR_FAILURE;
+        int32_t thisLine;
+        MOZ_TRY_VAR(thisLine, blockFrame->GetLineNumber(aPos->mScrollViewStop,
+                                                        &blockFrame));
         iter = blockFrame->GetLineIterator();
-        NS_ASSERTION(iter, "GetLineNumber() succeeded but no block frame?");
+        MOZ_ASSERT(iter, "GetLineNumber() succeeded but no block frame?");
 
         int edgeCase = 0;  // no edge case. this should look at thisLine
 
@@ -8593,11 +8592,11 @@ nsresult nsIFrame::PeekOffset(nsPeekOffsetStruct* aPos) {
     case eSelectEndLine: {
       // Adjusted so that the caret can't get confused when content changes
       nsIFrame* blockFrame = AdjustFrameForSelectionStyles(this);
-      int32_t thisLine = nsIFrame::GetLineNumber(
-          blockFrame, aPos->mScrollViewStop, &blockFrame);
-      if (thisLine < 0) return NS_ERROR_FAILURE;
+      int32_t thisLine;
+      MOZ_TRY_VAR(thisLine, blockFrame->GetLineNumber(aPos->mScrollViewStop,
+                                                      &blockFrame));
       nsAutoLineIterator it = blockFrame->GetLineIterator();
-      NS_ASSERTION(it, "GetLineNumber() succeeded but no block frame?");
+      MOZ_ASSERT(it, "GetLineNumber() succeeded but no block frame?");
 
       int32_t lineFrameCount;
       nsIFrame* firstFrame;
@@ -8765,53 +8764,128 @@ nsresult nsIFrame::CheckVisibility(nsPresContext*, int32_t, int32_t, bool,
   return NS_ERROR_NOT_IMPLEMENTED;
 }
 
-int32_t nsIFrame::GetLineNumber(nsIFrame* aFrame, bool aLockScroll,
-                                nsIFrame** aContainingBlock) {
-  NS_ASSERTION(aFrame, "null aFrame");
-  nsIFrame* blockFrame = aFrame;
-  nsIFrame* thisBlock;
+Result<int32_t, nsresult> nsIFrame::GetLineNumber(bool aLockScroll,
+                                                  nsIFrame** aContainingBlock) {
+  MOZ_ASSERT(aContainingBlock);
+
+  nsIFrame* parentFrame = this;
+  nsIFrame* frame;
   nsAutoLineIterator it;
-  nsresult result = NS_ERROR_FAILURE;
-  while (NS_FAILED(result) && blockFrame) {
-    thisBlock = blockFrame;
-    if (thisBlock->HasAnyStateBits(NS_FRAME_OUT_OF_FLOW)) {
+  while (!it && parentFrame) {
+    frame = parentFrame;
+    if (frame->HasAnyStateBits(NS_FRAME_OUT_OF_FLOW)) {
       // if we are searching for a frame that is not in flow we will not find
       // it. we must instead look for its placeholder
-      if (thisBlock->HasAnyStateBits(NS_FRAME_IS_OVERFLOW_CONTAINER)) {
+      if (frame->HasAnyStateBits(NS_FRAME_IS_OVERFLOW_CONTAINER)) {
         // abspos continuations don't have placeholders, get the fif
-        thisBlock = thisBlock->FirstInFlow();
+        frame = frame->FirstInFlow();
       }
-      thisBlock = thisBlock->GetPlaceholderFrame();
-      if (!thisBlock) return -1;
+      frame = frame->GetPlaceholderFrame();
+      if (!frame) {
+        return Err(NS_ERROR_FAILURE);
+      }
     }
-    blockFrame = thisBlock->GetParent();
-    result = NS_OK;
-    if (blockFrame) {
-      if (aLockScroll && blockFrame->IsScrollFrame()) return -1;
-      it = blockFrame->GetLineIterator();
-      if (!it) result = NS_ERROR_FAILURE;
+    parentFrame = frame->GetParent();
+    if (parentFrame) {
+      if (aLockScroll && parentFrame->IsScrollFrame()) {
+        return Err(NS_ERROR_FAILURE);
+      }
+      it = parentFrame->GetLineIterator();
     }
   }
-  if (!blockFrame || !it) return -1;
+  if (!parentFrame || !it) {
+    return Err(NS_ERROR_FAILURE);
+  }
 
-  if (aContainingBlock) *aContainingBlock = blockFrame;
-  return it->FindLineContaining(thisBlock);
+  *aContainingBlock = parentFrame;
+  int32_t line = it->FindLineContaining(frame);
+  if (line < 0) {
+    return Err(NS_ERROR_FAILURE);
+  }
+  return line;
+}
+
+Result<bool, nsresult> nsIFrame::IsVisuallyAtLineEdge(
+    nsILineIterator* aLineIterator, int32_t aLine, nsDirection aDirection) {
+  nsIFrame* firstFrame;
+  nsIFrame* lastFrame;
+
+  nsAutoLineIterator it = aLineIterator;
+  bool lineIsRTL = it->GetDirection();
+  bool isReordered;
+
+  nsresult result =
+      it->CheckLineOrder(aLine, &isReordered, &firstFrame, &lastFrame);
+  if (NS_FAILED(result)) {
+    return Err(result);
+  }
+
+  nsIFrame** framePtr = aDirection == eDirPrevious ? &firstFrame : &lastFrame;
+  if (!*framePtr) {
+    return true;
+  }
+
+  bool frameIsRTL = (nsBidiPresUtils::FrameDirection(*framePtr) == NSBIDI_RTL);
+  if ((frameIsRTL == lineIsRTL) == (aDirection == eDirPrevious)) {
+    nsFrame::GetFirstLeaf(framePtr);
+  } else {
+    nsFrame::GetLastLeaf(framePtr);
+  }
+  return *framePtr == this;
+}
+
+Result<bool, nsresult> nsIFrame::IsLogicallyAtLineEdge(
+    nsILineIterator* aLineIterator, int32_t aLine, nsDirection aDirection) {
+  nsIFrame* firstFrame;
+  nsIFrame* lastFrame;
+  nsRect nonUsedRect;
+  int32_t lineFrameCount;
+
+  nsAutoLineIterator it = aLineIterator;
+  nsresult result =
+      it->GetLine(aLine, &firstFrame, &lineFrameCount, nonUsedRect);
+  if (NS_FAILED(result)) {
+    return Err(result);
+  }
+
+  if (aDirection == eDirPrevious) {
+    nsFrame::GetFirstLeaf(&firstFrame);
+    return firstFrame == this;
+  }
+
+  // eDirNext
+  lastFrame = firstFrame;
+  for (; lineFrameCount > 1; lineFrameCount--) {
+    result = it->GetNextSiblingOnLine(lastFrame, aLine);
+    if (NS_FAILED(result) || !lastFrame) {
+      NS_ERROR("should not be reached nsFrame");
+      return Err(NS_ERROR_FAILURE);
+    }
+  }
+  nsFrame::GetLastLeaf(&lastFrame);
+  return lastFrame == this;
 }
 
 nsresult nsIFrame::GetFrameFromDirection(
     nsDirection aDirection, bool aVisual, bool aJumpLines, bool aScrollViewStop,
     bool aForceEditableRegion, nsIFrame** aOutFrame, int32_t* aOutOffset,
     bool* aOutJumpedLine, bool* aOutMovedOverNonSelectableText) {
-  nsresult result;
+  MOZ_ASSERT(aOutFrame && aOutOffset && aOutJumpedLine);
 
-  if (!aOutFrame || !aOutOffset || !aOutJumpedLine)
-    return NS_ERROR_NULL_POINTER;
-
-  nsPresContext* presContext = PresContext();
   *aOutFrame = nullptr;
   *aOutOffset = 0;
   *aOutJumpedLine = false;
   *aOutMovedOverNonSelectableText = false;
+
+  nsPresContext* presContext = PresContext();
+  bool needsVisualTraversal = aVisual && presContext->BidiEnabled();
+  nsCOMPtr<nsIFrameEnumerator> frameTraversal;
+  MOZ_TRY(NS_NewFrameTraversal(getter_AddRefs(frameTraversal), presContext,
+                               this, eLeaf, needsVisualTraversal,
+                               aScrollViewStop,
+                               true,  // aFollowOOFs
+                               false  // aSkipPopupChecks
+                               ));
 
   // Find the prev/next selectable frame
   bool selectable = false;
@@ -8819,79 +8893,25 @@ nsresult nsIFrame::GetFrameFromDirection(
   while (!selectable) {
     nsIFrame* blockFrame;
 
-    int32_t thisLine =
-        nsIFrame::GetLineNumber(traversedFrame, aScrollViewStop, &blockFrame);
-    if (thisLine < 0) return NS_ERROR_FAILURE;
+    int32_t thisLine;
+    MOZ_TRY_VAR(thisLine,
+                traversedFrame->GetLineNumber(aScrollViewStop, &blockFrame));
 
-    nsAutoLineIterator it = blockFrame->GetLineIterator();
-    NS_ASSERTION(it, "GetLineNumber() succeeded but no block frame?");
+    nsILineIterator* it = blockFrame->GetLineIterator();
 
     bool atLineEdge;
-    nsIFrame* firstFrame;
-    nsIFrame* lastFrame;
-    if (aVisual && presContext->BidiEnabled()) {
-      bool lineIsRTL = it->GetDirection();
-      bool isReordered;
-      result =
-          it->CheckLineOrder(thisLine, &isReordered, &firstFrame, &lastFrame);
-      nsIFrame** framePtr =
-          aDirection == eDirPrevious ? &firstFrame : &lastFrame;
-      if (*framePtr) {
-        bool frameIsRTL =
-            (nsBidiPresUtils::FrameDirection(*framePtr) == NSBIDI_RTL);
-        if ((frameIsRTL == lineIsRTL) == (aDirection == eDirPrevious)) {
-          nsFrame::GetFirstLeaf(presContext, framePtr);
-        } else {
-          nsFrame::GetLastLeaf(presContext, framePtr);
-        }
-        atLineEdge = *framePtr == traversedFrame;
-      } else {
-        atLineEdge = true;
-      }
-    } else {
-      nsRect nonUsedRect;
-      int32_t lineFrameCount;
-      result = it->GetLine(thisLine, &firstFrame, &lineFrameCount, nonUsedRect);
-      if (NS_FAILED(result)) return result;
-
-      if (aDirection == eDirPrevious) {
-        nsFrame::GetFirstLeaf(presContext, &firstFrame);
-        atLineEdge = firstFrame == traversedFrame;
-      } else {  // eDirNext
-        lastFrame = firstFrame;
-        for (; lineFrameCount > 1; lineFrameCount--) {
-          result = it->GetNextSiblingOnLine(lastFrame, thisLine);
-          if (NS_FAILED(result) || !lastFrame) {
-            NS_ERROR("should not be reached nsFrame");
-            return NS_ERROR_FAILURE;
-          }
-        }
-        nsFrame::GetLastLeaf(presContext, &lastFrame);
-        atLineEdge = lastFrame == traversedFrame;
-      }
-    }
-
+    MOZ_TRY_VAR(
+        atLineEdge,
+        needsVisualTraversal
+            ? traversedFrame->IsVisuallyAtLineEdge(it, thisLine, aDirection)
+            : traversedFrame->IsLogicallyAtLineEdge(it, thisLine, aDirection));
     if (atLineEdge) {
       *aOutJumpedLine = true;
       if (!aJumpLines)
         return NS_ERROR_FAILURE;  // we are done. cannot jump lines
     }
 
-    nsCOMPtr<nsIFrameEnumerator> frameTraversal;
-    result = NS_NewFrameTraversal(
-        getter_AddRefs(frameTraversal), presContext, traversedFrame, eLeaf,
-        aVisual && presContext->BidiEnabled(), aScrollViewStop,
-        true,  // aFollowOOFs
-        false  // aSkipPopupChecks
-    );
-    if (NS_FAILED(result)) return result;
-
-    if (aDirection == eDirNext)
-      frameTraversal->Next();
-    else
-      frameTraversal->Prev();
-
-    traversedFrame = frameTraversal->CurrentItem();
+    traversedFrame = frameTraversal->Traverse(aDirection == eDirNext);
     if (!traversedFrame) {
       return NS_ERROR_FAILURE;
     }
@@ -9813,7 +9833,7 @@ ComputedStyle* nsIFrame::DoGetParentComputedStyle(
   return placeholder->GetParentComputedStyleForOutOfFlow(aProviderFrame);
 }
 
-void nsIFrame::GetLastLeaf(nsPresContext* aPresContext, nsIFrame** aFrame) {
+void nsIFrame::GetLastLeaf(nsIFrame** aFrame) {
   if (!aFrame || !*aFrame) return;
   nsIFrame* child = *aFrame;
   // if we are a block frame then go for the last line of 'this'
@@ -9832,7 +9852,7 @@ void nsIFrame::GetLastLeaf(nsPresContext* aPresContext, nsIFrame** aFrame) {
   }
 }
 
-void nsIFrame::GetFirstLeaf(nsPresContext* aPresContext, nsIFrame** aFrame) {
+void nsIFrame::GetFirstLeaf(nsIFrame** aFrame) {
   if (!aFrame || !*aFrame) return;
   nsIFrame* child = *aFrame;
   while (1) {
