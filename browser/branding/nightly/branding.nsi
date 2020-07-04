@@ -8,17 +8,17 @@
 
 # BrandFullNameInternal is used for some registry and file system values
 # instead of BrandFullName and typically should not be modified.
-!define BrandFullNameInternal "Nightly"
-!define BrandFullName         "Firefox Nightly"
-!define CompanyName           "mozilla.org"
-!define URLInfoAbout          "https://www.mozilla.org"
-!define HelpLink              "https://support.mozilla.org"
+!define BrandFullNameInternal "Browser"
+!define BrandFullName         "Browser"
+!define CompanyName           ""
+!define URLInfoAbout          ""
+!define HelpLink              ""
 
-!define URLStubDownloadX86 "https://download.mozilla.org/?os=win&lang=${AB_CD}&product=firefox-nightly-latest"
-!define URLStubDownloadAMD64 "https://download.mozilla.org/?os=win64&lang=${AB_CD}&product=firefox-nightly-latest"
-!define URLStubDownloadAArch64 "https://download.mozilla.org/?os=win64-aarch64&lang=${AB_CD}&product=firefox-nightly-latest"
-!define URLManualDownload "https://www.mozilla.org/${AB_CD}/firefox/installer-help/?channel=nightly&installer_lang=${AB_CD}"
-!define URLSystemRequirements "https://www.mozilla.org/firefox/system-requirements/"
+!define URLStubDownloadX86 ""
+!define URLStubDownloadAMD64 ""
+!define URLStubDownloadAArch64 ""
+!define URLManualDownload ""
+!define URLSystemRequirements ""
 !define Channel "nightly"
 
 # The installer's certificate name and issuer expected by the stub installer
