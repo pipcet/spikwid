@@ -303,23 +303,6 @@ var gMainPane = {
     this.initBrowserContainers();
     this.buildContentProcessCountMenuList();
 
-    let performanceSettingsLink = document.getElementById(
-      "performanceSettingsLearnMore"
-    );
-    let performanceSettingsUrl =
-      Services.urlFormatter.formatURLPref("app.support.baseURL") +
-      "performance";
-    performanceSettingsLink.setAttribute("href", performanceSettingsUrl);
-
-    this.updateDefaultPerformanceSettingsPref();
-
-    let defaultPerformancePref = Preferences.get(
-      "browser.preferences.defaultPerformanceSettings.enabled"
-    );
-    defaultPerformancePref.on("change", () => {
-      this.updatePerformanceSettingsBox({ duringChangeEvent: true });
-    });
-    this.updatePerformanceSettingsBox({ duringChangeEvent: false });
     this.displayUseSystemLocale();
     let connectionSettingsLink = document.getElementById(
       "connectionSettingsLearnMore"
@@ -514,12 +497,6 @@ var gMainPane = {
     let arch = bundle.GetStringFromName(archResource);
     version += ` (${arch})`;
 
-    document.l10n.setAttributes(
-      document.getElementById("updateAppInfo"),
-      "update-application-version",
-      { version }
-    );
-
     // Show a release notes link if we have a URL.
     let relNotesLink = document.getElementById("releasenotes");
     let relNotesPrefType = Services.prefs.getPrefType("app.releaseNotesURL");
@@ -563,7 +540,6 @@ var gMainPane = {
     // the view when they change.
     Services.prefs.addObserver(PREF_SHOW_PLUGINS_IN_LIST, this);
     Services.prefs.addObserver(PREF_HIDE_PLUGINS_WITHOUT_EXTENSIONS, this);
-    Services.obs.addObserver(this, AUTO_UPDATE_CHANGED_TOPIC);
 
     setEventListener("filter", "command", gMainPane.filter);
     setEventListener("typeColumn", "click", gMainPane.sort);
@@ -1518,117 +1494,24 @@ var gMainPane = {
   },
 
   updateDefaultPerformanceSettingsPref() {
-    let defaultPerformancePref = Preferences.get(
-      "browser.preferences.defaultPerformanceSettings.enabled"
-    );
-    let processCountPref = Preferences.get("dom.ipc.processCount");
-    let accelerationPref = Preferences.get("layers.acceleration.disabled");
-    if (
-      processCountPref.value != processCountPref.defaultValue ||
-      accelerationPref.value != accelerationPref.defaultValue
-    ) {
-      defaultPerformancePref.value = false;
-    }
   },
 
   updatePerformanceSettingsBox({ duringChangeEvent }) {
-    let defaultPerformancePref = Preferences.get(
-      "browser.preferences.defaultPerformanceSettings.enabled"
-    );
-    let performanceSettings = document.getElementById("performanceSettings");
-    let processCountPref = Preferences.get("dom.ipc.processCount");
-    if (defaultPerformancePref.value) {
-      let accelerationPref = Preferences.get("layers.acceleration.disabled");
-      // Unset the value so process count will be decided by the platform.
-      processCountPref.value = processCountPref.defaultValue;
-      accelerationPref.value = accelerationPref.defaultValue;
-      performanceSettings.hidden = true;
-    } else {
-      performanceSettings.hidden = false;
-    }
   },
 
   buildContentProcessCountMenuList() {
-    if (Services.appinfo.browserTabsRemoteAutostart) {
-      let processCountPref = Preferences.get("dom.ipc.processCount");
-      let defaultProcessCount = processCountPref.defaultValue;
-
-      let contentProcessCount = document.querySelector(`#contentProcessCount > menupopup >
-                                menuitem[value="${defaultProcessCount}"]`);
-
-      document.l10n.setAttributes(
-        contentProcessCount,
-        "performance-default-content-process-count",
-        { num: defaultProcessCount }
-      );
-
-      document.getElementById("limitContentProcess").disabled = false;
-      document.getElementById("contentProcessCount").disabled = false;
-      document.getElementById(
-        "contentProcessCountEnabledDescription"
-      ).hidden = false;
-      document.getElementById(
-        "contentProcessCountDisabledDescription"
-      ).hidden = true;
-    } else {
-      document.getElementById("limitContentProcess").disabled = true;
-      document.getElementById("contentProcessCount").disabled = true;
-      document.getElementById(
-        "contentProcessCountEnabledDescription"
-      ).hidden = true;
-      document.getElementById(
-        "contentProcessCountDisabledDescription"
-      ).hidden = false;
-    }
   },
 
   /**
    * Selects the correct item in the update radio group
    */
   async updateReadPrefs() {
-    if (
-      AppConstants.MOZ_UPDATER &&
-      (!Services.policies || Services.policies.isAllowed("appUpdate"))
-    ) {
-      let radiogroup = document.getElementById("updateRadioGroup");
-      radiogroup.disabled = true;
-      try {
-        let enabled = await UpdateUtils.getAppUpdateAutoEnabled();
-        radiogroup.value = enabled;
-        radiogroup.disabled = false;
-      } catch (error) {
-        Cu.reportError(error);
-      }
-    }
   },
 
   /**
    * Writes the value of the update radio group to the disk
    */
   async updateWritePrefs() {
-    if (
-      AppConstants.MOZ_UPDATER &&
-      (!Services.policies || Services.policies.isAllowed("appUpdate"))
-    ) {
-      let radiogroup = document.getElementById("updateRadioGroup");
-      let updateAutoValue = radiogroup.value == "true";
-      radiogroup.disabled = true;
-      try {
-        await UpdateUtils.setAppUpdateAutoEnabled(updateAutoValue);
-        radiogroup.disabled = false;
-      } catch (error) {
-        Cu.reportError(error);
-        await this.updateReadPrefs();
-        await this.reportUpdatePrefWriteError(error);
-        return;
-      }
-
-      // If the value was changed to false the user should be given the option
-      // to discard an update if there is one.
-      if (!updateAutoValue) {
-        await this.checkUpdateInProgress();
-      }
-    }
   },
 
   async reportUpdatePrefWriteError(error) {
@@ -1717,8 +1600,6 @@ var gMainPane = {
     Services.prefs.removeObserver(PREF_HIDE_PLUGINS_WITHOUT_EXTENSIONS, this);
 
     Services.prefs.removeObserver(PREF_CONTAINERS_EXTENSION, this);
-
-    Services.obs.removeObserver(this, AUTO_UPDATE_CHANGED_TOPIC);
   },
 
   // nsISupports
@@ -1762,9 +1643,6 @@ var gMainPane = {
   handleEvent(aEvent) {
     if (aEvent.type == "unload") {
       this.destroy();
-      if (AppConstants.MOZ_UPDATER) {
-        onUnload();
-      }
     }
   },
 
