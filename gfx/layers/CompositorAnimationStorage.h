@@ -12,11 +12,13 @@
 #include "mozilla/Variant.h"
 #include "X11UndefineNone.h"
 #include <unordered_map>
+#include <unordered_set>
 
 namespace mozilla {
 namespace layers {
 class Animation;
 class Layers;
+class CompositorBridgeParent;
 
 typedef nsTArray<layers::Animation> AnimationArray;
 
@@ -121,7 +123,8 @@ class CompositorAnimationStorage final {
   /**
    * Set the animations based on the unique id
    */
-  void SetAnimations(uint64_t aId, const AnimationArray& aAnimations);
+  void SetAnimations(uint64_t aId, const LayersId& aLayersId,
+                     const AnimationArray& aAnimations);
 
   /**
    * Sample animation based the given timestamps and store them in this
@@ -143,7 +146,8 @@ class CompositorAnimationStorage final {
    *
    * Note: This is called only by non WebRender.
    */
-  bool SampleAnimations(Layer* aRoot, TimeStamp aPreviousFrameTime,
+  bool SampleAnimations(Layer* aRoot, CompositorBridgeParent* aCompositorBridge,
+                        TimeStamp aPreviousFrameTime,
                         TimeStamp aCurrentFrameTime);
 
   bool HasAnimations() const;
@@ -185,8 +189,9 @@ class CompositorAnimationStorage final {
   void SetAnimatedValue(uint64_t aId, AnimatedValue* aPreviousValue,
                         nscolor aColor);
 
-  void ApplyAnimatedValue(
-      Layer* aLayer, nsCSSPropertyID aProperty, AnimatedValue* aPreviousValue,
+  bool ApplyAnimatedValue(
+      CompositorBridgeParent* aCompositorBridge, Layer* aLayer,
+      nsCSSPropertyID aProperty, AnimatedValue* aPreviousValue,
       const nsTArray<RefPtr<RawServoAnimationValue>>& aValues);
 
   void Clear();
@@ -194,6 +199,7 @@ class CompositorAnimationStorage final {
  private:
   AnimatedValueTable mAnimatedValues;
   AnimationsTable mAnimations;
+  std::unordered_set<uint64_t> mNewAnimations;
   mutable Mutex mLock;
 };
 

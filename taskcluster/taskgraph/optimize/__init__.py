@@ -39,7 +39,7 @@ def register_strategy(name, args=()):
     return wrap
 
 
-def optimize_task_graph(target_task_graph, params, do_not_optimize,
+def optimize_task_graph(target_task_graph, requested_tasks, params, do_not_optimize,
                         decision_task_id, existing_tasks=None, strategy_override=None):
     """
     Perform task optimization, returning a taskgraph and a map from label to
@@ -58,6 +58,7 @@ def optimize_task_graph(target_task_graph, params, do_not_optimize,
 
     removed_tasks = remove_tasks(
         target_task_graph=target_task_graph,
+        requested_tasks=requested_tasks,
         optimizations=optimizations,
         params=params,
         do_not_optimize=do_not_optimize)
@@ -102,7 +103,7 @@ def _log_optimization(verb, opt_counts):
         logger.info('No tasks {} during optimization'.format(verb))
 
 
-def remove_tasks(target_task_graph, params, optimizations, do_not_optimize):
+def remove_tasks(target_task_graph, requested_tasks, params, optimizations, do_not_optimize):
     """
     Implement the "Removing Tasks" phase, returning a set of task labels of all removed tasks.
     """
@@ -123,6 +124,15 @@ def remove_tasks(target_task_graph, params, optimizations, do_not_optimize):
         if any(l not in removed for l in reverse_links_dict[label]):
             logger.debug(message.format(label=label, verb=verb, reason="dependent tasks"))
             continue
+
+        # Some tasks in the task graph only exist because they were required
+        # by a task that has just been optimized away. They can now be removed.
+        if label not in requested_tasks:
+            reason = "downstreams-optimized"
+            verb = "removed"
+            removed.add(label)
+            opt_counts['downstreams-optimized'] += 1
+            logger.debug(message.format(label=label, verb=verb, reason=reason))
 
         # call the optimization strategy
         task = target_task_graph.tasks[label]
@@ -416,20 +426,20 @@ class experimental(object):
         ./mach try auto --strategy relevant_tests
     """
 
-    bugbug_all = {
-        'test': Any('skip-unless-schedules', 'bugbug', split_args=tuple),
+    bugbug_tasks_medium = {
+        'test': Any('skip-unless-schedules', 'bugbug-tasks-medium', split_args=tuple),
     }
     """Doesn't limit platforms, medium confidence threshold."""
 
-    bugbug_all_high = {
-        'test': Any('skip-unless-schedules', 'bugbug-high', split_args=tuple),
+    bugbug_tasks_high = {
+        'test': Any('skip-unless-schedules', 'bugbug-tasks-high', split_args=tuple),
     }
     """Doesn't limit platforms, high confidence threshold."""
 
     bugbug_debug_disperse = {
         'test': Any(
             'skip-unless-schedules',
-            Any('bugbug', 'platform-debug', 'platform-disperse'),
+            Any('bugbug-low', 'platform-debug', 'platform-disperse'),
             split_args=tuple
         ),
     }
@@ -444,14 +454,42 @@ class experimental(object):
     }
     """Disperse tests across platforms, low confidence threshold."""
 
-    bugbug_disperse = {
+    bugbug_disperse_medium = {
         'test': Any(
             'skip-unless-schedules',
-            Any('bugbug', 'platform-disperse'),
+            Any('bugbug-medium', 'platform-disperse'),
             split_args=tuple
         ),
     }
     """Disperse tests across platforms, medium confidence threshold."""
+
+    bugbug_disperse_reduced_medium = {
+        'test': Any(
+            'skip-unless-schedules',
+            Any('bugbug-reduced-manifests', 'platform-disperse'),
+            split_args=tuple
+        ),
+    }
+    """Disperse tests across platforms, medium confidence threshold with reduced tasks."""
+
+    bugbug_disperse_medium_no_unseen = {
+        'test': Any(
+            'skip-unless-schedules',
+            Any('bugbug-medium', 'platform-disperse-no-unseen'),
+            split_args=tuple
+        ),
+    }
+    """Disperse tests across platforms (no modified for unseen configurations), medium confidence
+    threshold."""
+
+    bugbug_disperse_medium_only_one = {
+        'test': Any(
+            'skip-unless-schedules',
+            Any('bugbug-medium', 'platform-disperse-only-one'),
+            split_args=tuple
+        ),
+    }
+    """Disperse tests across platforms (one platform per group), medium confidence threshold."""
 
     bugbug_disperse_high = {
         'test': Any(
