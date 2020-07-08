@@ -2452,6 +2452,12 @@ AbortReasonOr<Ok> IonBuilder::inspectOpcode(JSOp op, bool* restarted) {
       // operation in the optimizing compiler?
       break;
 
+    // Private Fields
+    case JSOp::InitPrivateElem:
+    case JSOp::GetPrivateElem:
+    case JSOp::SetPrivateElem:
+      break;
+
     case JSOp::ForceInterpreter:
       // Intentionally not implemented.
       break;
@@ -2543,6 +2549,8 @@ AbortReasonOr<Ok> IonBuilder::replaceTypeSet(MDefinition* subject,
   if (type->unknown()) {
     return Ok();
   }
+
+  MOZ_ASSERT(!type->hasType(TypeSet::MagicArgType()));
 
   // Don't emit MFilterTypeSet if it doesn't improve the typeset.
   if (subject->resultTypeSet()) {
@@ -2667,7 +2675,7 @@ AbortReasonOr<Ok> IonBuilder::improveTypesAtTypeOfCompare(MCompare* ins,
                 alloc_->lifoAlloc());
   }
 
-  if (inputTypes->unknown()) {
+  if (inputTypes->unknown() || inputTypes->hasType(TypeSet::MagicArgType())) {
     return Ok();
   }
 
@@ -2758,7 +2766,7 @@ AbortReasonOr<Ok> IonBuilder::improveTypesAtNullOrUndefinedCompare(
                 alloc_->lifoAlloc());
   }
 
-  if (inputTypes->unknown()) {
+  if (inputTypes->unknown() || inputTypes->hasType(TypeSet::MagicArgType())) {
     return Ok();
   }
 
@@ -2841,7 +2849,7 @@ AbortReasonOr<Ok> IonBuilder::improveTypesAtTest(MDefinition* ins,
                     alloc_->lifoAlloc());
       }
 
-      if (oldType->unknown()) {
+      if (oldType->unknown() || oldType->hasType(TypeSet::MagicArgType())) {
         return Ok();
       }
 
@@ -2875,7 +2883,7 @@ AbortReasonOr<Ok> IonBuilder::improveTypesAtTest(MDefinition* ins,
       }
 
       // If ins does not have a typeset we return as we cannot optimize.
-      if (oldType->unknown()) {
+      if (oldType->unknown() || oldType->hasType(TypeSet::MagicArgType())) {
         return Ok();
       }
 
@@ -2924,7 +2932,7 @@ AbortReasonOr<Ok> IonBuilder::improveTypesAtTest(MDefinition* ins,
   }
 
   // If ins does not have a typeset we return as we cannot optimize.
-  if (oldType->unknown()) {
+  if (oldType->unknown() || oldType->hasType(TypeSet::MagicArgType())) {
     return Ok();
   }
 
@@ -3562,7 +3570,6 @@ AbortReasonOr<Ok> IonBuilder::powTrySpecialized(bool* emitted,
   // Cast to the right type
   if (outputType == MIRType::Int32 && output->type() != MIRType::Int32) {
     auto* toInt = MToNumberInt32::New(alloc(), output);
-    toInt->setCanBeNegativeZero(pow->canBeNegativeZero());
     current->add(toInt);
     output = toInt;
   }

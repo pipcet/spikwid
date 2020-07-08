@@ -700,11 +700,65 @@ class MOZ_STACK_CLASS WSRunScanner {
     EditorDOMPointInText mLast;
   };
 
+  /**
+   * TextFragmentData stores the information of text nodes which are in a
+   * hard line.
+   */
+  class MOZ_STACK_CLASS TextFragmentData final {
+   public:
+    TextFragmentData() = delete;
+    TextFragmentData(const BoundaryData& aStartBoundaryData,
+                     const BoundaryData& aEndBoundaryData,
+                     const NoBreakingSpaceData& aNBSPData, bool aIsPreformatted)
+        : mStart(aStartBoundaryData),
+          mEnd(aEndBoundaryData),
+          mNBSPData(aNBSPData),
+          mIsPreformatted(aIsPreformatted) {}
+
+    void InitializeWSFragmentArray(WSFragmentArray& aFragments) const;
+
+    bool StartsFromNormalText() const { return mStart.IsNormalText(); }
+    bool StartsFromSpecialContent() const { return mStart.IsSpecialContent(); }
+    bool StartsFromHardLineBreak() const { return mStart.IsHardLineBreak(); }
+    bool EndsByNormalText() const { return mEnd.IsNormalText(); }
+    bool EndsBySpecialContent() const { return mEnd.IsSpecialContent(); }
+    bool EndsByBRElement() const { return mEnd.IsBRElement(); }
+    bool EndsByBlockBoundary() const { return mEnd.IsBlockBoundary(); }
+
+    /**
+     * GetInvisibleLeadingWhiteSpaceRange() retruns two DOM points, start
+     * of the line and first visible point or end of the hard line.  When
+     * this returns non-positioned range or positioned but collapsed range,
+     * there is no invisible leading white-spaces.
+     * Note that if there are only invisible white-spaces in a hard line,
+     * this returns all of the white-spaces.
+     */
+    template <typename EditorDOMRangeType>
+    EditorDOMRangeType GetInvisibleLeadingWhiteSpaceRange() const;
+
+    /**
+     * GetInvisibleTrailingWhiteSpaceRange() returns two DOM points,
+     * first invisible white-space and end of the hard line.  When this
+     * returns non-positioned range or positioned but collapsed range,
+     * there is no invisible trailing white-spaces.
+     * Note that if there are only invisible white-spaces in a hard line,
+     * this returns all of the white-spaces.
+     */
+    template <typename EditorDOMRangeType>
+    EditorDOMRangeType GetInvisibleTrailingWhiteSpaceRange() const;
+
+   private:
+    BoundaryData mStart;
+    BoundaryData mEnd;
+    NoBreakingSpaceData mNBSPData;
+    // XXX Currently we set mIsPreformatted to `WSRunScanner::mPRE` value
+    //     even if some text nodes between mStart and mEnd are different styled
+    //     nodes.  This caused some bugs actually, but we now keep traditional
+    //     behavior for now.
+    bool mIsPreformatted;
+  };
+
   void EnsureWSFragments();
-  void InitializeWithSingleFragment(
-      WSFragment::Visible aIsVisible,
-      WSFragment::StartOfHardLine aIsStartOfHardLine,
-      WSFragment::EndOfHardLine aIsEndOfHardLine);
   template <typename EditorDOMPointType>
   void InitializeRangeStart(
       const EditorDOMPointType& aPoint,
@@ -788,10 +842,12 @@ class MOZ_STACK_CLASS WSRunObject final : public WSRunScanner {
                     EditorRawDOMPoint(aScanStartNode, aScanStartOffset)) {}
 
   /**
-   * Scrub() removes any non-visible white-spaces at aPoint.
+   * DeleteInvisibleASCIIWhiteSpaces() removes invisible leading white-spaces
+   * and trailing white-spaces if there are around aPoint.
    */
-  [[nodiscard]] MOZ_CAN_RUN_SCRIPT static nsresult Scrub(
-      HTMLEditor& aHTMLEditor, const EditorDOMPoint& aPoint);
+  [[nodiscard]] MOZ_CAN_RUN_SCRIPT static nsresult
+  DeleteInvisibleASCIIWhiteSpaces(HTMLEditor& aHTMLEditor,
+                                  const EditorDOMPoint& aPoint);
 
   /**
    * PrepareToJoinBlocks() fixes up white-spaces at the end of aLeftBlockElement
@@ -938,7 +994,11 @@ class MOZ_STACK_CLASS WSRunObject final : public WSRunScanner {
   MaybeReplaceInclusiveNextNBSPWithASCIIWhiteSpace(
       const WSFragment& aRun, const EditorDOMPoint& aPoint);
 
-  MOZ_CAN_RUN_SCRIPT nsresult Scrub();
+  /**
+   * See explanation of the static method for this.
+   */
+  [[nodiscard]] MOZ_CAN_RUN_SCRIPT nsresult
+  DeleteInvisibleASCIIWhiteSpacesInternal();
 
   // Because of MOZ_CAN_RUN_SCRIPT constructors, each instanciater of this class
   // guarantees the lifetime of the HTMLEditor.

@@ -134,7 +134,7 @@ function postProcessingRecord(s) {
   // alert(window.performance.now() - s);
   let delta = window.performance.now() - s;
   TalosContentProfiler.pause("tablemutation finish", true).then(() => {
-    tpRecordTime(delta, s);
+    tpRecordTime(delta, window.performance.timing.navigationStart + s);
   });
 }
 </script>

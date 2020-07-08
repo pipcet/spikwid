@@ -417,8 +417,8 @@ const nsTArray<nsCOMPtr<nsIPrincipal>>& TRRLoadInfo::AncestorPrincipals() {
   return mEmptyPrincipals;
 }
 
-const nsTArray<uint64_t>& TRRLoadInfo::AncestorOuterWindowIDs() {
-  return mEmptyWindowIDs;
+const nsTArray<uint64_t>& TRRLoadInfo::AncestorBrowsingContextIDs() {
+  return mEmptyBrowsingContextIDs;
 }
 
 void TRRLoadInfo::SetCorsPreflightInfo(const nsTArray<nsCString>& aHeaders,

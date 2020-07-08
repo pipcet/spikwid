@@ -2,14 +2,25 @@
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   ctypes: "resource://gre/modules/ctypes.jsm",
+  MockRegistry: "resource://testing-common/MockRegistry.jsm",
+  OS: "resource://gre/modules/osfile.jsm",
 });
 
 do_get_profile();
 let tmpDir = FileUtils.getDir("TmpD", ["PKCS11"]);
+let slug =
+  AppConstants.platform === "linux" ? "pkcs11-modules" : "PKCS11Modules";
+tmpDir.createUnique(Ci.nsIFile.DIRECTORY_TYPE, FileUtils.PERMS_DIRECTORY);
+let baseDir = OS.Path.join(tmpDir.path, slug);
+OS.File.makeDir(baseDir);
 
 registerCleanupFunction(() => {
   tmpDir.remove(true);
 });
+
+function getPath(filename) {
+  return OS.Path.join(baseDir, filename);
+}
 
 const testmodule =
   "../../../../../security/manager/ssl/tests/unit/pkcs11testmodule/" +
@@ -17,6 +28,77 @@ const testmodule =
 
 // This function was inspired by the native messaging test under
 // toolkit/components/extensions
+
+async function setupManifests(modules) {
+  async function writeManifest(module) {
+    let manifest = {
+      name: module.name,
+      description: module.description,
+      path: module.path,
+      type: "pkcs11",
+      allowed_extensions: [module.id],
+    };
+
+    let manifestPath = getPath(`${module.name}.json`);
+    await OS.File.writeAtomic(manifestPath, JSON.stringify(manifest));
+
+    return manifestPath;
+  }
+
+  switch (AppConstants.platform) {
+    case "macosx":
+    case "linux":
+      let dirProvider = {
+        getFile(property) {
+          if (property == "XREUserNativeManifests") {
+            return tmpDir.clone();
+          } else if (property == "XRESysNativeManifests") {
+            return tmpDir.clone();
+          }
+          return null;
+        },
+      };
+
+      Services.dirsvc.registerProvider(dirProvider);
+      registerCleanupFunction(() => {
+        Services.dirsvc.unregisterProvider(dirProvider);
+      });
+
+      for (let module of modules) {
+        await writeManifest(module);
+      }
+      break;
+
+    case "win":
+      const REGKEY = String.raw`Software\Mozilla\PKCS11Modules`;
+
+      let registry = new MockRegistry();
+      registerCleanupFunction(() => {
+        registry.shutdown();
+      });
+
+      for (let module of modules) {
+        if (!OS.Path.winIsAbsolute(module.path)) {
+          let cwd = await OS.File.getCurrentDirectory();
+          module.path = OS.Path.join(cwd, module.path);
+        }
+        let manifestPath = await writeManifest(module);
+        registry.setValue(
+          Ci.nsIWindowsRegKey.ROOT_KEY_CURRENT_USER,
+          `${REGKEY}\\${module.name}`,
+          "",
+          manifestPath
+        );
+      }
+      break;
+
+    default:
+      ok(
+        false,
+        `Loading of PKCS#11 modules is not supported on ${AppConstants.platform}`
+      );
+  }
+}
 
 add_task(async function test_pkcs11() {
   async function background() {
@@ -102,6 +184,26 @@ add_task(async function test_pkcs11() {
         /No such PKCS#11 module internalmodule/,
         "We cannot uninstall the NSS Builtin Roots Module"
       );
+      await browser.test.assertRejects(
+        browser.pkcs11.installModule("osclientcerts", 0),
+        /No such PKCS#11 module osclientcerts/,
+        "installModule should not work on the built-in osclientcerts module"
+      );
+      await browser.test.assertRejects(
+        browser.pkcs11.uninstallModule("osclientcerts"),
+        /No such PKCS#11 module osclientcerts/,
+        "uninstallModule should not work on the built-in osclientcerts module"
+      );
+      await browser.test.assertRejects(
+        browser.pkcs11.isModuleInstalled("osclientcerts"),
+        /No such PKCS#11 module osclientcerts/,
+        "isModuleLoaded should not work on the built-in osclientcerts module"
+      );
+      await browser.test.assertRejects(
+        browser.pkcs11.getModuleSlots("osclientcerts"),
+        /No such PKCS#11 module osclientcerts/,
+        "getModuleSlots should not work on the built-in osclientcerts module"
+      );
       browser.test.notifyPass("pkcs11");
     } catch (e) {
       browser.test.fail(`Error: ${String(e)} :: ${e.stack}`);
@@ -109,7 +211,8 @@ add_task(async function test_pkcs11() {
     }
   }
 
-  await setupPKCS11Manifests(tmpDir, [
+  let libDir = FileUtils.getDir("GreBinD", []);
+  await setupManifests([
     {
       name: "testmodule",
       description: "PKCS#11 Test Module",
@@ -126,6 +229,12 @@ add_task(async function test_pkcs11() {
       name: "internalmodule",
       description: "Builtin Roots Module",
       path: ctypes.libraryName("nssckbi"),
+      id: "pkcs11@tests.mozilla.org",
+    },
+    {
+      name: "osclientcerts",
+      description: "OS Client Cert Module",
+      path: OS.Path.join(libDir.path, ctypes.libraryName("osclientcerts")),
       id: "pkcs11@tests.mozilla.org",
     },
   ]);

@@ -189,7 +189,7 @@ bool BrowsingContext::SameOriginWithTop() {
 /* static */
 already_AddRefed<BrowsingContext> BrowsingContext::CreateDetached(
     nsGlobalWindowInner* aParent, BrowsingContext* aOpener,
-    const nsAString& aName, Type aType) {
+    BrowsingContextGroup* aSpecificGroup, const nsAString& aName, Type aType) {
   if (aParent) {
     MOZ_DIAGNOSTIC_ASSERT(aParent->GetWindowContext());
     MOZ_DIAGNOSTIC_ASSERT(aParent->GetBrowsingContext()->mType == aType);
@@ -210,10 +210,13 @@ already_AddRefed<BrowsingContext> BrowsingContext::CreateDetached(
       aParent ? aParent->GetWindowContext() : nullptr;
 
   // Determine which BrowsingContextGroup this context should be created in.
-  RefPtr<BrowsingContextGroup> group =
-      (aType == Type::Chrome)
-          ? do_AddRef(BrowsingContextGroup::GetChromeGroup())
-          : BrowsingContextGroup::Select(parentWC, aOpener);
+  RefPtr<BrowsingContextGroup> group = aSpecificGroup;
+  if (aType == Type::Chrome) {
+    MOZ_DIAGNOSTIC_ASSERT(!group);
+    group = BrowsingContextGroup::GetChromeGroup();
+  } else if (!group) {
+    group = BrowsingContextGroup::Select(parentWC, aOpener);
+  }
 
   RefPtr<BrowsingContext> context;
   if (XRE_IsParentProcess()) {
@@ -339,7 +342,7 @@ already_AddRefed<BrowsingContext> BrowsingContext::CreateDetached(
 already_AddRefed<BrowsingContext> BrowsingContext::CreateIndependent(
     Type aType) {
   RefPtr<BrowsingContext> bc(
-      CreateDetached(nullptr, nullptr, EmptyString(), aType));
+      CreateDetached(nullptr, nullptr, nullptr, EmptyString(), aType));
   bc->mWindowless = bc->IsContent();
   bc->mEmbeddedByThisProcess = true;
   bc->EnsureAttached();
@@ -1580,12 +1583,7 @@ nsresult BrowsingContext::LoadURI(nsDocShellLoadState* aLoadState,
             win->GetCurrentInnerWindow()->GetWindowGlobalChild()) {
       wgc->SendLoadURI(this, aLoadState, aSetNavigating);
     }
-  } else {
-    MOZ_DIAGNOSTIC_ASSERT(XRE_IsParentProcess());
-    if (!XRE_IsParentProcess()) {
-      return NS_ERROR_UNEXPECTED;
-    }
-
+  } else if (XRE_IsParentProcess()) {
     if (Canonical()->LoadInParent(aLoadState, aSetNavigating)) {
       return NS_OK;
     }
@@ -1618,6 +1616,13 @@ nsresult BrowsingContext::LoadURI(nsDocShellLoadState* aLoadState,
                    }
                  });
     }
+  } else {
+    MOZ_DIAGNOSTIC_ASSERT(sourceBC);
+    if (!sourceBC) {
+      return NS_ERROR_UNEXPECTED;
+    }
+    // If we're in a content process and the source BC is no longer in-process,
+    // just fail silently.
   }
   return NS_OK;
 }
@@ -2418,7 +2423,7 @@ void BrowsingContext::InitSessionHistory() {
     // also create the session history implementation for the child process.
     // This can be removed once session history is stored exclusively in the
     // parent process.
-    mChildSessionHistory->SetIsInProcess(mDocShell);
+    mChildSessionHistory->SetIsInProcess(IsInProcess());
   }
 }
 
@@ -2439,12 +2444,15 @@ ChildSHistory* BrowsingContext::GetChildSessionHistory() {
 
 void BrowsingContext::CreateChildSHistory() {
   MOZ_ASSERT(IsTop());
+  MOZ_ASSERT(GetHasSessionHistory());
+  MOZ_DIAGNOSTIC_ASSERT(!mChildSessionHistory);
 
   // Because session history is global in a browsing context tree, every process
   // that has access to a browsing context tree needs access to its session
   // history. That is why we create the ChildSHistory object in every process
   // where we have access to this browsing context (which is the top one).
   mChildSessionHistory = new ChildSHistory(this);
+  mChildSessionHistory->SetIsInProcess(IsInProcess());
 }
 
 void BrowsingContext::DidSet(FieldIndex<IDX_HasSessionHistory>,
@@ -2452,7 +2460,9 @@ void BrowsingContext::DidSet(FieldIndex<IDX_HasSessionHistory>,
   MOZ_ASSERT(GetHasSessionHistory() || !aOldValue,
              "We don't support turning off session history.");
 
-  CreateChildSHistory();
+  if (GetHasSessionHistory() && !aOldValue) {
+    CreateChildSHistory();
+  }
 }
 
 bool BrowsingContext::CanSet(FieldIndex<IDX_BrowserId>, const uint32_t& aValue,

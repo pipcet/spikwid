@@ -727,10 +727,16 @@ AbortReasonOr<Ok> WarpScriptOracle::maybeInlineIC(WarpOpSnapshotList& snapshots,
 
   const ICEntry& entry = getICEntry(loc);
   ICStub* stub = entry.firstStub();
+  ICFallbackStub* fallbackStub = entry.fallbackStub();
 
   uint32_t offset = loc.bytecodeToOffset(script_);
 
-  if (stub->isFallback()) {
+  // Clear the used-by-transpiler flag on the IC. It can still be set from a
+  // previous compilation because we don't clear the flag on every IC when
+  // invalidating.
+  fallbackStub->clearUsedByTranspiler();
+
+  if (stub == fallbackStub) {
     [[maybe_unused]] unsigned line, column;
     LineNumberAndColumn(script_, loc, &line, &column);
 
@@ -738,11 +744,11 @@ AbortReasonOr<Ok> WarpScriptOracle::maybeInlineIC(WarpOpSnapshotList& snapshots,
     JitSpew(JitSpew_WarpTranspiler,
             "fallback stub (entered-count: %" PRIu32
             ") for JSOp::%s @ %s:%u:%u",
-            stub->toFallbackStub()->enteredCount(), CodeName(loc.getOp()),
+            fallbackStub->enteredCount(), CodeName(loc.getOp()),
             script_->filename(), line, column);
 
     // If the fallback stub was used but there's no optimized stub, use an IC.
-    if (stub->toFallbackStub()->enteredCount() != 0) {
+    if (fallbackStub->enteredCount() != 0) {
       return Ok();
     }
 
@@ -774,24 +780,8 @@ AbortReasonOr<Ok> WarpScriptOracle::maybeInlineIC(WarpOpSnapshotList& snapshots,
   // TODO: don't inline if the IC had unhandled cases => CacheIR is incomplete.
   // TOOD: have a consistent bailout => invalidate story. Set a flag on the IC?
 
-  const CacheIRStubInfo* stubInfo = nullptr;
-  const uint8_t* stubData = nullptr;
-  switch (stub->kind()) {
-    case ICStub::CacheIR_Regular:
-      stubInfo = stub->toCacheIR_Regular()->stubInfo();
-      stubData = stub->toCacheIR_Regular()->stubDataStart();
-      break;
-    case ICStub::CacheIR_Monitored:
-      stubInfo = stub->toCacheIR_Monitored()->stubInfo();
-      stubData = stub->toCacheIR_Monitored()->stubDataStart();
-      break;
-    case ICStub::CacheIR_Updated:
-      stubInfo = stub->toCacheIR_Updated()->stubInfo();
-      stubData = stub->toCacheIR_Updated()->stubDataStart();
-      break;
-    default:
-      MOZ_CRASH("Unexpected stub");
-  }
+  const CacheIRStubInfo* stubInfo = stub->cacheIRStubInfo();
+  const uint8_t* stubData = stub->cacheIRStubData();
 
   // TODO: we don't support stubs with nursery pointers for now. Handling this
   // well requires special machinery. See bug 1631267.
@@ -869,6 +859,8 @@ AbortReasonOr<Ok> WarpScriptOracle::maybeInlineIC(WarpOpSnapshotList& snapshots,
                                   stubDataCopy)) {
     return abort(AbortReason::Alloc);
   }
+
+  fallbackStub->setUsedByTranspiler();
 
   return Ok();
 }

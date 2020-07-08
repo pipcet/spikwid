@@ -134,8 +134,20 @@ class HttpChannelParent final : public nsIInterfaceRequestor,
   // BeginConnect.
   void OverrideReferrerInfoDuringBeginConnect(nsIReferrerInfo* aReferrerInfo);
 
-  bool AttachStreamFilter(
-      Endpoint<extensions::PStreamFilterParent>&& aEndpoint);
+  // Set the cookie string, which will be informed to the child actor during
+  // PHttpBackgroundChannel::OnStartRequest. Note that CookieService also sends
+  // the information to all actors via PContent, a main thread IPC, which could
+  // be slower than background IPC PHttpBackgroundChannel::OnStartRequest.
+  // Therefore, another cookie notification via PBackground is needed to
+  // guarantee the listener in child has the necessary cookies before
+  // OnStartRequest.
+  void SetCookie(nsCString&& aCookie);
+
+  using ChildEndpointPromise =
+      MozPromise<ipc::Endpoint<extensions::PStreamFilterChild>, bool, true>;
+  [[nodiscard]] RefPtr<ChildEndpointPromise> AttachStreamFilter(
+      Endpoint<extensions::PStreamFilterParent>&& aParentEndpoint,
+      Endpoint<extensions::PStreamFilterChild>&& aChildEndpoint);
 
  protected:
   // used to connect redirected-to channel in parent with just created
@@ -323,6 +335,10 @@ class HttpChannelParent final : public nsIInterfaceRequestor,
   // original one. This info will be sent in OnStartRequest.
   nsCOMPtr<nsIReferrerInfo> mOverrideReferrerInfo;
 
+  // The cookie string in Set-Cookie header. This info will be sent in
+  // OnStartRequest.
+  nsCString mCookie;
+
   // OnStatus is always called before OnProgress.
   // Set true in OnStatus if next OnProgress can be ignored
   // since the information can be recontructed from ODA.
@@ -358,12 +374,6 @@ class HttpChannelParent final : public nsIInterfaceRequestor,
   // Defaults to false. Is set to true at the begining of OnStartRequest.
   // Used to ensure methods can't be called before OnStartRequest.
   uint8_t mAfterOnStartRequestBegun : 1;
-
-  // Set if the channel is attached with a stream filter and will send
-  // OnStartRequestSent to keep the order with OnStartRequest.
-  // AttachStreamFilter should be handled before OnStartRequest goes to the
-  // listener in child process, which could be racy with OnStartRequest.
-  uint8_t mStreamFilterAttached : 1;
 
   // Number of events to wait before actually invoking AsyncOpen on the main
   // channel. For each asynchronous step required before InvokeAsyncOpen, should

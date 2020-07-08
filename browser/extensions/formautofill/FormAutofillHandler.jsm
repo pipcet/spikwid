@@ -262,13 +262,48 @@ class FormAutofillSection {
       if (
         maxLength === undefined ||
         maxLength < 0 ||
-        profile[key].length <= maxLength
+        profile[key].toString().length <= maxLength
       ) {
         continue;
       }
 
       if (maxLength) {
-        profile[key] = profile[key].substr(0, maxLength);
+        switch (typeof profile[key]) {
+          case "string":
+            // If this is an expiration field and our previous
+            // adaptations haven't resulted in a string that is
+            // short enough to satisfy the field length, and the
+            // field is constrained to a length of 5, then we
+            // assume it is intended to hold an expiration of the
+            // form "MM/YY".
+            if (key == "cc-exp" && maxLength == 5) {
+              const month2Digits = (
+                "0" + profile["cc-exp-month"].toString()
+              ).slice(-2);
+              const year2Digits = profile["cc-exp-year"].toString().slice(-2);
+              profile[key] = `${month2Digits}/${year2Digits}`;
+            } else {
+              profile[key] = profile[key].substr(0, maxLength);
+            }
+            break;
+          case "number":
+            // There's no way to truncate a number smaller than a
+            // single digit.
+            if (maxLength < 1) {
+              maxLength = 1;
+            }
+            // The only numbers we store are expiration month/year,
+            // and if they truncate, we want the final digits, not
+            // the initial ones.
+            profile[key] = profile[key] % Math.pow(10, maxLength);
+            break;
+          default:
+            log.warn(
+              "adaptFieldMaxLength: Don't know how to truncate",
+              typeof profile[key],
+              profile[key]
+            );
+        }
       } else {
         delete profile[key];
       }

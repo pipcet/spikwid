@@ -4382,30 +4382,6 @@ class HTMLEditor final : public TextEditor,
   nsresult ParseCFHTML(nsCString& aCfhtml, char16_t** aStuffToPaste,
                        char16_t** aCfcontext);
 
-  static nsresult StripFormattingNodes(nsIContent& aNode,
-                                       bool aOnlyList = false);
-
-  /**
-   * @param aContextStr as indicated by nsITransferable's kHTMLContext.
-   * @param aInfoStr as indicated by nsITransferable's kHTMLInfo.
-   */
-  nsresult CreateDOMFragmentFromPaste(
-      const nsAString& aInputString, const nsAString& aContextStr,
-      const nsAString& aInfoStr, nsCOMPtr<nsINode>* aOutFragNode,
-      nsCOMPtr<nsINode>* aOutStartNode, nsCOMPtr<nsINode>* aOutEndNode,
-      int32_t* aOutStartOffset, int32_t* aOutEndOffset, bool aTrustedInput);
-  static nsresult ParseFragment(const nsAString& aStr,
-                                nsAtom* aContextLocalName, Document* aTargetDoc,
-                                dom::DocumentFragment** aFragment,
-                                bool aTrustedInput);
-
-  /**
-   * @param aInfoStr as indicated by nsITransferable's kHTMLInfo.
-   */
-  [[nodiscard]] static nsresult MoveStartAndEndAccordingToHTMLInfo(
-      const nsAString& aInfoStr, nsCOMPtr<nsINode>* aOutStartNode,
-      nsCOMPtr<nsINode>* aOutEndNode);
-
   /**
    * CollectTopMostChildContentsCompletelyInRange() collects topmost child
    * contents which are completely in the given range.
@@ -4613,8 +4589,7 @@ class HTMLEditor final : public TextEditor,
    */
   bool OurWindowHasFocus() const;
 
-  EditorDOMPoint GetNewCaretPointAfterInsertingHTML(
-      const EditorDOMPoint& lastInsertedPoint) const;
+  class HTMLWithContextInserter;
 
   /**
    * This function is used to insert a string of HTML input optionally with some

@@ -382,35 +382,6 @@ static const SIZE_T kReserveSize = 0x5000000;  // 80 MB
 static void* gBreakpadReservedVM;
 #endif
 
-#if defined(MOZ_WIDGET_ANDROID)
-// Android builds use a custom library loader,
-// so the embedding will provide a list of shared
-// libraries that are mapped into anonymous mappings.
-typedef struct {
-  std::string name;
-  uintptr_t start_address;
-  size_t length;
-  size_t file_offset;
-} mapping_info;
-static std::vector<mapping_info> gLibraryMappings;
-
-static void AddMappingInfoToExceptionHandler(const mapping_info& aInfo) {
-  PageAllocator allocator;
-  auto_wasteful_vector<uint8_t, kDefaultBuildIdSize> guid(&allocator);
-  FileID::ElfFileIdentifierFromMappedFile(
-      reinterpret_cast<void const*>(aInfo.start_address), guid);
-  gExceptionHandler->AddMappingInfo(aInfo.name, guid, aInfo.start_address,
-                                    aInfo.length, aInfo.file_offset);
-}
-
-static void AddAndroidMappingInfo() {
-  for (auto info : gLibraryMappings) {
-    AddMappingInfoToExceptionHandler(info);
-  }
-}
-
-#endif  // defined(MOZ_WIDGET_ANDROID)
-
 #ifdef XP_LINUX
 static inline void my_inttostring(intmax_t t, char* buffer,
                                   size_t buffer_length) {
@@ -2116,10 +2087,6 @@ nsresult SetExceptionHandler(nsIFile* aXREDirectory, bool force /*=false*/) {
   if (keyExistsAndHasValidFormat) showOSCrashReporter = prefValue;
 #endif
 
-#if defined(MOZ_WIDGET_ANDROID)
-  AddAndroidMappingInfo();
-#endif  // defined(MOZ_WIDGET_ANDROID)
-
   mozalloc_set_oom_abort_handler(AnnotateOOMAllocationSize);
 
   oldTerminateHandler = std::set_terminate(&TerminateHandler);
@@ -2439,6 +2406,33 @@ nsresult AnnotateCrashReport(Annotation key, const nsACString& data) {
 
 nsresult RemoveCrashReportAnnotation(Annotation key) {
   return AnnotateCrashReport(key, EmptyCString());
+}
+
+AutoAnnotateCrashReport::AutoAnnotateCrashReport(Annotation key, bool data)
+    : AutoAnnotateCrashReport(key, data ? "1"_ns : "0"_ns) {}
+
+AutoAnnotateCrashReport::AutoAnnotateCrashReport(Annotation key, int data)
+    : AutoAnnotateCrashReport(key, nsPrintfCString("%d", data)) {}
+
+AutoAnnotateCrashReport::AutoAnnotateCrashReport(Annotation key, unsigned data)
+    : AutoAnnotateCrashReport(key, nsPrintfCString("%u", data)) {}
+
+AutoAnnotateCrashReport::AutoAnnotateCrashReport(Annotation key,
+                                                 const nsACString& data)
+    : mKey(key) {
+  if (GetEnabled()) {
+    MutexAutoLock lock(*crashReporterAPILock);
+    auto& entry = crashReporterAPIData_Table[mKey];
+    mPrevious = std::move(entry);
+    entry = data;
+  }
+}
+
+AutoAnnotateCrashReport::~AutoAnnotateCrashReport() {
+  if (GetEnabled()) {
+    MutexAutoLock lock(*crashReporterAPILock);
+    crashReporterAPIData_Table[mKey] = std::move(mPrevious);
+  }
 }
 
 void MergeCrashAnnotations(AnnotationTable& aDst, const AnnotationTable& aSrc) {
@@ -3876,20 +3870,6 @@ void SetNotificationPipeForChild(int childCrashFd) {
 
 void SetCrashAnnotationPipeForChild(int childCrashAnnotationFd) {
   gChildCrashAnnotationReportFd = childCrashAnnotationFd;
-}
-
-void AddLibraryMapping(const char* library_name, uintptr_t start_address,
-                       size_t mapping_length, size_t file_offset) {
-  mapping_info info;
-  if (!gExceptionHandler) {
-    info.name = library_name;
-    info.start_address = start_address;
-    info.length = mapping_length;
-    info.file_offset = file_offset;
-    gLibraryMappings.push_back(info);
-  } else {
-    AddMappingInfoToExceptionHandler(info);
-  }
 }
 #endif
 

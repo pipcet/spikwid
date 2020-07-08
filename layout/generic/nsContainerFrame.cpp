@@ -65,7 +65,7 @@ void nsContainerFrame::Init(nsIContent* aContent, nsContainerFrame* aParent,
 void nsContainerFrame::SetInitialChildList(ChildListID aListID,
                                            nsFrameList& aChildList) {
 #ifdef DEBUG
-  nsFrame::VerifyDirtyBitSet(aChildList);
+  nsIFrame::VerifyDirtyBitSet(aChildList);
   for (nsIFrame* f : aChildList) {
     MOZ_ASSERT(f->GetParent() == this, "Unexpected parent");
   }
@@ -234,7 +234,7 @@ void nsContainerFrame::DestroyFrom(nsIFrame* aDestructRoot,
     }
 
 #ifdef DEBUG
-    // This is just so we can assert it's not set in nsFrame::DestroyFrom.
+    // This is just so we can assert it's not set in nsIFrame::DestroyFrom.
     RemoveStateBits(NS_FRAME_PART_OF_IBSPLIT);
 #endif
   }
@@ -372,7 +372,7 @@ class nsDisplaySelectionOverlay : public nsPaintedDisplayItem {
   /**
    * @param aSelectionValue nsISelectionController::getDisplaySelection.
    */
-  nsDisplaySelectionOverlay(nsDisplayListBuilder* aBuilder, nsFrame* aFrame,
+  nsDisplaySelectionOverlay(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame,
                             int16_t aSelectionValue)
       : nsPaintedDisplayItem(aBuilder, aFrame),
         mSelectionValue(aSelectionValue) {
@@ -2461,7 +2461,7 @@ LogicalSize nsContainerFrame::ComputeSizeWithIntrinsicDimensions(
       // "flex-basis:auto", in which case they use their main-size property
       // after all.
       // NOTE: The logic here should match the similar chunk for updating
-      // mainAxisCoord in nsFrame::ComputeSize() (aside from using a different
+      // mainAxisCoord in nsIFrame::ComputeSize() (aside from using a different
       // dummy value in the IsUsedFlexBasisContent() case).
       const auto* flexBasis = &stylePos->mFlexBasis;
       auto& mainAxisCoord =
@@ -3243,38 +3243,22 @@ void nsContainerFrame::List(FILE* out, const char* aPrefix,
   ListGeneric(str, aPrefix, aFlags);
   ExtraContainerFrameInfo(str);
 
-  // Output the children
-  bool outputOneList = false;
-  for (const auto& [list, listID] : ChildLists()) {
-    if (outputOneList) {
-      str += aPrefix;
-    }
-    if (listID != kPrincipalList) {
-      if (!outputOneList) {
-        str += "\n";
-        str += aPrefix;
-      }
-      str += nsPrintfCString("%s %p ", mozilla::layout::ChildListName(listID),
-                             &GetChildList(listID));
-    }
-    fprintf_stderr(out, "%s<\n", str.get());
-    str = "";
-    for (nsIFrame* kid : list) {
-      // Verify the child frame's parent frame pointer is correct
-      NS_ASSERTION(kid->GetParent() == this, "bad parent frame pointer");
+  // Output the frame name and various fields.
+  fprintf_stderr(out, "%s <\n", str.get());
 
-      // Have the child frame list
-      nsCString pfx(aPrefix);
-      pfx += "  ";
-      kid->List(out, pfx.get(), aFlags);
-    }
-    fprintf_stderr(out, "%s>\n", aPrefix);
-    outputOneList = true;
+  const nsCString pfx = nsCString(aPrefix) + "  "_ns;
+
+  // Output principal child list separately since we want to omit its
+  // name and address.
+  for (nsIFrame* kid : PrincipalChildList()) {
+    kid->List(out, pfx.get(), aFlags);
   }
 
-  if (!outputOneList) {
-    fprintf_stderr(out, "%s<>\n", str.get());
-  }
+  // Output rest of the child lists.
+  const ChildListIDs skippedListIDs = {kPrincipalList};
+  ListChildLists(out, pfx.get(), aFlags, skippedListIDs);
+
+  fprintf_stderr(out, "%s>\n", aPrefix);
 }
 
 void nsContainerFrame::ListWithMatchedRules(FILE* out,
@@ -3294,6 +3278,31 @@ void nsContainerFrame::ListWithMatchedRules(FILE* out,
     for (const nsIFrame* kid : childList.mList) {
       kid->ListWithMatchedRules(out, childPrefix.get());
     }
+  }
+}
+
+void nsContainerFrame::ListChildLists(FILE* aOut, const char* aPrefix,
+                                      ListFlags aFlags,
+                                      ChildListIDs aSkippedListIDs) const {
+  const nsCString nestedPfx = nsCString(aPrefix) + "  "_ns;
+
+  for (const auto& [list, listID] : ChildLists()) {
+    if (aSkippedListIDs.contains(listID)) {
+      continue;
+    }
+
+    // Use nsPrintfCString so that %p don't output prefix "0x". This is
+    // consistent with nsIFrame::ListTag().
+    const nsPrintfCString str("%s%s@%p <\n", aPrefix, ChildListName(listID),
+                              &GetChildList(listID));
+    fprintf_stderr(aOut, "%s", str.get());
+
+    for (nsIFrame* kid : list) {
+      // Verify the child frame's parent frame pointer is correct.
+      NS_ASSERTION(kid->GetParent() == this, "Bad parent frame pointer!");
+      kid->List(aOut, nestedPfx.get(), aFlags);
+    }
+    fprintf_stderr(aOut, "%s>\n", aPrefix);
   }
 }
 

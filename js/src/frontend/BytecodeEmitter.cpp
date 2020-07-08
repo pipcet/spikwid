@@ -1675,8 +1675,24 @@ bool BytecodeEmitter::emitGetNameAtLocation(Handle<JSAtom*> name,
 }
 
 bool BytecodeEmitter::emitGetName(NameNode* name) {
+  MOZ_ASSERT(name->isKind(ParseNodeKind::Name));
+
   RootedAtom nameAtom(cx, name->name());
   return emitGetName(nameAtom);
+}
+
+bool BytecodeEmitter::emitGetPrivateName(NameNode* name) {
+  MOZ_ASSERT(name->isKind(ParseNodeKind::PrivateName));
+
+  RootedAtom nameAtom(cx, name->name());
+
+  // The parser ensures the private name is present on the environment chain.
+  NameLocation location = lookupName(nameAtom);
+  MOZ_ASSERT(location.kind() == NameLocation::Kind::FrameSlot ||
+             location.kind() == NameLocation::Kind::EnvironmentCoordinate ||
+             location.kind() == NameLocation::Kind::Dynamic);
+
+  return emitGetNameAtLocation(nameAtom, location);
 }
 
 bool BytecodeEmitter::emitTDZCheckIfNeeded(HandleAtom name,
@@ -1904,6 +1920,7 @@ bool BytecodeEmitter::emitElemObjAndKey(PropertyByValue* elem, bool isSuper,
 bool BytecodeEmitter::emitElemIncDec(UnaryNode* incDec) {
   PropertyByValue* elemExpr = &incDec->kid()->as<PropertyByValue>();
   bool isSuper = elemExpr->isSuper();
+  bool isPrivate = elemExpr->key().isKind(ParseNodeKind::PrivateName);
   ParseNodeKind kind = incDec->getKind();
   ElemOpEmitter eoe(
       this,
@@ -1914,7 +1931,8 @@ bool BytecodeEmitter::emitElemIncDec(UnaryNode* incDec) {
                 : kind == ParseNodeKind::PostDecrementExpr
                       ? ElemOpEmitter::Kind::PostDecrement
                       : ElemOpEmitter::Kind::PreDecrement,
-      isSuper ? ElemOpEmitter::ObjKind::Super : ElemOpEmitter::ObjKind::Other);
+      isSuper ? ElemOpEmitter::ObjKind::Super : ElemOpEmitter::ObjKind::Other,
+      isPrivate ? NameVisibility::Private : NameVisibility::Public);
   if (!emitElemObjAndKey(elemExpr, isSuper, eoe)) {
     //              [stack] # if Super
     //              [stack] THIS KEY
@@ -2571,9 +2589,12 @@ bool BytecodeEmitter::emitDestructuringLHSRef(ParseNode* target,
     case ParseNodeKind::ElemExpr: {
       PropertyByValue* elem = &target->as<PropertyByValue>();
       bool isSuper = elem->isSuper();
-      ElemOpEmitter eoe(this, ElemOpEmitter::Kind::SimpleAssignment,
-                        isSuper ? ElemOpEmitter::ObjKind::Super
-                                : ElemOpEmitter::ObjKind::Other);
+      bool isPrivate = elem->key().isKind(ParseNodeKind::PrivateName);
+      ElemOpEmitter eoe(
+          this, ElemOpEmitter::Kind::SimpleAssignment,
+          isSuper ? ElemOpEmitter::ObjKind::Super
+                  : ElemOpEmitter::ObjKind::Other,
+          isPrivate ? NameVisibility::Private : NameVisibility::Public);
       if (!emitElemObjAndKey(elem, isSuper, eoe)) {
         //          [stack] # if Super
         //          [stack] THIS KEY
@@ -2714,9 +2735,12 @@ bool BytecodeEmitter::emitSetOrInitializeDestructuring(
         //          [stack] OBJ KEY VAL
         PropertyByValue* elem = &target->as<PropertyByValue>();
         bool isSuper = elem->isSuper();
-        ElemOpEmitter eoe(this, ElemOpEmitter::Kind::SimpleAssignment,
-                          isSuper ? ElemOpEmitter::ObjKind::Super
-                                  : ElemOpEmitter::ObjKind::Other);
+        bool isPrivate = elem->key().isKind(ParseNodeKind::PrivateName);
+        ElemOpEmitter eoe(
+            this, ElemOpEmitter::Kind::SimpleAssignment,
+            isSuper ? ElemOpEmitter::ObjKind::Super
+                    : ElemOpEmitter::ObjKind::Other,
+            isPrivate ? NameVisibility::Private : NameVisibility::Public);
         if (!eoe.skipObjAndKeyAndRhs()) {
           return false;
         }
@@ -4129,12 +4153,14 @@ bool BytecodeEmitter::emitAssignmentOrInit(ParseNodeKind kind, ParseNode* lhs,
     case ParseNodeKind::ElemExpr: {
       PropertyByValue* elem = &lhs->as<PropertyByValue>();
       bool isSuper = elem->isSuper();
+      bool isPrivate = elem->key().isKind(ParseNodeKind::PrivateName);
       eoe.emplace(this,
                   isCompound ? ElemOpEmitter::Kind::CompoundAssignment
                              : isInit ? ElemOpEmitter::Kind::PropInit
                                       : ElemOpEmitter::Kind::SimpleAssignment,
                   isSuper ? ElemOpEmitter::ObjKind::Super
-                          : ElemOpEmitter::ObjKind::Other);
+                          : ElemOpEmitter::ObjKind::Other,
+                  isPrivate ? NameVisibility::Private : NameVisibility::Public);
       if (!emitElemObjAndKey(elem, isSuper, *eoe)) {
         //          [stack] # if Super
         //          [stack] THIS KEY
@@ -4405,10 +4431,11 @@ bool BytecodeEmitter::emitShortCircuitAssignment(AssignmentNode* node) {
     case ParseNodeKind::ElemExpr: {
       PropertyByValue* elem = &lhs->as<PropertyByValue>();
       bool isSuper = elem->isSuper();
-
+      bool isPrivate = elem->key().isKind(ParseNodeKind::PrivateName);
       eoe.emplace(this, ElemOpEmitter::Kind::CompoundAssignment,
                   isSuper ? ElemOpEmitter::ObjKind::Super
-                          : ElemOpEmitter::ObjKind::Other);
+                          : ElemOpEmitter::ObjKind::Other,
+                  isPrivate ? NameVisibility::Private : NameVisibility::Public);
 
       if (!emitElemObjAndKey(elem, isSuper, *eoe)) {
         //          [stack] # if Super
@@ -6800,9 +6827,13 @@ bool BytecodeEmitter::emitDeleteElement(UnaryNode* deleteNode) {
 
   PropertyByValue* elemExpr = &deleteNode->kid()->as<PropertyByValue>();
   bool isSuper = elemExpr->isSuper();
+  DebugOnly<bool> isPrivate =
+      elemExpr->key().isKind(ParseNodeKind::PrivateName);
+  MOZ_ASSERT(!isPrivate);
   ElemOpEmitter eoe(
       this, ElemOpEmitter::Kind::Delete,
-      isSuper ? ElemOpEmitter::ObjKind::Super : ElemOpEmitter::ObjKind::Other);
+      isSuper ? ElemOpEmitter::ObjKind::Super : ElemOpEmitter::ObjKind::Other,
+      NameVisibility::Public);  // Can't delete a private name.
   if (isSuper) {
     // The expression |delete super[foo];| has to evaluate |super[foo]|,
     // which could throw if |this| hasn't yet been set by a |super(...)|
@@ -6953,7 +6984,7 @@ bool BytecodeEmitter::emitDeleteElementInOptChain(PropertyByValueBase* elemExpr,
   MOZ_ASSERT_IF(elemExpr->is<PropertyByValue>(),
                 !elemExpr->as<PropertyByValue>().isSuper());
   ElemOpEmitter eoe(this, ElemOpEmitter::Kind::Delete,
-                    ElemOpEmitter::ObjKind::Other);
+                    ElemOpEmitter::ObjKind::Other, NameVisibility::Public);
 
   if (!eoe.prepareForObj()) {
     //              [stack]
@@ -7384,8 +7415,8 @@ bool BytecodeEmitter::emitOptionalCalleeAndThis(ParseNode* callee,
     case ParseNodeKind::OptionalElemExpr: {
       OptionalPropertyByValue* elem = &callee->as<OptionalPropertyByValue>();
       bool isSuper = false;
-
-      ElemOpEmitter& eoe = cone.prepareForElemCallee(isSuper);
+      bool isPrivate = elem->key().isKind(ParseNodeKind::PrivateName);
+      ElemOpEmitter& eoe = cone.prepareForElemCallee(isSuper, isPrivate);
       if (!emitOptionalElemExpression(elem, eoe, isSuper, oe)) {
         //          [stack] CALLEE THIS
         return false;
@@ -7395,8 +7426,8 @@ bool BytecodeEmitter::emitOptionalCalleeAndThis(ParseNode* callee,
     case ParseNodeKind::ElemExpr: {
       PropertyByValue* elem = &callee->as<PropertyByValue>();
       bool isSuper = elem->isSuper();
-
-      ElemOpEmitter& eoe = cone.prepareForElemCallee(isSuper);
+      bool isPrivate = elem->key().isKind(ParseNodeKind::PrivateName);
+      ElemOpEmitter& eoe = cone.prepareForElemCallee(isSuper, isPrivate);
       if (!emitOptionalElemExpression(elem, eoe, isSuper, oe)) {
         //          [stack] CALLEE THIS
         return false;
@@ -7483,8 +7514,8 @@ bool BytecodeEmitter::emitCalleeAndThis(ParseNode* callee, ParseNode* call,
       MOZ_ASSERT(emitterMode != BytecodeEmitter::SelfHosting);
       PropertyByValue* elem = &callee->as<PropertyByValue>();
       bool isSuper = elem->isSuper();
-
-      ElemOpEmitter& eoe = cone.prepareForElemCallee(isSuper);
+      bool isPrivate = elem->key().isKind(ParseNodeKind::PrivateName);
+      ElemOpEmitter& eoe = cone.prepareForElemCallee(isSuper, isPrivate);
       if (!emitElemObjAndKey(elem, isSuper, eoe)) {
         //          [stack] # if Super
         //          [stack] THIS? THIS KEY
@@ -7915,8 +7946,10 @@ bool BytecodeEmitter::emitOptionalTree(
     case ParseNodeKind::OptionalElemExpr: {
       OptionalPropertyByValue* elem = &pn->as<OptionalPropertyByValue>();
       bool isSuper = false;
-      ElemOpEmitter eoe(this, ElemOpEmitter::Kind::Get,
-                        ElemOpEmitter::ObjKind::Other);
+      bool isPrivate = elem->key().isKind(ParseNodeKind::PrivateName);
+      ElemOpEmitter eoe(
+          this, ElemOpEmitter::Kind::Get, ElemOpEmitter::ObjKind::Other,
+          isPrivate ? NameVisibility::Private : NameVisibility::Public);
 
       if (!emitOptionalElemExpression(elem, eoe, isSuper, oe)) {
         return false;
@@ -7926,9 +7959,12 @@ bool BytecodeEmitter::emitOptionalTree(
     case ParseNodeKind::ElemExpr: {
       PropertyByValue* elem = &pn->as<PropertyByValue>();
       bool isSuper = elem->isSuper();
-      ElemOpEmitter eoe(this, ElemOpEmitter::Kind::Get,
-                        isSuper ? ElemOpEmitter::ObjKind::Super
-                                : ElemOpEmitter::ObjKind::Other);
+      bool isPrivate = elem->key().isKind(ParseNodeKind::PrivateName);
+      ElemOpEmitter eoe(
+          this, ElemOpEmitter::Kind::Get,
+          isSuper ? ElemOpEmitter::ObjKind::Super
+                  : ElemOpEmitter::ObjKind::Other,
+          isPrivate ? NameVisibility::Private : NameVisibility::Public);
 
       if (!emitOptionalElemExpression(elem, eoe, isSuper, oe)) {
         return false;
@@ -7950,6 +7986,7 @@ bool BytecodeEmitter::emitOptionalTree(
       // https://tc39.es/ecma262/#sec-primary-expression
       bool isPrimaryExpression =
           kind == ParseNodeKind::ThisExpr || kind == ParseNodeKind::Name ||
+          kind == ParseNodeKind::PrivateName ||
           kind == ParseNodeKind::NullExpr || kind == ParseNodeKind::TrueExpr ||
           kind == ParseNodeKind::FalseExpr ||
           kind == ParseNodeKind::NumberExpr ||
@@ -9833,12 +9870,7 @@ bool BytecodeEmitter::emitClass(
     }
   }
 
-  // This is kind of silly. In order to the get the home object defined on
-  // the constructor, we have to make it second, but we want the prototype
-  // on top for EmitPropertyList, because we expect static properties to be
-  // rarer. The result is a few more swaps than we would like. Such is life.
   bool isDerived = !!heritageExpression;
-  bool hasNameOnStack = nameKind == ClassNameKind::ComputedName;
   if (isDerived) {
     if (!updateSourceCoordNotes(classNode->pn_pos.begin)) {
       return false;
@@ -9850,6 +9882,68 @@ bool BytecodeEmitter::emitClass(
       //            [stack] HERITAGE
       return false;
     }
+  }
+
+  // The class body scope holds any private names. Those mustn't be visible in
+  // the heritage expression and hence the scope must be emitted after the
+  // heritage expression.
+  if (LexicalScopeNode* bodyScopeBindings = classNode->bodyScopeBindings()) {
+    if (!ce.emitBodyScope(bodyScopeBindings->scopeBindings())) {
+      //            [stack] HERITAGE
+      return false;
+    }
+
+    for (ParseNode* classElement : classNode->memberList()->contents()) {
+      if (!classElement->is<ClassField>()) {
+        continue;
+      }
+
+      ParseNode* fieldName = &classElement->as<ClassField>().name();
+      if (!fieldName->isKind(ParseNodeKind::PrivateName)) {
+        continue;
+      }
+
+      RootedAtom privateName(cx, fieldName->as<NameNode>().name());
+
+      // TODO: Add a new bytecode to create private names.
+      if (!emitAtomOp(JSOp::GetIntrinsic, cx->names().NewPrivateName)) {
+        //          [stack] HERITAGE NEWPRIVATENAME
+        return false;
+      }
+
+      // Push `undefined` as `this` parameter for call.
+      if (!emit1(JSOp::Undefined)) {
+        //          [stack] HERITAGE NEWPRIVATENAME UNDEFINED
+        return false;
+      }
+
+      if (!emitAtomOp(JSOp::String, privateName)) {
+        //          [stack] HERITAGE NEWPRIVATENAME UNDEFINED NAME
+        return false;
+      }
+
+      int argc = 1;
+      if (!emitCall(JSOp::Call, argc)) {
+        //          [stack] HERITAGE PRIVATENAME
+        return false;
+      }
+
+      // Add a binding for #name => privatename
+      if (!emitLexicalInitialization(privateName)) {
+        //          [stack] HERITAGE PRIVATENAME
+        return false;
+      }
+
+      // Pop Private name off the stack.
+      if (!emit1(JSOp::Pop)) {
+        //          [stack] HERITAGE
+        return false;
+      }
+    }
+  }
+
+  bool hasNameOnStack = nameKind == ClassNameKind::ComputedName;
+  if (isDerived) {
     if (!ce.emitDerivedClass(innerName, nameForAnonymousClass,
                              hasNameOnStack)) {
       //            [stack] HERITAGE HOMEOBJ
@@ -10118,11 +10212,13 @@ MOZ_NEVER_INLINE bool BytecodeEmitter::emitInstrumentationForOpcodeSlow(
                    emitAtomOp(JSOp::String, atomIndex) && emitDupAt(pushed + 2);
           });
     case JSOp::GetElem:
+    case JSOp::GetPrivateElem:
     case JSOp::CallElem:
       return emitInstrumentationSlow(
           InstrumentationKind::GetElement,
           [=](uint32_t pushed) { return emitDupAt(pushed + 1, 2); });
     case JSOp::SetElem:
+    case JSOp::SetPrivateElem:
     case JSOp::StrictSetElem:
       return emitInstrumentationSlow(
           InstrumentationKind::SetElement,
@@ -10496,9 +10592,12 @@ bool BytecodeEmitter::emitTree(
     case ParseNodeKind::ElemExpr: {
       PropertyByValue* elem = &pn->as<PropertyByValue>();
       bool isSuper = elem->isSuper();
-      ElemOpEmitter eoe(this, ElemOpEmitter::Kind::Get,
-                        isSuper ? ElemOpEmitter::ObjKind::Super
-                                : ElemOpEmitter::ObjKind::Other);
+      bool isPrivate = elem->key().isKind(ParseNodeKind::PrivateName);
+      ElemOpEmitter eoe(
+          this, ElemOpEmitter::Kind::Get,
+          isSuper ? ElemOpEmitter::ObjKind::Super
+                  : ElemOpEmitter::ObjKind::Other,
+          isPrivate ? NameVisibility::Private : NameVisibility::Public);
       if (!emitElemObjAndKey(elem, isSuper, eoe)) {
         //          [stack] # if Super
         //          [stack] THIS KEY
@@ -10583,6 +10682,12 @@ bool BytecodeEmitter::emitTree(
 
     case ParseNodeKind::Name:
       if (!emitGetName(&pn->as<NameNode>())) {
+        return false;
+      }
+      break;
+
+    case ParseNodeKind::PrivateName:
+      if (!emitGetPrivateName(&pn->as<NameNode>())) {
         return false;
       }
       break;

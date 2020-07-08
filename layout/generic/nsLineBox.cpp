@@ -16,7 +16,7 @@
 #include "mozilla/WritingModes.h"
 #include "mozilla/ToString.h"
 #include "nsBidiPresUtils.h"
-#include "nsFrame.h"
+#include "nsIFrame.h"
 #include "nsIFrameInlines.h"
 #include "nsPresArena.h"
 #include "nsPrintfCString.h"
@@ -237,7 +237,7 @@ void nsLineBox::List(FILE* out, const char* aPrefix,
                      nsIFrame::ListFlags aFlags) const {
   nsCString str(aPrefix);
   char cbuf[100];
-  str += nsPrintfCString("line %p: count=%d state=%s ",
+  str += nsPrintfCString("line@%p count=%d state=%s ",
                          static_cast<const void*>(this), GetChildCount(),
                          StateToString(cbuf, sizeof(cbuf)));
   if (IsBlock() && !GetCarriedOutBEndMargin().IsZero()) {

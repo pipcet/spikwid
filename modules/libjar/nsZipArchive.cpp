@@ -341,11 +341,21 @@ nsZipHandle::~nsZipHandle() {
 //---------------------------------------------
 //  nsZipArchive::OpenArchive
 //---------------------------------------------
-nsresult nsZipArchive::OpenArchive(nsZipHandle* aZipHandle, PRFileDesc* aFd) {
+nsresult nsZipArchive::OpenArchive(nsZipHandle* aZipHandle, PRFileDesc* aFd,
+                                   Span<const uint8_t> aCachedCentral) {
   mFd = aZipHandle;
 
   //-- get table of contents for archive
-  nsresult rv = BuildFileList(aFd);
+  nsresult rv = NS_OK;
+  if (!mBuiltFileList) {
+    if (!aCachedCentral.IsEmpty()) {
+      auto* start = aCachedCentral.Elements();
+      auto* end = start + aCachedCentral.Length();
+      rv = BuildFileListFromBuffer(start, end);
+    } else {
+      rv = BuildFileList(aFd);
+    }
+  }
   if (NS_SUCCEEDED(rv)) {
     if (aZipHandle->mFile && XRE_IsParentProcess()) {
       static char* env = PR_GetEnv("MOZ_JAR_LOG_FILE");
@@ -399,7 +409,8 @@ nsresult nsZipArchive::OpenArchive(nsZipHandle* aZipHandle, PRFileDesc* aFd) {
   return rv;
 }
 
-nsresult nsZipArchive::OpenArchive(nsIFile* aFile) {
+nsresult nsZipArchive::OpenArchive(nsIFile* aFile,
+                                   Span<const uint8_t> aCachedCentral) {
   RefPtr<nsZipHandle> handle;
 #if defined(XP_WIN)
   mozilla::AutoFDClose fd;
@@ -410,9 +421,9 @@ nsresult nsZipArchive::OpenArchive(nsIFile* aFile) {
   if (NS_FAILED(rv)) return rv;
 
 #if defined(XP_WIN)
-  return OpenArchive(handle, fd.get());
+  return OpenArchive(handle, fd.get(), aCachedCentral);
 #else
-  return OpenArchive(handle);
+  return OpenArchive(handle, nullptr, aCachedCentral);
 #endif
 }
 
@@ -462,13 +473,75 @@ nsresult nsZipArchive::CloseArchive() {
   // Let us also cleanup the mFiles table for re-use on the next 'open' call
   memset(mFiles, 0, sizeof(mFiles));
   mBuiltSynthetics = false;
+
+  AutoWriteLock lock(mLazyOpenLock);
+  mLazyOpenParams = Nothing();
+
   return NS_OK;
+}
+
+nsresult nsZipArchive::EnsureArchiveOpenedOnDisk() {
+  {
+    AutoReadLock lock(mLazyOpenLock);
+    if (!mLazyOpenParams) {
+      return NS_OK;
+    }
+  }
+
+  AutoWriteLock lock(mLazyOpenLock);
+  if (!mLazyOpenParams) {
+    // Another thread beat us to opening the archive while we were waiting on
+    // the mutex.
+    return NS_OK;
+  }
+
+  nsresult rv = OpenArchive(mLazyOpenParams->mFile);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return NS_ERROR_UNEXPECTED;
+  }
+  mLazyOpenParams = Nothing();
+
+  return NS_OK;
+}
+
+nsresult nsZipArchive::EnsureFileListBuilt() {
+  {
+    AutoReadLock lock(mLazyOpenLock);
+    if (!mLazyOpenParams || mBuiltFileList) {
+      return NS_OK;
+    }
+  }
+
+  AutoWriteLock lock(mLazyOpenLock);
+  if (!mLazyOpenParams || mBuiltFileList) {
+    // Another thread beat us to building the file list while we were waiting
+    // on the mutex.
+    return NS_OK;
+  }
+
+  nsresult rv;
+  if (!mLazyOpenParams->mCachedCentral.IsEmpty()) {
+    auto* start = mLazyOpenParams->mCachedCentral.Elements();
+    auto* end = start + mLazyOpenParams->mCachedCentral.Length();
+    rv = BuildFileListFromBuffer(start, end);
+  } else {
+    rv = OpenArchive(mLazyOpenParams->mFile);
+    mLazyOpenParams = Nothing();
+  }
+
+  return rv;
 }
 
 //---------------------------------------------
 // nsZipArchive::GetItem
 //---------------------------------------------
 nsZipItem* nsZipArchive::GetItem(const char* aEntryName) {
+  nsresult rv = EnsureFileListBuilt();
+
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return nullptr;
+  }
+
   if (aEntryName) {
     uint32_t len = strlen(aEntryName);
     //-- If the request is for a directory, make sure that synthetic entries
@@ -552,6 +625,12 @@ nsresult nsZipArchive::ExtractFile(nsZipItem* item, nsIFile* outFile,
 nsresult nsZipArchive::FindInit(const char* aPattern, nsZipFind** aFind) {
   if (!aFind) return NS_ERROR_ILLEGAL_VALUE;
 
+  nsresult rv = EnsureFileListBuilt();
+
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return NS_ERROR_UNEXPECTED;
+  }
+
   // null out param in case an error happens
   *aFind = nullptr;
 
@@ -559,7 +638,7 @@ nsresult nsZipArchive::FindInit(const char* aPattern, nsZipFind** aFind) {
   char* pattern = 0;
 
   // Create synthetic directory entries on demand
-  nsresult rv = BuildSynthetics();
+  rv = BuildSynthetics();
   if (rv != NS_OK) return rv;
 
   // validate the pattern
@@ -603,7 +682,12 @@ nsresult nsZipFind::FindNext(const char** aResult, uint16_t* aNameLen) {
 
   *aResult = 0;
   *aNameLen = 0;
-  MMAP_FAULT_HANDLER_BEGIN_HANDLE(mArchive->GetFD())
+
+  // NOTE: don't use GetFD here. if mFd is not null, then we need to have this
+  // fault handler, as we may be reading from the memory mapped file. However
+  // if it is null, then we can guarantee that we're reading here from a cached
+  // buffer, which we assume is not mapped to a file.
+  MMAP_FAULT_HANDLER_BEGIN_HANDLE(mArchive->mFd)
   // we start from last match, look for next
   while (mSlot < ZIP_TABSIZE) {
     // move to next in current chain, or move to new slot
@@ -649,10 +733,13 @@ nsZipItem* nsZipArchive::CreateZipItem() {
 //  nsZipArchive::BuildFileList
 //---------------------------------------------
 nsresult nsZipArchive::BuildFileList(PRFileDesc* aFd) {
+  mBuiltFileList = true;
   // Get archive size using end pos
   const uint8_t* buf;
   const uint8_t* startp = mFd->mFileData;
   const uint8_t* endp = startp + mFd->mLen;
+
+  nsresult rv;
   MMAP_FAULT_HANDLER_BEGIN_HANDLE(mFd)
   uint32_t centralOffset = 4;
   // Only perform readahead in the parent process. Children processes
@@ -677,20 +764,63 @@ nsresult nsZipArchive::BuildFileList(PRFileDesc* aFd) {
     return NS_ERROR_FILE_CORRUPTED;
   }
 
-  buf = startp + centralOffset;
-
-  // avoid overflow of startp + centralOffset.
-  if (buf < startp) {
+  uintptr_t startpInt = reinterpret_cast<uintptr_t>(startp);
+  if (startpInt + centralOffset < startpInt || centralOffset > mFd->mLen) {
     return NS_ERROR_FILE_CORRUPTED;
   }
 
+  buf = startp + centralOffset;
+
+  mZipCentralOffset = centralOffset;
+  rv = BuildFileListFromBuffer(buf, endp);
+
+  MMAP_FAULT_HANDLER_CATCH(NS_ERROR_FAILURE)
+  return rv;
+}
+
+UniquePtr<uint8_t[]> nsZipArchive::CopyCentralDirectoryBuffer(size_t* aSize) {
+  *aSize = 0;
+
+  // mZipCentralOffset could in theory be 0. In practice though, we likely
+  // won't ever see this. If the end result is that we can't cache the buffer
+  // in these cases, that's fine.
+  if (!mZipCentralOffset || !mZipCentralSize) {
+    return nullptr;
+  }
+
+  const uint8_t* buf;
+  const uint8_t* startp = mFd->mFileData;
+  buf = startp + mZipCentralOffset;
+
+  // Just a sanity check to make sure these values haven't overflowed the
+  // buffer mapped to our file. Technically the pointer could overflow the max
+  // pointer value, but that could only happen with this check succeeding if
+  // mFd->mLen is incorrect, which we will here assume is impossible.
+  if (mZipCentralOffset + mZipCentralSize > mFd->mLen) {
+    return nullptr;
+  }
+
+  auto resultBuf = MakeUnique<uint8_t[]>(mZipCentralSize);
+
+  MMAP_FAULT_HANDLER_BEGIN_HANDLE(mFd)
+  memcpy(resultBuf.get(), buf, mZipCentralSize);
+  MMAP_FAULT_HANDLER_CATCH(nullptr)
+
+  *aSize = mZipCentralSize;
+  return resultBuf;
+}
+
+nsresult nsZipArchive::BuildFileListFromBuffer(const uint8_t* aBuf,
+                                               const uint8_t* aEnd) {
+  mBuiltFileList = true;
+  const uint8_t* buf = aBuf;
   //-- Read the central directory headers
   uint32_t sig = 0;
   while ((buf + int32_t(sizeof(uint32_t)) > buf) &&
-         (buf + int32_t(sizeof(uint32_t)) <= endp) &&
+         (buf + int32_t(sizeof(uint32_t)) <= aEnd) &&
          ((sig = xtolong(buf)) == CENTRALSIG)) {
     // Make sure there is enough data available.
-    if ((buf > endp) || (endp - buf < ZIPCENTRAL_SIZE)) {
+    if ((buf > aEnd) || (aEnd - buf < ZIPCENTRAL_SIZE)) {
       return NS_ERROR_FILE_CORRUPTED;
     }
 
@@ -708,7 +838,7 @@ nsresult nsZipArchive::BuildFileList(PRFileDesc* aFd) {
       return NS_ERROR_FILE_CORRUPTED;
     }
     if (buf >= buf + diff ||  // No overflow
-        buf >= endp - diff) {
+        buf >= aEnd - diff) {
       return NS_ERROR_FILE_CORRUPTED;
     }
 
@@ -735,18 +865,18 @@ nsresult nsZipArchive::BuildFileList(PRFileDesc* aFd) {
   }
 
   // Make the comment available for consumers.
-  if ((endp >= buf) && (endp - buf >= ZIPEND_SIZE)) {
+  if ((aEnd >= buf) && (aEnd - buf >= ZIPEND_SIZE)) {
     ZipEnd* zipend = (ZipEnd*)buf;
 
     buf += ZIPEND_SIZE;
     uint16_t commentlen = xtoint(zipend->commentfield_len);
-    if (endp - buf >= commentlen) {
-      mCommentPtr = (const char*)buf;
+    if (aEnd - buf >= commentlen) {
+      mCommentPtr = (const char*)aBuf;
       mCommentLen = commentlen;
     }
   }
 
-  MMAP_FAULT_HANDLER_CATCH(NS_ERROR_FAILURE)
+  mZipCentralSize = buf - aBuf;
   return NS_OK;
 }
 
@@ -816,8 +946,54 @@ nsresult nsZipArchive::BuildSynthetics() {
 }
 
 nsZipHandle* nsZipArchive::GetFD() {
-  if (!mFd) return nullptr;
+  nsresult rv = EnsureArchiveOpenedOnDisk();
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return nullptr;
+  }
   return mFd.get();
+}
+
+void nsZipArchive::GetURIString(nsACString& result) {
+  {
+    AutoReadLock lock(mLazyOpenLock);
+    if (!mLazyOpenParams) {
+      mFd->mFile.GetURIString(result);
+      return;
+    }
+  }
+  AutoReadLock lock(mLazyOpenLock);
+  if (!mLazyOpenParams) {
+    // Another thread consumed mLazyOpenParams while we were waiting.
+    mFd->mFile.GetURIString(result);
+    return;
+  }
+
+  // This is a bit tricky - typically, we could just
+  // NS_GetURLSpecFromActualFile from mLazyOpenParams->mFile or from
+  // mFd->mFile.GetBaseFile(), depending on which we currently have. However,
+  // this won't actually be correct if this zip archive is nested inside
+  // another archive. However, at present, we know that mLazyOpenParams can
+  // only be here if we were opened from a real underlying file, so we assume
+  // that we're safe to do this. Any future code that breaks this assumption
+  // will need to update things here.
+  NS_GetURLSpecFromActualFile(mLazyOpenParams->mFile, result);
+}
+
+already_AddRefed<nsIFile> nsZipArchive::GetBaseFile() {
+  {
+    AutoReadLock lock(mLazyOpenLock);
+    if (!mLazyOpenParams) {
+      return mFd->mFile.GetBaseFile();
+    }
+  }
+  AutoReadLock lock(mLazyOpenLock);
+  if (!mLazyOpenParams) {
+    // Another thread consumed mLazyOpenParams while we were waiting.
+    return mFd->mFile.GetBaseFile();
+  }
+
+  nsCOMPtr<nsIFile> file = mLazyOpenParams->mFile;
+  return file.forget();
 }
 
 //---------------------------------------------
@@ -825,6 +1001,9 @@ nsZipHandle* nsZipArchive::GetFD() {
 //---------------------------------------------
 uint32_t nsZipArchive::GetDataOffset(nsZipItem* aItem) {
   MOZ_ASSERT(aItem);
+  nsresult rv = EnsureArchiveOpenedOnDisk();
+  MOZ_RELEASE_ASSERT(!NS_FAILED(rv),
+                     "Should have been able to open the zip archive");
 
   uint32_t offset;
   MMAP_FAULT_HANDLER_BEGIN_HANDLE(mFd)
@@ -855,6 +1034,10 @@ uint32_t nsZipArchive::GetDataOffset(nsZipItem* aItem) {
 //---------------------------------------------
 const uint8_t* nsZipArchive::GetData(nsZipItem* aItem) {
   MOZ_ASSERT(aItem);
+  nsresult rv = EnsureArchiveOpenedOnDisk();
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return nullptr;
+  }
   uint32_t offset = GetDataOffset(aItem);
 
   MMAP_FAULT_HANDLER_BEGIN_HANDLE(mFd)
@@ -889,8 +1072,12 @@ int64_t nsZipArchive::SizeOfMapping() { return mFd ? mFd->SizeOfMapping() : 0; }
 nsZipArchive::nsZipArchive()
     : mRefCnt(0),
       mCommentPtr(nullptr),
+      mZipCentralOffset(0),
+      mZipCentralSize(0),
       mCommentLen(0),
       mBuiltSynthetics(false),
+      mBuiltFileList(false),
+      mLazyOpenLock("nsZipArchive::mLazyOpenLock"),
       mUseZipLog(false) {
   // initialize the table to nullptr
   memset(mFiles, 0, sizeof(mFiles));
@@ -1198,11 +1385,13 @@ uint8_t* nsZipCursor::ReadOrCopy(uint32_t* aBytesRead, bool aCopy) {
 nsZipItemPtr_base::nsZipItemPtr_base(nsZipArchive* aZip, const char* aEntryName,
                                      bool doCRC)
     : mReturnBuf(nullptr), mReadlen(0) {
+  nsZipItem* item = aZip->GetItem(aEntryName);
+  if (!item) {
+    return;
+  }
+
   // make sure the ziparchive hangs around
   mZipHandle = aZip->GetFD();
-
-  nsZipItem* item = aZip->GetItem(aEntryName);
-  if (!item) return;
 
   uint32_t size = 0;
   bool compressed = (item->Compression() == DEFLATED);

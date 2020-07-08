@@ -205,6 +205,7 @@
   MACRO(h24, h24, "h24")                                                       \
   MACRO(Handle, Handle, "Handle")                                              \
   MACRO(has, has, "has")                                                       \
+  MACRO(hashConstructor, hashConstructor, "#constructor")                      \
   MACRO(hasOwn, hasOwn, "hasOwn")                                              \
   MACRO(hasOwnProperty, hasOwnProperty, "hasOwnProperty")                      \
   MACRO(highWaterMark, highWaterMark, "highWaterMark")                         \
@@ -304,6 +305,7 @@
   MACRO(NaN, NaN, "NaN")                                                       \
   MACRO(NegativeInfinity, NegativeInfinity, "-Infinity")                       \
   MACRO(new, new_, "new")                                                      \
+  MACRO(NewPrivateName, NewPrivateName, "NewPrivateName")                      \
   MACRO(next, next, "next")                                                    \
   MACRO(NFC, NFC, "NFC")                                                       \
   MACRO(NFD, NFD, "NFD")                                                       \

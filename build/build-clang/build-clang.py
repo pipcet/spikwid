@@ -105,7 +105,11 @@ def import_clang_tidy(source_dir, build_clang_tidy_alpha):
                                    'clang-tools-extra/clang-tidy')
     sys.path.append(clang_plugin_path)
     from import_mozilla_checks import do_import
-    do_import(clang_plugin_path, clang_tidy_path, build_clang_tidy_alpha)
+    import_options = {
+      "alpha": build_clang_tidy_alpha,
+      "external": False
+    }
+    do_import(clang_plugin_path, clang_tidy_path, import_options)
 
 
 def build_package(package_build_dir, cmake_args):
@@ -300,7 +304,6 @@ def build_one_stage(cc, cxx, asm, ld, ar, ranlib, libtool,
             cmake_args += [
                 "-DCMAKE_SYSTEM_NAME=Darwin",
                 "-DCMAKE_SYSTEM_VERSION=10.10",
-                "-DLLVM_ENABLE_THREADS=OFF",
                 # Xray requires a OSX 10.12 SDK (https://bugs.llvm.org/show_bug.cgi?id=38959)
                 "-DCOMPILER_RT_BUILD_XRAY=OFF",
                 "-DLIBCXXABI_LIBCXX_INCLUDES=%s" % libcxx_include_dir,

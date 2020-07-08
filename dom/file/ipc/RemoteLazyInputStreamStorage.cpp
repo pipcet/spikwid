@@ -30,12 +30,20 @@ NS_IMPL_ADDREF(RemoteLazyInputStreamStorage)
 NS_IMPL_RELEASE(RemoteLazyInputStreamStorage)
 
 /* static */
-RemoteLazyInputStreamStorage* RemoteLazyInputStreamStorage::Get() {
-  return gStorage;
+Result<RefPtr<RemoteLazyInputStreamStorage>, nsresult>
+RemoteLazyInputStreamStorage::Get() {
+  mozilla::StaticMutexAutoLock lock(gMutex);
+  if (gStorage) {
+    RefPtr<RemoteLazyInputStreamStorage> storage = gStorage;
+    return storage;
+  }
+
+  return Err(NS_ERROR_NOT_INITIALIZED);
 }
 
 /* static */
 void RemoteLazyInputStreamStorage::Initialize() {
+  mozilla::StaticMutexAutoLock lock(gMutex);
   MOZ_ASSERT(!gStorage);
 
   gStorage = new RemoteLazyInputStreamStorage();
@@ -57,6 +65,7 @@ RemoteLazyInputStreamStorage::Observe(nsISupports* aSubject, const char* aTopic,
       obs->RemoveObserver(this, "ipc:content-shutdown");
     }
 
+    mozilla::StaticMutexAutoLock lock(gMutex);
     gStorage = nullptr;
     return NS_OK;
   }

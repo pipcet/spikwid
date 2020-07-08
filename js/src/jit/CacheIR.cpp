@@ -120,6 +120,68 @@ StubField CacheIRWriter::readStubFieldForIon(uint32_t offset,
   return stubFields_[index];
 }
 
+CacheIRCloner::CacheIRCloner(ICStub* stub)
+    : stubInfo_(stub->cacheIRStubInfo()), stubData_(stub->cacheIRStubData()) {}
+
+void CacheIRCloner::cloneOp(CacheOp op, CacheIRReader& reader,
+                            CacheIRWriter& writer) {
+  switch (op) {
+#define DEFINE_OP(op, ...)     \
+  case CacheOp::op:            \
+    clone##op(reader, writer); \
+    break;
+    CACHE_IR_OPS(DEFINE_OP)
+#undef DEFINE_OP
+    default:
+      MOZ_CRASH("Invalid op");
+  }
+}
+
+uintptr_t CacheIRCloner::readStubWord(uint32_t offset) {
+  return stubInfo_->getStubRawWord(stubData_, offset);
+}
+int64_t CacheIRCloner::readStubInt64(uint32_t offset) {
+  return stubInfo_->getStubRawInt64(stubData_, offset);
+}
+
+Shape* CacheIRCloner::getShapeField(uint32_t stubOffset) {
+  return reinterpret_cast<Shape*>(readStubWord(stubOffset));
+}
+ObjectGroup* CacheIRCloner::getGroupField(uint32_t stubOffset) {
+  return reinterpret_cast<ObjectGroup*>(readStubWord(stubOffset));
+}
+JSObject* CacheIRCloner::getObjectField(uint32_t stubOffset) {
+  return reinterpret_cast<JSObject*>(readStubWord(stubOffset));
+}
+JSString* CacheIRCloner::getStringField(uint32_t stubOffset) {
+  return reinterpret_cast<JSString*>(readStubWord(stubOffset));
+}
+JSAtom* CacheIRCloner::getAtomField(uint32_t stubOffset) {
+  return reinterpret_cast<JSAtom*>(readStubWord(stubOffset));
+}
+PropertyName* CacheIRCloner::getPropertyNameField(uint32_t stubOffset) {
+  return reinterpret_cast<PropertyName*>(readStubWord(stubOffset));
+}
+JS::Symbol* CacheIRCloner::getSymbolField(uint32_t stubOffset) {
+  return reinterpret_cast<JS::Symbol*>(readStubWord(stubOffset));
+}
+uintptr_t CacheIRCloner::getRawWordField(uint32_t stubOffset) {
+  return reinterpret_cast<uintptr_t>(readStubWord(stubOffset));
+}
+const void* CacheIRCloner::getRawPointerField(uint32_t stubOffset) {
+  return reinterpret_cast<const void*>(readStubWord(stubOffset));
+}
+uint64_t CacheIRCloner::getDOMExpandoGenerationField(uint32_t stubOffset) {
+  return static_cast<uint64_t>(readStubInt64(stubOffset));
+}
+
+jsid CacheIRCloner::getIdField(uint32_t stubOffset) {
+  return jsid::fromRawBits(readStubWord(stubOffset));
+}
+const Value CacheIRCloner::getValueField(uint32_t stubOffset) {
+  return Value::fromRawBits(uint64_t(readStubInt64(stubOffset)));
+}
+
 IRGenerator::IRGenerator(JSContext* cx, HandleScript script, jsbytecode* pc,
                          CacheKind cacheKind, ICState::Mode mode)
     : writer(cx),
@@ -523,6 +585,12 @@ static bool IsCacheableNoProperty(JSContext* cx, JSObject* obj,
   // If we're doing a name lookup, we have to throw a ReferenceError.
   // Note that Ion does not generate idempotent caches for JSOp::GetBoundName.
   if (pc && JSOp(*pc) == JSOp::GetBoundName) {
+    return false;
+  }
+
+  // If we don't have the private field already (which we know from the
+  // if (shape) check above, we're going to throw so don't attach.
+  if (pc && JSOp(*pc) == JSOp::GetPrivateElem) {
     return false;
   }
 
@@ -1625,6 +1693,12 @@ AttachDecision GetPropIRGenerator::tryAttachProxy(HandleObject obj,
                                                   HandleId id) {
   ProxyStubType type = GetProxyStubType(cx_, obj, id);
   if (type == ProxyStubType::None) {
+    return AttachDecision::NoAction;
+  }
+
+  // Don't attach a proxy stub for private fields, as they
+  // may throw.
+  if (JSOp(*pc_) == JSOp::GetPrivateElem) {
     return AttachDecision::NoAction;
   }
 
@@ -4319,7 +4393,8 @@ AttachDecision SetPropIRGenerator::tryAttachMegamorphicSetElement(
     HandleObject obj, ObjOperandId objId, ValOperandId rhsId) {
   MOZ_ASSERT(IsPropertySetOp(JSOp(*pc_)));
 
-  if (mode_ != ICState::Mode::Megamorphic || cacheKind_ != CacheKind::SetElem) {
+  if (mode_ != ICState::Mode::Megamorphic || cacheKind_ != CacheKind::SetElem ||
+      IsPrivateElemOp(JSOp(*pc_))) {
     return AttachDecision::NoAction;
   }
 
@@ -4410,8 +4485,11 @@ bool SetPropIRGenerator::canAttachAddSlotStub(HandleObject obj, HandleId id) {
     }
   }
 
-  // Object must be extensible.
-  if (!obj->nonProxyIsExtensible()) {
+  // Object must be extensible, or we must be initializing a private
+  // elem.
+  bool isInitPrivateElem = JSOp(*pc_) == JSOp::InitPrivateElem;
+  bool canAddNewProperty = obj->nonProxyIsExtensible() || isInitPrivateElem;
+  if (!canAddNewProperty) {
     return false;
   }
 

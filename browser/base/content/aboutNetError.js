@@ -11,6 +11,47 @@ const TLS_ERROR_REPORT_TELEMETRY_AUTO_CHECKED = 2;
 const TLS_ERROR_REPORT_TELEMETRY_AUTO_UNCHECKED = 3;
 const TLS_ERROR_REPORT_TELEMETRY_UI_SHOWN = 0;
 
+// Used to check if we have a specific localized message for an error.
+const KNOWN_ERROR_TITLE_IDS = new Set([
+  // Error titles:
+  "connectionFailure-title",
+  "deniedPortAccess-title",
+  "dnsNotFound-title",
+  "fileNotFound-title",
+  "fileAccessDenied-title",
+  "generic-title",
+  "captivePortal-title",
+  "malformedURI-title",
+  "netInterrupt-title",
+  "notCached-title",
+  "netOffline-title",
+  "contentEncodingError-title",
+  "unsafeContentType-title",
+  "netReset-title",
+  "netTimeout-title",
+  "unknownProtocolFound-title",
+  "proxyConnectFailure-title",
+  "proxyResolveFailure-title",
+  "redirectLoop-title",
+  "unknownSocketType-title",
+  "nssFailure2-title",
+  "csp-xfo-error-title",
+  "corruptedContentError-title",
+  "remoteXUL-title",
+  "sslv3Used-title",
+  "inadequateSecurityError-title",
+  "blockedByPolicy-title",
+  "clockSkewError-title",
+  "networkProtocolError-title",
+  "nssBadCert-title",
+  "nssBadCert-sts-title",
+  "certerror-mitm-title",
+]);
+
+/* The error message IDs from nsserror.ftl get processed into
+ * aboutNetErrorCodes.js which is loaded before we are: */
+/* global KNOWN_ERROR_MESSAGE_IDS */
+
 // The following parameters are parsed from the error URL:
 //   e - the error code
 //   s - custom CSS class to allow alternate styling/favicons
@@ -163,7 +204,7 @@ function disallowCertOverridesIfNeeded() {
   }
 }
 
-async function setErrorPageStrings(err) {
+function setErrorPageStrings(err) {
   let title = err + "-title";
 
   let isCertError = err == "nssBadCert";
@@ -177,19 +218,12 @@ async function setErrorPageStrings(err) {
     title = "csp-xfo-error-title";
   }
 
-  let [errorCodeTitle] = await document.l10n.formatValues([
-    {
-      id: title,
-    },
-  ]);
-
   let titleElement = document.querySelector(".title-text");
-  if (!errorCodeTitle) {
-    console.error("No strings exist for this error type");
-    document.l10n.setAttributes(titleElement, "generic-title");
-    return;
-  }
 
+  if (!KNOWN_ERROR_TITLE_IDS.has(title)) {
+    console.error("No strings exist for error:", title);
+    title = "generic-title";
+  }
   document.l10n.setAttributes(titleElement, title);
 }
 
@@ -452,16 +486,14 @@ async function setNetErrorMessageFromCode() {
 
   let desc = document.getElementById("errorShortDescText");
   let errorCodeStr = securityInfo.errorCodeString || "";
+  let errorCodeStrId = errorCodeStr
+    .split("_")
+    .join("-")
+    .toLowerCase();
   let errorCodeMsg = "";
-  if (errorCodeStr) {
-    [errorCodeMsg] = await document.l10n.formatValues([
-      {
-        id: errorCodeStr
-          .split("_")
-          .join("-")
-          .toLowerCase(),
-      },
-    ]);
+
+  if (KNOWN_ERROR_MESSAGE_IDS.has(errorCodeStrId)) {
+    [errorCodeMsg] = await document.l10n.formatValues([errorCodeStrId]);
   }
 
   if (!errorCodeMsg) {
@@ -629,11 +661,14 @@ async function getFailedCertificatesAsPEMString() {
   let errorMessage = failedCertInfo.errorMessage;
   let hasHSTS = failedCertInfo.hasHSTS.toString();
   let hasHPKP = failedCertInfo.hasHPKP.toString();
-  let [hstsLabel] = await document.l10n.formatValues([
+  let [
+    hstsLabel,
+    hpkpLabel,
+    failedChainLabel,
+  ] = await document.l10n.formatValues([
     { id: "cert-error-details-hsts-label", args: { hasHSTS } },
-  ]);
-  let [hpkpLabel] = await document.l10n.formatValues([
     { id: "cert-error-details-key-pinning-label", args: { hasHPKP } },
+    { id: "cert-error-details-cert-chain-label" },
   ]);
 
   let certStrings = failedCertInfo.certChainStrings;
@@ -645,9 +680,6 @@ async function getFailedCertificatesAsPEMString() {
       wrapped +
       "\r\n-----END CERTIFICATE-----\r\n";
   }
-  let [failedChainLabel] = await document.l10n.formatValues([
-    { id: "cert-error-details-cert-chain-label" },
-  ]);
 
   let details =
     location +

@@ -393,7 +393,7 @@ class nsDisplayListBuilder {
    * wrong result, being different from the result of appling with
    * effective transform directly.
    *
-   * nsFrame::BuildDisplayListForStackingContext() uses
+   * nsIFrame::BuildDisplayListForStackingContext() uses
    * AutoPreserves3DContext to install an instance on the builder.
    *
    * \see AutoAccumulateTransform, AutoAccumulateRect,
@@ -4179,7 +4179,7 @@ class nsDisplayGeneric : public nsPaintedDisplayItem {
 #if defined(MOZ_REFLOW_PERF_DSP) && defined(MOZ_REFLOW_PERF)
 /**
  * This class implements painting of reflow counts.  Ideally, we would simply
- * make all the frame names be those returned by nsFrame::GetFrameName
+ * make all the frame names be those returned by nsIFrame::GetFrameName
  * (except that tosses in the content tag name!)  and support only one color
  * and eliminate this class altogether in favor of nsDisplayGeneric, but for
  * the time being we can't pass args to a PaintCallback, so just have a
@@ -7089,7 +7089,7 @@ class nsDisplayTransform : public nsDisplayHitTestInfoBase {
   nsRect mChildBounds;
   // The transformed bounds of this display item.
   nsRect mBounds;
-  PrerenderDecision mPrerenderDecision : 2;
+  PrerenderDecision mPrerenderDecision : 8;
   // This item is a separator between 3D rendering contexts, and
   // mTransform have been presetted by the constructor.
   // This also forces us not to extend the 3D context.  Since we don't create a

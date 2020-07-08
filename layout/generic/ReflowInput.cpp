@@ -11,7 +11,7 @@
 #include "LayoutLogging.h"
 #include "nsStyleConsts.h"
 #include "nsCSSAnonBoxes.h"
-#include "nsFrame.h"
+#include "nsIFrame.h"
 #include "nsIContent.h"
 #include "nsGkAtoms.h"
 #include "nsPresContext.h"
@@ -146,6 +146,12 @@ static nscoord FontSizeInflationListMarginAdjustment(const nsIFrame* aFrame) {
   return 0;
 }
 
+SizeComputationInput::SizeComputationInput(nsIFrame* aFrame,
+                                           gfxContext* aRenderingContext)
+    : mFrame(aFrame),
+      mRenderingContext(aRenderingContext),
+      mWritingMode(aFrame->GetWritingMode()) {}
+
 SizeComputationInput::SizeComputationInput(
     nsIFrame* aFrame, gfxContext* aRenderingContext,
     WritingMode aContainingBlockWritingMode, nscoord aContainingBlockISize)
@@ -264,6 +270,18 @@ nscoord SizeComputationInput::ComputeBSizeValue(
   return nsLayoutUtils::ComputeBSizeValue(aContainingBlockBSize, inside, aSize);
 }
 
+bool ReflowInput::ShouldReflowAllKids() const {
+  // Note that we could make a stronger optimization for IsBResize if
+  // we use it in a ShouldReflowChild test that replaces the current
+  // checks of NS_FRAME_IS_DIRTY | NS_FRAME_HAS_DIRTY_CHILDREN, if it
+  // were tested there along with NS_FRAME_CONTAINS_RELATIVE_BSIZE.
+  // This would need to be combined with a slight change in which
+  // frames NS_FRAME_CONTAINS_RELATIVE_BSIZE is marked on.
+  return mFrame->HasAnyStateBits(NS_FRAME_IS_DIRTY) || IsIResize() ||
+         (IsBResize() &&
+          mFrame->HasAnyStateBits(NS_FRAME_CONTAINS_RELATIVE_BSIZE));
+}
+
 void ReflowInput::SetComputedWidth(nscoord aComputedWidth) {
   NS_ASSERTION(mFrame, "Must have a frame!");
   // It'd be nice to assert that |frame| is not in reflow, but this fails for
@@ -273,7 +291,7 @@ void ReflowInput::SetComputedWidth(nscoord aComputedWidth) {
   //    input when reflowing fixed-pos kids.  In that case we actually don't
   //    want to mess with the resize flags, because comparing the frame's rect
   //    to the munged computed width is pointless.
-  // 2) nsFrame::BoxReflow creates a reflow input for its parent.  This reflow
+  // 2) nsIFrame::BoxReflow creates a reflow input for its parent.  This reflow
   //    input is not used to reflow the parent, but just as a parent for the
   //    frame's own reflow input.  So given a nsBoxFrame inside some non-XUL
   //    (like a text control, for example), we'll end up creating a reflow
@@ -295,7 +313,7 @@ void ReflowInput::SetComputedHeight(nscoord aComputedHeight) {
   // It'd be nice to assert that |frame| is not in reflow, but this fails
   // because:
   //
-  //    nsFrame::BoxReflow creates a reflow input for its parent.  This reflow
+  //    nsIFrame::BoxReflow creates a reflow input for its parent.  This reflow
   //    input is not used to reflow the parent, but just as a parent for the
   //    frame's own reflow input.  So given a nsBoxFrame inside some non-XUL
   //    (like a text control, for example), we'll end up creating a reflow
@@ -617,7 +635,7 @@ void ReflowInput::InitResizeFlags(nsPresContext* aPresContext,
     // We don't clear the HasBSizeChange state here, since sometimes we
     // construct reflow states (e.g., in
     // nsBlockReflowContext::ComputeCollapsedBStartMargin) without
-    // reflowing the frame.  Instead, we clear it in nsFrame::DidReflow.
+    // reflowing the frame.  Instead, we clear it in nsIFrame::DidReflow.
   } else if (mCBReflowInput &&
              mCBReflowInput->IsBResizeForPercentagesForWM(wm) &&
              (mStylePosition->BSize(wm).HasPercent() ||
@@ -984,6 +1002,24 @@ void ReflowInput::ApplyRelativePositioning(nsIFrame* aFrame,
       *aPosition = ssc->ComputePosition(aFrame);
     }
   }
+}
+
+void ReflowInput::ApplyRelativePositioning(
+    nsIFrame* aFrame, mozilla::WritingMode aWritingMode,
+    const mozilla::LogicalMargin& aComputedOffsets,
+    mozilla::LogicalPoint* aPosition, const nsSize& aContainerSize) {
+  // Subtract the size of the frame from the container size that we
+  // use for converting between the logical and physical origins of
+  // the frame. This accounts for the fact that logical origins in RTL
+  // coordinate systems are at the top right of the frame instead of
+  // the top left.
+  nsSize frameSize = aFrame->GetSize();
+  nsPoint pos =
+      aPosition->GetPhysicalPoint(aWritingMode, aContainerSize - frameSize);
+  ApplyRelativePositioning(
+      aFrame, aComputedOffsets.GetPhysicalMargin(aWritingMode), &pos);
+  *aPosition =
+      mozilla::LogicalPoint(aWritingMode, pos, aContainerSize - frameSize);
 }
 
 // Returns true if aFrame is non-null, a XUL frame, and "XUL-collapsed" (which

@@ -269,6 +269,7 @@ class StubField {
 class CallFlags {
  public:
   enum ArgFormat : uint8_t {
+    Unknown,
     Standard,
     Spread,
     FunCall,
@@ -277,12 +278,12 @@ class CallFlags {
     LastArgFormat = FunApplyArray
   };
 
+  CallFlags() = default;
+  explicit CallFlags(ArgFormat format) : argFormat_(format) {}
   CallFlags(bool isConstructing, bool isSpread, bool isSameRealm = false)
       : argFormat_(isSpread ? Spread : Standard),
         isConstructing_(isConstructing),
         isSameRealm_(isSameRealm) {}
-  explicit CallFlags(ArgFormat format)
-      : argFormat_(format), isConstructing_(false), isSameRealm_(false) {}
 
   ArgFormat getArgFormat() const { return argFormat_; }
   bool isConstructing() const {
@@ -294,6 +295,7 @@ class CallFlags {
 
   uint8_t toByte() const {
     // See CacheIRReader::callFlags()
+    MOZ_ASSERT(argFormat_ != ArgFormat::Unknown);
     uint8_t value = getArgFormat();
     if (isConstructing()) {
       value |= CallFlags::IsConstructing;
@@ -305,9 +307,9 @@ class CallFlags {
   }
 
  private:
-  ArgFormat argFormat_;
-  bool isConstructing_;
-  bool isSameRealm_;
+  ArgFormat argFormat_ = ArgFormat::Unknown;
+  bool isConstructing_ = false;
+  bool isSameRealm_ = false;
 
   // Used for encoding/decoding
   static const uint8_t ArgFormatBits = 4;
@@ -385,6 +387,7 @@ inline int32_t GetIndexOfArgument(ArgumentKind kind, CallFlags flags,
       MOZ_ASSERT(kind <= ArgumentKind::Arg0);
       *addArgc = false;
       break;
+    case CallFlags::Unknown:
     case CallFlags::FunCall:
     case CallFlags::FunApplyArgs:
     case CallFlags::FunApplyArray:
@@ -882,6 +885,7 @@ class MOZ_RAII CacheIRWriter : public JS::CustomAutoRooter {
     metaTwoByte_(MetaTwoByteKind::ScriptedTemplateObject, callee,
                  templateObject);
   }
+  friend class CacheIRCloner;
 
   CACHE_IR_WRITER_GENERATED
 };
@@ -977,6 +981,8 @@ class MOZ_RAII CacheIRReader {
     bool isConstructing = encoded & CallFlags::IsConstructing;
     bool isSameRealm = encoded & CallFlags::IsSameRealm;
     switch (format) {
+      case CallFlags::Unknown:
+        MOZ_CRASH("Unexpected call flags");
       case CallFlags::Standard:
         return CallFlags(isConstructing, /*isSpread =*/false, isSameRealm);
       case CallFlags::Spread:
@@ -1024,6 +1030,35 @@ class MOZ_RAII CacheIRReader {
     return false;
   }
   const uint8_t* currentPosition() const { return buffer_.currentPosition(); }
+};
+
+class MOZ_RAII CacheIRCloner {
+ public:
+  explicit CacheIRCloner(ICStub* stubInfo);
+
+  void cloneOp(CacheOp op, CacheIRReader& reader, CacheIRWriter& writer);
+
+  CACHE_IR_CLONE_GENERATED
+
+ private:
+  const CacheIRStubInfo* stubInfo_;
+  const uint8_t* stubData_;
+
+  uintptr_t readStubWord(uint32_t offset);
+  int64_t readStubInt64(uint32_t offset);
+
+  Shape* getShapeField(uint32_t stubOffset);
+  ObjectGroup* getGroupField(uint32_t stubOffset);
+  JSObject* getObjectField(uint32_t stubOffset);
+  JSString* getStringField(uint32_t stubOffset);
+  JSAtom* getAtomField(uint32_t stubOffset);
+  PropertyName* getPropertyNameField(uint32_t stubOffset);
+  JS::Symbol* getSymbolField(uint32_t stubOffset);
+  uintptr_t getRawWordField(uint32_t stubOffset);
+  const void* getRawPointerField(uint32_t stubOffset);
+  jsid getIdField(uint32_t stubOffset);
+  const Value getValueField(uint32_t stubOffset);
+  uint64_t getDOMExpandoGenerationField(uint32_t stubOffset);
 };
 
 class MOZ_RAII IRGenerator {

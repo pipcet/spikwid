@@ -42,6 +42,10 @@ pref("extensions.getAddons.link.url", "");
 pref("extensions.getAddons.langpacks.url", "");
 pref("extensions.getAddons.discovery.api_url", "");
 
+// Use bloomfilters for the addons blocklist, instead of JSON only.
+pref("extensions.blocklist.useMLBF", true);
+pref("extensions.blocklist.useMLBF.stashes", true);
+
 // The URL for the privacy policy related to recommended extensions.
 pref("extensions.recommendations.privacyPolicyUrl", "");
 // The URL for Firefox Color, recommended on the theme page in about:addons.

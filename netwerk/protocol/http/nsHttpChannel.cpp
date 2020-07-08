@@ -2602,9 +2602,15 @@ nsresult nsHttpChannel::ContinueProcessResponse1() {
   // for Strict-Transport-Security.
   if (!(mTransaction && mTransaction->ProxyConnectFailed()) &&
       (httpStatus != 407)) {
-    nsAutoCString cookie;
-    if (NS_SUCCEEDED(mResponseHead->GetHeader(nsHttp::Set_Cookie, cookie))) {
+    if (nsAutoCString cookie;
+        NS_SUCCEEDED(mResponseHead->GetHeader(nsHttp::Set_Cookie, cookie))) {
       SetCookie(cookie);
+      nsCOMPtr<nsIParentChannel> parentChannel;
+      NS_QueryNotificationCallbacks(this, parentChannel);
+      if (RefPtr<HttpChannelParent> httpParent =
+              do_QueryObject(parentChannel)) {
+        httpParent->SetCookie(std::move(cookie));
+      }
     }
 
     // Given a successful connection, process any STS or PKP data that's
@@ -7085,10 +7091,7 @@ auto nsHttpChannel::AttachStreamFilter(base::ProcessId aChildProcessId)
   }
 
   if (RefPtr<HttpChannelParent> httpParent = do_QueryObject(parentChannel)) {
-    if (httpParent->AttachStreamFilter(std::move(parent))) {
-      return ChildEndpointPromise::CreateAndResolve(std::move(child), __func__);
-    }
-    return ChildEndpointPromise::CreateAndReject(false, __func__);
+    return httpParent->AttachStreamFilter(std::move(parent), std::move(child));
   }
 
   extensions::StreamFilterParent::Attach(this, std::move(parent));

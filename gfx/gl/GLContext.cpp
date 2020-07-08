@@ -172,6 +172,7 @@ static const char* const sExtensionNames[] = {
     "GL_IMG_texture_compression_pvrtc",
     "GL_IMG_texture_npot",
     "GL_KHR_debug",
+    "GL_KHR_parallel_shader_compile",
     "GL_KHR_robust_buffer_access_behavior",
     "GL_KHR_robustness",
     "GL_KHR_texture_compression_astc_hdr",
@@ -2297,8 +2298,10 @@ uint32_t GetBytesPerTexel(GLenum format, GLenum type) {
     switch (format) {
       case LOCAL_GL_ALPHA:
       case LOCAL_GL_LUMINANCE:
+      case LOCAL_GL_R8:
         return 1 * multiplier;
       case LOCAL_GL_LUMINANCE_ALPHA:
+      case LOCAL_GL_R16:
         return 2 * multiplier;
       case LOCAL_GL_RGB:
         return 3 * multiplier;

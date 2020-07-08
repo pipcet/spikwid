@@ -51,6 +51,7 @@
 #include "mozilla/scache/StartupCacheUtils.h"
 #include "mozilla/MacroForEach.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/Omnijar.h"
 #include "mozilla/ResultExtensions.h"
 #include "mozilla/ScriptPreloader.h"
 #include "mozilla/ScopeExit.h"
@@ -670,6 +671,10 @@ JSObject* mozJSComponentLoader::PrepareObjectForLocation(
 
 static mozilla::Result<nsCString, nsresult> ReadScript(
     ComponentLoaderInfo& aInfo) {
+  // We're going to cache the XDR encoded script data - suspend writes via the
+  // CacheAwareZipReader, otherwise we'll end up redundantly caching scripts.
+  AutoSuspendStartupCacheWrites suspendScache;
+
   MOZ_TRY(aInfo.EnsureScriptChannel());
 
   nsCOMPtr<nsIInputStream> scriptStream;
@@ -731,7 +736,15 @@ nsresult mozJSComponentLoader::ObjectForLocation(
   // to loading the script, since we can always slow-load.
 
   bool writeToCache = false;
-  StartupCache* cache = StartupCache::GetSingleton();
+
+  // Since we are intending to cache these buffers in the script preloader
+  // already, caching them in the StartupCache tends to be redundant. This
+  // ought to be addressed, but as in bug 1627075 we extended the
+  // StartupCache to be multi-process, we just didn't want to propagate
+  // this problem into yet more processes, so we pretend the StartupCache
+  // doesn't exist if we're not the parent process.
+  StartupCache* cache =
+      XRE_IsParentProcess() ? StartupCache::GetSingleton() : nullptr;
 
   aInfo.EnsureResolvedURI();
 

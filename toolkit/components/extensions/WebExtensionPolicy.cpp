@@ -11,6 +11,7 @@
 #include "mozilla/AddonManagerWebAPI.h"
 #include "mozilla/ResultExtensions.h"
 #include "mozilla/StaticPrefs_extensions.h"
+#include "nsContentUtils.h"
 #include "nsEscape.h"
 #include "nsIObserver.h"
 #include "nsISubstitutingProtocolHandler.h"
@@ -250,6 +251,11 @@ bool WebExtensionPolicy::Enable() {
 
   if (!EPS().RegisterExtension(*this)) {
     return false;
+  }
+
+  if (XRE_IsParentProcess()) {
+    // Reserve a BrowsingContextGroup ID for use by this WebExtensionPolicy.
+    mBrowsingContextGroupId = nsContentUtils::GenerateBrowsingContextId();
   }
 
   Unused << Proto()->SetSubstitution(MozExtensionHostname(), mBaseURI);
@@ -492,6 +498,11 @@ void WebExtensionPolicy::GetReadyPromise(
   } else {
     aResult.set(nullptr);
   }
+}
+
+uint64_t WebExtensionPolicy::GetBrowsingContextGroupId() const {
+  MOZ_ASSERT(XRE_IsParentProcess() && mActive);
+  return mBrowsingContextGroupId;
 }
 
 NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE_WEAK_PTR(WebExtensionPolicy, mParent,
@@ -811,9 +822,11 @@ uint64_t DocInfo::FrameID() const {
       mFrameID.emplace(0);
     } else {
       struct Matcher {
-        uint64_t operator()(Window aWin) { return aWin->WindowID(); }
+        uint64_t operator()(Window aWin) {
+          return aWin->GetBrowsingContext()->Id();
+        }
         uint64_t operator()(LoadInfo aLoadInfo) {
-          return aLoadInfo->GetOuterWindowID();
+          return aLoadInfo->GetBrowsingContextID();
         }
       };
       mFrameID.emplace(mObj.match(Matcher()));

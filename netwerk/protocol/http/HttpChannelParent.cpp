@@ -83,8 +83,7 @@ HttpChannelParent::HttpChannelParent(dom::BrowserParent* iframeEmbedding,
       mCacheNeedFlowControlInitialized(false),
       mNeedFlowControl(true),
       mSuspendedForFlowControl(false),
-      mAfterOnStartRequestBegun(false),
-      mStreamFilterAttached(false) {
+      mAfterOnStartRequestBegun(false) {
   LOG(("Creating HttpChannelParent [this=%p]\n", this));
 
   // Ensure gHttpHandler is initialized: we need the atom table up and running.
@@ -829,6 +828,10 @@ mozilla::ipc::IPCResult HttpChannelParent::RecvCancel(
       Unused << mChannel->Resume();
       mSuspendedForFlowControl = false;
     }
+  } else if (!mIPCClosed) {
+    // Make sure that the child correctly delivers all stream listener
+    // notifications.
+    Unused << SendFailedAsyncOpen(status);
   }
 
   // We won't need flow control anymore. Toggle the flag to avoid |Suspend|
@@ -1520,6 +1523,9 @@ HttpChannelParent::OnStartRequest(nsIRequest* aRequest) {
   if (mOverrideReferrerInfo) {
     args.overrideReferrerInfo() = ToRefPtr(std::move(mOverrideReferrerInfo));
   }
+  if (!mCookie.IsEmpty()) {
+    args.cookie() = std::move(mCookie);
+  }
 
   nsHttpRequestHead* requestHead = chan->GetRequestHead();
   // !!! We need to lock headers and please don't forget to unlock them !!!
@@ -1542,8 +1548,7 @@ HttpChannelParent::OnStartRequest(nsIRequest* aRequest) {
   // Bug 1645901: Currently Set-Cookie is passed to child process on main
   // thread, which is racy with PBackground. We should have a way to set cookie
   // in child for Set-Cookie response header.
-  args.shouldWaitForOnStartRequestSent() =
-      isDocument || hasSetCookie || mStreamFilterAttached;
+  args.shouldWaitForOnStartRequestSent() = isDocument || hasSetCookie;
 
   rv = NS_OK;
 
@@ -2665,11 +2670,30 @@ void HttpChannelParent::OverrideReferrerInfoDuringBeginConnect(
   mOverrideReferrerInfo = aReferrerInfo;
 }
 
-bool HttpChannelParent::AttachStreamFilter(
-    Endpoint<extensions::PStreamFilterParent>&& aEndpoint) {
+auto HttpChannelParent::AttachStreamFilter(
+    Endpoint<extensions::PStreamFilterParent>&& aParentEndpoint,
+    Endpoint<extensions::PStreamFilterChild>&& aChildEndpoint)
+    -> RefPtr<ChildEndpointPromise> {
+  LOG(("HttpChannelParent::AttachStreamFilter [this=%p]", this));
   MOZ_ASSERT(!mAfterOnStartRequestBegun);
-  mStreamFilterAttached = true;
-  return SendAttachStreamFilter(std::move(aEndpoint));
+
+  if (mIPCClosed) {
+    return ChildEndpointPromise::CreateAndReject(false, __func__);
+  }
+
+  // If IPC channel is open, background channel should be ready to send
+  // SendAttachStreamFilter.
+  MOZ_ASSERT(mBgParent);
+  return InvokeAsync(mBgParent->GetBackgroundTarget(), mBgParent.get(),
+                     __func__, &HttpBackgroundChannelParent::AttachStreamFilter,
+                     std::move(aParentEndpoint), std::move(aChildEndpoint));
+}
+
+void HttpChannelParent::SetCookie(nsCString&& aCookie) {
+  LOG(("HttpChannelParent::SetCookie [this=%p]", this));
+  MOZ_ASSERT(!mAfterOnStartRequestBegun);
+  MOZ_ASSERT(mCookie.IsEmpty());
+  mCookie = std::move(aCookie);
 }
 
 }  // namespace net

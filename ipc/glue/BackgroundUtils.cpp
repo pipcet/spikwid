@@ -664,7 +664,7 @@ nsresult LoadInfoArgsToLoadInfo(
   }
 
   nsTArray<nsCOMPtr<nsIPrincipal>> ancestorPrincipals;
-  nsTArray<uint64_t> ancestorOuterWindowIDs;
+  nsTArray<uint64_t> ancestorBrowsingContextIDs;
   if (XRE_IsParentProcess() &&
       (nsContentUtils::InternalContentPolicyTypeToExternal(
            loadInfoArgs.contentPolicyType()) !=
@@ -675,7 +675,7 @@ nsresult LoadInfoArgsToLoadInfo(
         BrowsingContext::Get(loadInfoArgs.browsingContextID());
     if (parentBC) {
       LoadInfo::ComputeAncestors(parentBC->Canonical(), ancestorPrincipals,
-                                 ancestorOuterWindowIDs);
+                                 ancestorBrowsingContextIDs);
     }
   }
 
@@ -756,9 +756,10 @@ nsresult LoadInfoArgsToLoadInfo(
       loadInfoArgs.isThirdPartyContextToTopWindow(),
       loadInfoArgs.isFormSubmission(), loadInfoArgs.sendCSPViolationEvents(),
       loadInfoArgs.originAttributes(), redirectChainIncludingInternalRedirects,
-      redirectChain, std::move(ancestorPrincipals), ancestorOuterWindowIDs,
-      loadInfoArgs.corsUnsafeHeaders(), loadInfoArgs.forcePreflight(),
-      loadInfoArgs.isPreflight(), loadInfoArgs.loadTriggeredFromExternal(),
+      redirectChain, std::move(ancestorPrincipals), ancestorBrowsingContextIDs,
+      loadInfoArgs.corsUnsafeHeaders(),
+      loadInfoArgs.forcePreflight(), loadInfoArgs.isPreflight(),
+      loadInfoArgs.loadTriggeredFromExternal(),
       loadInfoArgs.serviceWorkerTaintingSynthesized(),
       loadInfoArgs.documentHasUserInteracted(),
       loadInfoArgs.documentHasLoaded(),

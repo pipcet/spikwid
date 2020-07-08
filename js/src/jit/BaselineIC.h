@@ -258,7 +258,7 @@ class ICEntry {
     return script->offsetToPC(pcOffset());
   }
 
-  static inline size_t offsetOfFirstStub() {
+  static constexpr size_t offsetOfFirstStub() {
     return offsetof(ICEntry, firstStub_);
   }
 
@@ -373,7 +373,7 @@ class ICStubIterator {
 
   bool atEnd() const { return currentStub_ == (ICStub*)fallbackStub_; }
 
-  void unlink(JSContext* cx);
+  void unlink(JSContext* cx, JSScript* script);
 };
 
 //
@@ -644,6 +644,9 @@ class ICStub {
     MOZ_ASSERT(next());
     return makesGCCalls();
   }
+
+  const CacheIRStubInfo* cacheIRStubInfo() const;
+  const uint8_t* cacheIRStubData();
 };
 
 class ICFallbackStub : public ICStub {
@@ -702,9 +705,16 @@ class ICFallbackStub : public ICStub {
 
   ICStubIterator beginChain() { return ICStubIterator(this); }
 
-  void discardStubs(JSContext* cx);
+  void discardStubs(JSContext* cx, JSScript* script);
 
-  void unlinkStub(Zone* zone, ICStub* prev, ICStub* stub);
+  void clearUsedByTranspiler() { state_.clearUsedByTranspiler(); }
+  void setUsedByTranspiler() { state_.setUsedByTranspiler(); }
+
+  // If the transpiler optimized based on this IC, invalidate the script's Warp
+  // code.
+  void maybeInvalidateWarp(JSContext* cx, JSScript* script);
+
+  void unlinkStubDontInvalidateWarp(Zone* zone, ICStub* prev, ICStub* stub);
 
   // Return the number of times this stub has successfully provided a value to
   // the caller.
@@ -982,11 +992,13 @@ class ICStubCompiler : public ICStubCompilerBase {
  public:
   virtual ICStub* getStub(ICStubSpace* space) = 0;
 
-  static ICStubSpace* StubSpaceForStub(bool makesGCCalls, JSScript* script);
+  static ICStubSpace* StubSpaceForStub(bool makesGCCalls, JSScript* script,
+                                       ICScript* icScript);
 
   ICStubSpace* getStubSpace(JSScript* outerScript) {
+    MOZ_ASSERT(IsTypeInferenceEnabled());
     return StubSpaceForStub(ICStub::NonCacheIRStubMakesGCCalls(kind),
-                            outerScript);
+                            outerScript, /*icScript = */ nullptr);
   }
 };
 

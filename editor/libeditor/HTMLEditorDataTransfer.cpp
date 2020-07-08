@@ -200,14 +200,65 @@ nsresult HTMLEditor::InsertHTMLAsAction(const nsAString& aInString,
   return EditorBase::ToGenericNSResult(rv);
 }
 
-EditorDOMPoint HTMLEditor::GetNewCaretPointAfterInsertingHTML(
+class MOZ_STACK_CLASS HTMLEditor::HTMLWithContextInserter final {
+ public:
+  MOZ_CAN_RUN_SCRIPT explicit HTMLWithContextInserter(HTMLEditor& aHTMLEditor)
+      : mHTMLEditor(aHTMLEditor) {}
+
+  HTMLWithContextInserter() = delete;
+  HTMLWithContextInserter(const HTMLWithContextInserter&) = delete;
+  HTMLWithContextInserter(HTMLWithContextInserter&&) = delete;
+
+  MOZ_CAN_RUN_SCRIPT nsresult Run(const nsAString& aInputString,
+                                  const nsAString& aContextStr,
+                                  const nsAString& aInfoStr,
+                                  const EditorDOMPoint& aPointToInsert,
+                                  bool aDoDeleteSelection, bool aTrustedInput,
+                                  bool aClearStyle);
+
+ private:
+  EditorDOMPoint GetNewCaretPointAfterInsertingHTML(
+      const EditorDOMPoint& aLastInsertedPoint) const;
+
+  /**
+   * @param aContextStr as indicated by nsITransferable's kHTMLContext.
+   * @param aInfoStr as indicated by nsITransferable's kHTMLInfo.
+   */
+  nsresult CreateDOMFragmentFromPaste(
+      const nsAString& aInputString, const nsAString& aContextStr,
+      const nsAString& aInfoStr, nsCOMPtr<nsINode>* aOutFragNode,
+      nsCOMPtr<nsINode>* aOutStartNode, nsCOMPtr<nsINode>* aOutEndNode,
+      int32_t* aOutStartOffset, int32_t* aOutEndOffset,
+      bool aTrustedInput) const;
+
+  /**
+   * @param aInfoStr as indicated by nsITransferable's kHTMLInfo.
+   */
+  [[nodiscard]] static nsresult MoveStartAndEndAccordingToHTMLInfo(
+      const nsAString& aInfoStr, nsCOMPtr<nsINode>* aOutStartNode,
+      nsCOMPtr<nsINode>* aOutEndNode);
+
+  static nsresult ParseFragment(const nsAString& aStr,
+                                nsAtom* aContextLocalName, Document* aTargetDoc,
+                                dom::DocumentFragment** aFragment,
+                                bool aTrustedInput);
+
+  static nsresult StripFormattingNodes(nsIContent& aNode,
+                                       bool aOnlyList = false);
+
+  HTMLEditor& mHTMLEditor;
+};
+
+EditorDOMPoint
+HTMLEditor::HTMLWithContextInserter::GetNewCaretPointAfterInsertingHTML(
     const EditorDOMPoint& aLastInsertedPoint) const {
   EditorDOMPoint pointToPutCaret;
 
   // but don't cross tables
   nsIContent* containerContent = nullptr;
   if (!HTMLEditUtils::IsTable(aLastInsertedPoint.GetChild())) {
-    containerContent = GetLastEditableLeaf(*aLastInsertedPoint.GetChild());
+    containerContent =
+        mHTMLEditor.GetLastEditableLeaf(*aLastInsertedPoint.GetChild());
     if (containerContent) {
       Element* mostDistantInclusiveAncestorTableElement = nullptr;
       for (Element* maybeTableElement =
@@ -249,13 +300,15 @@ EditorDOMPoint HTMLEditor::GetNewCaretPointAfterInsertingHTML(
 
   // Make sure we don't end up with selection collapsed after an invisible
   // `<br>` element.
-  WSRunScanner wsRunScannerAtCaret(this, pointToPutCaret);
+  WSRunScanner wsRunScannerAtCaret(&mHTMLEditor, pointToPutCaret);
   if (wsRunScannerAtCaret
           .ScanPreviousVisibleNodeOrBlockBoundaryFrom(pointToPutCaret)
           .ReachedBRElement() &&
-      !IsVisibleBRElement(wsRunScannerAtCaret.GetStartReasonContent())) {
+      !mHTMLEditor.IsVisibleBRElement(
+          wsRunScannerAtCaret.GetStartReasonContent())) {
     WSRunScanner wsRunScannerAtStartReason(
-        this, EditorDOMPoint(wsRunScannerAtCaret.GetStartReasonContent()));
+        &mHTMLEditor,
+        EditorDOMPoint(wsRunScannerAtCaret.GetStartReasonContent()));
     WSScanResult backwardScanFromPointToCaretResult =
         wsRunScannerAtStartReason.ScanPreviousVisibleNodeOrBlockBoundaryFrom(
             pointToPutCaret);
@@ -277,23 +330,36 @@ EditorDOMPoint HTMLEditor::GetNewCaretPointAfterInsertingHTML(
 
   return pointToPutCaret;
 }
+
 nsresult HTMLEditor::DoInsertHTMLWithContext(
     const nsAString& aInputString, const nsAString& aContextStr,
     const nsAString& aInfoStr, const nsAString& aFlavor, Document* aSourceDoc,
     const EditorDOMPoint& aPointToInsert, bool aDoDeleteSelection,
     bool aTrustedInput, bool aClearStyle) {
-  MOZ_ASSERT(IsEditActionDataAvailable());
+  HTMLWithContextInserter htmlWithContextInserter(*this);
 
-  if (NS_WARN_IF(!mInitSucceeded)) {
+  return htmlWithContextInserter.Run(aInputString, aContextStr, aInfoStr,
+                                     aPointToInsert, aDoDeleteSelection,
+                                     aTrustedInput, aClearStyle);
+}
+
+nsresult HTMLEditor::HTMLWithContextInserter::Run(
+    const nsAString& aInputString, const nsAString& aContextStr,
+    const nsAString& aInfoStr, const EditorDOMPoint& aPointToInsert,
+    bool aDoDeleteSelection, bool aTrustedInput, bool aClearStyle) {
+  MOZ_ASSERT(mHTMLEditor.IsEditActionDataAvailable());
+
+  if (NS_WARN_IF(!mHTMLEditor.mInitSucceeded)) {
     return NS_ERROR_NOT_INITIALIZED;
   }
 
   // force IME commit; set up rules sniffing and batching
-  CommitComposition();
-  AutoPlaceholderBatch treatAsOneTransaction(*this);
+  mHTMLEditor.CommitComposition();
+  AutoPlaceholderBatch treatAsOneTransaction(mHTMLEditor);
   IgnoredErrorResult ignoredError;
   AutoEditSubActionNotifier startToHandleEditSubAction(
-      *this, EditSubAction::ePasteHTMLContent, nsIEditor::eNext, ignoredError);
+      MOZ_KnownLive(mHTMLEditor), EditSubAction::ePasteHTMLContent,
+      nsIEditor::eNext, ignoredError);
   if (NS_WARN_IF(ignoredError.ErrorCodeIs(NS_ERROR_EDITOR_DESTROYED))) {
     return ignoredError.StealNSResult();
   }
@@ -311,7 +377,9 @@ nsresult HTMLEditor::DoInsertHTMLWithContext(
       address_of(streamStartParent), address_of(streamEndParent),
       &streamStartOffset, &streamEndOffset, aTrustedInput);
   if (NS_FAILED(rv)) {
-    NS_WARNING("HTMLEditor::CreateDOMFragmentFromPaste() failed");
+    NS_WARNING(
+        "HTMLEditor::HTMLWithContextInserter::CreateDOMFragmentFromPaste() "
+        "failed");
     return rv;
   }
 
@@ -322,7 +390,8 @@ nsresult HTMLEditor::DoInsertHTMLWithContext(
   // scenarios where we are dropping in an editor (and may want to delete
   // the selection before collapsing the selection in the new destination)
   if (aPointToInsert.IsSet()) {
-    rv = PrepareToInsertContent(aPointToInsert, aDoDeleteSelection);
+    rv = MOZ_KnownLive(mHTMLEditor)
+             .PrepareToInsertContent(aPointToInsert, aDoDeleteSelection);
     if (NS_FAILED(rv)) {
       NS_WARNING("HTMLEditor::PrepareToInsertContent() failed");
       return rv;
@@ -357,7 +426,8 @@ nsresult HTMLEditor::DoInsertHTMLWithContext(
     // XXX What will this do? We've already called DeleteSelectionAsSubAtion()
     //     above if insertion point is specified.
     if (aDoDeleteSelection) {
-      nsresult rv = DeleteSelectionAsSubAction(eNone, eStrip);
+      nsresult rv =
+          MOZ_KnownLive(mHTMLEditor).DeleteSelectionAsSubAction(eNone, eStrip);
       if (NS_FAILED(rv)) {
         NS_WARNING(
             "EditorBase::DeleteSelectionAsSubAction(eNone, eStrip) failed");
@@ -370,7 +440,8 @@ nsresult HTMLEditor::DoInsertHTMLWithContext(
   // Are there any table elements in the list?
   // check for table cell selection mode
   bool cellSelectionMode = false;
-  RefPtr<Element> cellElement = GetFirstSelectedTableCellElement(ignoredError);
+  RefPtr<Element> cellElement =
+      mHTMLEditor.GetFirstSelectedTableCellElement(ignoredError);
   if (cellElement) {
     cellSelectionMode = true;
   }
@@ -387,7 +458,7 @@ nsresult HTMLEditor::DoInsertHTMLWithContext(
   }
 
   if (!cellSelectionMode) {
-    rv = DeleteSelectionAndPrepareToCreateNode();
+    rv = MOZ_KnownLive(mHTMLEditor).DeleteSelectionAndPrepareToCreateNode();
     if (NS_FAILED(rv)) {
       NS_WARNING("HTMLEditor::DeleteSelectionAndPrepareToCreateNode() failed");
       return rv;
@@ -395,8 +466,11 @@ nsresult HTMLEditor::DoInsertHTMLWithContext(
 
     if (aClearStyle) {
       // pasting does not inherit local inline styles
-      EditResult result = ClearStyleAt(
-          EditorDOMPoint(SelectionRefPtr()->AnchorRef()), nullptr, nullptr);
+      EditResult result =
+          MOZ_KnownLive(mHTMLEditor)
+              .ClearStyleAt(
+                  EditorDOMPoint(mHTMLEditor.SelectionRefPtr()->AnchorRef()),
+                  nullptr, nullptr);
       if (result.Failed()) {
         NS_WARNING("HTMLEditor::ClearStyleAt() failed");
         return result.Rv();
@@ -409,8 +483,8 @@ nsresult HTMLEditor::DoInsertHTMLWithContext(
     // Save current selection since DeleteTableCellWithTransaction() perturbs
     // it.
     {
-      AutoSelectionRestorer restoreSelectionLater(*this);
-      rv = DeleteTableCellWithTransaction(1);
+      AutoSelectionRestorer restoreSelectionLater(mHTMLEditor);
+      rv = MOZ_KnownLive(mHTMLEditor).DeleteTableCellWithTransaction(1);
       if (NS_FAILED(rv)) {
         NS_WARNING("HTMLEditor::DeleteTableCellWithTransaction(1) failed");
         return rv;
@@ -418,26 +492,26 @@ nsresult HTMLEditor::DoInsertHTMLWithContext(
     }
     // collapse selection to beginning of deleted table content
     IgnoredErrorResult ignoredError;
-    SelectionRefPtr()->CollapseToStart(ignoredError);
+    mHTMLEditor.SelectionRefPtr()->CollapseToStart(ignoredError);
     NS_WARNING_ASSERTION(!ignoredError.Failed(),
                          "Selection::Collapse() failed, but ignored");
   }
 
   // XXX Why don't we test this first?
-  if (IsReadonly()) {
+  if (mHTMLEditor.IsReadonly()) {
     return NS_OK;
   }
 
-  EditActionResult result = CanHandleHTMLEditSubAction();
+  EditActionResult result = mHTMLEditor.CanHandleHTMLEditSubAction();
   if (result.Failed() || result.Canceled()) {
     NS_WARNING_ASSERTION(result.Succeeded(),
                          "HTMLEditor::CanHandleHTMLEditSubAction() failed");
     return result.Rv();
   }
 
-  UndefineCaretBidiLevel();
+  mHTMLEditor.UndefineCaretBidiLevel();
 
-  rv = EnsureNoPaddingBRElementForEmptyEditor();
+  rv = MOZ_KnownLive(mHTMLEditor).EnsureNoPaddingBRElementForEmptyEditor();
   if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
     return NS_ERROR_EDITOR_DESTROYED;
   }
@@ -445,8 +519,9 @@ nsresult HTMLEditor::DoInsertHTMLWithContext(
                        "EditorBase::EnsureNoPaddingBRElementForEmptyEditor() "
                        "failed, but ignored");
 
-  if (NS_SUCCEEDED(rv) && SelectionRefPtr()->IsCollapsed()) {
-    nsresult rv = EnsureCaretNotAfterPaddingBRElement();
+  if (NS_SUCCEEDED(rv) && mHTMLEditor.SelectionRefPtr()->IsCollapsed()) {
+    nsresult rv =
+        MOZ_KnownLive(mHTMLEditor).EnsureCaretNotAfterPaddingBRElement();
     if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
       return NS_ERROR_EDITOR_DESTROYED;
     }
@@ -454,7 +529,7 @@ nsresult HTMLEditor::DoInsertHTMLWithContext(
                          "HTMLEditor::EnsureCaretNotAfterPaddingBRElement() "
                          "failed, but ignored");
     if (NS_SUCCEEDED(rv)) {
-      nsresult rv = PrepareInlineStylesForCaret();
+      nsresult rv = MOZ_KnownLive(mHTMLEditor).PrepareInlineStylesForCaret();
       if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
         return NS_ERROR_EDITOR_DESTROYED;
       }
@@ -465,9 +540,9 @@ nsresult HTMLEditor::DoInsertHTMLWithContext(
   }
 
   // Adjust position based on the first node we are going to insert.
-  EditorDOMPoint pointToInsert =
-      GetBetterInsertionPointFor(arrayOfTopMostChildContents[0],
-                                 EditorBase::GetStartPoint(*SelectionRefPtr()));
+  EditorDOMPoint pointToInsert = mHTMLEditor.GetBetterInsertionPointFor(
+      arrayOfTopMostChildContents[0],
+      EditorBase::GetStartPoint(*mHTMLEditor.SelectionRefPtr()));
   if (!pointToInsert.IsSet()) {
     NS_WARNING("HTMLEditor::GetBetterInsertionPointFor() failed");
     return NS_ERROR_FAILURE;
@@ -476,14 +551,16 @@ nsresult HTMLEditor::DoInsertHTMLWithContext(
   // Remove invisible `<br>` element at the point because if there is a `<br>`
   // element at end of what we paste, it will make the existing invisible
   // `<br>` element visible.
-  WSRunScanner wsRunScannerAtInsertionPoint(this, pointToInsert);
+  WSRunScanner wsRunScannerAtInsertionPoint(&mHTMLEditor, pointToInsert);
   if (wsRunScannerAtInsertionPoint.GetEndReasonContent() &&
       wsRunScannerAtInsertionPoint.GetEndReasonContent()->IsHTMLElement(
           nsGkAtoms::br) &&
-      !IsVisibleBRElement(wsRunScannerAtInsertionPoint.GetEndReasonContent())) {
+      !mHTMLEditor.IsVisibleBRElement(
+          wsRunScannerAtInsertionPoint.GetEndReasonContent())) {
     AutoEditorDOMPointChildInvalidator lockOffset(pointToInsert);
-    nsresult rv = DeleteNodeWithTransaction(
-        MOZ_KnownLive(*wsRunScannerAtInsertionPoint.GetEndReasonContent()));
+    nsresult rv = MOZ_KnownLive(mHTMLEditor)
+                      .DeleteNodeWithTransaction(MOZ_KnownLive(
+                          *wsRunScannerAtInsertionPoint.GetEndReasonContent()));
     if (NS_FAILED(rv)) {
       NS_WARNING("HTMLEditor::DeleteNodeWithTransaction() failed");
       return rv;
@@ -491,12 +568,14 @@ nsresult HTMLEditor::DoInsertHTMLWithContext(
   }
 
   const bool insertionPointWasInLink =
-      !!GetLinkElement(pointToInsert.GetContainer());
+      !!HTMLEditor::GetLinkElement(pointToInsert.GetContainer());
 
   if (pointToInsert.IsInTextNode()) {
-    SplitNodeResult splitNodeResult = SplitNodeDeepWithTransaction(
-        MOZ_KnownLive(*pointToInsert.GetContainerAsContent()), pointToInsert,
-        SplitAtEdges::eAllowToCreateEmptyContainer);
+    SplitNodeResult splitNodeResult =
+        MOZ_KnownLive(mHTMLEditor)
+            .SplitNodeDeepWithTransaction(
+                MOZ_KnownLive(*pointToInsert.GetContainerAsContent()),
+                pointToInsert, SplitAtEdges::eAllowToCreateEmptyContainer);
     if (splitNodeResult.Failed()) {
       NS_WARNING("HTMLEditor::SplitNodeDeepWithTransaction() failed");
       return splitNodeResult.Rv();
@@ -559,9 +638,10 @@ nsresult HTMLEditor::DoInsertHTMLWithContext(
       for (nsCOMPtr<nsIContent> firstChild = content->GetFirstChild();
            firstChild; firstChild = content->GetFirstChild()) {
         EditorDOMPoint insertedPoint =
-            InsertNodeIntoProperAncestorWithTransaction(
-                *firstChild, pointToInsert,
-                SplitAtEdges::eDoNotCreateEmptyContainer);
+            MOZ_KnownLive(mHTMLEditor)
+                .InsertNodeIntoProperAncestorWithTransaction(
+                    *firstChild, pointToInsert,
+                    SplitAtEdges::eDoNotCreateEmptyContainer);
         if (!insertedPoint.IsSet()) {
           NS_WARNING(
               "HTMLEditor::InsertNodeIntoProperAncestorWithTransaction("
@@ -596,24 +676,27 @@ nsresult HTMLEditor::DoInsertHTMLWithContext(
           //     is not proper child of the parent element, or current node
           //     is a list element.
           if (HTMLEditUtils::IsListItem(pointToInsert.GetContainer()) &&
-              IsEmptyNode(*pointToInsert.GetContainer(), true)) {
+              mHTMLEditor.IsEmptyNode(*pointToInsert.GetContainer(), true)) {
             NS_WARNING_ASSERTION(pointToInsert.GetContainerParent(),
                                  "Insertion point is out of the DOM tree");
             if (pointToInsert.GetContainerParent()) {
               pointToInsert.Set(pointToInsert.GetContainer());
               MOZ_ASSERT(pointToInsert.IsSet());
               AutoEditorDOMPointChildInvalidator lockOffset(pointToInsert);
-              DebugOnly<nsresult> rvIgnored = DeleteNodeWithTransaction(
-                  MOZ_KnownLive(*pointToInsert.GetChild()));
+              DebugOnly<nsresult> rvIgnored =
+                  MOZ_KnownLive(mHTMLEditor)
+                      .DeleteNodeWithTransaction(
+                          MOZ_KnownLive(*pointToInsert.GetChild()));
               NS_WARNING_ASSERTION(NS_SUCCEEDED(rvIgnored),
                                    "HTMLEditor::DeleteNodeWithTransaction() "
                                    "failed, but ignored");
             }
           }
           EditorDOMPoint insertedPoint =
-              InsertNodeIntoProperAncestorWithTransaction(
-                  *firstChild, pointToInsert,
-                  SplitAtEdges::eDoNotCreateEmptyContainer);
+              MOZ_KnownLive(mHTMLEditor)
+                  .InsertNodeIntoProperAncestorWithTransaction(
+                      *firstChild, pointToInsert,
+                      SplitAtEdges::eDoNotCreateEmptyContainer);
           if (!insertedPoint.IsSet()) {
             NS_WARNING(
                 "HTMLEditor::InsertNodeIntoProperAncestorWithTransaction("
@@ -649,9 +732,10 @@ nsresult HTMLEditor::DoInsertHTMLWithContext(
       for (nsCOMPtr<nsIContent> firstChild = content->GetFirstChild();
            firstChild; firstChild = content->GetFirstChild()) {
         EditorDOMPoint insertedPoint =
-            InsertNodeIntoProperAncestorWithTransaction(
-                *firstChild, pointToInsert,
-                SplitAtEdges::eDoNotCreateEmptyContainer);
+            MOZ_KnownLive(mHTMLEditor)
+                .InsertNodeIntoProperAncestorWithTransaction(
+                    *firstChild, pointToInsert,
+                    SplitAtEdges::eDoNotCreateEmptyContainer);
         if (!insertedPoint.IsSet()) {
           NS_WARNING(
               "HTMLEditor::InsertNodeIntoProperAncestorWithTransaction("
@@ -675,9 +759,10 @@ nsresult HTMLEditor::DoInsertHTMLWithContext(
       // MOZ_KnownLive because 'arrayOfTopMostChildContents' is guaranteed to
       // keep it alive.
       EditorDOMPoint insertedPoint =
-          InsertNodeIntoProperAncestorWithTransaction(
-              MOZ_KnownLive(content), pointToInsert,
-              SplitAtEdges::eDoNotCreateEmptyContainer);
+          MOZ_KnownLive(mHTMLEditor)
+              .InsertNodeIntoProperAncestorWithTransaction(
+                  MOZ_KnownLive(content), pointToInsert,
+                  SplitAtEdges::eDoNotCreateEmptyContainer);
       NS_WARNING_ASSERTION(
           insertedPoint.IsSet(),
           "HTMLEditor::InsertNodeIntoProperAncestorWithTransaction("
@@ -703,9 +788,10 @@ nsresult HTMLEditor::DoInsertHTMLWithContext(
           }
           OwningNonNull<nsIContent> oldParentContent(
               *childContent->GetParent());
-          insertedPoint = InsertNodeIntoProperAncestorWithTransaction(
-              oldParentContent, pointToInsert,
-              SplitAtEdges::eDoNotCreateEmptyContainer);
+          insertedPoint = MOZ_KnownLive(mHTMLEditor)
+                              .InsertNodeIntoProperAncestorWithTransaction(
+                                  oldParentContent, pointToInsert,
+                                  SplitAtEdges::eDoNotCreateEmptyContainer);
           NS_WARNING_ASSERTION(
               insertedPoint.IsSet(),
               "HTMLEditor::InsertNodeIntoProperAncestorWithTransaction("
@@ -742,7 +828,7 @@ nsresult HTMLEditor::DoInsertHTMLWithContext(
   const EditorDOMPoint pointToPutCaret =
       GetNewCaretPointAfterInsertingHTML(lastInsertedPoint);
   // Now collapse the selection to the end of what we just inserted.
-  rv = CollapseSelectionTo(pointToPutCaret);
+  rv = MOZ_KnownLive(mHTMLEditor).CollapseSelectionTo(pointToPutCaret);
   if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
     return NS_ERROR_EDITOR_DESTROYED;
   }
@@ -763,15 +849,19 @@ nsresult HTMLEditor::DoInsertHTMLWithContext(
   // above just placed selection inside that.  So we need to split it instead.
   // XXX Sounds like that it's not really expensive comparing with the reason
   //     to use SplitNodeDeepWithTransaction() here.
-  SplitNodeResult splitLinkResult = SplitNodeDeepWithTransaction(
-      *linkElement, pointToPutCaret, SplitAtEdges::eDoNotCreateEmptyContainer);
+  SplitNodeResult splitLinkResult =
+      MOZ_KnownLive(mHTMLEditor)
+          .SplitNodeDeepWithTransaction(
+              *linkElement, pointToPutCaret,
+              SplitAtEdges::eDoNotCreateEmptyContainer);
   NS_WARNING_ASSERTION(
       splitLinkResult.Succeeded(),
       "HTMLEditor::SplitNodeDeepWithTransaction() failed, but ignored");
   if (splitLinkResult.GetPreviousNode()) {
     EditorRawDOMPoint afterLeftLink(splitLinkResult.GetPreviousNode());
     if (afterLeftLink.AdvanceOffset()) {
-      nsresult rv = CollapseSelectionTo(afterLeftLink);
+      nsresult rv =
+          MOZ_KnownLive(mHTMLEditor).CollapseSelectionTo(afterLeftLink);
       if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
         return NS_ERROR_EDITOR_DESTROYED;
       }
@@ -799,7 +889,8 @@ Element* HTMLEditor::GetLinkElement(nsINode* aNode) {
 }
 
 // static
-nsresult HTMLEditor::StripFormattingNodes(nsIContent& aNode, bool aListOnly) {
+nsresult HTMLEditor::HTMLWithContextInserter::StripFormattingNodes(
+    nsIContent& aNode, bool aListOnly) {
   if (aNode.TextIsOnlyWhitespace()) {
     nsCOMPtr<nsINode> parent = aNode.GetParentNode();
     if (parent) {
@@ -817,9 +908,12 @@ nsresult HTMLEditor::StripFormattingNodes(nsIContent& aNode, bool aListOnly) {
     nsCOMPtr<nsIContent> child = aNode.GetLastChild();
     while (child) {
       nsCOMPtr<nsIContent> previous = child->GetPreviousSibling();
-      nsresult rv = HTMLEditor::StripFormattingNodes(*child, aListOnly);
+      nsresult rv =
+          HTMLWithContextInserter::StripFormattingNodes(*child, aListOnly);
       if (NS_FAILED(rv)) {
-        NS_WARNING("HTMLEditor::StripFormattingNodes() failed");
+        NS_WARNING(
+            "HTMLEditor::HTMLWithContextInserter::StripFormattingNodes() "
+            "failed");
         return rv;
       }
       child = std::move(previous);
@@ -2906,18 +3000,19 @@ bool FindTargetNode(nsINode& aStart, nsCOMPtr<nsINode>& aResult) {
   return false;
 }
 
-nsresult HTMLEditor::CreateDOMFragmentFromPaste(
+nsresult HTMLEditor::HTMLWithContextInserter::CreateDOMFragmentFromPaste(
     const nsAString& aInputString, const nsAString& aContextStr,
     const nsAString& aInfoStr, nsCOMPtr<nsINode>* aOutFragNode,
     nsCOMPtr<nsINode>* aOutStartNode, nsCOMPtr<nsINode>* aOutEndNode,
-    int32_t* aOutStartOffset, int32_t* aOutEndOffset, bool aTrustedInput) {
+    int32_t* aOutStartOffset, int32_t* aOutEndOffset,
+    bool aTrustedInput) const {
   if (NS_WARN_IF(!aOutFragNode) || NS_WARN_IF(!aOutStartNode) ||
       NS_WARN_IF(!aOutEndNode) || NS_WARN_IF(!aOutStartOffset) ||
       NS_WARN_IF(!aOutEndOffset)) {
     return NS_ERROR_INVALID_ARG;
   }
 
-  RefPtr<Document> document = GetDocument();
+  RefPtr<Document> document = mHTMLEditor.GetDocument();
   if (NS_WARN_IF(!document)) {
     return NS_ERROR_FAILURE;
   }
@@ -2926,21 +3021,27 @@ nsresult HTMLEditor::CreateDOMFragmentFromPaste(
   nsCOMPtr<nsINode> targetNode;
   RefPtr<DocumentFragment> documentFragmentForContext;
   if (!aContextStr.IsEmpty()) {
-    nsresult rv = HTMLEditor::ParseFragment(
-        aContextStr, nullptr, document,
-        getter_AddRefs(documentFragmentForContext), aTrustedInput);
+    nsresult rv = ParseFragment(aContextStr, nullptr, document,
+                                getter_AddRefs(documentFragmentForContext),
+                                aTrustedInput);
     if (NS_FAILED(rv)) {
-      NS_WARNING("HTMLEditor::ParseFragment(aContextStr) failed");
+      NS_WARNING(
+          "HTMLEditor::HTMLWithContextInserter::ParseFragment(aContextStr) "
+          "failed");
       return rv;
     }
     if (!documentFragmentForContext) {
-      NS_WARNING("HTMLEditor::ParseFragment(aContextStr) returned nullptr");
+      NS_WARNING(
+          "HTMLEditor::HTMLWithContextInserter::ParseFragment(aContextStr) "
+          "returned nullptr");
       return NS_ERROR_FAILURE;
     }
 
-    rv = HTMLEditor::StripFormattingNodes(*documentFragmentForContext);
+    rv = HTMLWithContextInserter::StripFormattingNodes(
+        *documentFragmentForContext);
     if (NS_FAILED(rv)) {
-      NS_WARNING("HTMLEditor::StripFormattingNodes() failed");
+      NS_WARNING(
+          "HTMLEditor::HTMLWithContextInserter::StripFormattingNodes() failed");
       return rv;
     }
 
@@ -2963,15 +3064,19 @@ nsresult HTMLEditor::CreateDOMFragmentFromPaste(
     contextLocalNameAtom = nsGkAtoms::body;
   }
   RefPtr<DocumentFragment> documentFragmentToInsert;
-  nsresult rv = HTMLEditor::ParseFragment(
-      aInputString, contextLocalNameAtom, document,
-      getter_AddRefs(documentFragmentToInsert), aTrustedInput);
+  nsresult rv =
+      ParseFragment(aInputString, contextLocalNameAtom, document,
+                    getter_AddRefs(documentFragmentToInsert), aTrustedInput);
   if (NS_FAILED(rv)) {
-    NS_WARNING("HTMLEditor::ParseFragment(aInputString) failed");
+    NS_WARNING(
+        "HTMLEditor::HTMLWithContextInserter::ParseFragment(aInputString) "
+        "failed");
     return rv;
   }
   if (!documentFragmentToInsert) {
-    NS_WARNING("HTMLEditor::ParseFragment(aInputString) returned nullptr");
+    NS_WARNING(
+        "HTMLEditor::HTMLWithContextInserter::ParseFragment(aInputString) "
+        "returned nullptr");
     return NS_ERROR_FAILURE;
   }
 
@@ -2986,9 +3091,11 @@ nsresult HTMLEditor::CreateDOMFragmentFromPaste(
     documentFragmentToInsert = documentFragmentForContext;
   }
 
-  rv = HTMLEditor::StripFormattingNodes(*documentFragmentToInsert, true);
+  rv = HTMLWithContextInserter::StripFormattingNodes(*documentFragmentToInsert,
+                                                     true);
   if (NS_FAILED(rv)) {
-    NS_WARNING("HTMLEditor::StripFormattingNodes() failed");
+    NS_WARNING(
+        "HTMLEditor::HTMLWithContextInserter::StripFormattingNodes() failed");
     return rv;
   }
 
@@ -3004,10 +3111,13 @@ nsresult HTMLEditor::CreateDOMFragmentFromPaste(
   *aOutStartOffset = 0;
 
   if (!aInfoStr.IsEmpty()) {
-    const nsresult rv = HTMLEditor::MoveStartAndEndAccordingToHTMLInfo(
-        aInfoStr, aOutStartNode, aOutEndNode);
+    const nsresult rv =
+        HTMLWithContextInserter::MoveStartAndEndAccordingToHTMLInfo(
+            aInfoStr, aOutStartNode, aOutEndNode);
     if (NS_FAILED(rv)) {
-      NS_WARNING("HTMLEditor::MoveStartAndEndAccordingToHTMLInfo() failed");
+      NS_WARNING(
+          "HTMLEditor::HTMLWithContextInserter::"
+          "MoveStartAndEndAccordingToHTMLInfo() failed");
       return rv;
     }
   }
@@ -3017,7 +3127,8 @@ nsresult HTMLEditor::CreateDOMFragmentFromPaste(
 }
 
 // static
-nsresult HTMLEditor::MoveStartAndEndAccordingToHTMLInfo(
+nsresult
+HTMLEditor::HTMLWithContextInserter::MoveStartAndEndAccordingToHTMLInfo(
     const nsAString& aInfoStr, nsCOMPtr<nsINode>* aOutStartNode,
     nsCOMPtr<nsINode>* aOutEndNode) {
   int32_t sep = aInfoStr.FindChar((char16_t)',');
@@ -3053,11 +3164,10 @@ nsresult HTMLEditor::MoveStartAndEndAccordingToHTMLInfo(
 }
 
 // static
-nsresult HTMLEditor::ParseFragment(const nsAString& aFragStr,
-                                   nsAtom* aContextLocalName,
-                                   Document* aTargetDocument,
-                                   DocumentFragment** aFragment,
-                                   bool aTrustedInput) {
+nsresult HTMLEditor::HTMLWithContextInserter::ParseFragment(
+    const nsAString& aFragStr, nsAtom* aContextLocalName,
+    Document* aTargetDocument, DocumentFragment** aFragment,
+    bool aTrustedInput) {
   nsAutoScriptBlockerSuppressNodeRemoved autoBlocker;
 
   RefPtr<DocumentFragment> fragment = new (aTargetDocument->NodeInfoManager())

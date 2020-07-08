@@ -56,8 +56,6 @@
 #include "nsBoxFrame.h"
 #include "nsImageFrame.h"
 #include "nsSubDocumentFrame.h"
-#include "SVGObserverUtils.h"
-#include "nsSVGClipPathFrame.h"
 #include "GeckoProfiler.h"
 #include "nsViewManager.h"
 #include "ImageLayers.h"
@@ -78,7 +76,9 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/StyleAnimationValue.h"
 #include "mozilla/ServoBindings.h"
+#include "mozilla/SVGClipPathFrame.h"
 #include "mozilla/SVGMaskFrame.h"
+#include "mozilla/SVGObserverUtils.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/Unused.h"
@@ -801,6 +801,7 @@ void nsDisplayListBuilder::SetIsRelativeToLayoutViewport() {
 void nsDisplayListBuilder::UpdateShouldBuildAsyncZoomContainer() {
   Document* document = mReferenceFrame->PresContext()->Document();
   mBuildAsyncZoomContainer = !mIsRelativeToLayoutViewport &&
+                             !document->Fullscreen() &&
                              nsLayoutUtils::AllowZoomingForDocument(document);
 }
 
@@ -1272,7 +1273,7 @@ void nsDisplayListBuilder::MarkFramesForDisplayList(
 /**
  * Mark all preserve-3d children with
  * NS_FRAME_FORCE_DISPLAY_LIST_DESCEND_INTO to make sure
- * nsFrame::BuildDisplayListForChild() would visit them.  Also compute
+ * nsIFrame::BuildDisplayListForChild() would visit them.  Also compute
  * dirty rect for preserve-3d children.
  *
  * @param aDirtyFrame is the frame to mark children extending context.
@@ -7748,6 +7749,15 @@ auto nsDisplayTransform::ShouldPrerenderTransformedContent(
   uint32_t absoluteLimitY =
       StaticPrefs::layout_animation_prerender_absolute_limit_y();
   nsSize refSize = aBuilder->RootReferenceFrame()->GetSize();
+
+  float resolution = aFrame->PresShell()->GetCumulativeResolution();
+  if (resolution < 1.0f) {
+    refSize.SizeTo(
+        NSCoordSaturatingNonnegativeMultiply(refSize.width, 1.0f / resolution),
+        NSCoordSaturatingNonnegativeMultiply(refSize.height,
+                                             1.0f / resolution));
+  }
+
   // Only prerender if the transformed frame's size is <= a multiple of the
   // reference frame size (~viewport), and less than an absolute limit.
   // Both the ratio and the absolute limit are configurable.
@@ -9545,7 +9555,7 @@ void nsDisplayMasksAndClipPaths::PrintEffects(nsACString& aTo) {
     first = false;
     aTo += nsPrintfCString("opacity(%f)", mFrame->StyleEffects()->mOpacity);
   }
-  nsSVGClipPathFrame* clipPathFrame;
+  SVGClipPathFrame* clipPathFrame;
   // XXX Check return value?
   SVGObserverUtils::GetAndObserveClipPath(firstFrame, &clipPathFrame);
   if (clipPathFrame) {

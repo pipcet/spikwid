@@ -36,7 +36,7 @@ namespace mozilla {
 static ShutdownPhase sFastShutdownPhase = ShutdownPhase::NotInShutdown;
 static ShutdownPhase sLateWriteChecksPhase = ShutdownPhase::NotInShutdown;
 static AppShutdownMode sShutdownMode = AppShutdownMode::Normal;
-static bool sIsShuttingDown = false;
+static Atomic<bool, MemoryOrdering::Relaxed> sIsShuttingDown;
 
 // These environment variable strings are all deliberately copied and leaked
 // due to requirements of PR_SetEnv and similar.
@@ -142,7 +142,7 @@ void AppShutdown::Init(AppShutdownMode aMode) {
 
   // Very early shutdowns can happen before the startup cache is even
   // initialized; don't bother initializing it during shutdown.
-  if (auto* cache = scache::StartupCache::GetSingletonNoInit()) {
+  if (auto* cache = scache::StartupCache::GetSingleton()) {
     cache->MaybeInitShutdownWrite();
   }
 }
@@ -152,7 +152,7 @@ void AppShutdown::MaybeFastShutdown(ShutdownPhase aPhase) {
   // the late write checking code. Anything that writes to disk and which
   // we don't want to skip should be listed out explicitly in this section.
   if (aPhase == sFastShutdownPhase || aPhase == sLateWriteChecksPhase) {
-    if (auto* cache = scache::StartupCache::GetSingletonNoInit()) {
+    if (auto* cache = scache::StartupCache::GetSingleton()) {
       cache->EnsureShutdownWriteComplete();
     }
 

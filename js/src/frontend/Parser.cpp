@@ -671,7 +671,8 @@ bool GeneralParser<ParseHandler, Unit>::noteDeclaredName(
       break;
     }
 
-    case DeclarationKind::LexicalFunction: {
+    case DeclarationKind::LexicalFunction:
+    case DeclarationKind::PrivateName: {
       ParseContext::Scope* scope = pc_->innermostScope();
       AddDeclaredNamePtr p = scope->lookupDeclaredNameForAdd(name);
       if (p) {
@@ -782,7 +783,9 @@ bool GeneralParser<ParseHandler, Unit>::noteDeclaredName(
   return true;
 }
 
-bool ParserBase::noteUsedNameInternal(HandlePropertyName name) {
+bool ParserBase::noteUsedNameInternal(HandlePropertyName name,
+                                      NameVisibility visibility,
+                                      mozilla::Maybe<TokenPos> tokenPosition) {
   // The asm.js validator does all its own symbol-table management so, as an
   // optimization, avoid doing any work here.
   if (pc_->useAsmOrInsideUseAsm()) {
@@ -793,12 +796,18 @@ bool ParserBase::noteUsedNameInternal(HandlePropertyName name) {
   // to know if they are closed over. So no need to track used name at the
   // global scope. It is not incorrect to track them, this is an
   // optimization.
+  //
+  // As an exception however, we continue to track private name references,
+  // as the used names tracker is used to provide early errors for undeclared
+  // private name references
   ParseContext::Scope* scope = pc_->innermostScope();
-  if (pc_->sc()->isGlobalContext() && scope == &pc_->varScope()) {
+  if (pc_->sc()->isGlobalContext() && scope == &pc_->varScope() &&
+      visibility == NameVisibility::Public) {
     return true;
   }
 
-  return usedNames_.noteUse(cx_, name, pc_->scriptId(), scope->id());
+  return usedNames_.noteUse(cx_, name, visibility, pc_->scriptId(), scope->id(),
+                            tokenPosition);
 }
 
 template <class ParseHandler>
@@ -1377,6 +1386,84 @@ LexicalScopeNode* PerHandlerParser<FullParseHandler>::finishLexicalScope(
   return handler_.newLexicalScope(*bindings, body, kind);
 }
 
+template <class ParseHandler>
+bool PerHandlerParser<ParseHandler>::checkForUndefinedPrivateFields(
+    EvalSharedContext* evalSc) {
+  if (handler_.canSkipLazyClosedOverBindings()) {
+    // We're delazifying -- so we already checked private names during first
+    // parse.
+    return true;
+  }
+
+  Vector<UnboundPrivateName, 8> unboundPrivateNames(cx_);
+  if (!this->getCompilationInfo().usedNames.getUnboundPrivateNames(
+          unboundPrivateNames)) {
+    return false;
+  }
+
+  // No unbound names, let's get out of here!
+  if (unboundPrivateNames.empty()) {
+    return true;
+  }
+
+  // It is an early error if there's private name references unbound,
+  // unless it's an eval, in which case we need to check the scope
+  // chain.
+  if (!evalSc) {
+    // The unbound private names are sorted, so just grab the first one.
+    UnboundPrivateName minimum = unboundPrivateNames[0];
+    UniqueChars str = AtomToPrintableString(cx_, minimum.atom);
+    if (!str) {
+      return false;
+    }
+
+    errorAt(minimum.position.begin, JSMSG_MISSING_PRIVATE_DECL, str.get());
+    return false;
+  }
+
+  // For the given private name, search the enclosing scope chain
+  // to see if there's an associated binding, and if not, issue an error.
+  auto verifyPrivateName = [](JSContext* cx, auto* parser,
+                              HandleScope enclosingScope,
+                              UnboundPrivateName unboundName) {
+    // Walk the enclosing scope chain looking for this private name;
+    for (ScopeIter si(enclosingScope); si; si++) {
+      // Private names are only found within class body scopes.
+      if (si.scope()->kind() != ScopeKind::ClassBody) {
+        continue;
+      }
+
+      // Look for a matching binding.
+      for (js::BindingIter bi(si.scope()); bi; bi++) {
+        if (bi.name() == unboundName.atom) {
+          // Awesome. We found it, we're done here!
+          return true;
+        }
+      }
+    }
+
+    // Didn't find a matching binding, so issue an error.
+    UniqueChars str = AtomToPrintableString(cx, unboundName.atom);
+    if (!str) {
+      return false;
+    }
+    parser->errorAt(unboundName.position.begin, JSMSG_MISSING_PRIVATE_DECL,
+                    str.get());
+    return false;
+  };
+
+  RootedScope enclosingScope(cx_, evalSc->compilationEnclosingScope());
+  // It's important that the unbound private names are sorted, as we
+  // want our errors to always be issued to the first textually.
+  for (UnboundPrivateName unboundName : unboundPrivateNames) {
+    if (!verifyPrivateName(cx_, this, enclosingScope, unboundName)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 template <typename Unit>
 LexicalScopeNode* Parser<FullParseHandler, Unit>::evalBody(
     EvalSharedContext* evalsc) {
@@ -1404,6 +1491,11 @@ LexicalScopeNode* Parser<FullParseHandler, Unit>::evalBody(
     }
 
     if (!checkStatementsEOF()) {
+      return nullptr;
+    }
+
+    // Private names not lexically defined must trigger a syntax error.
+    if (!checkForUndefinedPrivateFields(evalsc)) {
       return nullptr;
     }
 
@@ -1495,6 +1587,10 @@ ListNode* Parser<FullParseHandler, Unit>::globalBody(
   }
 
   if (!CheckParseTree(cx_, alloc_, body)) {
+    return null();
+  }
+
+  if (!checkForUndefinedPrivateFields()) {
     return null();
   }
 
@@ -1605,6 +1701,11 @@ ModuleNode* Parser<FullParseHandler, Unit>::moduleBody(
   stmtList = &node->as<ListNode>();
 
   if (!this->setSourceMapInfo()) {
+    return null();
+  }
+
+  // Private names not lexically defined must trigger a syntax error.
+  if (!checkForUndefinedPrivateFields()) {
     return null();
   }
 
@@ -2188,6 +2289,10 @@ FunctionNode* Parser<FullParseHandler, Unit>::standaloneFunction(
     }
   }
   funNode = &node->as<FunctionNode>();
+
+  if (!checkForUndefinedPrivateFields(nullptr)) {
+    return null();
+  }
 
   if (!this->setSourceMapInfo()) {
     return null();
@@ -7111,6 +7216,18 @@ bool GeneralParser<ParseHandler, Unit>::classMember(
       return false;
     }
 
+    if (handler_.isPrivateName(propName)) {
+      if (propAtom == cx_->names().hashConstructor) {
+        errorAt(propNameOffset, JSMSG_BAD_METHOD_DEF);
+        return false;
+      }
+
+      RootedPropertyName privateName(cx_, propAtom->asPropertyName());
+      if (!noteDeclaredName(privateName, DeclarationKind::PrivateName, pos())) {
+        return false;
+      }
+    }
+
     if (!abortIfSyntaxParser()) {
       return false;
     }
@@ -7121,8 +7238,8 @@ bool GeneralParser<ParseHandler, Unit>::classMember(
       classFields.instanceFields++;
     }
 
-    FunctionNodeType initializer =
-        fieldInitializerOpt(propName, propAtom, classFields, isStatic);
+    FunctionNodeType initializer = fieldInitializerOpt(
+        propName, propAtom, classFields, isStatic, hasHeritage);
     if (!initializer) {
       return false;
     }
@@ -7145,6 +7262,13 @@ bool GeneralParser<ParseHandler, Unit>::classMember(
       propType != PropertyType::GeneratorMethod &&
       propType != PropertyType::AsyncMethod &&
       propType != PropertyType::AsyncGeneratorMethod) {
+    errorAt(propNameOffset, JSMSG_BAD_METHOD_DEF);
+    return false;
+  }
+
+  if (handler_.isPrivateName(propName)) {
+    // Private methods aren't yet implemented.
+    // TODO: Adjust error message to mention private methods.
     errorAt(propNameOffset, JSMSG_BAD_METHOD_DEF);
     return false;
   }
@@ -7361,6 +7485,8 @@ GeneralParser<ParseHandler, Unit>::classDefinition(
   // position in order to provide it for the nodes created later.
   TokenPos namePos = pos();
 
+  bool isInClass = pc_->sc()->inClass();
+
   // Push a ParseContext::ClassStatement to keep track of the constructor
   // funbox.
   ParseContext::ClassStatement classStmt(pc_);
@@ -7369,6 +7495,7 @@ GeneralParser<ParseHandler, Unit>::classDefinition(
   Node nameNode = null();
   Node classHeritage = null();
   LexicalScopeNodeType classBlock = null();
+  LexicalScopeNodeType classBodyBlock = null();
   uint32_t classEndOffset;
   {
     // A named class creates a new lexical scope with a const binding of the
@@ -7399,49 +7526,64 @@ GeneralParser<ParseHandler, Unit>::classDefinition(
       return null();
     }
 
-    ListNodeType classMembers = handler_.newClassMemberList(pos().begin);
-    if (!classMembers) {
-      return null();
-    }
-
-    ClassFields classFields{};
-    for (;;) {
-      bool done;
-      if (!classMember(yieldHandling, classStmt, className, classStartOffset,
-                       hasHeritage, classFields, classMembers, &done)) {
+    {
+      ParseContext::Statement bodyScopeStmt(pc_, StatementKind::Block);
+      ParseContext::Scope bodyScope(this);
+      if (!bodyScope.init(pc_)) {
         return null();
       }
-      if (done) {
-        break;
-      }
-    }
 
-    if (classFields.instanceFieldKeys > 0) {
-      if (!noteDeclaredName(cx_->names().dotFieldKeys, DeclarationKind::Let,
-                            namePos)) {
+      ListNodeType classMembers = handler_.newClassMemberList(pos().begin);
+      if (!classMembers) {
         return null();
       }
-    }
 
-    if (classFields.staticFields > 0) {
-      if (!noteDeclaredName(cx_->names().dotStaticInitializers,
-                            DeclarationKind::Let, namePos)) {
+      ClassFields classFields{};
+      for (;;) {
+        bool done;
+        if (!classMember(yieldHandling, classStmt, className, classStartOffset,
+                         hasHeritage, classFields, classMembers, &done)) {
+          return null();
+        }
+        if (done) {
+          break;
+        }
+      }
+
+      if (classFields.instanceFieldKeys > 0) {
+        if (!noteDeclaredName(cx_->names().dotFieldKeys, DeclarationKind::Let,
+                              namePos)) {
+          return null();
+        }
+      }
+
+      if (classFields.staticFields > 0) {
+        if (!noteDeclaredName(cx_->names().dotStaticInitializers,
+                              DeclarationKind::Let, namePos)) {
+          return null();
+        }
+      }
+
+      if (classFields.staticFieldKeys > 0) {
+        if (!noteDeclaredName(cx_->names().dotStaticFieldKeys,
+                              DeclarationKind::Let, namePos)) {
+          return null();
+        }
+      }
+
+      classEndOffset = pos().end;
+      if (!finishClassConstructor(classStmt, className, hasHeritage,
+                                  classStartOffset, classEndOffset, classFields,
+                                  classMembers)) {
         return null();
       }
-    }
 
-    if (classFields.staticFieldKeys > 0) {
-      if (!noteDeclaredName(cx_->names().dotStaticFieldKeys,
-                            DeclarationKind::Let, namePos)) {
+      classBodyBlock = finishLexicalScope(bodyScope, classMembers);
+      if (!classBodyBlock) {
         return null();
       }
-    }
 
-    classEndOffset = pos().end;
-    if (!finishClassConstructor(classStmt, className, hasHeritage,
-                                classStartOffset, classEndOffset, classFields,
-                                classMembers)) {
-      return null();
+      // Pop the class body scope
     }
 
     if (className) {
@@ -7456,7 +7598,7 @@ GeneralParser<ParseHandler, Unit>::classDefinition(
       }
     }
 
-    classBlock = finishLexicalScope(innerScope, classMembers);
+    classBlock = finishLexicalScope(innerScope, classBodyBlock);
     if (!classBlock) {
       return null();
     }
@@ -7483,8 +7625,25 @@ GeneralParser<ParseHandler, Unit>::classDefinition(
       return null();
     }
   }
-
   MOZ_ALWAYS_TRUE(setLocalStrictMode(savedStrictness));
+  // We're leaving a class definition that was not itself nested within a class
+  if (!isInClass) {
+    mozilla::Maybe<UnboundPrivateName> maybeUnboundName;
+    if (!this->getCompilationInfo().usedNames.hasUnboundPrivateNames(
+            cx_, maybeUnboundName)) {
+      return null();
+    }
+    if (maybeUnboundName) {
+      UniqueChars str = AtomToPrintableString(cx_, maybeUnboundName->atom);
+      if (!str) {
+        return null();
+      }
+
+      errorAt(maybeUnboundName->position.begin, JSMSG_MISSING_PRIVATE_DECL,
+              str.get());
+      return null();
+    }
+  }
 
   return handler_.newClass(nameNode, classHeritage, classBlock,
                            TokenPos(classStartOffset, classEndOffset));
@@ -7646,10 +7805,9 @@ GeneralParser<ParseHandler, Unit>::synthesizeConstructor(
 
 template <class ParseHandler, typename Unit>
 typename ParseHandler::FunctionNodeType
-GeneralParser<ParseHandler, Unit>::fieldInitializerOpt(Node propName,
-                                                       HandleAtom propAtom,
-                                                       ClassFields& classFields,
-                                                       bool isStatic) {
+GeneralParser<ParseHandler, Unit>::fieldInitializerOpt(
+    Node propName, HandleAtom propAtom, ClassFields& classFields, bool isStatic,
+    HasHeritage hasHeritage) {
   bool hasInitializer = false;
   if (!tokenStream.matchToken(&hasInitializer, TokenKind::Assign,
                               TokenStream::SlashIsDiv)) {
@@ -7795,6 +7953,27 @@ GeneralParser<ParseHandler, Unit>::fieldInitializerOpt(Node propName,
 
     propAssignFieldAccess = handler_.newPropertyByValue(
         propAssignThis, fieldKeyValue, wholeInitializerPos.end);
+    if (!propAssignFieldAccess) {
+      return null();
+    }
+  } else if (handler_.isPrivateName(propName)) {
+    // It would be nice if we could tweak this here such that only if
+    // HasHeritage::Yes we end up emitting InitPrivateElem, but otherwise we
+    // emit InitElem -- this is an optimization to minimize HasOwn checks
+    // in InitElem for classes without heritage.
+    //
+    // Further tweaking would be to ultimately only do InitPrivateElem for the
+    // -first- field in a derived class, which would suffice to match the
+    // semantic check.
+
+    RootedPropertyName privateName(cx_, propAtom->asPropertyName());
+    NameNodeType privateNameNode = privateNameReference(privateName);
+    if (!privateNameNode) {
+      return null();
+    }
+
+    propAssignFieldAccess = handler_.newPropertyByValue(
+        propAssignThis, privateNameNode, wholeInitializerPos.end);
     if (!propAssignFieldAccess) {
       return null();
     }
@@ -9050,6 +9229,11 @@ typename ParseHandler::Node GeneralParser<ParseHandler, Unit>::optionalExpr(
         if (!nextMember) {
           return null();
         }
+      } else if (tt == TokenKind::PrivateName) {
+        nextMember = memberPrivateAccess(lhs, OptionalKind::Optional);
+        if (!nextMember) {
+          return null();
+        }
       } else if (tt == TokenKind::LeftBracket) {
         nextMember =
             memberElemAccess(lhs, yieldHandling, OptionalKind::Optional);
@@ -9072,6 +9256,11 @@ typename ParseHandler::Node GeneralParser<ParseHandler, Unit>::optionalExpr(
       }
       if (TokenKindIsPossibleIdentifierName(tt)) {
         nextMember = memberPropertyAccess(lhs);
+        if (!nextMember) {
+          return null();
+        }
+      } else if (tt == TokenKind::PrivateName) {
+        nextMember = memberPrivateAccess(lhs);
         if (!nextMember) {
           return null();
         }
@@ -9180,14 +9369,22 @@ typename ParseHandler::Node GeneralParser<ParseHandler, Unit>::unaryExpr(
         return null();
       }
 
-      // Per spec, deleting any unary expression is valid -- it simply
-      // returns true -- except for one case that is illegal in strict mode.
+      // Per spec, deleting most unary expressions is valid -- it simply
+      // returns true -- except for two cases:
+      // 1. `var x; ...; delete x` is a syntax error in strict mode.
+      // 2. Private fields cannot be deleted.
       if (handler_.isName(expr)) {
         if (!strictModeErrorAt(exprOffset, JSMSG_DEPRECATED_DELETE_OPERAND)) {
           return null();
         }
 
         pc_->sc()->setBindingsAccessedDynamically();
+      }
+
+      if (handler_.isPrivateField(expr)) {
+        // should always be in strict mode if we're talking private names.
+        MOZ_ALWAYS_FALSE(strictModeErrorAt(exprOffset, JSMSG_PRIVATE_DELETE));
+        return null();
       }
 
       return handler_.newDelete(begin, expr);
@@ -9462,6 +9659,11 @@ typename ParseHandler::Node GeneralParser<ParseHandler, Unit>::memberExpr(
         if (!nextMember) {
           return null();
         }
+      } else if (tt == TokenKind::PrivateName) {
+        nextMember = memberPrivateAccess(lhs);
+        if (!nextMember) {
+          return null();
+        }
       } else {
         error(JSMSG_NAME_AFTER_DOT);
         return null();
@@ -9530,11 +9732,25 @@ PerHandlerParser<ParseHandler>::newName(PropertyName* name, TokenPos pos) {
   return handler_.newName(name, pos, cx_);
 }
 
+template <class ParseHandler>
+inline typename ParseHandler::NameNodeType
+PerHandlerParser<ParseHandler>::newPrivateName(PropertyName* name) {
+  return newPrivateName(name, pos());
+}
+
+template <class ParseHandler>
+inline typename ParseHandler::NameNodeType
+PerHandlerParser<ParseHandler>::newPrivateName(PropertyName* name,
+                                               TokenPos pos) {
+  return handler_.newPrivateName(name, pos);
+}
+
 template <class ParseHandler, typename Unit>
 typename ParseHandler::Node
 GeneralParser<ParseHandler, Unit>::memberPropertyAccess(
     Node lhs, OptionalKind optionalKind /* = OptionalKind::NonOptional */) {
-  MOZ_ASSERT(TokenKindIsPossibleIdentifierName(anyChars.currentToken().type));
+  MOZ_ASSERT(TokenKindIsPossibleIdentifierName(anyChars.currentToken().type) ||
+             anyChars.currentToken().type == TokenKind::PrivateName);
   PropertyName* field = anyChars.currentName();
   if (handler_.isSuperBase(lhs) && !checkAndMarkSuperScope()) {
     error(JSMSG_BAD_SUPERPROP, "property");
@@ -9551,6 +9767,31 @@ GeneralParser<ParseHandler, Unit>::memberPropertyAccess(
     return handler_.newOptionalPropertyAccess(lhs, name);
   }
   return handler_.newPropertyAccess(lhs, name);
+}
+
+template <class ParseHandler, typename Unit>
+typename ParseHandler::Node
+GeneralParser<ParseHandler, Unit>::memberPrivateAccess(
+    Node lhs, OptionalKind optionalKind /* = OptionalKind::NonOptional */) {
+  MOZ_ASSERT(anyChars.currentToken().type == TokenKind::PrivateName);
+
+  RootedPropertyName field(cx_, anyChars.currentName());
+  // Cannot access private fields on super.
+  if (handler_.isSuperBase(lhs)) {
+    error(JSMSG_BAD_SUPERPRIVATE);
+    return null();
+  }
+
+  NameNodeType privateName = privateNameReference(field);
+  if (!privateName) {
+    return null();
+  }
+
+  if (optionalKind == OptionalKind::Optional) {
+    MOZ_ASSERT(!handler_.isSuperBase(lhs));
+    return handler_.newOptionalPropertyByValue(lhs, privateName, pos().end);
+  }
+  return handler_.newPropertyByValue(lhs, privateName, pos().end);
 }
 
 template <class ParseHandler, typename Unit>
@@ -9851,6 +10092,22 @@ PerHandlerParser<ParseHandler>::identifierReference(
   }
 
   if (!noteUsedName(name)) {
+    return null();
+  }
+
+  return id;
+}
+
+template <class ParseHandler>
+typename ParseHandler::NameNodeType
+PerHandlerParser<ParseHandler>::privateNameReference(
+    Handle<PropertyName*> name) {
+  NameNodeType id = newPrivateName(name);
+  if (!id) {
+    return null();
+  }
+
+  if (!noteUsedName(name, NameVisibility::Private, Some(pos()))) {
     return null();
   }
 
@@ -10290,6 +10547,17 @@ typename ParseHandler::Node GeneralParser<ParseHandler, Unit>::propertyName(
       return computedPropertyName(yieldHandling, maybeDecl, propertyNameContext,
                                   propList);
 
+    case TokenKind::PrivateName: {
+      if (propertyNameContext != PropertyNameContext::PropertyNameInClass) {
+        error(JSMSG_ILLEGAL_PRIVATE_FIELD);
+        return null();
+      }
+
+      propAtom.set(anyChars.currentName());
+      RootedPropertyName propName(cx_, propAtom->asPropertyName());
+      return privateNameReference(propName);
+    }
+
     default: {
       if (!TokenKindIsPossibleIdentifierName(ltok)) {
         error(JSMSG_UNEXPECTED_TOKEN, "property name", TokenKindToDesc(ltok));
@@ -10306,7 +10574,8 @@ typename ParseHandler::Node GeneralParser<ParseHandler, Unit>::propertyName(
 static bool TokenKindCanStartPropertyName(TokenKind tt) {
   return TokenKindIsPossibleIdentifierName(tt) || tt == TokenKind::String ||
          tt == TokenKind::Number || tt == TokenKind::LeftBracket ||
-         tt == TokenKind::Mul || tt == TokenKind::BigInt;
+         tt == TokenKind::Mul || tt == TokenKind::BigInt ||
+         tt == TokenKind::PrivateName;
 }
 
 template <class ParseHandler, typename Unit>

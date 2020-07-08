@@ -413,7 +413,8 @@ class MOZ_STACK_CLASS ParserBase : public ParserSharedBase,
   // modifier TokenStream::SlashIsDiv, continues a LexicalDeclaration.
   bool nextTokenContinuesLetDeclaration(TokenKind next);
 
-  bool noteUsedNameInternal(HandlePropertyName name);
+  bool noteUsedNameInternal(HandlePropertyName name, NameVisibility visibility,
+                            mozilla::Maybe<TokenPos> tokenPosition);
 
   bool checkAndMarkSuperScope();
 
@@ -485,18 +486,23 @@ class MOZ_STACK_CLASS PerHandlerParser : public ParserBase {
   bool noteDestructuredPositionalFormalParameter(FunctionNodeType funNode,
                                                  Node destruct);
 
-  bool noteUsedName(HandlePropertyName name) {
+  bool noteUsedName(
+      HandlePropertyName name,
+      NameVisibility visibility = NameVisibility::Public,
+      mozilla::Maybe<TokenPos> tokenPosition = mozilla::Nothing()) {
     // If the we are delazifying, the BaseScript already has all the closed-over
     // info for bindings and there's no need to track used names.
     if (handler_.canSkipLazyClosedOverBindings()) {
       return true;
     }
 
-    return ParserBase::noteUsedNameInternal(name);
+    return ParserBase::noteUsedNameInternal(name, visibility, tokenPosition);
   }
 
   // Required on Scope exit.
   bool propagateFreeNamesAndMarkClosedOverBindings(ParseContext::Scope& scope);
+
+  bool checkForUndefinedPrivateFields(EvalSharedContext* evalSc = nullptr);
 
   bool finishFunctionScopes(bool isStandaloneFunction);
   LexicalScopeNodeType finishLexicalScope(ParseContext::Scope& scope, Node body,
@@ -506,11 +512,15 @@ class MOZ_STACK_CLASS PerHandlerParser : public ParserBase {
   inline NameNodeType newName(PropertyName* name);
   inline NameNodeType newName(PropertyName* name, TokenPos pos);
 
+  inline NameNodeType newPrivateName(PropertyName* name);
+  inline NameNodeType newPrivateName(PropertyName* name, TokenPos pos);
+
   NameNodeType newInternalDotName(HandlePropertyName name);
   NameNodeType newThisName();
   NameNodeType newDotGeneratorName();
 
   NameNodeType identifierReference(Handle<PropertyName*> name);
+  NameNodeType privateNameReference(Handle<PropertyName*> name);
 
   Node noSubstitutionTaggedTemplate();
 
@@ -689,6 +699,7 @@ class MOZ_STACK_CLASS GeneralParser : public PerHandlerParser<ParseHandler> {
 #if DEBUG
   using Base::checkOptionsCalled_;
 #endif
+  using Base::checkForUndefinedPrivateFields;
   using Base::finishFunctionScopes;
   using Base::finishLexicalScope;
   using Base::foldConstants_;
@@ -757,6 +768,7 @@ class MOZ_STACK_CLASS GeneralParser : public PerHandlerParser<ParseHandler> {
   using Base::noteDestructuredPositionalFormalParameter;
   using Base::noteUsedName;
   using Base::prefixAccessorName;
+  using Base::privateNameReference;
   using Base::processExport;
   using Base::processExportFrom;
   using Base::setFunctionEndFromCurrentToken;
@@ -1255,7 +1267,8 @@ class MOZ_STACK_CLASS GeneralParser : public PerHandlerParser<ParseHandler> {
       const ClassFields& classFields, ListNodeType& classMembers);
 
   FunctionNodeType fieldInitializerOpt(Node name, HandleAtom atom,
-                                       ClassFields& classFields, bool isStatic);
+                                       ClassFields& classFields, bool isStatic,
+                                       HasHeritage hasHeritage);
   FunctionNodeType synthesizeConstructor(HandleAtom className,
                                          uint32_t classNameOffset,
                                          HasHeritage hasHeritage);
@@ -1358,6 +1371,8 @@ class MOZ_STACK_CLASS GeneralParser : public PerHandlerParser<ParseHandler> {
     Optional,
   };
   Node memberPropertyAccess(
+      Node lhs, OptionalKind optionalKind = OptionalKind::NonOptional);
+  Node memberPrivateAccess(
       Node lhs, OptionalKind optionalKind = OptionalKind::NonOptional);
   Node memberElemAccess(Node lhs, YieldHandling yieldHandling,
                         OptionalKind optionalKind = OptionalKind::NonOptional);
@@ -1470,6 +1485,7 @@ class MOZ_STACK_CLASS Parser<SyntaxParseHandler, Unit> final
 #if DEBUG
   using Base::checkOptionsCalled_;
 #endif
+  using Base::checkForUndefinedPrivateFields;
   using Base::finishFunctionScopes;
   using Base::functionFormalParametersAndBody;
   using Base::handler_;
@@ -1613,6 +1629,7 @@ class MOZ_STACK_CLASS Parser<FullParseHandler, Unit> final
 #if DEBUG
   using Base::checkOptionsCalled_;
 #endif
+  using Base::checkForUndefinedPrivateFields;
   using Base::cx_;
   using Base::finishFunctionScopes;
   using Base::finishLexicalScope;

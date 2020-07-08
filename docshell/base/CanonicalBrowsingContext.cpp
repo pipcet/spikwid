@@ -162,10 +162,15 @@ void CanonicalBrowsingContext::
 }
 
 void CanonicalBrowsingContext::SetInFlightProcessId(uint64_t aProcessId) {
-  // We can't handle more than one in-flight process change at a time.
-  MOZ_ASSERT_IF(aProcessId, mInFlightProcessId == 0);
-
+  MOZ_ASSERT(aProcessId);
   mInFlightProcessId = aProcessId;
+}
+
+void CanonicalBrowsingContext::ClearInFlightProcessId(uint64_t aProcessId) {
+  MOZ_ASSERT(aProcessId);
+  if (mInFlightProcessId == aProcessId) {
+    mInFlightProcessId = 0;
+  }
 }
 
 void CanonicalBrowsingContext::GetWindowGlobals(
@@ -612,11 +617,16 @@ void CanonicalBrowsingContext::PendingRemotenessChange::Finish() {
                             mContentParent ? u"true"_ns : u"false"_ns,
                             /* notify */ true);
 
+    RefPtr<BrowsingContextGroup> specificGroup;
+    if (mSpecificGroupId != 0) {
+      specificGroup = BrowsingContextGroup::GetOrCreate(mSpecificGroupId);
+    }
+
     // The process has been created, hand off to nsFrameLoaderOwner to finish
     // the process switch.
     ErrorResult error;
-    frameLoaderOwner->ChangeRemotenessToProcess(mContentParent,
-                                                mReplaceBrowsingContext, error);
+    frameLoaderOwner->ChangeRemotenessToProcess(
+        mContentParent, mReplaceBrowsingContext, specificGroup, error);
     if (error.Failed()) {
       Cancel(error.StealNSResult());
       return;
@@ -705,11 +715,7 @@ void CanonicalBrowsingContext::PendingRemotenessChange::Finish() {
   target->SetOwnerProcessId(mContentParent->ChildID());
 
   auto resetInFlightId = [target, inFlightProcessId] {
-    if (target->GetInFlightProcessId() == inFlightProcessId) {
-      target->SetInFlightProcessId(0);
-    } else {
-      MOZ_DIAGNOSTIC_ASSERT(false, "Unexpected InFlightProcessId");
-    }
+    target->ClearInFlightProcessId(inFlightProcessId);
   };
 
   // If we were in a remote frame, trigger unloading of the remote window. When
@@ -802,10 +808,12 @@ void CanonicalBrowsingContext::PendingRemotenessChange::Clear() {
 
 CanonicalBrowsingContext::PendingRemotenessChange::PendingRemotenessChange(
     CanonicalBrowsingContext* aTarget, RemotenessPromise::Private* aPromise,
-    uint64_t aPendingSwitchId, bool aReplaceBrowsingContext)
+    uint64_t aPendingSwitchId, bool aReplaceBrowsingContext,
+    uint64_t aSpecificGroupId)
     : mTarget(aTarget),
       mPromise(aPromise),
       mPendingSwitchId(aPendingSwitchId),
+      mSpecificGroupId(aSpecificGroupId),
       mReplaceBrowsingContext(aReplaceBrowsingContext) {}
 
 CanonicalBrowsingContext::PendingRemotenessChange::~PendingRemotenessChange() {
@@ -816,7 +824,8 @@ CanonicalBrowsingContext::PendingRemotenessChange::~PendingRemotenessChange() {
 RefPtr<CanonicalBrowsingContext::RemotenessPromise>
 CanonicalBrowsingContext::ChangeRemoteness(const nsAString& aRemoteType,
                                            uint64_t aPendingSwitchId,
-                                           bool aReplaceBrowsingContext) {
+                                           bool aReplaceBrowsingContext,
+                                           uint64_t aSpecificGroupId) {
   MOZ_DIAGNOSTIC_ASSERT(IsContent(),
                         "cannot change the process of chrome contexts");
   MOZ_DIAGNOSTIC_ASSERT(
@@ -824,6 +833,8 @@ CanonicalBrowsingContext::ChangeRemoteness(const nsAString& aRemoteType,
       "toplevel content must be embedded in the parent process");
   MOZ_DIAGNOSTIC_ASSERT(!aReplaceBrowsingContext || IsTop(),
                         "Cannot replace BrowsingContext for subframes");
+  MOZ_DIAGNOSTIC_ASSERT(aSpecificGroupId == 0 || aReplaceBrowsingContext,
+                        "Cannot specify group ID unless replacing BC");
 
   // Ensure our embedder hasn't been destroyed already.
   RefPtr<WindowGlobalParent> embedderWindowGlobal = GetEmbedderWindowGlobal();
@@ -858,10 +869,12 @@ CanonicalBrowsingContext::ChangeRemoteness(const nsAString& aRemoteType,
       RefPtr<BrowserParent> oldBrowser =
           GetCurrentWindowGlobal()->GetBrowserParent();
 
-      SetInFlightProcessId(OwnerProcessId());
-      oldBrowser->SendWillChangeProcess(
-          [target = RefPtr{this}](auto) { target->SetInFlightProcessId(0); },
-          [target = RefPtr{this}](auto) { target->SetInFlightProcessId(0); });
+      uint64_t targetProcessId = OwnerProcessId();
+      SetInFlightProcessId(targetProcessId);
+      auto callback = [target = RefPtr{this}, targetProcessId](auto) {
+        target->ClearInFlightProcessId(targetProcessId);
+      };
+      oldBrowser->SendWillChangeProcess(callback, callback);
       oldBrowser->Destroy();
     }
 
@@ -876,8 +889,9 @@ CanonicalBrowsingContext::ChangeRemoteness(const nsAString& aRemoteType,
 
   // Switching to remote. Wait for new process to launch before switch.
   auto promise = MakeRefPtr<RemotenessPromise::Private>(__func__);
-  RefPtr<PendingRemotenessChange> change = new PendingRemotenessChange(
-      this, promise, aPendingSwitchId, aReplaceBrowsingContext);
+  RefPtr<PendingRemotenessChange> change =
+      new PendingRemotenessChange(this, promise, aPendingSwitchId,
+                                  aReplaceBrowsingContext, aSpecificGroupId);
   mPendingRemotenessChange = change;
 
   // Call `prepareToChangeRemoteness` in parallel with starting a new process

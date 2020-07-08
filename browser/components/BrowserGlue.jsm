@@ -453,7 +453,7 @@ let JSWINDOWACTORS = {
 
     // Only matching web pages, as opposed to internal about:, chrome: or
     // resource: pages. See https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/Match_patterns
-    matches: ["*://*/*"],
+    matches: ["*://*/*", "file:///*"],
     messageManagerGroups: ["browsers"],
     allFrames: true,
   },
@@ -2092,6 +2092,32 @@ BrowserGlue.prototype = {
 
     Services.prefs.addObserver(PREF_ENABLED, _checkHTTPSOnlyPref);
     _checkHTTPSOnlyPref();
+
+    const PREF_PBM_WAS_ENABLED =
+      "dom.security.https_only_mode_ever_enabled_pbm";
+    const PREF_PBM_ENABLED = "dom.security.https_only_mode_pbm";
+
+    const _checkHTTPSOnlyPBMPref = async () => {
+      const enabledPBM = Services.prefs.getBoolPref(PREF_PBM_ENABLED, false);
+      const was_enabledPBM = Services.prefs.getBoolPref(
+        PREF_PBM_WAS_ENABLED,
+        false
+      );
+      let valuePBM = 0;
+      if (enabledPBM) {
+        valuePBM = 1;
+        Services.prefs.setBoolPref(PREF_PBM_WAS_ENABLED, true);
+      } else if (was_enabledPBM) {
+        valuePBM = 2;
+      }
+      Services.telemetry.scalarSet(
+        "security.https_only_mode_enabled_pbm",
+        valuePBM
+      );
+    };
+
+    Services.prefs.addObserver(PREF_PBM_ENABLED, _checkHTTPSOnlyPBMPref);
+    _checkHTTPSOnlyPBMPref();
   },
 
   _monitorPioneerPref() {
@@ -2124,6 +2150,52 @@ BrowserGlue.prototype = {
     Services.prefs.addObserver(PREF_PIONEER_ID, _checkPioneerPref);
     Services.wm.addListener(windowListener);
     _checkPioneerPref();
+  },
+
+  _monitorPioneerStudies() {
+    const STUDY_ADDON_COLLECTION_KEY = "pioneer-study-addons";
+    const PREF_PIONEER_NEW_STUDIES_AVAILABLE =
+      "toolkit.telemetry.pioneer-new-studies-available";
+
+    const _badgeIcon = async () => {
+      for (let win of Services.wm.getEnumerator("navigator:browser")) {
+        win.document
+          .getElementById("pioneer-button")
+          .querySelector(".toolbarbutton-badge")
+          .classList.add("feature-callout");
+      }
+    };
+
+    const windowListener = {
+      onOpenWindow(xulWindow) {
+        const win = xulWindow.docShell.domWindow;
+        win.addEventListener("load", () => {
+          const pioneerButton = win.document.getElementById("pioneer-button");
+          if (pioneerButton) {
+            const badge = pioneerButton.querySelector(".toolbarbutton-badge");
+            if (
+              Services.prefs.getBoolPref(
+                PREF_PIONEER_NEW_STUDIES_AVAILABLE,
+                false
+              )
+            ) {
+              badge.classList.add("feature-callout");
+            } else {
+              badge.classList.remove("feature-callout");
+            }
+          }
+        });
+      },
+      onCloseWindow() {},
+    };
+
+    Services.prefs.addObserver(PREF_PIONEER_NEW_STUDIES_AVAILABLE, _badgeIcon);
+
+    RemoteSettings(STUDY_ADDON_COLLECTION_KEY).on("sync", async event => {
+      Services.prefs.setBoolPref(PREF_PIONEER_NEW_STUDIES_AVAILABLE, true);
+    });
+
+    Services.wm.addListener(windowListener);
   },
 
   _showNewInstallModal() {
@@ -2217,6 +2289,7 @@ BrowserGlue.prototype = {
     this._monitorWebcompatReporterPref();
     this._monitorHTTPSOnlyPref();
     this._monitorPioneerPref();
+    this._monitorPioneerStudies();
 
     let pService = Cc["@mozilla.org/toolkit/profile-service;1"].getService(
       Ci.nsIToolkitProfileService

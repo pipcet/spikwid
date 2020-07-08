@@ -41,20 +41,11 @@ static const void* GetItemPtrFromJarURI(nsIJARURI* aJAR, uint32_t* aLength) {
   if (!file) {
     return nullptr;
   }
-  RefPtr<nsZipArchive> archive = Omnijar::GetReader(file);
+  RefPtr<CacheAwareZipReader> archive = Omnijar::GetReader(file);
   if (archive) {
     nsCString path;
     aJAR->GetJAREntry(path);
-    nsZipItem* item = archive->GetItem(path.get());
-    if (item && item->Compression() == 0 && item->Size() > 0) {
-      // We do NOT own this data, but it won't go away until the omnijar
-      // file is closed during shutdown.
-      const uint8_t* data = archive->GetData(item);
-      if (data) {
-        *aLength = item->Size();
-        return data;
-      }
-    }
+    return archive->GetData(path.get(), aLength);
   }
   return nullptr;
 }
@@ -179,8 +170,18 @@ nsHyphenator::nsHyphenator(nsIURI* aURI, bool aHyphenateCapitalized)
     // remains zero; mDict is not a pointer to the raw data but an opaque
     // reference to a Rust object, and can only be freed by passing it to
     // mapped_hyph_free_dictionary().
+    // (This case occurs in unpackaged developer builds.)
     nsAutoCString path;
     aURI->GetFilePath(path);
+#if XP_WIN
+    // GetFilePath returns the path with an unexpected leading slash (like
+    // "/c:/path/to/firefox/...") that may prevent it being found if it's an
+    // absolute Windows path starting with a drive letter.
+    // So check for this case and strip the slash.
+    if (path.Length() > 2 && path[0] == '/' && path[2] == ':') {
+      path.Cut(0, 1);
+    }
+#endif
     UniquePtr<const HyphDic> dic(mapped_hyph_load_dictionary(path.get()));
     if (dic) {
       mDict = AsVariant(std::move(dic));

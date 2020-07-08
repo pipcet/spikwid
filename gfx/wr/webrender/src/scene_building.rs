@@ -24,22 +24,21 @@ use crate::intern::Interner;
 use crate::internal_types::{FastHashMap, FastHashSet, LayoutPrimitiveInfo, Filter};
 use crate::picture::{Picture3DContext, PictureCompositeMode, PicturePrimitive, PictureOptions, SliceId};
 use crate::picture::{BlitReason, OrderedPictureChild, PrimitiveList, ClusterFlags, TileCacheParams};
-use crate::prim_store::PrimitiveInstance;
+use crate::prim_store::{PrimitiveInstance, register_prim_chase_id};
 use crate::prim_store::{PrimitiveInstanceKind, NinePatchDescriptor, PrimitiveStore};
 use crate::prim_store::{InternablePrimitive, SegmentInstanceIndex, PictureIndex};
-use crate::prim_store::{register_prim_chase_id, get_line_decoration_size};
-use crate::prim_store::{SpaceSnapper};
 use crate::prim_store::backdrop::Backdrop;
 use crate::prim_store::borders::{ImageBorder, NormalBorderPrim};
 use crate::prim_store::gradient::{GradientStopKey, LinearGradient, RadialGradient, RadialGradientParams, ConicGradient, ConicGradientParams};
 use crate::prim_store::image::{Image, YuvImage};
-use crate::prim_store::line_dec::{LineDecoration, LineDecorationCacheKey};
+use crate::prim_store::line_dec::{LineDecoration, LineDecorationCacheKey, get_line_decoration_size};
 use crate::prim_store::picture::{Picture, PictureCompositeKey, PictureKey};
 use crate::prim_store::text_run::TextRun;
 use crate::render_backend::SceneView;
 use crate::resource_cache::ImageRequest;
 use crate::scene::{Scene, BuiltScene, SceneStats, StackingContextHelpers};
 use crate::scene_builder_thread::Interners;
+use crate::space::SpaceSnapper;
 use crate::spatial_node::{StickyFrameInfo, ScrollFrameKind};
 use euclid::approxeq::ApproxEq;
 use std::{f32, mem, usize, ops};
@@ -450,9 +449,7 @@ impl<'a> SceneBuilder<'a> {
         &mut self,
         main_prim_list: &mut PrimitiveList,
     ) {
-        if !self.config.global_enable_picture_caching {
-            return;
-        }
+        profile_scope!("setup_picture_caching");
 
         // Ensure that setup_picture_caching has executed
         debug_assert!(self.picture_caching_initialized);
@@ -984,6 +981,8 @@ impl<'a> SceneBuilder<'a> {
     ) {
         match *item.item() {
             DisplayItem::Image(ref info) => {
+                profile_scope!("image");
+
                 let (layout, _, spatial_node_index, clip_chain_id) = self.process_common_properties_with_bounds(
                     &info.common,
                     &info.bounds,
@@ -1002,6 +1001,8 @@ impl<'a> SceneBuilder<'a> {
                 );
             }
             DisplayItem::RepeatingImage(ref info) => {
+                profile_scope!("repeating_image");
+
                 let (layout, unsnapped_rect, spatial_node_index, clip_chain_id) = self.process_common_properties_with_bounds(
                     &info.common,
                     &info.bounds,
@@ -1026,6 +1027,8 @@ impl<'a> SceneBuilder<'a> {
                 );
             }
             DisplayItem::YuvImage(ref info) => {
+                profile_scope!("yuv_image");
+
                 let (layout, _, spatial_node_index, clip_chain_id) = self.process_common_properties_with_bounds(
                     &info.common,
                     &info.bounds,
@@ -1043,6 +1046,8 @@ impl<'a> SceneBuilder<'a> {
                 );
             }
             DisplayItem::Text(ref info) => {
+                profile_scope!("text");
+
                 // TODO(aosmond): Snapping text primitives does not make much sense, given the
                 // primitive bounds and clip are supposed to be conservative, not definitive.
                 // E.g. they should be able to grow and not impact the output. However there
@@ -1065,6 +1070,8 @@ impl<'a> SceneBuilder<'a> {
                 );
             }
             DisplayItem::Rectangle(ref info) => {
+                profile_scope!("rect");
+
                 let (layout, _, spatial_node_index, clip_chain_id) = self.process_common_properties_with_bounds(
                     &info.common,
                     &info.bounds,
@@ -1078,6 +1085,8 @@ impl<'a> SceneBuilder<'a> {
                 );
             }
             DisplayItem::HitTest(ref info) => {
+                profile_scope!("hit_test");
+
                 let (layout, _, spatial_node_index, clip_chain_id) = self.process_common_properties(
                     &info.common,
                     None,
@@ -1091,6 +1100,8 @@ impl<'a> SceneBuilder<'a> {
                 );
             }
             DisplayItem::ClearRectangle(ref info) => {
+                profile_scope!("clear");
+
                 let (layout, _, spatial_node_index, clip_chain_id) = self.process_common_properties_with_bounds(
                     &info.common,
                     &info.bounds,
@@ -1103,6 +1114,8 @@ impl<'a> SceneBuilder<'a> {
                 );
             }
             DisplayItem::Line(ref info) => {
+                profile_scope!("line");
+
                 let (layout, _, spatial_node_index, clip_chain_id) = self.process_common_properties_with_bounds(
                     &info.common,
                     &info.area,
@@ -1119,6 +1132,8 @@ impl<'a> SceneBuilder<'a> {
                 );
             }
             DisplayItem::Gradient(ref info) => {
+                profile_scope!("gradient");
+
                 let (layout, unsnapped_rect, spatial_node_index, clip_chain_id) = self.process_common_properties_with_bounds(
                     &info.common,
                     &info.bounds,
@@ -1150,6 +1165,8 @@ impl<'a> SceneBuilder<'a> {
                 }
             }
             DisplayItem::RadialGradient(ref info) => {
+                profile_scope!("radial");
+
                 let (layout, unsnapped_rect, spatial_node_index, clip_chain_id) = self.process_common_properties_with_bounds(
                     &info.common,
                     &info.bounds,
@@ -1183,6 +1200,8 @@ impl<'a> SceneBuilder<'a> {
                 );
             }
             DisplayItem::ConicGradient(ref info) => {
+                profile_scope!("conic");
+
                 let (layout, unsnapped_rect, spatial_node_index, clip_chain_id) = self.process_common_properties_with_bounds(
                     &info.common,
                     &info.bounds,
@@ -1216,6 +1235,8 @@ impl<'a> SceneBuilder<'a> {
                 );
             }
             DisplayItem::BoxShadow(ref info) => {
+                profile_scope!("box_shadow");
+
                 let (layout, _, spatial_node_index, clip_chain_id) = self.process_common_properties_with_bounds(
                     &info.common,
                     &info.box_bounds,
@@ -1234,6 +1255,8 @@ impl<'a> SceneBuilder<'a> {
                 );
             }
             DisplayItem::Border(ref info) => {
+                profile_scope!("border");
+
                 let (layout, _, spatial_node_index, clip_chain_id) = self.process_common_properties_with_bounds(
                     &info.common,
                     &info.bounds,
@@ -1248,6 +1271,8 @@ impl<'a> SceneBuilder<'a> {
                 );
             }
             DisplayItem::Iframe(ref info) => {
+                profile_scope!("iframe");
+
                 let space = self.get_space(info.space_and_clip.spatial_id);
                 self.build_iframe(
                     info,
@@ -1255,6 +1280,8 @@ impl<'a> SceneBuilder<'a> {
                 );
             }
             DisplayItem::ImageMaskClip(ref info) => {
+                profile_scope!("image_clip");
+
                 let parent_space = self.get_space(info.parent_space_and_clip.spatial_id);
                 let current_offset = self.current_offset(parent_space);
 
@@ -1270,6 +1297,8 @@ impl<'a> SceneBuilder<'a> {
                 );
             }
             DisplayItem::RoundedRectClip(ref info) => {
+                profile_scope!("rounded_clip");
+
                 let parent_space = self.get_space(info.parent_space_and_clip.spatial_id);
                 let current_offset = self.current_offset(parent_space);
 
@@ -1281,6 +1310,8 @@ impl<'a> SceneBuilder<'a> {
                 );
             }
             DisplayItem::RectClip(ref info) => {
+                profile_scope!("rect_clip");
+
                 let parent_space = self.get_space(info.parent_space_and_clip.spatial_id);
                 let current_offset = self.current_offset(parent_space);
                 let clip_rect = info.clip_rect.translate(current_offset);
@@ -1292,6 +1323,8 @@ impl<'a> SceneBuilder<'a> {
                 );
             }
             DisplayItem::Clip(ref info) => {
+                profile_scope!("clip");
+
                 let parent_space = self.get_space(info.parent_space_and_clip.spatial_id);
                 let current_offset = self.current_offset(parent_space);
                 let clip_region = ClipRegion::create_for_clip_node(
@@ -1302,6 +1335,8 @@ impl<'a> SceneBuilder<'a> {
                 self.add_clip_node(info.id, &info.parent_space_and_clip, clip_region);
             }
             DisplayItem::ClipChain(ref info) => {
+                profile_scope!("clip_chain");
+
                 let parent = info.parent.map_or(ClipId::root(pipeline_id), |id| ClipId::ClipChain(id));
                 let mut instances: SmallVec<[ClipInstance; 4]> = SmallVec::new();
 
@@ -1317,6 +1352,8 @@ impl<'a> SceneBuilder<'a> {
                 );
             },
             DisplayItem::ScrollFrame(ref info) => {
+                profile_scope!("scrollframe");
+
                 let parent_space = self.get_space(info.parent_space_and_clip.spatial_id);
                 self.build_scroll_frame(
                     info,
@@ -1325,6 +1362,8 @@ impl<'a> SceneBuilder<'a> {
                 );
             }
             DisplayItem::StickyFrame(ref info) => {
+                profile_scope!("stickyframe");
+
                 let parent_space = self.get_space(info.parent_spatial_id);
                 self.build_sticky_frame(
                     info,
@@ -1332,6 +1371,8 @@ impl<'a> SceneBuilder<'a> {
                 );
             }
             DisplayItem::BackdropFilter(ref info) => {
+                profile_scope!("backdrop");
+
                 let (layout, _, spatial_node_index, clip_chain_id) = self.process_common_properties(
                     &info.common,
                     None,
@@ -1371,6 +1412,8 @@ impl<'a> SceneBuilder<'a> {
             }
 
             DisplayItem::PushShadow(info) => {
+                profile_scope!("push_shadow");
+
                 let spatial_node_index = self.get_space(info.space_and_clip.spatial_id);
                 let clip_chain_id = self.get_clip_chain(
                     info.space_and_clip.clip_id,
@@ -1384,6 +1427,8 @@ impl<'a> SceneBuilder<'a> {
                 );
             }
             DisplayItem::PopAllShadows => {
+                profile_scope!("pop_all_shadows");
+
                 self.pop_all_shadows();
             }
         }
@@ -1639,6 +1684,8 @@ impl<'a> SceneBuilder<'a> {
         flags: StackingContextFlags,
         device_pixel_scale: DevicePixelScale,
     ) {
+        profile_scope!("push_stacking_context");
+
         // Check if this stacking context is the root of a pipeline, and the caller
         // has requested it as an output frame.
         let is_pipeline_root =
@@ -1809,6 +1856,8 @@ impl<'a> SceneBuilder<'a> {
     }
 
     pub fn pop_stacking_context(&mut self) {
+        profile_scope!("pop_stacking_context");
+
         let mut stacking_context = self.sc_stack.pop().unwrap();
 
         if stacking_context.clip_id.is_some() {
@@ -2503,8 +2552,12 @@ impl<'a> SceneBuilder<'a> {
                         // detect this and mark the picture to be drawn directly into the
                         // parent picture, which avoids an intermediate surface and blur.
                         let blur_filter = Filter::Blur(std_deviation);
-                        let composite_mode = PictureCompositeMode::Filter(blur_filter);
-                        let composite_mode_key = Some(composite_mode.clone()).into();
+                        let composite_mode = if blur_filter.is_noop() {
+                            None
+                        } else {
+                            Some(PictureCompositeMode::Filter(blur_filter))
+                        };
+                        let composite_mode_key = composite_mode.clone().into();
 
                         // Pass through configuration information about whether WR should
                         // do the bounding rect inflation for text shadows.
@@ -2516,7 +2569,7 @@ impl<'a> SceneBuilder<'a> {
                         let shadow_pic_index = PictureIndex(self.prim_store.pictures
                             .alloc()
                             .init(PicturePrimitive::new_image(
-                                Some(composite_mode),
+                                composite_mode,
                                 Picture3DContext::Out,
                                 None,
                                 is_passthrough,
@@ -3405,7 +3458,7 @@ impl<'a> SceneBuilder<'a> {
         // For each filter, create a new image with that composite mode.
         let mut current_filter_data_index = 0;
         for filter in &mut filter_ops {
-            let composite_mode = Some(match *filter {
+            let composite_mode = match filter {
                 Filter::ComponentTransfer => {
                     let filter_data =
                         &filter_datas[current_filter_data_index];
@@ -3431,11 +3484,17 @@ impl<'a> SceneBuilder<'a> {
                         let handle = self.interners
                             .filter_data
                             .intern(&filter_data_key, || ());
-                        PictureCompositeMode::ComponentTransferFilter(handle)
+                        Some(PictureCompositeMode::ComponentTransferFilter(handle))
                     }
                 }
-                _ => PictureCompositeMode::Filter(filter.clone()),
-            });
+                _ => {
+                    if filter.is_noop() {
+                        None
+                    } else {
+                        Some(PictureCompositeMode::Filter(filter.clone()))
+                    }
+                }
+            };
 
             let mut prim_list = PrimitiveList::empty();
             prim_list.add_prim(
@@ -3630,6 +3689,8 @@ impl FlattenedStackingContext {
         clip_store: &ClipStore,
         quality_settings: &QualitySettings,
     ) -> usize {
+        profile_scope!("init_picture_caching");
+
         struct SliceInfo {
             cluster_index: usize,
             scroll_root: SpatialNodeIndex,

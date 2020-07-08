@@ -25,7 +25,7 @@
 #include "nsContentUtils.h"
 #include "nsDebug.h"
 #include "nsFocusManager.h"
-#include "nsFrame.h"
+#include "nsIFrame.h"
 #include "nsFrameSelection.h"
 #include "nsGenericHTMLElement.h"
 #include "nsIHapticFeedback.h"
@@ -902,9 +902,8 @@ void AccessibleCaretManager::ChangeFocusToOrClearOldFocus(
 nsresult AccessibleCaretManager::SelectWord(nsIFrame* aFrame,
                                             const nsPoint& aPoint) const {
   SetSelectionDragState(true);
-  nsFrame* frame = static_cast<nsFrame*>(aFrame);
-  nsresult rs = frame->SelectByTypeAtPoint(mPresShell->GetPresContext(), aPoint,
-                                           eSelectWord, eSelectWord, 0);
+  nsresult rs = aFrame->SelectByTypeAtPoint(
+      mPresShell->GetPresContext(), aPoint, eSelectWord, eSelectWord, 0);
 
   SetSelectionDragState(false);
   ClearMaintainedSelection();

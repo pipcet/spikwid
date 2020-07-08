@@ -16,11 +16,11 @@ use crate::gpu_types::{PrimitiveInstanceData, RasterizationSpace, GlyphInstance}
 use crate::gpu_types::{PrimitiveHeader, PrimitiveHeaderIndex, TransformPaletteId, TransformPalette};
 use crate::gpu_types::{ImageBrushData, get_shader_opacity};
 use crate::internal_types::{FastHashMap, SavedTargetIndex, Swizzle, TextureSource, Filter};
-use crate::picture::{Picture3DContext, PictureCompositeMode, PicturePrimitive};
+use crate::picture::{Picture3DContext, PictureCompositeMode, PicturePrimitive, ClusterFlags};
 use crate::prim_store::{DeferredResolve, PrimitiveInstanceKind};
 use crate::prim_store::{VisibleGradientTile, PrimitiveInstance, PrimitiveOpacity, SegmentInstanceIndex};
 use crate::prim_store::{BrushSegment, ClipMaskKind, ClipTaskIndex};
-use crate::prim_store::{VECS_PER_SEGMENT, SpaceMapper};
+use crate::prim_store::VECS_PER_SEGMENT;
 use crate::prim_store::image::ImageSource;
 use crate::render_target::RenderTargetContext;
 use crate::render_task_graph::{RenderTaskId, RenderTaskGraph};
@@ -28,6 +28,7 @@ use crate::render_task::RenderTaskAddress;
 use crate::renderer::{BlendMode, ImageBufferKind, ShaderColorMode};
 use crate::renderer::{BLOCKS_PER_UV_RECT, MAX_VERTEX_TEXTURE_WIDTH};
 use crate::resource_cache::{CacheItem, GlyphFetchResult, ImageRequest, ResourceCache};
+use crate::space::SpaceMapper;
 use crate::visibility::{PrimitiveVisibilityIndex, PrimitiveVisibilityMask, PrimitiveVisibility, PrimitiveVisibilityFlags};
 use smallvec::SmallVec;
 use std::{f32, i32, usize};
@@ -762,6 +763,9 @@ impl BatchBuilder {
         composite_state: &mut CompositeState,
     ) {
         for cluster in &pic.prim_list.clusters {
+            if !cluster.flags.contains(ClusterFlags::IS_VISIBLE) {
+                continue;
+            }
             for prim_instance in &pic.prim_list.prim_instances[cluster.prim_range()] {
                 if prim_instance.visibility_info == PrimitiveVisibilityIndex::INVALID {
                     continue;

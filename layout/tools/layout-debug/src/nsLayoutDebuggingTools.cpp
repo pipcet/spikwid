@@ -18,7 +18,7 @@
 #include "nsIContent.h"
 
 #include "nsViewManager.h"
-#include "nsFrame.h"
+#include "nsIFrame.h"
 
 #include "nsLayoutCID.h"
 
@@ -85,7 +85,7 @@ nsLayoutDebuggingTools::Init(mozIDOMWindow* aWin) {
 NS_IMETHODIMP
 nsLayoutDebuggingTools::SetVisualDebugging(bool aVisualDebugging) {
 #ifdef DEBUG
-  nsFrame::ShowFrameBorders(aVisualDebugging);
+  nsIFrame::ShowFrameBorders(aVisualDebugging);
   ForceRefresh();
 #endif
   return NS_OK;
@@ -94,7 +94,7 @@ nsLayoutDebuggingTools::SetVisualDebugging(bool aVisualDebugging) {
 NS_IMETHODIMP
 nsLayoutDebuggingTools::SetVisualEventDebugging(bool aVisualEventDebugging) {
 #ifdef DEBUG
-  nsFrame::ShowEventTargetFrameBorder(aVisualEventDebugging);
+  nsIFrame::ShowEventTargetFrameBorder(aVisualEventDebugging);
   ForceRefresh();
 #endif
   return NS_OK;
