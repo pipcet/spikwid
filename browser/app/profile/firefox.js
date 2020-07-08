@@ -377,76 +377,8 @@ pref("browser.urlbar.maxHistoricalSearchSuggestions", 2);
 pref("browser.urlbar.suggest.bookmark",             true);
 pref("browser.urlbar.suggest.history",              true);
 pref("browser.urlbar.suggest.openpage",             true);
-pref("browser.urlbar.suggest.remotetab",            true);
-pref("browser.urlbar.suggest.searches",             true);
-pref("browser.urlbar.suggest.topsites",             true);
-pref("browser.urlbar.suggest.engines",              true);
-pref("browser.urlbar.suggest.calculator",           false);
-
-// When `browser.urlbar.bestMatch.enabled` is true, this controls whether best
-// match results are shown in the urlbar. This pref is exposed to the user in
-// the UI, and it's sticky so that its user-branch value persists regardless of
-// whatever Firefox Suggest experiments or rollouts the user is enrolled in over
-// time.
-pref("browser.urlbar.suggest.bestmatch", true, sticky);
-
-// Whether non-sponsored quick suggest results are shown in the urlbar. This
-// pref is exposed to the user in the UI, and it's sticky so that its
-// user-branch value persists regardless of whatever Firefox Suggest scenarios,
-// with their various default-branch values, the user is enrolled in over time.
-pref("browser.urlbar.suggest.quicksuggest.nonsponsored", false, sticky);
-
-// Whether sponsored quick suggest results are shown in the urlbar. This pref is
-// exposed to the user in the UI, and it's sticky so that its user-branch value
-// persists regardless of whatever Firefox Suggest scenarios, with their various
-// default-branch values, the user is enrolled in over time.
-pref("browser.urlbar.suggest.quicksuggest.sponsored", false, sticky);
-
-// Whether data collection is enabled for quick suggest results in the urlbar.
-// This pref is exposed to the user in the UI, and it's sticky so that its
-// user-branch value persists regardless of whatever Firefox Suggest scenarios,
-// with their various default-branch values, the user is enrolled in over time.
-pref("browser.urlbar.quicksuggest.dataCollection.enabled", false, sticky);
-
-// Whether the quick suggest feature in the urlbar is enabled.
-pref("browser.urlbar.quicksuggest.enabled", false);
-
-// Whether to show the QuickSuggest onboarding dialog.
-pref("browser.urlbar.quicksuggest.shouldShowOnboardingDialog", true);
-
-// Show QuickSuggest onboarding dialog on the nth browser restarts.
-pref("browser.urlbar.quicksuggest.showOnboardingDialogAfterNRestarts", 0);
-
-// The indexes of the sponsored and non-sponsored quick suggest results within
-// the general results group.
-pref("browser.urlbar.quicksuggest.sponsoredIndex", -1);
-pref("browser.urlbar.quicksuggest.nonSponsoredIndex", -1);
-
-// Whether Remote Settings is enabled as a quick suggest source.
-pref("browser.urlbar.quicksuggest.remoteSettings.enabled", true);
-
-// Whether quick suggest results can be shown in position specified in the
-// suggestions.
-pref("browser.urlbar.quicksuggest.allowPositionInSuggestions", true);
-
-// Whether non-sponsored quick suggest results are subject to impression
-// frequency caps.
-pref("browser.urlbar.quicksuggest.impressionCaps.nonSponsoredEnabled", false);
-
-// Whether sponsored quick suggest results are subject to impression frequency
-// caps.
-pref("browser.urlbar.quicksuggest.impressionCaps.sponsoredEnabled", false);
-
-// Whether unit conversion is enabled.
-#ifdef NIGHTLY_BUILD
-pref("browser.urlbar.unitConversion.enabled", true);
-#else
-pref("browser.urlbar.unitConversion.enabled", false);
-#endif
-
-// Whether to show search suggestions before general results like history and
-// bookmarks.
-pref("browser.urlbar.showSearchSuggestionsFirst", true);
+pref("browser.urlbar.suggest.searches",             false);
+pref("browser.urlbar.suggest.topsites",             false);
 
 // As a user privacy measure, don't fetch search suggestions if a pasted string
 // is longer than this.
