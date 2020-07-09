@@ -48,11 +48,6 @@ var gSearchResultsPane = {
       // Initialize other panes in an idle callback.
       window.requestIdleCallback(() => this.initializeCategories());
     }
-    let helpUrl =
-      Services.urlFormatter.formatURLPref("app.support.baseURL") +
-      "preferences";
-    let helpContainer = document.getElementById("need-help");
-    helpContainer.querySelector("a").href = helpUrl;
   },
 
   async handleEvent(event) {
