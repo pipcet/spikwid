@@ -380,16 +380,22 @@ class MOZ_STACK_CLASS ParserBase : public ParserSharedBase,
     friend class ParserBase;
     LifoAlloc::Mark mark;
     FunctionBox* traceListHead;
+    size_t funcDataLength;
   };
   Mark mark() const {
     Mark m;
     m.mark = alloc_.mark();
     m.traceListHead = compilationInfo_.traceListHead;
+    MOZ_ASSERT(compilationInfo_.funcData.length() ==
+               compilationInfo_.functions.length());
+    m.funcDataLength = compilationInfo_.funcData.length();
     return m;
   }
   void release(Mark m) {
     alloc_.release(m.mark);
     compilationInfo_.traceListHead = m.traceListHead;
+    compilationInfo_.funcData.get().shrinkTo(m.funcDataLength);
+    compilationInfo_.functions.get().shrinkTo(m.funcDataLength);
   }
 
  public:
@@ -564,16 +570,27 @@ class MOZ_STACK_CLASS PerHandlerParser : public ParserBase {
     return handler_.newPropertyAccess(expr, key);
   }
 
+ private:
+  FunctionBox* newFunctionBoxImpl(FunctionNodeType funNode, JSFunction* fun,
+                                  JSAtom* explicitName, FunctionFlags flags,
+                                  uint32_t toStringStart, Directives directives,
+                                  GeneratorKind generatorKind,
+                                  FunctionAsyncKind asyncKind,
+                                  TopLevelFunction isTopLevel);
+
+ public:
   FunctionBox* newFunctionBox(FunctionNodeType funNode, JSFunction* fun,
                               uint32_t toStringStart, Directives directives,
                               GeneratorKind generatorKind,
-                              FunctionAsyncKind asyncKind);
+                              FunctionAsyncKind asyncKind,
+                              TopLevelFunction isTopLevel);
 
   FunctionBox* newFunctionBox(FunctionNodeType funNode, HandleAtom explicitName,
                               FunctionFlags flags, uint32_t toStringStart,
                               Directives directives,
                               GeneratorKind generatorKind,
-                              FunctionAsyncKind asyncKind);
+                              FunctionAsyncKind asyncKind,
+                              TopLevelFunction isTopLevel);
 
  public:
   // ErrorReportMixin.

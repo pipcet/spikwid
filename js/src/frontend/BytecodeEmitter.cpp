@@ -2524,7 +2524,7 @@ bool BytecodeEmitter::emitFunctionScript(FunctionNode* funNode,
     }
   }
 
-  return fse.intoStencil(isTopLevel);
+  return fse.intoStencil();
 }
 
 bool BytecodeEmitter::emitDestructuringLHSRef(ParseNode* target,
@@ -10924,7 +10924,7 @@ bool BytecodeEmitter::intoScriptStencil(ScriptStencil* stencil) {
   // Update flags specific to functions.
   if (sc->isFunctionBox()) {
     FunctionBox* funbox = sc->asFunctionBox();
-    stencil->functionIndex.emplace(funbox->index());
+    MOZ_ASSERT(stencil->functionIndex.isSome());
     stencil->fieldInitializers = funbox->fieldInitializers;
 
     // Set flags that don't have direct flag representation within the

@@ -510,6 +510,9 @@ class MOZ_STACK_CLASS WSRunScanner {
       mRightWSType = WSType::TrailingWhiteSpaces;
     }
     bool EndsByNormalText() const { return mRightWSType == WSType::NormalText; }
+    bool EndsByTrailingWhiteSpaces() const {
+      return mRightWSType == WSType::TrailingWhiteSpaces;
+    }
     bool EndsBySpecialContent() const {
       return mRightWSType == WSType::SpecialContent;
     }
@@ -519,12 +522,50 @@ class MOZ_STACK_CLASS WSRunScanner {
              mRightWSType == WSType::OtherBlockBoundary;
     }
 
+    /**
+     * ComparePointWitWSFragment() compares aPoint with this fragment.
+     */
+    enum class PointPosition {
+      BeforeStartOfFragment,
+      StartOfFragment,
+      MiddleOfFragment,
+      EndOfFragment,
+      AfterEndOfFragment,
+      NotInSameDOMTree,
+    };
+    template <typename EditorDOMPointType>
+    PointPosition ComparePoint(const EditorDOMPointType& aPoint) const {
+      MOZ_ASSERT(aPoint.IsSetAndValid());
+      const EditorRawDOMPoint start = RawStartPoint();
+      if (start == aPoint) {
+        return PointPosition::StartOfFragment;
+      }
+      const EditorRawDOMPoint end = RawEndPoint();
+      if (end == aPoint) {
+        return PointPosition::EndOfFragment;
+      }
+      const bool startIsBeforePoint = start.IsBefore(aPoint);
+      const bool pointIsBeforeEnd = aPoint.IsBefore(end);
+      if (startIsBeforePoint && pointIsBeforeEnd) {
+        return PointPosition::MiddleOfFragment;
+      }
+      if (startIsBeforePoint) {
+        return PointPosition::AfterEndOfFragment;
+      }
+      if (pointIsBeforeEnd) {
+        return PointPosition::BeforeStartOfFragment;
+      }
+      return PointPosition::NotInSameDOMTree;
+    }
+
    private:
     WSType mLeftWSType, mRightWSType;
     Visible mIsVisible;
     StartOfHardLine mIsStartOfHardLine;
     EndOfHardLine mIsEndOfHardLine;
   };
+
+  using PointPosition = WSFragment::PointPosition;
 
   using WSFragmentArray = AutoTArray<WSFragment, 3>;
   const WSFragmentArray& WSFragmentArrayRef() const {
@@ -747,6 +788,12 @@ class MOZ_STACK_CLASS WSRunScanner {
     template <typename EditorDOMRangeType>
     EditorDOMRangeType GetInvisibleTrailingWhiteSpaceRange() const;
 
+    /**
+     * CreateWSFragmentForVisibleAndMiddleOfLine() creates WSFragment whose
+     * `IsVisibleAndMiddleOfHardLine()` returns true.
+     */
+    Maybe<WSFragment> CreateWSFragmentForVisibleAndMiddleOfLine() const;
+
    private:
     BoundaryData mStart;
     BoundaryData mEnd;
@@ -940,9 +987,13 @@ class MOZ_STACK_CLASS WSRunObject final : public WSRunScanner {
   // makes any needed conversion to adjacent ws to retain its significance.
   MOZ_CAN_RUN_SCRIPT nsresult DeleteWSForward();
 
-  // AdjustWhiteSpace examines the ws object for nbsp's that can
-  // be safely converted to regular ascii space and converts them.
-  MOZ_CAN_RUN_SCRIPT nsresult AdjustWhiteSpace();
+  /**
+   * NormalizeWhiteSpacesAround() tries to normalize white-space sequence
+   * around aScanStartPoint.
+   */
+  template <typename EditorDOMPointType>
+  [[nodiscard]] MOZ_CAN_RUN_SCRIPT static nsresult NormalizeWhiteSpacesAround(
+      HTMLEditor& aHTMLEditor, const EditorDOMPointType& aSacnStartPoint);
 
  protected:
   MOZ_CAN_RUN_SCRIPT nsresult PrepareToDeleteRangePriv(WSRunObject* aEndObject);

@@ -22,6 +22,7 @@
 #include "mozilla/ExtensionPolicyService.h"
 #include "mozilla/Logging.h"
 #include "mozilla/dom/Document.h"
+#include "LoadInfo.h"
 #include "mozilla/StaticPrefs_extensions.h"
 #include "mozilla/StaticPrefs_dom.h"
 
@@ -812,6 +813,9 @@ void nsContentSecurityUtils::AssertAboutPageHasCSP(Document* aDocument) {
   bool foundObjectSrc = false;
   bool foundUnsafeEval = false;
   bool foundUnsafeInline = false;
+  bool foundScriptSrc = false;
+  bool foundWorkerSrc = false;
+  bool foundWebScheme = false;
   if (csp) {
     uint32_t policyCount = 0;
     csp->GetPolicyCount(&policyCount);
@@ -829,6 +833,16 @@ void nsContentSecurityUtils::AssertAboutPageHasCSP(Document* aDocument) {
       }
       if (parsedPolicyStr.Find("'unsafe-inline'") >= 0) {
         foundUnsafeInline = true;
+      }
+      if (parsedPolicyStr.Find("script-src") >= 0) {
+        foundScriptSrc = true;
+      }
+      if (parsedPolicyStr.Find("worker-src") >= 0) {
+        foundWorkerSrc = true;
+      }
+      if (parsedPolicyStr.Find("http:") >= 0 ||
+          parsedPolicyStr.Find("https:") >= 0) {
+        foundWebScheme = true;
       }
     }
   }
@@ -875,6 +889,38 @@ void nsContentSecurityUtils::AssertAboutPageHasCSP(Document* aDocument) {
              "about: page must contain a CSP including default-src");
   MOZ_ASSERT(foundObjectSrc,
              "about: page must contain a CSP denying object-src");
+
+  // preferences and downloads allow legacy inline scripts through hash src.
+  MOZ_ASSERT(!foundScriptSrc ||
+                 StringBeginsWith(aboutSpec, "about:preferences"_ns) ||
+                 StringBeginsWith(aboutSpec, "about:downloads"_ns) ||
+                 StringBeginsWith(aboutSpec, "about:newtab"_ns) ||
+                 StringBeginsWith(aboutSpec, "about:logins"_ns) ||
+                 StringBeginsWith(aboutSpec, "about:compat"_ns) ||
+                 StringBeginsWith(aboutSpec, "about:welcome"_ns) ||
+                 StringBeginsWith(aboutSpec, "about:profiling"_ns) ||
+                 StringBeginsWith(aboutSpec, "about:studies"_ns) ||
+                 StringBeginsWith(aboutSpec, "about:home"_ns),
+             "about: page must not contain a CSP including script-src");
+
+  MOZ_ASSERT(!foundWorkerSrc,
+             "about: page must not contain a CSP including worker-src");
+
+  // addons, preferences, debugging, newinstall, pioneer, devtools all have
+  // to allow some remote web resources
+  MOZ_ASSERT(!foundWebScheme ||
+                 StringBeginsWith(aboutSpec, "about:preferences"_ns) ||
+                 StringBeginsWith(aboutSpec, "about:addons"_ns) ||
+                 StringBeginsWith(aboutSpec, "about:newtab"_ns) ||
+                 StringBeginsWith(aboutSpec, "about:debugging"_ns) ||
+                 StringBeginsWith(aboutSpec, "about:newinstall"_ns) ||
+                 StringBeginsWith(aboutSpec, "about:pioneer"_ns) ||
+                 StringBeginsWith(aboutSpec, "about:compat"_ns) ||
+                 StringBeginsWith(aboutSpec, "about:logins"_ns) ||
+                 StringBeginsWith(aboutSpec, "about:home"_ns) ||
+                 StringBeginsWith(aboutSpec, "about:welcome"_ns) ||
+                 StringBeginsWith(aboutSpec, "about:devtools"_ns),
+             "about: page must not contain a CSP including a web scheme");
 
   if (aDocument->IsExtensionPage()) {
     // Extensions have two CSP policies applied where the baseline CSP
@@ -1029,4 +1075,80 @@ bool nsContentSecurityUtils::ValidateScriptFilename(const char* aFilename,
   // we're only reporting Telemetry. In the future we will assert in debug
   // builds and return false to prevent execution in non-debug builds.
   return true;
+}
+
+/* static */
+void nsContentSecurityUtils::LogMessageToConsole(nsIHttpChannel* aChannel,
+                                                 const char* aMsg) {
+  nsCOMPtr<nsIURI> uri;
+  nsresult rv = aChannel->GetURI(getter_AddRefs(uri));
+  if (NS_FAILED(rv)) {
+    return;
+  }
+
+  uint64_t windowID = 0;
+  rv = aChannel->GetTopLevelContentWindowId(&windowID);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return;
+  }
+  if (!windowID) {
+    nsCOMPtr<nsILoadInfo> loadInfo = aChannel->LoadInfo();
+    loadInfo->GetInnerWindowID(&windowID);
+  }
+
+  nsAutoString localizedMsg;
+  nsAutoCString spec;
+  uri->GetSpec(spec);
+  AutoTArray<nsString, 1> params = {NS_ConvertUTF8toUTF16(spec)};
+  rv = nsContentUtils::FormatLocalizedString(
+      nsContentUtils::eSECURITY_PROPERTIES, aMsg, params, localizedMsg);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return;
+  }
+
+  nsContentUtils::ReportToConsoleByWindowID(
+      localizedMsg, nsIScriptError::warningFlag, "Security"_ns, windowID, uri);
+}
+
+/* static */
+bool nsContentSecurityUtils::IsDownloadAllowed(
+    nsIChannel* aChannel, const nsAutoCString& aMimeTypeGuess) {
+  MOZ_ASSERT(aChannel, "IsDownloadAllowed without channel?");
+  if (!StaticPrefs::dom_block_download_insecure()) {
+    return true;
+  }
+
+  nsCOMPtr<nsILoadInfo> loadInfo = aChannel->LoadInfo();
+  if (loadInfo->TriggeringPrincipal()->IsSystemPrincipal()) {
+    return true;
+  }
+
+  nsCOMPtr<nsIURI> contentLocation;
+  aChannel->GetURI(getter_AddRefs(contentLocation));
+
+  nsCOMPtr<nsIPrincipal> loadingPrincipal = loadInfo->GetLoadingPrincipal();
+  if (!loadingPrincipal) {
+    loadingPrincipal = loadInfo->TriggeringPrincipal();
+  }
+  // Creating a fake Loadinfo that is just used for the MCB check.
+  nsCOMPtr<nsILoadInfo> secCheckLoadInfo =
+      new LoadInfo(loadingPrincipal, loadInfo->TriggeringPrincipal(), nullptr,
+                   nsILoadInfo::SEC_ONLY_FOR_EXPLICIT_CONTENTSEC_CHECK,
+                   nsIContentPolicy::TYPE_OTHER);
+
+  int16_t decission = nsIContentPolicy::ACCEPT;
+  nsMixedContentBlocker::ShouldLoad(false,  //  aHadInsecureImageRedirect
+                                    contentLocation,   //  aContentLocation,
+                                    secCheckLoadInfo,  //  aLoadinfo
+                                    aMimeTypeGuess,    //  aMimeGuess,
+                                    &decission         // aDecision
+  );
+  if (decission == nsIContentPolicy::ACCEPT) {
+    return true;
+  }
+  nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(aChannel);
+  if (httpChannel) {
+    LogMessageToConsole(httpChannel, "MixedContentBlockedDownload");
+  }
+  return false;
 }

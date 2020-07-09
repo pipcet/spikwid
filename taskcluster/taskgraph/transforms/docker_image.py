@@ -9,7 +9,6 @@ import os
 import re
 import json
 
-from collections import deque
 import six
 from six import text_type
 import taskgraph
@@ -81,27 +80,6 @@ docker_image_schema = Schema({
 transforms.add_validate(docker_image_schema)
 
 
-def order_image_tasks(config, tasks):
-    """Iterate image tasks in an order where parent images come first."""
-    pending = deque(tasks)
-    task_names = {task['name'] for task in pending}
-    emitted = set()
-    while True:
-        try:
-            task = pending.popleft()
-        except IndexError:
-            break
-        parent = task.get('parent')
-        if parent and parent not in emitted:
-            if parent not in task_names:
-                raise Exception('Missing parent image for {}-{}: {}'.format(
-                    config.kind, task['name'], parent))
-            pending.append(task)
-            continue
-        emitted.add(task['name'])
-        yield task
-
-
 @transforms.add
 def fill_template(config, tasks):
     available_packages = set()
@@ -111,13 +89,11 @@ def fill_template(config, tasks):
         name = task.label.replace('packages-', '')
         available_packages.add(name)
 
-    context_hashes = {}
-
     if not taskgraph.fast and config.write_artifacts:
         if not os.path.isdir(CONTEXTS_DIR):
             os.makedirs(CONTEXTS_DIR)
 
-    for task in order_image_tasks(config, tasks):
+    for task in tasks:
         image_name = task.pop('name')
         job_symbol = task.pop('symbol')
         args = task.pop('args', {})
@@ -149,7 +125,6 @@ def fill_template(config, tasks):
             context_hash = '0'*40
         digest_data = [context_hash]
         digest_data += [json.dumps(args, sort_keys=True)]
-        context_hashes[image_name] = context_hash
 
         description = 'Build the docker image {} for use by dependent tasks'.format(
             image_name)
@@ -211,8 +186,13 @@ def fill_template(config, tasks):
 
         worker = taskdesc['worker']
 
-        worker['docker-image'] = IMAGE_BUILDER_IMAGE
-        digest_data.append("image-builder-image:{}".format(IMAGE_BUILDER_IMAGE))
+        if image_name == 'image_builder':
+            worker['docker-image'] = IMAGE_BUILDER_IMAGE
+            digest_data.append("image-builder-image:{}".format(IMAGE_BUILDER_IMAGE))
+        else:
+            worker['docker-image'] = {'in-tree': 'image_builder'}
+            deps = taskdesc.setdefault('dependencies', {})
+            deps['docker-image'] = 'build-docker-image-image_builder'
 
         if packages:
             deps = taskdesc.setdefault('dependencies', {})

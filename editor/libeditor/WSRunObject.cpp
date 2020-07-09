@@ -65,6 +65,12 @@ template WSScanResult WSRunScanner::ScanNextVisibleNodeOrBlockBoundaryFrom(
     const EditorDOMPoint& aPoint) const;
 template WSScanResult WSRunScanner::ScanNextVisibleNodeOrBlockBoundaryFrom(
     const EditorRawDOMPoint& aPoint) const;
+template nsresult WSRunObject::NormalizeWhiteSpacesAround(
+    HTMLEditor& aHTMLEditor, const EditorDOMPoint& aScanStartPoint);
+template nsresult WSRunObject::NormalizeWhiteSpacesAround(
+    HTMLEditor& aHTMLEditor, const EditorRawDOMPoint& aScanStartPoint);
+template nsresult WSRunObject::NormalizeWhiteSpacesAround(
+    HTMLEditor& aHTMLEditor, const EditorDOMPointInText& aScanStartPoint);
 
 template <typename PT, typename CT>
 WSRunScanner::WSRunScanner(const HTMLEditor* aHTMLEditor,
@@ -199,6 +205,14 @@ already_AddRefed<Element> WSRunObject::InsertBreak(
   const WSFragment* beforeRun = FindNearestFragment(aPointToInsert, false);
   const WSFragment* afterRun = FindNearestFragment(aPointToInsert, true);
 
+  const Maybe<const WSFragment> visibleWSFragmentInMiddleOfLine =
+      TextFragmentData(mStart, mEnd, mNBSPData, mPRE)
+          .CreateWSFragmentForVisibleAndMiddleOfLine();
+  const PointPosition pointPositionWithVisibleWhiteSpaces =
+      visibleWSFragmentInMiddleOfLine.isSome()
+          ? visibleWSFragmentInMiddleOfLine.ref().ComparePoint(aPointToInsert)
+          : PointPosition::NotInSameDOMTree;
+
   EditorDOMPoint pointToInsert(aPointToInsert);
   {
     // Some scoping for AutoTrackDOMPoint.  This will track our insertion
@@ -220,9 +234,13 @@ already_AddRefed<Element> WSRunObject::InsertBreak(
             "HTMLEditor::DeleteTextAndTextNodesWithTransaction() failed");
         return nullptr;
       }
-    } else if (afterRun->IsVisibleAndMiddleOfHardLine()) {
-      // Need to determine if break at front of non-nbsp run.  If so, convert
-      // run to nbsp.
+    }
+    // If new line will start with visible white-spaces, it needs to be start
+    // with an NBSP.
+    else if (pointPositionWithVisibleWhiteSpaces ==
+                 PointPosition::StartOfFragment ||
+             pointPositionWithVisibleWhiteSpaces ==
+                 PointPosition::MiddleOfFragment) {
       EditorDOMPointInText atNextCharOfInsertionPoint =
           GetInclusiveNextEditableCharPoint(pointToInsert);
       if (atNextCharOfInsertionPoint.IsSet() &&
@@ -261,10 +279,18 @@ already_AddRefed<Element> WSRunObject::InsertBreak(
             "WSRunObject::DeleteTextAndTextNodesWithTransaction() failed");
         return nullptr;
       }
-    } else if (beforeRun->IsVisibleAndMiddleOfHardLine()) {
-      // Try to change an nbsp to a space, just to prevent nbsp proliferation
-      nsresult rv = MaybeReplacePreviousNBSPWithASCIIWhiteSpace(*beforeRun,
-                                                                pointToInsert);
+    }
+    // If the `<br>` element is put immediately after an NBSP, it should be
+    // replaced with an ASCII white-space.
+    else if (pointPositionWithVisibleWhiteSpaces ==
+                 PointPosition::MiddleOfFragment ||
+             pointPositionWithVisibleWhiteSpaces ==
+                 PointPosition::EndOfFragment) {
+      // XXX If the DOM tree has been changed above, pointToInsert` and/or
+      //     `visibleWSFragmentInMiddleOfLine` may be invalid.  So, we may do
+      //     something wrong here.
+      nsresult rv = MaybeReplacePreviousNBSPWithASCIIWhiteSpace(
+          visibleWSFragmentInMiddleOfLine.ref(), pointToInsert);
       if (NS_FAILED(rv)) {
         NS_WARNING(
             "WSRunObject::MaybeReplacePreviousNBSPWithASCIIWhiteSpace() "
@@ -600,34 +626,27 @@ nsresult WSRunObject::DeleteWSForward() {
 template <typename PT, typename CT>
 WSScanResult WSRunScanner::ScanPreviousVisibleNodeOrBlockBoundaryFrom(
     const EditorDOMPointBase<PT, CT>& aPoint) const {
-  // Find first visible thing before the point.  Position
-  // outVisNode/outVisOffset just _after_ that thing.  If we don't find
-  // anything return start of ws.
   MOZ_ASSERT(aPoint.IsSet());
 
-  WSFragmentArray::index_type index = FindNearestFragmentIndex(aPoint, false);
-  if (index != WSFragmentArray::NoIndex) {
-    // Is there a visible run there or earlier?
-    for (WSFragmentArray::index_type i = index + 1; i; i--) {
-      const WSFragment& fragment = WSFragmentArrayRef()[i - 1];
-      if (!fragment.IsVisibleAndMiddleOfHardLine()) {
-        continue;
-      }
-      EditorDOMPointInText atPreviousChar =
-          GetPreviousEditableCharPoint(aPoint);
-      // When it's a non-empty text node, return it.
-      if (atPreviousChar.IsSet() && !atPreviousChar.IsContainerEmpty()) {
-        MOZ_ASSERT(!atPreviousChar.IsEndOfContainer());
-        return WSScanResult(
-            atPreviousChar.NextPoint(),
-            atPreviousChar.IsCharASCIISpace() || atPreviousChar.IsCharNBSP()
-                ? WSType::NormalWhiteSpaces
-                : WSType::NormalText);
-      }
-      // If no text node, keep looking.  We should eventually fall out of loop
+  // If the range has visible text and start of the visible text is before
+  // aPoint, return previous character in the text.
+  Maybe<WSFragment> visibleWSFragmentInMiddleOfLine =
+      TextFragmentData(mStart, mEnd, mNBSPData, mPRE)
+          .CreateWSFragmentForVisibleAndMiddleOfLine();
+  if (visibleWSFragmentInMiddleOfLine.isSome() &&
+      visibleWSFragmentInMiddleOfLine.ref().RawStartPoint().IsBefore(aPoint)) {
+    EditorDOMPointInText atPreviousChar = GetPreviousEditableCharPoint(aPoint);
+    // When it's a non-empty text node, return it.
+    if (atPreviousChar.IsSet() && !atPreviousChar.IsContainerEmpty()) {
+      MOZ_ASSERT(!atPreviousChar.IsEndOfContainer());
+      return WSScanResult(atPreviousChar.NextPoint(),
+                          atPreviousChar.IsCharASCIISpaceOrNBSP()
+                              ? WSType::NormalWhiteSpaces
+                              : WSType::NormalText);
     }
   }
 
+  // Otherwise, return the start of the range.
   if (mStart.GetReasonContent() != mStart.PointRef().GetContainer()) {
     // In this case, mStart.PointRef().Offset() is not meaningful.
     return WSScanResult(mStart.GetReasonContent(), mStart.RawReason());
@@ -638,34 +657,28 @@ WSScanResult WSRunScanner::ScanPreviousVisibleNodeOrBlockBoundaryFrom(
 template <typename PT, typename CT>
 WSScanResult WSRunScanner::ScanNextVisibleNodeOrBlockBoundaryFrom(
     const EditorDOMPointBase<PT, CT>& aPoint) const {
-  // Find first visible thing after the point.  Position
-  // outVisNode/outVisOffset just _before_ that thing.  If we don't find
-  // anything return end of ws.
   MOZ_ASSERT(aPoint.IsSet());
 
-  WSFragmentArray::index_type index = FindNearestFragmentIndex(aPoint, true);
-  if (index != WSFragmentArray::NoIndex) {
-    // Is there a visible run there or later?
-    for (size_t i = index; i < WSFragmentArrayRef().Length(); i++) {
-      const WSFragment& fragment = WSFragmentArrayRef()[i];
-      if (!fragment.IsVisibleAndMiddleOfHardLine()) {
-        continue;
-      }
-      EditorDOMPointInText atNextChar =
-          GetInclusiveNextEditableCharPoint(aPoint);
-      // When it's a non-empty text node, return it.
-      if (atNextChar.IsSet() && !atNextChar.IsContainerEmpty()) {
-        return WSScanResult(
-            atNextChar,
-            !atNextChar.IsEndOfContainer() &&
-                    (atNextChar.IsCharASCIISpace() || atNextChar.IsCharNBSP())
-                ? WSType::NormalWhiteSpaces
-                : WSType::NormalText);
-      }
-      // If no text node, keep looking.  We should eventually fall out of loop
+  // If the range has visible text and aPoint equals or is before the end of the
+  // visible text, return inclusive next character in the text.
+  Maybe<WSFragment> visibleWSFragmentInMiddleOfLine =
+      TextFragmentData(mStart, mEnd, mNBSPData, mPRE)
+          .CreateWSFragmentForVisibleAndMiddleOfLine();
+  if (visibleWSFragmentInMiddleOfLine.isSome() &&
+      aPoint.EqualsOrIsBefore(
+          visibleWSFragmentInMiddleOfLine.ref().RawEndPoint())) {
+    EditorDOMPointInText atNextChar = GetInclusiveNextEditableCharPoint(aPoint);
+    // When it's a non-empty text node, return it.
+    if (atNextChar.IsSet() && !atNextChar.IsContainerEmpty()) {
+      return WSScanResult(
+          atNextChar,
+          !atNextChar.IsEndOfContainer() && atNextChar.IsCharASCIISpaceOrNBSP()
+              ? WSType::NormalWhiteSpaces
+              : WSType::NormalText);
     }
   }
 
+  // Otherwise, return the end of the range.
   if (mEnd.GetReasonContent() != mEnd.PointRef().GetContainer()) {
     // In this case, mEnd.PointRef().Offset() is not meaningful.
     return WSScanResult(mEnd.GetReasonContent(), mEnd.RawReason());
@@ -673,25 +686,31 @@ WSScanResult WSRunScanner::ScanNextVisibleNodeOrBlockBoundaryFrom(
   return WSScanResult(mEnd.PointRef(), mEnd.RawReason());
 }
 
-nsresult WSRunObject::AdjustWhiteSpace() {
+// static
+template <typename EditorDOMPointType>
+nsresult WSRunObject::NormalizeWhiteSpacesAround(
+    HTMLEditor& aHTMLEditor, const EditorDOMPointType& aScanStartPoint) {
+  WSRunObject wsRunObject(aHTMLEditor, aScanStartPoint);
   // this routine examines a run of ws and tries to get rid of some unneeded
   // nbsp's, replacing them with regular ascii space if possible.  Keeping
   // things simple for now and just trying to fix up the trailing ws in the run.
-  if (!mNBSPData.FoundNBSP()) {
+  if (!wsRunObject.mNBSPData.FoundNBSP()) {
     // nothing to do!
     return NS_OK;
   }
-  for (const WSFragment& fragment : WSFragmentArrayRef()) {
-    if (!fragment.IsVisibleAndMiddleOfHardLine()) {
-      continue;
-    }
-    nsresult rv = NormalizeWhiteSpacesAtEndOf(fragment);
-    if (NS_FAILED(rv)) {
-      NS_WARNING("WSRunObject::NormalizeWhiteSpacesAtEndOf() failed");
-      return rv;
-    }
+  Maybe<WSFragment> visibleWSFragmentInMiddleOfLine =
+      TextFragmentData(wsRunObject.mStart, wsRunObject.mEnd,
+                       wsRunObject.mNBSPData, wsRunObject.mPRE)
+          .CreateWSFragmentForVisibleAndMiddleOfLine();
+  if (visibleWSFragmentInMiddleOfLine.isNothing()) {
+    return NS_OK;
   }
-  return NS_OK;
+
+  nsresult rv = wsRunObject.NormalizeWhiteSpacesAtEndOf(
+      visibleWSFragmentInMiddleOfLine.ref());
+  NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+                       "WSRunObject::NormalizeWhiteSpacesAtEndOf() failed");
+  return rv;
 }
 
 //--------------------------------------------------------------------------------------------
@@ -1025,6 +1044,112 @@ WSRunScanner::TextFragmentData::GetInvisibleTrailingWhiteSpaceRange() const {
                             mEnd.PointRef());
 }
 
+Maybe<WSRunScanner::WSFragment>
+WSRunScanner::TextFragmentData::CreateWSFragmentForVisibleAndMiddleOfLine()
+    const {
+  WSFragment fragment;
+  if (mIsPreformatted ||
+      ((StartsFromNormalText() || StartsFromSpecialContent()) &&
+       (EndsByNormalText() || EndsBySpecialContent() || EndsByBRElement()))) {
+    fragment.MarkAsVisible();
+    if (mStart.PointRef().IsSet()) {
+      fragment.mStartNode = mStart.PointRef().GetContainer();
+      fragment.mStartOffset = mStart.PointRef().Offset();
+    }
+    fragment.SetStartFrom(mStart.RawReason());
+    if (mEnd.PointRef().IsSet()) {
+      fragment.mEndNode = mEnd.PointRef().GetContainer();
+      fragment.mEndOffset = mEnd.PointRef().Offset();
+    }
+    fragment.SetEndBy(mEnd.RawReason());
+    return Some(fragment);
+  }
+
+  // If all of the range is invisible leading or trailing white-spaces,
+  // there is no visible content.
+  const auto leadingWhiteSpaceRange =
+      GetInvisibleLeadingWhiteSpaceRange<EditorRawDOMRange>();
+  const bool maybeHaveLeadingWhiteSpaces =
+      leadingWhiteSpaceRange.StartRef().IsSet() ||
+      leadingWhiteSpaceRange.EndRef().IsSet();
+  if (maybeHaveLeadingWhiteSpaces &&
+      leadingWhiteSpaceRange.StartRef() == mStart.PointRef() &&
+      leadingWhiteSpaceRange.EndRef() == mEnd.PointRef()) {
+    return Nothing();
+  }
+  const auto trailingWhiteSpaceRange =
+      GetInvisibleTrailingWhiteSpaceRange<EditorRawDOMRange>();
+  const bool maybeHaveTrailingWhiteSpaces =
+      trailingWhiteSpaceRange.StartRef().IsSet() ||
+      trailingWhiteSpaceRange.EndRef().IsSet();
+  if (maybeHaveTrailingWhiteSpaces &&
+      trailingWhiteSpaceRange.StartRef() == mStart.PointRef() &&
+      trailingWhiteSpaceRange.EndRef() == mEnd.PointRef()) {
+    return Nothing();
+  }
+
+  if (!StartsFromHardLineBreak()) {
+    fragment.MarkAsVisible();
+    if (mStart.PointRef().IsSet()) {
+      fragment.mStartNode = mStart.PointRef().GetContainer();
+      fragment.mStartOffset = mStart.PointRef().Offset();
+    }
+    fragment.SetStartFrom(mStart.RawReason());
+    if (!maybeHaveTrailingWhiteSpaces) {
+      fragment.mEndNode = mEnd.PointRef().GetContainer();
+      fragment.mEndOffset = mEnd.PointRef().Offset();
+      fragment.SetEndBy(mEnd.RawReason());
+      // XXX At here, `EndsByBlockBoundary()` may be true.  So, the method name,
+      //     "MiddleOfHardLine" is wrong.
+      return Some(fragment);
+    }
+    if (trailingWhiteSpaceRange.StartRef().IsSet()) {
+      fragment.mEndNode = trailingWhiteSpaceRange.StartRef().GetContainer();
+      fragment.mEndOffset = trailingWhiteSpaceRange.StartRef().Offset();
+    }
+    fragment.SetEndByTrailingWhiteSpaces();
+    return Some(fragment);
+  }
+
+  MOZ_ASSERT(StartsFromHardLineBreak());
+  MOZ_ASSERT(maybeHaveLeadingWhiteSpaces);
+
+  fragment.MarkAsVisible();
+  if (leadingWhiteSpaceRange.EndRef().IsSet()) {
+    fragment.mStartNode = leadingWhiteSpaceRange.EndRef().GetContainer();
+    fragment.mStartOffset = leadingWhiteSpaceRange.EndRef().Offset();
+  }
+  fragment.SetStartFromLeadingWhiteSpaces();
+  if (!EndsByBlockBoundary()) {
+    // then no trailing ws.  this normal run ends the overall ws run.
+    if (mEnd.PointRef().IsSet()) {
+      fragment.mEndNode = mEnd.PointRef().GetContainer();
+      fragment.mEndOffset = mEnd.PointRef().Offset();
+    }
+    fragment.SetEndBy(mEnd.RawReason());
+    return Some(fragment);
+  }
+
+  MOZ_ASSERT(EndsByBlockBoundary());
+
+  if (!maybeHaveTrailingWhiteSpaces) {
+    // normal ws runs right up to adjacent block (nbsp next to block)
+    fragment.mEndNode = mEnd.PointRef().GetContainer();
+    fragment.mEndOffset = mEnd.PointRef().Offset();
+    fragment.SetEndBy(mEnd.RawReason());
+    // XXX At here, `EndsByBlockBoundary()` is true.  So, the method name,
+    //     "MiddleOfHardLine" is wrong.
+    return Some(fragment);
+  }
+
+  if (trailingWhiteSpaceRange.StartRef().IsSet()) {
+    fragment.mEndNode = trailingWhiteSpaceRange.StartRef().GetContainer();
+    fragment.mEndOffset = trailingWhiteSpaceRange.StartRef().Offset();
+  }
+  fragment.SetEndByTrailingWhiteSpaces();
+  return Some(fragment);
+}
+
 void WSRunScanner::TextFragmentData::InitializeWSFragmentArray(
     WSFragmentArray& aFragments) const {
   MOZ_ASSERT(aFragments.IsEmpty());
@@ -1039,18 +1164,7 @@ void WSRunScanner::TextFragmentData::InitializeWSFragmentArray(
   if (mIsPreformatted ||
       ((StartsFromNormalText() || StartsFromSpecialContent()) &&
        (EndsByNormalText() || EndsBySpecialContent() || EndsByBRElement()))) {
-    WSFragment* startRun = aFragments.AppendElement();
-    startRun->MarkAsVisible();
-    if (mStart.PointRef().IsSet()) {
-      startRun->mStartNode = mStart.PointRef().GetContainer();
-      startRun->mStartOffset = mStart.PointRef().Offset();
-    }
-    startRun->SetStartFrom(mStart.RawReason());
-    if (mEnd.PointRef().IsSet()) {
-      startRun->mEndNode = mEnd.PointRef().GetContainer();
-      startRun->mEndOffset = mEnd.PointRef().Offset();
-    }
-    startRun->SetEndBy(mEnd.RawReason());
+    aFragments.AppendElement(CreateWSFragmentForVisibleAndMiddleOfLine().ref());
     return;
   }
 
@@ -1115,31 +1229,16 @@ void WSRunScanner::TextFragmentData::InitializeWSFragmentArray(
   }
 
   if (!StartsFromHardLineBreak()) {
-    WSFragment* startRun = aFragments.AppendElement();
-    startRun->MarkAsVisible();
-    if (mStart.PointRef().IsSet()) {
-      startRun->mStartNode = mStart.PointRef().GetContainer();
-      startRun->mStartOffset = mStart.PointRef().Offset();
-    }
-    startRun->SetStartFrom(mStart.RawReason());
-    if (!maybeHaveTrailingWhiteSpaces) {
-      startRun->mEndNode = mEnd.PointRef().GetContainer();
-      startRun->mEndOffset = mEnd.PointRef().Offset();
-      startRun->SetEndBy(mEnd.RawReason());
+    aFragments.AppendElement(CreateWSFragmentForVisibleAndMiddleOfLine().ref());
+    if (!aFragments[0].EndsByTrailingWhiteSpaces()) {
       return;
     }
-
-    if (trailingWhiteSpaceRange.StartRef().IsSet()) {
-      startRun->mEndNode = trailingWhiteSpaceRange.StartRef().GetContainer();
-      startRun->mEndOffset = trailingWhiteSpaceRange.StartRef().Offset();
-    }
-    startRun->SetEndByTrailingWhiteSpaces();
 
     // set up next run
     WSFragment* lastRun = aFragments.AppendElement();
     lastRun->MarkAsEndOfHardLine();
-    lastRun->mStartNode = startRun->mEndNode;
-    lastRun->mStartOffset = startRun->mEndOffset;
+    lastRun->mStartNode = aFragments[0].mEndNode;
+    lastRun->mStartOffset = aFragments[0].mEndOffset;
     lastRun->SetStartFromNormalWhiteSpaces();
     // XXX Why don't we set end boundary here??
     lastRun->SetEndBy(mEnd.RawReason());
@@ -1163,40 +1262,16 @@ void WSRunScanner::TextFragmentData::InitializeWSFragmentArray(
   startRun->SetEndByNormalWiteSpaces();
 
   // set up next run
-  WSFragment* normalRun = aFragments.AppendElement();
-  normalRun->MarkAsVisible();
-  normalRun->mStartNode = startRun->mEndNode;
-  normalRun->mStartOffset = startRun->mEndOffset;
-  normalRun->SetStartFromLeadingWhiteSpaces();
-  if (!EndsByBlockBoundary()) {
-    // then no trailing ws.  this normal run ends the overall ws run.
-    if (mEnd.PointRef().IsSet()) {
-      normalRun->mEndNode = mEnd.PointRef().GetContainer();
-      normalRun->mEndOffset = mEnd.PointRef().Offset();
-    }
-    normalRun->SetEndBy(mEnd.RawReason());
+  aFragments.AppendElement(CreateWSFragmentForVisibleAndMiddleOfLine().ref());
+  if (!aFragments[1].EndsByTrailingWhiteSpaces()) {
     return;
   }
-
-  if (!maybeHaveTrailingWhiteSpaces) {
-    // normal ws runs right up to adjacent block (nbsp next to block)
-    normalRun->mEndNode = mEnd.PointRef().GetContainer();
-    normalRun->mEndOffset = mEnd.PointRef().Offset();
-    normalRun->SetEndBy(mEnd.RawReason());
-    return;
-  }
-
-  if (trailingWhiteSpaceRange.StartRef().IsSet()) {
-    normalRun->mEndNode = trailingWhiteSpaceRange.StartRef().GetContainer();
-    normalRun->mEndOffset = trailingWhiteSpaceRange.StartRef().Offset();
-  }
-  normalRun->SetEndByTrailingWhiteSpaces();
 
   // set up next run
   WSFragment* lastRun = aFragments.AppendElement();
   lastRun->MarkAsEndOfHardLine();
-  lastRun->mStartNode = normalRun->mEndNode;
-  lastRun->mStartOffset = normalRun->mEndOffset;
+  lastRun->mStartNode = aFragments[1].mEndNode;
+  lastRun->mStartOffset = aFragments[1].mEndOffset;
   lastRun->SetStartFromNormalWhiteSpaces();
   if (trailingWhiteSpaceRange.EndRef().IsSet()) {
     lastRun->mEndNode = trailingWhiteSpaceRange.EndRef().GetContainer();
@@ -1321,18 +1396,28 @@ nsresult WSRunObject::PrepareToDeleteRangePriv(WSRunObject* aEndObject) {
 }
 
 nsresult WSRunObject::PrepareToSplitAcrossBlocksPriv() {
-  // used to prepare ws to be split across two blocks.  The main issue
-  // here is make sure normalWS doesn't end up becoming non-significant
-  // leading or trailing ws after the split.
+  // used to prepare white-space sequence to be split across two blocks.
+  // The main issue here is make sure white-spaces around the split point
+  // doesn't end up becoming non-significant leading or trailing ws after
+  // the split.
+  Maybe<WSFragment> visibleWSFragmentInMiddleOfLine =
+      TextFragmentData(mStart, mEnd, mNBSPData, mPRE)
+          .CreateWSFragmentForVisibleAndMiddleOfLine();
+  if (visibleWSFragmentInMiddleOfLine.isNothing()) {
+    return NS_OK;  // No visible white-space sequence.
+  }
 
-  // get the runs before and after selection
-  const WSFragment* beforeRun = FindNearestFragment(mScanStartPoint, false);
-  const WSFragment* afterRun = FindNearestFragment(mScanStartPoint, true);
+  PointPosition pointPositionWithVisibleWhiteSpaces =
+      visibleWSFragmentInMiddleOfLine.ref().ComparePoint(mScanStartPoint);
 
-  // adjust normal ws in afterRun if needed
-  if (afterRun && afterRun->IsVisibleAndMiddleOfHardLine()) {
-    // make sure leading char of following ws is an nbsp, so that it will show
-    // up
+  // XXX If we split white-space sequence, the following code modify the DOM
+  //     tree twice.  This is not reasonable and the latter change may touch
+  //     wrong position.  We should do this once.
+
+  // If we insert block boundary to start or middle of the white-space sequence,
+  // the character at the insertion point needs to be an NBSP.
+  if (pointPositionWithVisibleWhiteSpaces == PointPosition::StartOfFragment ||
+      pointPositionWithVisibleWhiteSpaces == PointPosition::MiddleOfFragment) {
     EditorDOMPointInText atNextCharOfStart =
         GetInclusiveNextEditableCharPoint(mScanStartPoint);
     if (atNextCharOfStart.IsSet() && !atNextCharOfStart.IsEndOfContainer() &&
@@ -1356,10 +1441,11 @@ nsresult WSRunObject::PrepareToSplitAcrossBlocksPriv() {
     }
   }
 
-  // adjust normal ws in beforeRun if needed
-  if (beforeRun && beforeRun->IsVisibleAndMiddleOfHardLine()) {
-    // make sure trailing char of starting ws is an nbsp, so that it will show
-    // up
+  // If we insert block boundary to middle of or end of the white-space
+  // sequence, the previous character at the insertion point needs to be an
+  // NBSP.
+  if (pointPositionWithVisibleWhiteSpaces == PointPosition::MiddleOfFragment ||
+      pointPositionWithVisibleWhiteSpaces == PointPosition::EndOfFragment) {
     EditorDOMPointInText atPreviousCharOfStart =
         GetPreviousEditableCharPoint(mScanStartPoint);
     if (atPreviousCharOfStart.IsSet() &&
@@ -1747,10 +1833,7 @@ char16_t WSRunScanner::GetCharAt(Text* aTextNode, int32_t aOffset) const {
 }
 
 nsresult WSRunObject::NormalizeWhiteSpacesAtEndOf(const WSFragment& aRun) {
-  // Check if it's a visible fragment in a hard line.
-  if (!aRun.IsVisibleAndMiddleOfHardLine()) {
-    return NS_ERROR_FAILURE;
-  }
+  MOZ_ASSERT(aRun.IsVisibleAndMiddleOfHardLine());
 
   // Remove this block if we ship Blink-compat white-space normalization.
   if (!StaticPrefs::editor_white_space_normalization_blink_compatible()) {

@@ -213,6 +213,15 @@ class LValue : public LInstructionHelper<BOX_PIECES, 0, 0> {
   Value value() const { return v_; }
 };
 
+class LNurseryObject : public LInstructionHelper<1, 0, 0> {
+ public:
+  LIR_HEADER(NurseryObject);
+
+  LNurseryObject() : LInstructionHelper(classOpcode) {}
+
+  MNurseryObject* mir() const { return mir_->toNurseryObject(); }
+};
+
 // Clone an object literal such as we are not modifying the object contained in
 // the sources.
 class LCloneLiteral : public LCallInstructionHelper<1, 1, 0> {
@@ -6107,6 +6116,37 @@ class LGuardShape : public LInstructionHelper<1, 1, 1> {
   }
   const LDefinition* temp() { return getTemp(0); }
   const MGuardShape* mir() const { return mir_->toGuardShape(); }
+};
+
+class LGuardProto : public LInstructionHelper<0, 2, 1> {
+ public:
+  LIR_HEADER(GuardProto)
+
+  LGuardProto(const LAllocation& obj, const LAllocation& expected,
+              const LDefinition& temp)
+      : LInstructionHelper(classOpcode) {
+    setOperand(0, obj);
+    setOperand(1, expected);
+    setTemp(0, temp);
+  }
+
+  const LAllocation* object() { return getOperand(0); }
+  const LAllocation* expected() { return getOperand(1); }
+  const LDefinition* temp() { return getTemp(0); }
+};
+
+class LGuardNullProto : public LInstructionHelper<0, 1, 1> {
+ public:
+  LIR_HEADER(GuardNullProto)
+
+  LGuardNullProto(const LAllocation& obj, const LDefinition& temp)
+      : LInstructionHelper(classOpcode) {
+    setOperand(0, obj);
+    setTemp(0, temp);
+  }
+
+  const LAllocation* object() { return getOperand(0); }
+  const LDefinition* temp() { return getTemp(0); }
 };
 
 class LGuardObjectGroup : public LInstructionHelper<1, 1, 1> {

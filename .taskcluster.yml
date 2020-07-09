@@ -1,6 +1,6 @@
 # yamllint disable rule:line-length
 # This file is rendered via JSON-e by
-# - hg-push - https://hg.mozilla.org/ci/ci-admin/file/tip/build-decision/src/build_decision/hg_push.py
+# - hg-push - https://hg.mozilla.org/ci/ci-admin/file/default/build-decision/src/build_decision/hg_push.py
 #   {
 #     tasks_for: 'hg-push',
 #     push: {owner, comment, pushlog_id, pushdate},
@@ -10,7 +10,7 @@
 #     ownTaskId: // taskId of the task that will be created
 #   }
 #
-# - cron tasks - https://hg.mozilla.org/ci/ci-admin/file/tip/build-decision/src/build_decision/cron/decision.py
+# - cron tasks - https://hg.mozilla.org/ci/ci-admin/file/default/build-decision/src/build_decision/cron/decision.py
 #   {
 #     tasks_for: 'cron',
 #     push: {revision, pushlog_id, pushdate, owner}
@@ -64,6 +64,7 @@ tasks:
                   then: {$fromNow: '28 days'}
                   else: {$fromNow: '1 year'}
               trustDomain: gecko
+              treeherder_link: '[Treeherder job](https://treeherder.mozilla.org/#/jobs?repo=${repository.project}&revision=${push.revision}&selectedTaskRun=${ownTaskId})'
           in:
               taskId: {$if: 'tasks_for != "action"', then: '${ownTaskId}'}
               taskGroupId:
@@ -84,7 +85,7 @@ tasks:
                       - $if: 'tasks_for == "hg-push"'
                         then:
                             name: "Gecko Decision Task"
-                            description: 'The task that creates all of the other tasks in the task graph'
+                            description: 'The task that creates all of the other tasks in the task graph (${treeherder_link})'
                         else:
                             $if: 'tasks_for == "action"'
                             then:
@@ -92,10 +93,12 @@ tasks:
                                 description: |
                                     ${action.description}
 
+                                    ${treeherder_link}
+
                                     Action triggered by clientID `${clientId}`
                             else:
                                 name: "Decision Task for cron job ${cron.job_name}"
-                                description: 'Created by a [cron task](https://firefox-ci-tc.services.mozilla.com/tasks/${cron.task_id})'
+                                description: 'Created by a [cron task](https://firefox-ci-tc.services.mozilla.com/tasks/${cron.task_id}) (${treeherder_link})'
 
               provisionerId: "${trustDomain}-${repository.level}"
               workerType: "decision"

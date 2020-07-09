@@ -280,6 +280,63 @@ class WarpCacheIR : public WarpOpSnapshot {
 #endif
 };
 
+// [SMDOC] Warp Nursery Object support
+//
+// CacheIR stub data can contain nursery allocated objects. This can happen for
+// example for GuardSpecificObject/GuardSpecificFunction or GuardProto.
+//
+// To support nursery GCs in parallel with off-thread compilation, we use the
+// following mechanism:
+//
+// * When WarpOracle copies stub data, it builds a Vector of nursery objects.
+//   The nursery object pointers in the stub data are replaced with the
+//   corresponding index into this Vector.
+//   See WarpScriptOracle::replaceNurseryPointers.
+//
+// * The Vector is copied to the snapshot and, at the end of compilation, to
+//   the IonScript. The Vector is only accessed on the main thread.
+//
+// * The MIR backend never accesses the raw JSObject*. Instead, it uses
+//   MNurseryObject which will load the object at runtime from the IonScript.
+//
+// WarpObjectField is a helper class to encode/decode a stub data field that
+// either stores an object or a nursery index.
+class WarpObjectField {
+  // This is a nursery index if the low bit is set. Else it's a JSObject*.
+  static constexpr uintptr_t NurseryIndexTag = 0x1;
+  static constexpr uintptr_t NurseryIndexShift = 1;
+
+  uintptr_t data_;
+
+  explicit WarpObjectField(uintptr_t data) : data_(data) {}
+
+ public:
+  static WarpObjectField fromData(uintptr_t data) {
+    return WarpObjectField(data);
+  }
+  static WarpObjectField fromObject(JSObject* obj) {
+    return WarpObjectField(uintptr_t(obj));
+  }
+  static WarpObjectField fromNurseryIndex(uint32_t index) {
+    uintptr_t data = (uintptr_t(index) << NurseryIndexShift) | NurseryIndexTag;
+    return WarpObjectField(data);
+  }
+
+  uintptr_t rawData() const { return data_; }
+
+  bool isNurseryIndex() const { return (data_ & NurseryIndexTag) != 0; }
+
+  uint32_t toNurseryIndex() const {
+    MOZ_ASSERT(isNurseryIndex());
+    return data_ >> NurseryIndexShift;
+  }
+
+  JSObject* toObject() const {
+    MOZ_ASSERT(!isNurseryIndex());
+    return reinterpret_cast<JSObject*>(data_);
+  }
+};
+
 // Template object for JSOp::Rest.
 class WarpRest : public WarpOpSnapshot {
   WarpGCPtr<ArrayObject*> templateObject_;
@@ -451,8 +508,14 @@ class WarpSnapshot : public TempObject {
 
   const WarpBailoutInfo bailoutInfo_;
 
+  // List of (originally) nursery-allocated objects. Must only be accessed on
+  // the main thread. See also WarpObjectField.
+  using NurseryObjectVector = Vector<JSObject*, 0, JitAllocPolicy>;
+  NurseryObjectVector nurseryObjects_;
+
  public:
-  explicit WarpSnapshot(JSContext* cx, WarpScriptSnapshot* script,
+  explicit WarpSnapshot(JSContext* cx, TempAllocator& alloc,
+                        WarpScriptSnapshot* script,
                         const WarpBailoutInfo& bailoutInfo);
 
   WarpScriptSnapshot* script() const { return script_; }
@@ -465,6 +528,9 @@ class WarpSnapshot : public TempObject {
   void trace(JSTracer* trc);
 
   const WarpBailoutInfo& bailoutInfo() const { return bailoutInfo_; }
+
+  NurseryObjectVector& nurseryObjects() { return nurseryObjects_; }
+  const NurseryObjectVector& nurseryObjects() const { return nurseryObjects_; }
 
 #ifdef JS_JITSPEW
   void dump() const;

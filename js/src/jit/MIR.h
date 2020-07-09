@@ -2606,18 +2606,19 @@ class MInitElemGetterSetter
   NAMED_OPERANDS((0, object), (1, idValue), (2, value))
 };
 
-// WrappedFunction wraps a JSFunction so it can safely be used off-thread.
-// In particular, a function's flags can be modified on the main thread as
-// functions are relazified and delazified, so we must be careful not to access
-// these flags off-thread.
+// WrappedFunction stores information about a function that can safely be used
+// off-thread. In particular, a function's flags can be modified on the main
+// thread as functions are relazified and delazified, so we must be careful not
+// to access these flags off-thread.
 class WrappedFunction : public TempObject {
-  CompilerFunction fun_;
+  // If this is a native function without a JitEntry, the JSFunction*.
+  CompilerFunction nativeFun_;
   uint16_t nargs_;
   js::FunctionFlags flags_;
 
  public:
   explicit WrappedFunction(JSFunction* fun);
-  WrappedFunction(JSFunction* fun, uint16_t nargs, FunctionFlags flags);
+  WrappedFunction(JSFunction* nativeFun, uint16_t nargs, FunctionFlags flags);
 
   // Note: When adding new accessors be sure to add consistency asserts
   // to the constructor.
@@ -2634,19 +2635,24 @@ class WrappedFunction : public TempObject {
   // These fields never change, they can be accessed off-main thread.
   JSNative native() const {
     MOZ_ASSERT(isNativeWithoutJitEntry());
-    return fun_->nativeUnchecked();
+    return nativeFun_->nativeUnchecked();
   }
   bool hasJitInfo() const {
-    return flags_.isBuiltinNative() && fun_->jitInfoUnchecked();
+    return flags_.isBuiltinNative() && nativeFun_->jitInfoUnchecked();
   }
   const JSJitInfo* jitInfo() const {
     MOZ_ASSERT(hasJitInfo());
-    return fun_->jitInfoUnchecked();
+    return nativeFun_->jitInfoUnchecked();
   }
 
-  JSFunction* rawJSFunction() const { return fun_; }
+  JSFunction* rawNativeJSFunction() const { return nativeFun_; }
 
-  bool appendRoots(MRootList& roots) const { return roots.append(fun_); }
+  bool appendRoots(MRootList& roots) const {
+    if (nativeFun_) {
+      return roots.append(nativeFun_);
+    }
+    return true;
+  }
 };
 
 class MCall : public MVariadicInstruction, public CallPolicy::Data {
@@ -9022,6 +9028,82 @@ class MGuardShape : public MUnaryInstruction, public SingleObjectPolicy::Data {
   }
 };
 
+// Guard the object's proto is |expected|.
+class MGuardProto : public MBinaryInstruction, public SingleObjectPolicy::Data {
+  MGuardProto(MDefinition* obj, MDefinition* expected)
+      : MBinaryInstruction(classOpcode, obj, expected) {
+    MOZ_ASSERT(expected->isConstant() || expected->isNurseryObject());
+    setGuard();
+    setMovable();
+    setResultType(MIRType::Object);
+    setResultTypeSet(obj->resultTypeSet());
+  }
+
+ public:
+  INSTRUCTION_HEADER(GuardProto)
+  TRIVIAL_NEW_WRAPPERS
+  NAMED_OPERANDS((0, object), (1, expected))
+
+  bool congruentTo(const MDefinition* ins) const override {
+    return congruentIfOperandsEqual(ins);
+  }
+
+  AliasSet getAliasSet() const override {
+    return AliasSet::Load(AliasSet::ObjectFields);
+  }
+};
+
+// Guard the object has no proto.
+class MGuardNullProto : public MUnaryInstruction,
+                        public SingleObjectPolicy::Data {
+  explicit MGuardNullProto(MDefinition* obj)
+      : MUnaryInstruction(classOpcode, obj) {
+    setGuard();
+    setMovable();
+    setResultType(MIRType::Object);
+    setResultTypeSet(obj->resultTypeSet());
+  }
+
+ public:
+  INSTRUCTION_HEADER(GuardNullProto)
+  TRIVIAL_NEW_WRAPPERS
+  NAMED_OPERANDS((0, object))
+
+  bool congruentTo(const MDefinition* ins) const override {
+    return congruentIfOperandsEqual(ins);
+  }
+  AliasSet getAliasSet() const override {
+    return AliasSet::Load(AliasSet::ObjectFields);
+  }
+};
+
+// Loads a specific JSObject* that was originally nursery-allocated.
+// See also WarpObjectField.
+class MNurseryObject : public MNullaryInstruction {
+  // Index in the Vector of objects stored in the WarpSnapshot.
+  uint32_t nurseryIndex_;
+
+  explicit MNurseryObject(uint32_t nurseryIndex)
+      : MNullaryInstruction(classOpcode), nurseryIndex_(nurseryIndex) {
+    setMovable();
+    setResultType(MIRType::Object);
+  }
+
+ public:
+  INSTRUCTION_HEADER(NurseryObject)
+  TRIVIAL_NEW_WRAPPERS
+
+  uint32_t nurseryIndex() const { return nurseryIndex_; }
+
+  bool congruentTo(const MDefinition* ins) const override {
+    if (!ins->isNurseryObject()) {
+      return false;
+    }
+    return nurseryIndex() == ins->toNurseryObject()->nurseryIndex();
+  }
+  AliasSet getAliasSet() const override { return AliasSet::None(); }
+};
+
 // Guard on a specific Value.
 class MGuardValue : public MUnaryInstruction, public BoxInputsPolicy::Data {
   Value expected_;
@@ -9172,7 +9254,7 @@ class MGuardObjectIdentity : public MBinaryInstruction,
                        bool bailOnEquality)
       : MBinaryInstruction(classOpcode, obj, expected),
         bailOnEquality_(bailOnEquality) {
-    MOZ_ASSERT(expected->isConstant());
+    MOZ_ASSERT(expected->isConstant() || expected->isNurseryObject());
     setGuard();
     setMovable();
     setResultType(MIRType::Object);
@@ -9209,7 +9291,7 @@ class MGuardSpecificFunction : public MBinaryInstruction,
       : MBinaryInstruction(classOpcode, obj, expected),
         nargs_(nargs),
         flags_(flags) {
-    MOZ_ASSERT(expected->isConstant());
+    MOZ_ASSERT(expected->isConstant() || expected->isNurseryObject());
     setGuard();
     setMovable();
     setResultType(MIRType::Object);

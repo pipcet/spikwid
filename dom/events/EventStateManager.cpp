@@ -3804,7 +3804,7 @@ static bool ShouldBlockCustomCursor(nsPresContext* aPresContext,
   // TODO(emilio, bug 1525561): In a fission world, we should have a better way
   // to find the event coordinates relative to the content area.
   nsPresContext* topLevel =
-      aPresContext->GetToplevelContentDocumentPresContext();
+      aPresContext->GetInProcessRootContentDocumentPresContext();
   if (!topLevel) {
     return false;
   }
@@ -3873,6 +3873,8 @@ static CursorImage ComputeCustomCursor(nsPresContext* aPresContext,
     if (!container) {
       continue;
     }
+    container = nsLayoutUtils::OrientImage(
+        container, aFrame.StyleVisibility()->mImageOrientation);
     Maybe<gfx::Point> specifiedHotspot =
         image.has_hotspot ? Some(gfx::Point{image.hotspot_x, image.hotspot_y})
                           : Nothing();

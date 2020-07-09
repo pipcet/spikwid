@@ -1000,6 +1000,15 @@ int64_t CacheIRStubInfo::getStubRawInt64(ICStub* stub, uint32_t offset) const {
   return getStubRawInt64(stubData, offset);
 }
 
+void CacheIRStubInfo::replaceStubRawWord(uint8_t* stubData, uint32_t offset,
+                                         uintptr_t oldWord,
+                                         uintptr_t newWord) const {
+  MOZ_ASSERT(uintptr_t(stubData) % sizeof(uintptr_t) == 0);
+  uintptr_t* addr = reinterpret_cast<uintptr_t*>(stubData + offset);
+  MOZ_ASSERT(*addr == oldWord);
+  *addr = newWord;
+}
+
 template <class Stub, class T>
 GCPtr<T>& CacheIRStubInfo::getStubField(Stub* stub, uint32_t offset) const {
   uint8_t* stubData = (uint8_t*)stub + stubDataOffset_;
@@ -1090,28 +1099,24 @@ void jit::TraceCacheIRStub(JSTracer* trc, T* stub,
       case StubField::Type::DOMExpandoGeneration:
         break;
       case StubField::Type::Shape:
-        TraceNullableEdge(trc, &stubInfo->getStubField<T, Shape*>(stub, offset),
-                          "cacheir-shape");
+        TraceEdge(trc, &stubInfo->getStubField<T, Shape*>(stub, offset),
+                  "cacheir-shape");
         break;
       case StubField::Type::ObjectGroup:
-        TraceNullableEdge(
-            trc, &stubInfo->getStubField<T, ObjectGroup*>(stub, offset),
-            "cacheir-group");
+        TraceEdge(trc, &stubInfo->getStubField<T, ObjectGroup*>(stub, offset),
+                  "cacheir-group");
         break;
       case StubField::Type::JSObject:
-        TraceNullableEdge(trc,
-                          &stubInfo->getStubField<T, JSObject*>(stub, offset),
-                          "cacheir-object");
+        TraceEdge(trc, &stubInfo->getStubField<T, JSObject*>(stub, offset),
+                  "cacheir-object");
         break;
       case StubField::Type::Symbol:
-        TraceNullableEdge(trc,
-                          &stubInfo->getStubField<T, JS::Symbol*>(stub, offset),
-                          "cacheir-symbol");
+        TraceEdge(trc, &stubInfo->getStubField<T, JS::Symbol*>(stub, offset),
+                  "cacheir-symbol");
         break;
       case StubField::Type::String:
-        TraceNullableEdge(trc,
-                          &stubInfo->getStubField<T, JSString*>(stub, offset),
-                          "cacheir-string");
+        TraceEdge(trc, &stubInfo->getStubField<T, JSString*>(stub, offset),
+                  "cacheir-string");
         break;
       case StubField::Type::Id:
         TraceEdge(trc, &stubInfo->getStubField<T, jsid>(stub, offset),
@@ -1856,6 +1861,21 @@ bool CacheIRCompiler::emitGuardClass(ObjOperandId objId, GuardClassKind kind) {
   return true;
 }
 
+bool CacheIRCompiler::emitGuardNullProto(ObjOperandId objId) {
+  JitSpew(JitSpew_Codegen, "%s", __FUNCTION__);
+  Register obj = allocator.useRegister(masm, objId);
+  AutoScratchRegister scratch(allocator, masm);
+
+  FailurePath* failure;
+  if (!addFailurePath(&failure)) {
+    return false;
+  }
+
+  masm.loadObjProto(obj, scratch);
+  masm.branchTestPtr(Assembler::NonZero, scratch, scratch, failure->label());
+  return true;
+}
+
 bool CacheIRCompiler::emitGuardIsExtensible(ObjOperandId objId) {
   JitSpew(JitSpew_Codegen, "%s", __FUNCTION__);
   Register obj = allocator.useRegister(masm, objId);
@@ -2195,6 +2215,16 @@ bool CacheIRCompiler::emitLoadProto(ObjOperandId objId, ObjOperandId resultId) {
   Register obj = allocator.useRegister(masm, objId);
   Register reg = allocator.defineRegister(masm, resultId);
   masm.loadObjProto(obj, reg);
+
+#ifdef DEBUG
+  // We shouldn't encounter a null or lazy proto.
+  MOZ_ASSERT(uintptr_t(TaggedProto::LazyProto) == 1);
+
+  Label done;
+  masm.branchPtr(Assembler::Above, reg, ImmWord(1), &done);
+  masm.assumeUnreachable("Unexpected null or lazy proto in CacheIR LoadProto");
+  masm.bind(&done);
+#endif
   return true;
 }
 
@@ -3357,17 +3387,15 @@ bool CacheIRCompiler::emitGuardTagNotEqual(ValueTagOperandId lhsId,
 }
 
 bool CacheIRCompiler::emitGuardXrayExpandoShapeAndDefaultProto(
-    ObjOperandId objId, bool hasExpando, uint32_t shapeWrapperOffset) {
+    ObjOperandId objId, uint32_t shapeWrapperOffset) {
   JitSpew(JitSpew_Codegen, "%s", __FUNCTION__);
+
   Register obj = allocator.useRegister(masm, objId);
   StubFieldOffset shapeWrapper(shapeWrapperOffset, StubField::Type::JSObject);
 
   AutoScratchRegister scratch(allocator, masm);
-  Maybe<AutoScratchRegister> scratch2, scratch3;
-  if (hasExpando) {
-    scratch2.emplace(allocator, masm);
-    scratch3.emplace(allocator, masm);
-  }
+  AutoScratchRegister scratch2(allocator, masm);
+  AutoScratchRegister scratch3(allocator, masm);
 
   FailurePath* failure;
   if (!addFailurePath(&failure)) {
@@ -3380,38 +3408,52 @@ bool CacheIRCompiler::emitGuardXrayExpandoShapeAndDefaultProto(
   Address expandoAddress(scratch, NativeObject::getFixedSlotOffset(
                                       GetXrayJitInfo()->holderExpandoSlot));
 
-  if (hasExpando) {
-    masm.branchTestObject(Assembler::NotEqual, holderAddress, failure->label());
-    masm.unboxObject(holderAddress, scratch);
-    masm.branchTestObject(Assembler::NotEqual, expandoAddress,
-                          failure->label());
-    masm.unboxObject(expandoAddress, scratch);
+  masm.branchTestObject(Assembler::NotEqual, holderAddress, failure->label());
+  masm.unboxObject(holderAddress, scratch);
+  masm.branchTestObject(Assembler::NotEqual, expandoAddress, failure->label());
+  masm.unboxObject(expandoAddress, scratch);
 
-    // Unwrap the expando before checking its shape.
-    masm.loadPtr(Address(scratch, ProxyObject::offsetOfReservedSlots()),
-                 scratch);
-    masm.unboxObject(
-        Address(scratch, js::detail::ProxyReservedSlots::offsetOfPrivateSlot()),
-        scratch);
+  // Unwrap the expando before checking its shape.
+  masm.loadPtr(Address(scratch, ProxyObject::offsetOfReservedSlots()), scratch);
+  masm.unboxObject(
+      Address(scratch, js::detail::ProxyReservedSlots::offsetOfPrivateSlot()),
+      scratch);
 
-    emitLoadStubField(shapeWrapper, scratch2.ref());
-    LoadShapeWrapperContents(masm, scratch2.ref(), scratch2.ref(),
-                             failure->label());
-    masm.branchTestObjShape(Assembler::NotEqual, scratch, *scratch2, *scratch3,
-                            scratch, failure->label());
+  emitLoadStubField(shapeWrapper, scratch2);
+  LoadShapeWrapperContents(masm, scratch2, scratch2, failure->label());
+  masm.branchTestObjShape(Assembler::NotEqual, scratch, scratch2, scratch3,
+                          scratch, failure->label());
 
-    // The reserved slots on the expando should all be in fixed slots.
-    Address protoAddress(scratch, NativeObject::getFixedSlotOffset(
-                                      GetXrayJitInfo()->expandoProtoSlot));
-    masm.branchTestUndefined(Assembler::NotEqual, protoAddress,
-                             failure->label());
-  } else {
-    Label done;
-    masm.branchTestObject(Assembler::NotEqual, holderAddress, &done);
-    masm.unboxObject(holderAddress, scratch);
-    masm.branchTestObject(Assembler::Equal, expandoAddress, failure->label());
-    masm.bind(&done);
+  // The reserved slots on the expando should all be in fixed slots.
+  Address protoAddress(scratch, NativeObject::getFixedSlotOffset(
+                                    GetXrayJitInfo()->expandoProtoSlot));
+  masm.branchTestUndefined(Assembler::NotEqual, protoAddress, failure->label());
+
+  return true;
+}
+
+bool CacheIRCompiler::emitGuardXrayNoExpando(ObjOperandId objId) {
+  JitSpew(JitSpew_Codegen, "%s", __FUNCTION__);
+
+  Register obj = allocator.useRegister(masm, objId);
+  AutoScratchRegister scratch(allocator, masm);
+
+  FailurePath* failure;
+  if (!addFailurePath(&failure)) {
+    return false;
   }
+
+  masm.loadPtr(Address(obj, ProxyObject::offsetOfReservedSlots()), scratch);
+  Address holderAddress(scratch,
+                        sizeof(Value) * GetXrayJitInfo()->xrayHolderSlot);
+  Address expandoAddress(scratch, NativeObject::getFixedSlotOffset(
+                                      GetXrayJitInfo()->holderExpandoSlot));
+
+  Label done;
+  masm.branchTestObject(Assembler::NotEqual, holderAddress, &done);
+  masm.unboxObject(holderAddress, scratch);
+  masm.branchTestObject(Assembler::Equal, expandoAddress, failure->label());
+  masm.bind(&done);
 
   return true;
 }

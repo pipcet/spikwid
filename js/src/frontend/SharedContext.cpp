@@ -223,12 +223,14 @@ FunctionBox::FunctionBox(JSContext* cx, FunctionBox* traceListHead,
                          SourceExtent extent, CompilationInfo& compilationInfo,
                          Directives directives, GeneratorKind generatorKind,
                          FunctionAsyncKind asyncKind, JSAtom* atom,
-                         FunctionFlags flags, size_t index)
+                         FunctionFlags flags, size_t index,
+                         TopLevelFunction isTopLevel)
     : SharedContext(cx, Kind::FunctionBox, compilationInfo, directives, extent),
       traceLink_(traceListHead),
       atom_(atom),
       funcDataIndex_(index),
       flags_(flags),
+      isTopLevel_(isTopLevel),
       emitBytecode(false),
       isStandalone(false),
       wasEmitted(false),
@@ -243,6 +245,16 @@ FunctionBox::FunctionBox(JSContext* cx, FunctionBox* traceListHead,
       usesApply(false),
       usesThis(false),
       usesReturn(false) {
+  if (functionStencil().get().functionIndex.isSome()) {
+    // If top-level function is re-parsed, top-level stencil is already
+    // initialized.
+    // It should point the same index, given that we rewind the state.
+    MOZ_ASSERT(isTopLevel_ == TopLevelFunction::Yes);
+    MOZ_ASSERT(*functionStencil().get().functionIndex ==
+               FunctionIndex(funcDataIndex_));
+  } else {
+    functionStencil().get().functionIndex.emplace(index);
+  }
   setFlag(ImmutableFlags::IsGenerator,
           generatorKind == GeneratorKind::Generator);
   setFlag(ImmutableFlags::IsAsync,
@@ -489,6 +501,9 @@ ModuleSharedContext::ModuleSharedContext(JSContext* cx, ModuleObject* module,
 }
 
 MutableHandle<ScriptStencil> FunctionBox::functionStencil() const {
+  if (isTopLevel_ == TopLevelFunction::Yes) {
+    return &compilationInfo_.topLevel;
+  }
   return compilationInfo_.funcData[funcDataIndex_];
 }
 

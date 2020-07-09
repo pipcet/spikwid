@@ -1429,16 +1429,6 @@ var gKeywordURIFixup = {
 
     this.check(browser, fixupInfo);
   },
-
-  receiveMessage({ target: browser, data: fixupInfo }) {
-    // As fixupInfo comes from a serialized message, its URI properties are
-    // strings that we need to recreate nsIURIs from.
-    this.check(browser, {
-      fixedURI: fixupInfo.fixedURI ? makeURI(fixupInfo.fixedURI) : null,
-      keywordProviderName: fixupInfo.keywordProviderName,
-      preferredURI: makeURI(fixupInfo.preferredURI),
-    });
-  },
 };
 
 function serializeInputStream(aStream) {
@@ -1966,10 +1956,6 @@ var gBrowserInit = {
     Services.obs.addObserver(gXPInstallObserver, "addon-install-failed");
     Services.obs.addObserver(gXPInstallObserver, "addon-install-confirmation");
     Services.obs.addObserver(gXPInstallObserver, "addon-install-complete");
-    window.messageManager.addMessageListener(
-      "Browser:URIFixup",
-      gKeywordURIFixup
-    );
     Services.obs.addObserver(gKeywordURIFixup, "keyword-uri-fixup");
 
     BrowserOffline.init();
@@ -2508,10 +2494,6 @@ var gBrowserInit = {
         "addon-install-confirmation"
       );
       Services.obs.removeObserver(gXPInstallObserver, "addon-install-complete");
-      window.messageManager.removeMessageListener(
-        "Browser:URIFixup",
-        gKeywordURIFixup
-      );
       Services.obs.removeObserver(gKeywordURIFixup, "keyword-uri-fixup");
 
       if (AppConstants.isPlatformAndVersionAtLeast("win", "10")) {
@@ -2554,7 +2536,10 @@ const SiteSpecificBrowserUI = {
     }
 
     XPCOMUtils.defineLazyGetter(this, "panelBody", () => {
-      return document.querySelector("#appMenu-SSBView .panel-subview-body");
+      return PanelMultiView.getViewNode(
+        document,
+        "appMenu-SSBView .panel-subview-body"
+      );
     });
 
     let initializeMenu = async () => {
@@ -2577,7 +2562,10 @@ const SiteSpecificBrowserUI = {
       "popupshowing",
       () => {
         let blocker = initializeMenu();
-        document.getElementById("appMenu-SSBView").addEventListener(
+        PanelMultiView.getViewNode(
+          document,
+          "appMenu-SSBView"
+        ).addEventListener(
           "ViewShowing",
           event => {
             event.detail.addBlocker(blocker);

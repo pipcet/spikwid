@@ -9064,8 +9064,7 @@ nsIPrincipal* nsDocShell::GetInheritedPrincipal(
     nsCOMPtr<nsIPrincipal> permissionPrincipal =
         BasePrincipal::CreateContentPrincipal(aLoadState->URI(), attrs);
 
-    if (nsContentUtils::IsExactSitePermAllow(permissionPrincipal,
-                                             "https-only-mode-exception"_ns)) {
+    if (nsHTTPSOnlyUtils::TestHttpsOnlySitePermission(permissionPrincipal)) {
       uint32_t httpsOnlyStatus = aLoadInfo->GetHttpsOnlyStatus();
       httpsOnlyStatus |= nsILoadInfo::HTTPS_ONLY_EXEMPT;
       aLoadInfo->SetHttpsOnlyStatus(httpsOnlyStatus);
@@ -9577,6 +9576,10 @@ nsresult nsDocShell::DoURILoad(nsDocShellLoadState* aLoadState,
                                                      loadFlags, this, cacheKey,
                                                      uriModified, isXFOError);
     MOZ_ASSERT(channel);
+
+    // Disable keyword fixup when using DocumentChannel, since
+    // DocumentLoadListener will handle this for us (in the parent process).
+    mAllowKeywordFixup = false;
   } else if (!CreateAndConfigureRealChannelForLoadState(
                  mBrowsingContext, aLoadState, loadInfo, this, this,
                  GetOriginAttributes(), loadFlags, cacheKey, rv,

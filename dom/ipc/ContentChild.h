@@ -17,6 +17,7 @@
 #include "mozilla/dom/MediaControllerBinding.h"
 #include "mozilla/dom/PContentChild.h"
 #include "mozilla/dom/RemoteBrowser.h"
+#include "mozilla/dom/RemoteType.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/ipc/InputStreamUtils.h"
 #include "mozilla/ipc/Shmem.h"
@@ -390,11 +391,11 @@ class ContentChild final : public PContentChild,
       const nsCString& UAName, const nsCString& ID, const nsCString& vendor,
       const nsCString& sourceURL, const nsCString& updateURL);
 
-  mozilla::ipc::IPCResult RecvRemoteType(const nsString& aRemoteType);
+  mozilla::ipc::IPCResult RecvRemoteType(const nsCString& aRemoteType);
 
   // Call RemoteTypePrefix() on the result to remove URIs if you want to use
   // this for telemetry.
-  const nsAString& GetRemoteType() const override;
+  const nsACString& GetRemoteType() const override;
 
   mozilla::ipc::IPCResult RecvInitServiceWorkers(
       const ServiceWorkerConfiguration& aConfig);
@@ -802,7 +803,10 @@ class ContentChild final : public PContentChild,
                                          const ClonedMessageData& aData,
                                          const ClonedMessageData& aStack);
 
-  JSActor::Type GetSide() override { return JSActor::Type::Child; }
+  already_AddRefed<JSActor> InitJSActor(JS::HandleObject aMaybeActor,
+                                        const nsACString& aName,
+                                        ErrorResult& aRv) override;
+  mozilla::ipc::IProtocol* AsNativeActor() override { return this; }
 
   mozilla::ipc::IPCResult RecvHistoryCommitLength(
       const MaybeDiscarded<BrowsingContext>& aContext, uint32_t aLength);
@@ -860,7 +864,7 @@ class ContentChild final : public PContentChild,
   AppInfo mAppInfo;
 
   bool mIsForBrowser;
-  nsString mRemoteType = VoidString();
+  nsCString mRemoteType = NOT_REMOTE_TYPE;
   bool mIsAlive;
   nsString mProcessName;
 
@@ -902,11 +906,6 @@ class ContentChild final : public PContentChild,
 
   // See `BrowsingContext::mEpochs` for an explanation of this field.
   uint64_t mBrowsingContextFieldEpoch = 0;
-
-  nsRefPtrHashtable<nsCStringHashKey, JSProcessActorChild> mProcessActors;
-  ContentChild(const ContentChild&) = delete;
-
-  const ContentChild& operator=(const ContentChild&) = delete;
 };
 
 inline nsISupports* ToSupports(mozilla::dom::ContentChild* aContentChild) {

@@ -2807,6 +2807,12 @@ const rehydrationMiddleware = ({
   getState.didRequestInitialState = false;
   return next => action => {
     if (getState.didRehydrate || window.__FROM_STARTUP_CACHE__) {
+      // Startup messages can be safely ignored by the about:home document
+      // stored in the startup cache.
+      if (window.__FROM_STARTUP_CACHE__ && action.meta && action.meta.isStartup) {
+        return null;
+      }
+
       return next(action);
     }
 
@@ -2881,7 +2887,7 @@ const queueEarlyMessageMiddleware = ({
  */
 
 function initStore(reducers, initialState) {
-  const store = Object(redux__WEBPACK_IMPORTED_MODULE_1__["createStore"])(mergeStateReducer(Object(redux__WEBPACK_IMPORTED_MODULE_1__["combineReducers"])(reducers)), initialState, global.RPMAddMessageListener && Object(redux__WEBPACK_IMPORTED_MODULE_1__["applyMiddleware"])(rehydrationMiddleware, queueEarlyMessageMiddleware, messageMiddleware));
+  const store = Object(redux__WEBPACK_IMPORTED_MODULE_1__["createStore"])(mergeStateReducer(Object(redux__WEBPACK_IMPORTED_MODULE_1__["combineReducers"])(reducers)), initialState, global.RPMAddMessageListener && Object(redux__WEBPACK_IMPORTED_MODULE_1__["applyMiddleware"])(queueEarlyMessageMiddleware, rehydrationMiddleware, messageMiddleware));
 
   if (global.RPMAddMessageListener) {
     global.RPMAddMessageListener(INCOMING_MESSAGE_NAME, msg => {

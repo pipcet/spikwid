@@ -1831,6 +1831,28 @@ void Document::GetFailedCertSecurityInfo(FailedCertSecurityInfo& aInfo,
   }
 }
 
+bool Document::AllowDeprecatedTls() {
+  return Preferences::GetBool("security.tls.version.enable-deprecated", false);
+}
+
+void Document::SetAllowDeprecatedTls(bool value) {
+  if (!IsErrorPage()) {
+    return;
+  }
+
+  auto docShell = GetDocShell();
+  if (!docShell) {
+    return;
+  }
+
+  auto child = BrowserChild::GetFrom(docShell);
+  if (!child) {
+    return;
+  }
+
+  child->SendSetAllowDeprecatedTls(value);
+}
+
 bool Document::IsAboutPage() const {
   nsCOMPtr<nsIPrincipal> principal = NodePrincipal();
   return principal->SchemeIs("about");
@@ -6565,23 +6587,7 @@ void Document::StyleSheetApplicableStateChanged(StyleSheet& aSheet) {
     }
   }
 
-  if (StyleSheetChangeEventsEnabled()) {
-    StyleSheetApplicableStateChangeEventInit init;
-    init.mBubbles = true;
-    init.mCancelable = true;
-    init.mStylesheet = &aSheet;
-    init.mApplicable = applicable;
-
-    RefPtr<StyleSheetApplicableStateChangeEvent> event =
-        StyleSheetApplicableStateChangeEvent::Constructor(
-            this, u"StyleSheetApplicableStateChanged"_ns, init);
-    event->SetTrusted(true);
-    event->SetTarget(this);
-    RefPtr<AsyncEventDispatcher> asyncDispatcher =
-        new AsyncEventDispatcher(this, event);
-    asyncDispatcher->mOnlyChromeDispatch = ChromeOnlyDispatch::eYes;
-    asyncDispatcher->PostDOMEvent();
-  }
+  PostStyleSheetApplicableStateChangeEvent(aSheet);
 
   if (!mSSApplicableStateNotificationPending) {
     MOZ_RELEASE_ASSERT(NS_IsMainThread());
@@ -6591,6 +6597,28 @@ void Document::StyleSheetApplicableStateChanged(StyleSheet& aSheet) {
     mSSApplicableStateNotificationPending =
         NS_SUCCEEDED(Dispatch(TaskCategory::Other, notification.forget()));
   }
+}
+
+void Document::PostStyleSheetApplicableStateChangeEvent(StyleSheet& aSheet) {
+  if (!StyleSheetChangeEventsEnabled()) {
+    return;
+  }
+
+  StyleSheetApplicableStateChangeEventInit init;
+  init.mBubbles = true;
+  init.mCancelable = true;
+  init.mStylesheet = &aSheet;
+  init.mApplicable = aSheet.IsApplicable();
+
+  RefPtr<StyleSheetApplicableStateChangeEvent> event =
+      StyleSheetApplicableStateChangeEvent::Constructor(
+          this, u"StyleSheetApplicableStateChanged"_ns, init);
+  event->SetTrusted(true);
+  event->SetTarget(this);
+  RefPtr<AsyncEventDispatcher> asyncDispatcher =
+      new AsyncEventDispatcher(this, event);
+  asyncDispatcher->mOnlyChromeDispatch = ChromeOnlyDispatch::eYes;
+  asyncDispatcher->PostDOMEvent();
 }
 
 void Document::NotifyStyleSheetApplicableStateChanged() {

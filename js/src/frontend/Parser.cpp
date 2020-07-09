@@ -244,18 +244,20 @@ inline void GeneralParser<ParseHandler, Unit>::setInParametersOfAsyncFunction(
 }
 
 template <class ParseHandler>
-FunctionBox* PerHandlerParser<ParseHandler>::newFunctionBox(
-    FunctionNodeType funNode, JSFunction* fun, uint32_t toStringStart,
-    Directives inheritedDirectives, GeneratorKind generatorKind,
-    FunctionAsyncKind asyncKind) {
+FunctionBox* PerHandlerParser<ParseHandler>::newFunctionBoxImpl(
+    FunctionNodeType funNode, JSFunction* fun, JSAtom* explicitName,
+    FunctionFlags flags, uint32_t toStringStart, Directives inheritedDirectives,
+    GeneratorKind generatorKind, FunctionAsyncKind asyncKind,
+    TopLevelFunction isTopLevel) {
   MOZ_ASSERT(funNode);
-  MOZ_ASSERT(fun);
 
-  size_t index = this->getCompilationInfo().funcData.length();
-  if (!this->getCompilationInfo().functions.emplaceBack(fun)) {
+  size_t index = compilationInfo_.funcData.length();
+  if (!compilationInfo_.functions.emplaceBack(fun)) {
     return nullptr;
   }
-  if (!this->getCompilationInfo().funcData.emplaceBack(cx_)) {
+  // Allocate `funcData` item even if isTopLevel == Yes, to use same index
+  // with `compilationInfo_.functions` and `compilationInfo_.asmJS`.
+  if (!compilationInfo_.funcData.emplaceBack(cx_)) {
     return nullptr;
   }
 
@@ -271,9 +273,9 @@ FunctionBox* PerHandlerParser<ParseHandler>::newFunctionBox(
    * function.
    */
   FunctionBox* funbox = alloc_.new_<FunctionBox>(
-      cx_, compilationInfo_.traceListHead, extent, this->getCompilationInfo(),
-      inheritedDirectives, generatorKind, asyncKind, fun->displayAtom(),
-      fun->flags(), index);
+      cx_, compilationInfo_.traceListHead, extent, compilationInfo_,
+      inheritedDirectives, generatorKind, asyncKind, explicitName, flags, index,
+      isTopLevel);
   if (!funbox) {
     ReportOutOfMemory(cx_);
     return nullptr;
@@ -287,46 +289,24 @@ FunctionBox* PerHandlerParser<ParseHandler>::newFunctionBox(
 
 template <class ParseHandler>
 FunctionBox* PerHandlerParser<ParseHandler>::newFunctionBox(
+    FunctionNodeType funNode, JSFunction* fun, uint32_t toStringStart,
+    Directives inheritedDirectives, GeneratorKind generatorKind,
+    FunctionAsyncKind asyncKind, TopLevelFunction isTopLevel) {
+  MOZ_ASSERT(fun);
+  return newFunctionBoxImpl(funNode, fun, fun->displayAtom(), fun->flags(),
+                            toStringStart, inheritedDirectives, generatorKind,
+                            asyncKind, isTopLevel);
+}
+
+template <class ParseHandler>
+FunctionBox* PerHandlerParser<ParseHandler>::newFunctionBox(
     FunctionNodeType funNode, HandleAtom explicitName, FunctionFlags flags,
     uint32_t toStringStart, Directives inheritedDirectives,
-    GeneratorKind generatorKind, FunctionAsyncKind asyncKind) {
-  MOZ_ASSERT(funNode);
-
-  CompilationInfo& compilationInfo = this->getCompilationInfo();
-
-  size_t index = compilationInfo.funcData.length();
-  if (!compilationInfo.functions.emplaceBack(nullptr)) {
-    return nullptr;
-  }
-  if (!compilationInfo.funcData.emplaceBack(cx_)) {
-    return nullptr;
-  }
-
-  // This source extent will be further filled in during the remainder of parse.
-  SourceExtent extent;
-  extent.toStringStart = toStringStart;
-
-  /*
-   * We use JSContext.tempLifoAlloc to allocate parsed objects and place them
-   * on a list in this Parser to ensure GC safety. Thus the tempLifoAlloc
-   * arenas containing the entries must be alive until we are done with
-   * scanning, parsing and code generation for the whole script or top-level
-   * function.
-   */
-  FunctionBox* funbox = alloc_.new_<FunctionBox>(
-      cx_, compilationInfo.traceListHead, extent, compilationInfo,
-      inheritedDirectives, generatorKind, asyncKind, explicitName, flags,
-      index);
-
-  if (!funbox) {
-    ReportOutOfMemory(cx_);
-    return nullptr;
-  }
-
-  compilationInfo.traceListHead = funbox;
-  handler_.setFunctionBox(funNode, funbox);
-
-  return funbox;
+    GeneratorKind generatorKind, FunctionAsyncKind asyncKind,
+    TopLevelFunction isTopLevel) {
+  return newFunctionBoxImpl(funNode, nullptr, explicitName, flags,
+                            toStringStart, inheritedDirectives, generatorKind,
+                            asyncKind, isTopLevel);
 }
 
 void CompilationInfo::trace(JSTracer* trc) {
@@ -2235,9 +2215,9 @@ FunctionNode* Parser<FullParseHandler, Unit>::standaloneFunction(
   bool isSelfHosting = options().selfHostingMode;
   FunctionFlags flags =
       InitialFunctionFlags(syntaxKind, generatorKind, asyncKind, isSelfHosting);
-  FunctionBox* funbox =
-      newFunctionBox(funNode, explicitName, flags, /* toStringStart = */ 0,
-                     inheritedDirectives, generatorKind, asyncKind);
+  FunctionBox* funbox = newFunctionBox(
+      funNode, explicitName, flags, /* toStringStart = */ 0,
+      inheritedDirectives, generatorKind, asyncKind, TopLevelFunction::Yes);
   if (!funbox) {
     return null();
   }
@@ -2827,9 +2807,9 @@ bool Parser<FullParseHandler, Unit>::skipLazyInnerFunction(
   // so we can skip over them after accounting for their free variables.
 
   RootedFunction fun(cx_, handler_.nextLazyInnerFunction());
-  FunctionBox* funbox = newFunctionBox(funNode, fun, toStringStart,
-                                       Directives(/* strict = */ false),
-                                       fun->generatorKind(), fun->asyncKind());
+  FunctionBox* funbox = newFunctionBox(
+      funNode, fun, toStringStart, Directives(/* strict = */ false),
+      fun->generatorKind(), fun->asyncKind(), TopLevelFunction::No);
   if (!funbox) {
     return false;
   }
@@ -3096,9 +3076,9 @@ bool Parser<FullParseHandler, Unit>::trySyntaxParseInnerFunction(
     // Make a FunctionBox before we enter the syntax parser, because |pn|
     // still expects a FunctionBox to be attached to it during BCE, and
     // the syntax parser cannot attach one to it.
-    FunctionBox* funbox =
-        newFunctionBox(*funNode, explicitName, flags, toStringStart,
-                       inheritedDirectives, generatorKind, asyncKind);
+    FunctionBox* funbox = newFunctionBox(
+        *funNode, explicitName, flags, toStringStart, inheritedDirectives,
+        generatorKind, asyncKind, TopLevelFunction::No);
     if (!funbox) {
       return false;
     }
@@ -3230,9 +3210,9 @@ GeneralParser<ParseHandler, Unit>::innerFunction(
   // parser. In that case, outerpc is a SourceParseContext from the full parser
   // instead of the current top of the stack of the syntax parser.
 
-  FunctionBox* funbox =
-      newFunctionBox(funNode, explicitName, flags, toStringStart,
-                     inheritedDirectives, generatorKind, asyncKind);
+  FunctionBox* funbox = newFunctionBox(
+      funNode, explicitName, flags, toStringStart, inheritedDirectives,
+      generatorKind, asyncKind, TopLevelFunction::No);
   if (!funbox) {
     return null();
   }
@@ -3308,8 +3288,9 @@ FunctionNode* Parser<FullParseHandler, Unit>::standaloneLazyFunction(
   }
 
   Directives directives(strict);
-  FunctionBox* funbox = newFunctionBox(funNode, fun, toStringStart, directives,
-                                       generatorKind, asyncKind);
+  FunctionBox* funbox =
+      newFunctionBox(funNode, fun, toStringStart, directives, generatorKind,
+                     asyncKind, TopLevelFunction::Yes);
   if (!funbox) {
     return null();
   }
@@ -7671,9 +7652,10 @@ GeneralParser<ParseHandler, Unit>::synthesizeConstructor(
 
   // Create the FunctionBox and link it to the function object.
   Directives directives(true);
-  FunctionBox* funbox = newFunctionBox(
-      funNode, className, flags, classNameOffset, directives,
-      GeneratorKind::NotGenerator, FunctionAsyncKind::SyncFunction);
+  FunctionBox* funbox =
+      newFunctionBox(funNode, className, flags, classNameOffset, directives,
+                     GeneratorKind::NotGenerator,
+                     FunctionAsyncKind::SyncFunction, TopLevelFunction::No);
   if (!funbox) {
     return null();
   }
@@ -7843,7 +7825,7 @@ GeneralParser<ParseHandler, Unit>::fieldInitializerOpt(
   Directives directives(true);
   FunctionBox* funbox =
       newFunctionBox(funNode, nullptr, flags, firstTokenPos.begin, directives,
-                     generatorKind, asyncKind);
+                     generatorKind, asyncKind, TopLevelFunction::No);
   if (!funbox) {
     return null();
   }
@@ -11394,11 +11376,14 @@ template class Parser<FullParseHandler, char16_t>;
 template class Parser<SyntaxParseHandler, char16_t>;
 
 CompilationInfo::RewindToken CompilationInfo::getRewindToken() {
-  return RewindToken{traceListHead};
+  MOZ_ASSERT(funcData.length() == functions.length());
+  return RewindToken{traceListHead, funcData.length()};
 }
 
 void CompilationInfo::rewind(const CompilationInfo::RewindToken& pos) {
   traceListHead = pos.funbox;
+  funcData.get().shrinkTo(pos.funcDataLength);
+  functions.get().shrinkTo(pos.funcDataLength);
 }
 
 }  // namespace js::frontend

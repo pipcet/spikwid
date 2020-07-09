@@ -1192,6 +1192,7 @@ security:
     notification_emails:
       - julianwels@mozilla.com
       - seceng-telemetry@mozilla.com
+    release_channel_collection: opt-out
     products:
       - 'firefox'
     record_in_processes:
@@ -4486,7 +4487,7 @@ script.preloader:
     description:
       How many times we ended up recompiling a script from the script preloader
       on the main thread.
-    expires: "81"
+    expires: "88"
     keyed: false
     kind: uint
     notification_emails:

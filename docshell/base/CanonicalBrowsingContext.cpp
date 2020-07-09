@@ -94,11 +94,11 @@ ContentParent* CanonicalBrowsingContext::GetContentParent() const {
   return cpm->GetContentProcessById(ContentParentId(mProcessId));
 }
 
-void CanonicalBrowsingContext::GetCurrentRemoteType(nsAString& aRemoteType,
+void CanonicalBrowsingContext::GetCurrentRemoteType(nsACString& aRemoteType,
                                                     ErrorResult& aRv) const {
   // If we're in the parent process, dump out the void string.
   if (mProcessId == 0) {
-    aRemoteType.Assign(VoidString());
+    aRemoteType = NOT_REMOTE_TYPE;
     return;
   }
 
@@ -108,7 +108,7 @@ void CanonicalBrowsingContext::GetCurrentRemoteType(nsAString& aRemoteType,
     return;
   }
 
-  aRemoteType.Assign(cp->GetRemoteType());
+  aRemoteType = cp->GetRemoteType();
 }
 
 void CanonicalBrowsingContext::SetOwnerProcessId(uint64_t aProcessId) {
@@ -822,7 +822,7 @@ CanonicalBrowsingContext::PendingRemotenessChange::~PendingRemotenessChange() {
 }
 
 RefPtr<CanonicalBrowsingContext::RemotenessPromise>
-CanonicalBrowsingContext::ChangeRemoteness(const nsAString& aRemoteType,
+CanonicalBrowsingContext::ChangeRemoteness(const nsACString& aRemoteType,
                                            uint64_t aPendingSwitchId,
                                            bool aReplaceBrowsingContext,
                                            uint64_t aSpecificGroupId) {
