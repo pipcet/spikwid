@@ -203,15 +203,7 @@ loader.lazyServiceGetter(
 // Minimum delay between two "new-mutations" events.
 const MUTATIONS_THROTTLING_DELAY = 100;
 // List of mutation types that should -not- be throttled.
-const IMMEDIATE_MUTATIONS = [
-  "documentUnload",
-  "frameLoad",
-  "pseudoClassLock",
-
-  // These should be delivered right away in order to be sure that the
-  // fronts have not been removed due to other non-throttled mutations.
-  "mutationBreakpoints",
-];
+const IMMEDIATE_MUTATIONS = ["documentUnload", "frameLoad", "pseudoClassLock"];
 
 const HIDDEN_CLASS = "__fx-devtools-hide-shortcut__";
 
@@ -454,8 +446,6 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
       traits: {
         // Walker implements node picker starting with Firefox 80
         supportsNodePicker: true,
-        // watch/unwatchRootNode are available starting with Fx77
-        watchRootNode: true,
       },
     };
   },
@@ -2675,6 +2665,12 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
         this.emit("root-destroyed", this.rootNode);
       }
       this.rootNode = null;
+      this.releaseNode(documentActor, { force: true });
+      // XXX: Only top-level "roots" trigger root-available/root-destroyed
+      // events. When a frame living in the same process as the parent frame
+      // navigates, we rely on legacy mutations to communicate the update to the
+      // markup view.
+      return;
     }
 
     this.queueMutation({

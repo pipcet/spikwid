@@ -392,7 +392,7 @@ Maybe<DeclarationKind> ParseContext::isVarRedeclaredInEval(
 
   // In the case of eval, we also need to check enclosing VM scopes to see
   // if the var declaration is allowed in the context.
-  js::Scope* enclosingScope = sc()->compilationEnclosingScope();
+  js::Scope* enclosingScope = sc()->compilationInfo().enclosingScope;
   js::Scope* varScope = EvalScope::nearestVarScopeForDirectEval(enclosingScope);
   MOZ_ASSERT(varScope);
   for (ScopeIter si(enclosingScope); si; si++) {
@@ -530,8 +530,8 @@ bool ParseContext::hasUsedName(const UsedNameTracker& usedNames,
 
 bool ParseContext::hasUsedFunctionSpecialName(const UsedNameTracker& usedNames,
                                               HandlePropertyName name) {
-  MOZ_ASSERT(name == sc()->cx_->names().arguments ||
-             name == sc()->cx_->names().dotThis);
+  MOZ_ASSERT(name == sc()->cx_->parserNames().arguments ||
+             name == sc()->cx_->parserNames().dotThis);
   return hasUsedName(usedNames, name) ||
          functionBox()->bindingsAccessedDynamically();
 }
@@ -547,7 +547,7 @@ bool ParseContext::declareFunctionThis(const UsedNameTracker& usedNames,
   // Derived class constructors emit JSOp::CheckReturn, which requires
   // '.this' to be bound.
   FunctionBox* funbox = functionBox();
-  HandlePropertyName dotThis = sc()->cx_->names().dotThis;
+  HandlePropertyName dotThis = sc()->cx_->parserNames().dotThis;
 
   bool declareThis;
   if (canSkipLazyClosedOverBindings) {
@@ -581,7 +581,7 @@ bool ParseContext::declareFunctionArgumentsObject(
   bool hasExtraBodyVarScope = &funScope != &_varScope;
 
   // Time to implement the odd semantics of 'arguments'.
-  HandlePropertyName argumentsName = sc()->cx_->names().arguments;
+  HandlePropertyName argumentsName = sc()->cx_->parserNames().arguments;
 
   bool tryDeclareArguments;
   if (canSkipLazyClosedOverBindings) {
@@ -645,7 +645,7 @@ bool ParseContext::declareDotGeneratorName() {
   // The special '.generator' binding must be on the function scope, as
   // generators expect to find it on the CallObject.
   ParseContext::Scope& funScope = functionScope();
-  HandlePropertyName dotGenerator = sc()->cx_->names().dotGenerator;
+  HandlePropertyName dotGenerator = sc()->cx_->parserNames().dotGenerator;
   AddDeclaredNamePtr p = funScope.lookupDeclaredNameForAdd(dotGenerator);
   if (!p &&
       !funScope.addDeclaredName(this, p, dotGenerator, DeclarationKind::Var,

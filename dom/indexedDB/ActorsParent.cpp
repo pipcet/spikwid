@@ -637,8 +637,8 @@ void WriteCompressedNumber(uint64_t aNumber, uint8_t** aIterator) {
              CompressedByteCountForNumber(originalNumber));
 }
 
-std::pair<uint64_t, mozilla::Span<const uint8_t>> ReadCompressedNumber(
-    const Span<const uint8_t> aSpan) {
+Result<std::pair<uint64_t, mozilla::Span<const uint8_t>>, nsresult>
+ReadCompressedNumber(const Span<const uint8_t> aSpan) {
   uint8_t shiftCounter = 0;
   uint64_t result = 0;
 
@@ -656,10 +656,11 @@ std::pair<uint64_t, mozilla::Span<const uint8_t>> ReadCompressedNumber(
 
   if (NS_WARN_IF(newPos == end)) {
     MOZ_ASSERT(false);
-    // XXX Shouldn't we return an error in this case?
+    IDB_REPORT_INTERNAL_ERR();
+    return Err(NS_ERROR_FILE_CORRUPTED);
   }
 
-  return {result, Span{newPos + 1, end}};
+  return std::pair{result, Span{newPos + 1, end}};
 }
 
 void WriteCompressedIndexId(IndexOrObjectStoreId aIndexId, bool aUnique,
@@ -674,8 +675,14 @@ void WriteCompressedIndexId(IndexOrObjectStoreId aIndexId, bool aUnique,
   WriteCompressedNumber(indexId, aIterator);
 }
 
-auto ReadCompressedIndexId(const Span<const uint8_t> aData) {
-  const auto [indexId, remainder] = ReadCompressedNumber(aData);
+Result<std::tuple<IndexOrObjectStoreId, bool, Span<const uint8_t>>, nsresult>
+ReadCompressedIndexId(const Span<const uint8_t> aData) {
+  auto readNumberOrErr = ReadCompressedNumber(aData);
+  if (NS_WARN_IF(readNumberOrErr.isErr())) {
+    return readNumberOrErr.propagateErr();
+  }
+
+  const auto [indexId, remainder] = readNumberOrErr.unwrap();
 
   MOZ_ASSERT(UINT64_MAX / 2 >= uint64_t(indexId), "Bad index id!");
 
@@ -786,8 +793,13 @@ nsresult ReadCompressedIndexDataValuesFromBlob(
   }
 
   for (auto remainder = aBlobData; !remainder.IsEmpty();) {
+    auto readIndexIdOrErr = ReadCompressedIndexId(remainder);
+    if (NS_WARN_IF(readIndexIdOrErr.isErr())) {
+      return readIndexIdOrErr.unwrapErr();
+    }
+
     const auto [indexId, unique, remainderAfterIndexId] =
-        ReadCompressedIndexId(remainder);
+        readIndexIdOrErr.unwrap();
 
     if (NS_WARN_IF(remainderAfterIndexId.IsEmpty())) {
       IDB_REPORT_INTERNAL_ERR();
@@ -795,15 +807,17 @@ nsresult ReadCompressedIndexDataValuesFromBlob(
     }
 
     // Read key buffer length.
+    auto readNumberOrErr = ReadCompressedNumber(remainderAfterIndexId);
+    if (NS_WARN_IF(readNumberOrErr.isErr())) {
+      return readNumberOrErr.unwrapErr();
+    }
+
     const auto [keyBufferLength, remainderAfterKeyBufferLength] =
-        ReadCompressedNumber(remainderAfterIndexId);
+        readNumberOrErr.unwrap();
 
     if (NS_WARN_IF(remainderAfterKeyBufferLength.IsEmpty()) ||
         NS_WARN_IF(keyBufferLength > uint64_t(UINT32_MAX)) ||
-        NS_WARN_IF(keyBufferLength > remainderAfterKeyBufferLength.Length())
-        // XXX Does this sub-condition make any sense?
-        // || NS_WARN_IF(keyBufferLength > uintptr_t(blobDataEnd))
-    ) {
+        NS_WARN_IF(keyBufferLength > remainderAfterKeyBufferLength.Length())) {
       IDB_REPORT_INTERNAL_ERR();
       return NS_ERROR_FILE_CORRUPTED;
     }
@@ -814,17 +828,19 @@ nsresult ReadCompressedIndexDataValuesFromBlob(
         IndexDataValue{indexId, unique, Key{nsCString{AsChars(keyBuffer)}}};
 
     // Read sort key buffer length.
+    readNumberOrErr = ReadCompressedNumber(remainderAfterKeyBuffer);
+    if (NS_WARN_IF(readNumberOrErr.isErr())) {
+      return readNumberOrErr.unwrapErr();
+    }
+
     const auto [sortKeyBufferLength, remainderAfterSortKeyBufferLength] =
-        ReadCompressedNumber(remainderAfterKeyBuffer);
+        readNumberOrErr.unwrap();
 
     remainder = remainderAfterSortKeyBufferLength;
     if (sortKeyBufferLength > 0) {
       if (NS_WARN_IF(remainder.IsEmpty()) ||
           NS_WARN_IF(sortKeyBufferLength > uint64_t(UINT32_MAX)) ||
-          NS_WARN_IF(sortKeyBufferLength > remainder.Length())
-          // XXX Does this sub-condition make any sense?
-          // || NS_WARN_IF(sortKeyBufferLength > uintptr_t(blobDataEnd))
-      ) {
+          NS_WARN_IF(sortKeyBufferLength > remainder.Length())) {
         IDB_REPORT_INTERNAL_ERR();
         return NS_ERROR_FILE_CORRUPTED;
       }
@@ -2074,8 +2090,9 @@ class EncodeKeysFunction final : public mozIStorageFunction {
       aArguments->GetString(0, stringKey);
       auto result = key.SetFromString(stringKey);
       if (!result.Is(Ok)) {
-        return result.Is(Invalid) ? NS_ERROR_DOM_INDEXEDDB_DATA_ERR
-                                  : result.AsException().StealNSResult();
+        return result.Is(SpecialValues::Invalid)
+                   ? NS_ERROR_DOM_INDEXEDDB_DATA_ERR
+                   : result.AsException().StealNSResult();
       }
     } else {
       NS_WARNING("Don't call me with the wrong type of arguments!");
@@ -3460,7 +3477,12 @@ UpgradeIndexDataValuesFunction::ReadOldCompressedIDVFromBlob(
   IndexDataValuesArray result;
   for (auto remainder = aBlobData; !remainder.IsEmpty();) {
     if (!nextIndexIdAlreadyRead) {
-      std::tie(indexId, unique, remainder) = ReadCompressedIndexId(remainder);
+      auto readNumberOrErr = ReadCompressedIndexId(remainder);
+      if (NS_WARN_IF(readNumberOrErr.isErr())) {
+        return readNumberOrErr.propagateErr();
+      }
+
+      std::tie(indexId, unique, remainder) = readNumberOrErr.unwrap();
     }
     nextIndexIdAlreadyRead = false;
 
@@ -3470,8 +3492,13 @@ UpgradeIndexDataValuesFunction::ReadOldCompressedIDVFromBlob(
     }
 
     // Read key buffer length.
+    auto readNumberOrErr = ReadCompressedNumber(remainder);
+    if (NS_WARN_IF(readNumberOrErr.isErr())) {
+      return readNumberOrErr.propagateErr();
+    }
+
     const auto [keyBufferLength, remainderAfterKeyBufferLength] =
-        ReadCompressedNumber(remainder);
+        readNumberOrErr.unwrap();
 
     if (NS_WARN_IF(remainderAfterKeyBufferLength.IsEmpty()) ||
         NS_WARN_IF(keyBufferLength > uint64_t(UINT32_MAX)) ||
@@ -3491,8 +3518,13 @@ UpgradeIndexDataValuesFunction::ReadOldCompressedIDVFromBlob(
     remainder = remainderAfterKeyBuffer;
     if (!remainder.IsEmpty()) {
       // Read either a sort key buffer length or an index id.
+      auto readNumberOrErr = ReadCompressedNumber(remainder);
+      if (NS_WARN_IF(readNumberOrErr.isErr())) {
+        return readNumberOrErr.propagateErr();
+      }
+
       const auto [maybeIndexId, remainderAfterIndexId] =
-          ReadCompressedNumber(remainder);
+          readNumberOrErr.unwrap();
 
       // Locale-aware indexes haven't been around long enough to have any users,
       // we can safely assume all sort key buffer lengths will be zero.
@@ -9833,7 +9865,7 @@ nsresult LocalizeKey(const Key& aBaseKey, const nsCString& aLocale,
 
   auto result = aBaseKey.ToLocaleAwareKey(aLocale);
   if (!result.Is(Ok)) {
-    return NS_WARN_IF(result.Is(Exception))
+    return NS_WARN_IF(result.Is(SpecialValues::Exception))
                ? result.AsException().StealNSResult()
                : NS_ERROR_DOM_INDEXEDDB_DATA_ERR;
   }
@@ -21570,7 +21602,7 @@ nsresult OpenDatabaseOp::UpdateLocaleAwareIndex(
 
     auto result = oldKey.ToLocaleAwareKey(aLocale);
     if (!result.Is(Ok)) {
-      return NS_WARN_IF(result.Is(Exception))
+      return NS_WARN_IF(result.Is(SpecialValues::Exception))
                  ? result.AsException().StealNSResult()
                  : NS_ERROR_DOM_INDEXEDDB_DATA_ERR;
     }
@@ -26501,7 +26533,7 @@ void Cursor<CursorType>::SetOptionalKeyRange(
         // XXX Explain why an error or Invalid result is ignored here (If it's
         // impossible, then
         //     we should change this to an assertion.)
-        if (res.Is(Exception)) {
+        if (res.Is(SpecialValues::Exception)) {
           res.AsException().SuppressException();
         }
 

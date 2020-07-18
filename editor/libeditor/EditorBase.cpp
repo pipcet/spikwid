@@ -62,6 +62,7 @@
 #include "mozilla/TransactionManager.h"  // for TransactionManager
 #include "mozilla/Tuple.h"
 #include "mozilla/dom/AbstractRange.h"  // for AbstractRange
+#include "mozilla/dom/Attr.h"           // for Attr
 #include "mozilla/dom/CharacterData.h"  // for CharacterData
 #include "mozilla/dom/DataTransfer.h"   // for DataTransfer
 #include "mozilla/dom/Element.h"        // for Element, nsINode::AsElement
@@ -3716,8 +3717,8 @@ nsresult EditorBase::DeleteSelectionAsAction(
   // TODO: If we're an HTMLEditor instance, we need to compute delete ranges
   //       here.  However, it means that we need to pick computation codes
   //       which are in `HandleDeleteSelection()`, its helper methods and
-  //       `WSRunObject` so that we need to redesign `HandleDeleteSelection()`
-  //       in bug 1618457.
+  //       `WhiteSpaceVisibilityKeeper` so that we need to redesign
+  //       `HandleDeleteSelection()` in bug 1618457.
 
   nsresult rv = editActionData.MaybeDispatchBeforeInputEvent();
   if (NS_FAILED(rv)) {

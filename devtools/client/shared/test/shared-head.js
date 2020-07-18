@@ -232,7 +232,7 @@ registerCleanupFunction(function() {
  * Watch console messages for failed propType definitions in React components.
  */
 const ConsoleObserver = {
-  QueryInterface: ChromeUtils.generateQI([Ci.nsIObserver]),
+  QueryInterface: ChromeUtils.generateQI(["nsIObserver"]),
 
   observe: function(subject) {
     const message = subject.wrappedJSObject.arguments[0];
@@ -409,7 +409,7 @@ async function navigateTo(uri, { isErrorPage = false } = {}) {
   // Navigating from/to pages loaded in the parent process, like about:robots,
   // also spawn new targets.
   // (If target-switching pref is false, the toolbox will reboot)
-  const onTargetSwitched = toolbox.once("switched-target");
+  const onTargetSwitched = toolbox.targetList.once("switched-target");
   // Otherwise, if we don't switch target, it is safe to wait for navigate event.
   const onNavigate = target.once("navigate");
 
@@ -1079,4 +1079,28 @@ async function moveWindowTo(win, left, top) {
 
 function getCurrentTestFilePath() {
   return gTestPath.replace("chrome://mochitests/content/browser/", "");
+}
+
+/**
+ * Wait for a single resource of the provided resourceType.
+ *
+ * @param {ResourceWatcher} resourceWatcher
+ *        The ResourceWatcher instance that should emit the expected resource.
+ * @param {String} resourceType
+ *        One of ResourceWatcher.TYPES, type of the expected resource.
+ * @return {Object}
+ *         - resource {Object} the resource itself
+ *         - targetFront {TargetFront} the target which owns the resource
+ */
+function waitForResourceOnce(resourceWatcher, resourceType) {
+  return new Promise(resolve => {
+    const onAvailable = ({ targetFront, resource }) => {
+      resolve({ targetFront, resource });
+      resourceWatcher.unwatchResources([resourceType], { onAvailable });
+    };
+    resourceWatcher.watchResources([resourceType], {
+      ignoreExistingResources: true,
+      onAvailable,
+    });
+  });
 }

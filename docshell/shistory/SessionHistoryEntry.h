@@ -10,6 +10,7 @@
 #include "mozilla/UniquePtr.h"
 #include "nsISHEntry.h"
 #include "nsStructuredCloneContainer.h"
+#include "nsDataHashtable.h"
 
 class nsDocShellLoadState;
 class nsIChannel;
@@ -34,7 +35,18 @@ class SessionHistoryInfo {
     return false;  // FIXME
   }
 
+  nsIInputStream* GetPostData() const { return mPostData; }
+  void GetScrollPosition(int32_t* aScrollPositionX, int32_t* aScrollPositionY) {
+    *aScrollPositionX = mScrollPositionX;
+    *aScrollPositionY = mScrollPositionY;
+  }
+  bool GetScrollRestorationIsManual() const {
+    return mScrollRestorationIsManual;
+  }
+  const nsAString& GetTitle() { return mTitle; }
   nsIURI* GetURI() const { return mURI; }
+
+  bool GetURIWasModified() const { return mURIWasModified; }
 
   uint64_t Id() const { return mId; }
 
@@ -67,22 +79,27 @@ class SessionHistoryInfo {
 // SessionHistoryEntries, a parent and children.
 class SessionHistoryEntry : public nsISHEntry {
  public:
-  SessionHistoryEntry(nsISHistory* aSessionHistory,
-                      nsDocShellLoadState* aLoadState, nsIChannel* aChannel);
+  SessionHistoryEntry(nsDocShellLoadState* aLoadState, nsIChannel* aChannel);
+  explicit SessionHistoryEntry(SessionHistoryInfo* aInfo);
 
   NS_DECL_ISUPPORTS
   NS_DECL_NSISHENTRY
 
   const SessionHistoryInfo& Info() const { return *mInfo; }
 
+  // Get an entry based on SessionHistoryInfo's Id. Parent process only.
+  static SessionHistoryEntry* GetByInfoId(uint64_t aId);
+
  private:
-  virtual ~SessionHistoryEntry() = default;
+  virtual ~SessionHistoryEntry();
 
   UniquePtr<SessionHistoryInfo> mInfo;
   RefPtr<SHEntrySharedParentState> mSharedInfo;
   nsISHEntry* mParent = nullptr;
   uint32_t mID;
   nsTArray<RefPtr<SessionHistoryEntry>> mChildren;
+
+  static nsDataHashtable<nsUint64HashKey, SessionHistoryEntry*>* sInfoIdToEntry;
 };
 
 }  // namespace dom

@@ -19,6 +19,7 @@
 #include "frontend/SharedContext.h"        // SharedContext
 #include "vm/AsyncFunctionResolveKind.h"   // AsyncFunctionResolveKind
 #include "vm/JSScript.h"                   // JSScript
+#include "vm/ModuleBuilder.h"              // ModuleBuilder
 #include "vm/Opcodes.h"                    // JSOp
 #include "vm/Scope.h"                      // BindingKind
 #include "wasm/AsmJS.h"                    // IsAsmJSModule
@@ -43,11 +44,11 @@ bool FunctionEmitter::prepareForNonLazy() {
 
   MOZ_ASSERT(funbox_->isInterpreted());
   MOZ_ASSERT(funbox_->emitBytecode);
-  MOZ_ASSERT(!funbox_->wasEmitted);
+  MOZ_ASSERT(!funbox_->wasEmitted());
 
   //                [stack]
 
-  funbox_->wasEmitted = true;
+  funbox_->setWasEmitted(true);
 
 #ifdef DEBUG
   state_ = State::NonLazy;
@@ -76,15 +77,15 @@ bool FunctionEmitter::emitLazy() {
 
   MOZ_ASSERT(funbox_->isInterpreted());
   MOZ_ASSERT(!funbox_->emitBytecode);
-  MOZ_ASSERT(!funbox_->wasEmitted);
+  MOZ_ASSERT(!funbox_->wasEmitted());
 
   //                [stack]
 
-  funbox_->wasEmitted = true;
+  funbox_->setWasEmitted(true);
 
   // Prepare to update the inner lazy script now that it's parent is fully
-  // compiled. These updates will be applied in FunctionBox::finish().
-  funbox_->setEnclosingScopeForInnerLazyFunction(bce_->innermostScope());
+  // compiled. These updates will be applied in UpdateEmittedInnerFunctions().
+  funbox_->setEnclosingScopeForInnerLazyFunction(bce_->innermostScopeIndex());
 
   if (!emitFunction()) {
     //              [stack] FUN?
@@ -99,7 +100,7 @@ bool FunctionEmitter::emitLazy() {
 
 bool FunctionEmitter::emitAgain() {
   MOZ_ASSERT(state_ == State::Start);
-  MOZ_ASSERT(funbox_->wasEmitted);
+  MOZ_ASSERT(funbox_->wasEmitted());
 
   //                [stack]
 
@@ -168,12 +169,12 @@ bool FunctionEmitter::emitAgain() {
 bool FunctionEmitter::emitAsmJSModule() {
   MOZ_ASSERT(state_ == State::Start);
 
-  MOZ_ASSERT(!funbox_->wasEmitted);
+  MOZ_ASSERT(!funbox_->wasEmitted());
   MOZ_ASSERT(funbox_->isAsmJSModule());
 
   //                [stack]
 
-  funbox_->wasEmitted = true;
+  funbox_->setWasEmitted(true);
 
   if (!emitFunction()) {
     //              [stack]
@@ -298,13 +299,8 @@ bool FunctionEmitter::emitTopLevelFunction(unsigned index) {
   if (bce_->sc->isModuleContext()) {
     // For modules, we record the function and instantiate the binding
     // during ModuleInstantiate(), before the script is run.
-
-    JS::Rooted<ModuleObject*> module(bce_->cx,
-                                     bce_->sc->asModuleContext()->module());
-    if (!module->noteFunctionDeclaration(bce_->cx, name_, index)) {
-      return false;
-    }
-    return true;
+    return bce_->sc->asModuleContext()->builder.noteFunctionDeclaration(
+        bce_->cx, index);
   }
 
   MOZ_ASSERT(bce_->sc->isGlobalContext() || bce_->sc->isEvalContext());
@@ -532,8 +528,8 @@ bool FunctionScriptEmitter::emitExtraBodyVarScope() {
     // The '.this' and '.generator' function special
     // bindings should never appear in the extra var
     // scope. 'arguments', however, may.
-    MOZ_ASSERT(name != bce_->cx->names().dotThis &&
-               name != bce_->cx->names().dotGenerator);
+    MOZ_ASSERT(name != bce_->cx->parserNames().dotThis &&
+               name != bce_->cx->parserNames().dotGenerator);
 
     NameOpEmitter noe(bce_, name, NameOpEmitter::Kind::Initialize);
     if (!noe.prepareForRhs()) {

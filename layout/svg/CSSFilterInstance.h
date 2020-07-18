@@ -4,8 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef __NS_CSSFILTERINSTANCE_H__
-#define __NS_CSSFILTERINSTANCE_H__
+#ifndef LAYOUT_SVG_CSSFILTERINSTANCE_H_
+#define LAYOUT_SVG_CSSFILTERINSTANCE_H_
 
 #include "FilterSupport.h"
 #include "gfxMatrix.h"
@@ -23,10 +23,10 @@ namespace mozilla {
  * FilterPrimitiveDescription connected to the filter graph.
  */
 class CSSFilterInstance {
-  typedef gfx::sRGBColor sRGBColor;
-  typedef gfx::FilterPrimitiveDescription FilterPrimitiveDescription;
-  typedef gfx::IntPoint IntPoint;
-  typedef gfx::Size Size;
+  using sRGBColor = gfx::sRGBColor;
+  using FilterPrimitiveDescription = gfx::FilterPrimitiveDescription;
+  using IntPoint = gfx::IntPoint;
+  using Size = gfx::Size;
 
  public:
   /**
@@ -143,4 +143,4 @@ class CSSFilterInstance {
 
 }  // namespace mozilla
 
-#endif
+#endif  // LAYOUT_SVG_CSSFILTERINSTANCE_H_

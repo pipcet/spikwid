@@ -46,15 +46,6 @@ using namespace mozilla::dom;
 namespace mozilla {
 namespace net {
 
-static uint64_t FindTopOuterWindowID(nsPIDOMWindowOuter* aOuter) {
-  nsCOMPtr<nsPIDOMWindowOuter> outer = aOuter;
-  while (nsCOMPtr<nsPIDOMWindowOuter> parent =
-             outer->GetInProcessScriptableParentOrNull()) {
-    outer = parent;
-  }
-  return outer->WindowID();
-}
-
 static nsContentPolicyType InternalContentPolicyTypeForFrame(
     CanonicalBrowsingContext* aBrowsingContext) {
   const auto& maybeEmbedderElementType =
@@ -100,10 +91,6 @@ LoadInfo::LoadInfo(
       mOriginalFrameSrcLoad(false),
       mForceInheritPrincipalDropped(false),
       mInnerWindowID(0),
-      mOuterWindowID(0),
-      mParentOuterWindowID(0),
-      mTopOuterWindowID(0),
-      mFrameOuterWindowID(0),
       mBrowsingContextID(0),
       mFrameBrowsingContextID(0),
       mInitialSecurityCheckDone(false),
@@ -194,11 +181,6 @@ LoadInfo::LoadInfo(
         aLoadingContext->OwnerDoc()->GetWindow();
     if (contextOuter) {
       ComputeIsThirdPartyContext(contextOuter);
-      mOuterWindowID = contextOuter->WindowID();
-      nsCOMPtr<nsPIDOMWindowOuter> parent =
-          contextOuter->GetInProcessScriptableParent();
-      mParentOuterWindowID = parent ? parent->WindowID() : mOuterWindowID;
-      mTopOuterWindowID = FindTopOuterWindowID(contextOuter);
       RefPtr<dom::BrowsingContext> bc = contextOuter->GetBrowsingContext();
       MOZ_ASSERT(bc);
       mBrowsingContextID = bc->Id();
@@ -282,8 +264,6 @@ LoadInfo::LoadInfo(
       if (docShell) {
         nsCOMPtr<nsPIDOMWindowOuter> outerWindow = do_GetInterface(docShell);
         if (outerWindow) {
-          mFrameOuterWindowID = outerWindow->WindowID();
-
           RefPtr<dom::BrowsingContext> bc = outerWindow->GetBrowsingContext();
           mFrameBrowsingContextID = bc ? bc->Id() : 0;
         }
@@ -384,10 +364,6 @@ LoadInfo::LoadInfo(nsPIDOMWindowOuter* aOuterWindow,
       mOriginalFrameSrcLoad(false),
       mForceInheritPrincipalDropped(false),
       mInnerWindowID(0),
-      mOuterWindowID(0),
-      mParentOuterWindowID(0),
-      mTopOuterWindowID(0),
-      mFrameOuterWindowID(0),
       mBrowsingContextID(0),
       mFrameBrowsingContextID(0),
       mInitialSecurityCheckDone(false),
@@ -424,9 +400,6 @@ LoadInfo::LoadInfo(nsPIDOMWindowOuter* aOuterWindow,
     mSecurityFlags &= ~nsILoadInfo::SEC_FORCE_INHERIT_PRINCIPAL;
   }
 
-  // NB: Ignore the current inner window since we're navigating away from it.
-  mOuterWindowID = mParentOuterWindowID = mTopOuterWindowID =
-      aOuterWindow->WindowID();
   RefPtr<BrowsingContext> bc = aOuterWindow->GetBrowsingContext();
   mBrowsingContextID = bc ? bc->Id() : 0;
 
@@ -448,7 +421,6 @@ LoadInfo::LoadInfo(nsPIDOMWindowOuter* aOuterWindow,
   // that aren't top level.
   if (aSecurityFlags != nsILoadInfo::SEC_ONLY_FOR_EXPLICIT_CONTENTSEC_CHECK) {
     MOZ_ASSERT(aOuterWindow->GetBrowsingContext()->IsTop());
-    MOZ_ASSERT(mTopOuterWindowID == FindTopOuterWindowID(aOuterWindow));
   }
 
 #ifdef DEBUG
@@ -467,8 +439,7 @@ LoadInfo::LoadInfo(nsPIDOMWindowOuter* aOuterWindow,
 LoadInfo::LoadInfo(dom::CanonicalBrowsingContext* aBrowsingContext,
                    nsIPrincipal* aTriggeringPrincipal,
                    const OriginAttributes& aOriginAttributes,
-                   uint64_t aOuterWindowID, nsSecurityFlags aSecurityFlags,
-                   uint32_t aSandboxFlags)
+                   nsSecurityFlags aSecurityFlags, uint32_t aSandboxFlags)
     : mLoadingPrincipal(nullptr),
       mTriggeringPrincipal(aTriggeringPrincipal),
       mPrincipalToInherit(nullptr),
@@ -488,10 +459,6 @@ LoadInfo::LoadInfo(dom::CanonicalBrowsingContext* aBrowsingContext,
       mOriginalFrameSrcLoad(false),
       mForceInheritPrincipalDropped(false),
       mInnerWindowID(0),
-      mOuterWindowID(0),
-      mParentOuterWindowID(0),
-      mTopOuterWindowID(0),
-      mFrameOuterWindowID(0),
       mBrowsingContextID(0),
       mFrameBrowsingContextID(0),
       mInitialSecurityCheckDone(false),
@@ -530,10 +497,6 @@ LoadInfo::LoadInfo(dom::CanonicalBrowsingContext* aBrowsingContext,
     mSecurityFlags &= ~nsILoadInfo::SEC_FORCE_INHERIT_PRINCIPAL;
   }
 
-  // NB: Ignore the current inner window since we're navigating away from it.
-  // Since this is a TYPE_DOCUMENT load, we should be the top window, and all
-  // the outer window IDs are the same.
-  mOuterWindowID = mParentOuterWindowID = mTopOuterWindowID = aOuterWindowID;
   mBrowsingContextID = aBrowsingContext->Id();
   mOriginAttributes = aOriginAttributes;
 
@@ -552,7 +515,6 @@ LoadInfo::LoadInfo(dom::CanonicalBrowsingContext* aBrowsingContext,
 
 LoadInfo::LoadInfo(dom::WindowGlobalParent* aParentWGP,
                    nsIPrincipal* aTriggeringPrincipal,
-                   uint64_t aFrameOuterWindowID,
                    nsContentPolicyType aContentPolicyType,
                    nsSecurityFlags aSecurityFlags, uint32_t aSandboxFlags)
     : mLoadingPrincipal(nullptr),
@@ -577,10 +539,6 @@ LoadInfo::LoadInfo(dom::WindowGlobalParent* aParentWGP,
       mOriginalFrameSrcLoad(false),
       mForceInheritPrincipalDropped(false),
       mInnerWindowID(0),
-      mOuterWindowID(0),
-      mParentOuterWindowID(0),
-      mTopOuterWindowID(0),
-      mFrameOuterWindowID(aFrameOuterWindowID),
       mBrowsingContextID(0),
       mFrameBrowsingContextID(0),
       mInitialSecurityCheckDone(false),
@@ -610,12 +568,6 @@ LoadInfo::LoadInfo(dom::WindowGlobalParent* aParentWGP,
 
   RefPtr<WindowGlobalParent> topLevelWGP = aParentWGP->TopWindowContext();
 
-  if (WindowGlobalParent* ancestorWGP = aParentWGP->GetParentWindowContext()) {
-    mParentOuterWindowID = ancestorWGP->OuterWindowId();
-  } else {
-    mParentOuterWindowID = aParentWGP->OuterWindowId();
-  }
-
   // if the load is sandboxed, we can not also inherit the principal
   if (mSandboxFlags & SANDBOXED_ORIGIN) {
     mForceInheritPrincipalDropped =
@@ -629,12 +581,6 @@ LoadInfo::LoadInfo(dom::WindowGlobalParent* aParentWGP,
   mLoadingPrincipal = aParentWGP->DocumentPrincipal();
   ComputeIsThirdPartyContext(aParentWGP);
 
-  // When the element being loaded is a frame, we choose the frame's window
-  // for the window ID (see mInnerWindowID being set below) and the frame
-  // element's window as the parent window. This is the behavior that Chrome
-  // exposes to add-ons.
-  mOuterWindowID = aParentWGP->OuterWindowId();
-  mTopOuterWindowID = topLevelWGP->OuterWindowId();
   mBrowsingContextID = parentBC->Id();
 
   // Let's inherit the cookie behavior and permission from the embedder
@@ -717,10 +663,8 @@ LoadInfo::LoadInfo(dom::WindowGlobalParent* aParentWGP,
 
 LoadInfo::LoadInfo(dom::CanonicalBrowsingContext* aBrowsingContext,
                    nsIPrincipal* aTriggeringPrincipal,
-                   uint64_t aFrameOuterWindowID, nsSecurityFlags aSecurityFlags,
-                   uint32_t aSandboxFlags)
+                   nsSecurityFlags aSecurityFlags, uint32_t aSandboxFlags)
     : LoadInfo(aBrowsingContext->GetParentWindowContext(), aTriggeringPrincipal,
-               aFrameOuterWindowID,
                InternalContentPolicyTypeForFrame(aBrowsingContext),
                aSecurityFlags, aSandboxFlags) {
   mFrameBrowsingContextID = aBrowsingContext->Id();
@@ -761,10 +705,6 @@ LoadInfo::LoadInfo(const LoadInfo& rhs)
       mOriginalFrameSrcLoad(rhs.mOriginalFrameSrcLoad),
       mForceInheritPrincipalDropped(rhs.mForceInheritPrincipalDropped),
       mInnerWindowID(rhs.mInnerWindowID),
-      mOuterWindowID(rhs.mOuterWindowID),
-      mParentOuterWindowID(rhs.mParentOuterWindowID),
-      mTopOuterWindowID(rhs.mTopOuterWindowID),
-      mFrameOuterWindowID(rhs.mFrameOuterWindowID),
       mBrowsingContextID(rhs.mBrowsingContextID),
       mFrameBrowsingContextID(rhs.mFrameBrowsingContextID),
       mInitialSecurityCheckDone(rhs.mInitialSecurityCheckDone),
@@ -820,8 +760,6 @@ LoadInfo::LoadInfo(
     bool aAllowInsecureRedirectToDataURI, bool aBypassCORSChecks,
     bool aSkipContentPolicyCheckForWebRequest,
     bool aForceInheritPrincipalDropped, uint64_t aInnerWindowID,
-    uint64_t aOuterWindowID, uint64_t aParentOuterWindowID,
-    uint64_t aTopOuterWindowID, uint64_t aFrameOuterWindowID,
     uint64_t aBrowsingContextID, uint64_t aFrameBrowsingContextID,
     bool aInitialSecurityCheckDone, bool aIsThirdPartyContext,
     bool aIsThirdPartyContextToTopWindow, bool aIsFormSubmission,
@@ -871,10 +809,6 @@ LoadInfo::LoadInfo(
       mOriginalFrameSrcLoad(false),
       mForceInheritPrincipalDropped(aForceInheritPrincipalDropped),
       mInnerWindowID(aInnerWindowID),
-      mOuterWindowID(aOuterWindowID),
-      mParentOuterWindowID(aParentOuterWindowID),
-      mTopOuterWindowID(aTopOuterWindowID),
-      mFrameOuterWindowID(aFrameOuterWindowID),
       mBrowsingContextID(aBrowsingContextID),
       mFrameBrowsingContextID(aFrameBrowsingContextID),
       mInitialSecurityCheckDone(aInitialSecurityCheckDone),
@@ -1118,12 +1052,12 @@ LoadInfo::GetSandboxFlags(uint32_t* aResult) {
 
 NS_IMETHODIMP
 LoadInfo::GetSecurityMode(uint32_t* aFlags) {
-  *aFlags =
-      (mSecurityFlags & (nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_DATA_INHERITS |
-                         nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_DATA_IS_BLOCKED |
-                         nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_INHERITS |
-                         nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL |
-                         nsILoadInfo::SEC_REQUIRE_CORS_DATA_INHERITS));
+  *aFlags = (mSecurityFlags &
+             (nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_INHERITS_SEC_CONTEXT |
+              nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_DATA_IS_BLOCKED |
+              nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_INHERITS_SEC_CONTEXT |
+              nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL |
+              nsILoadInfo::SEC_REQUIRE_CORS_INHERITS_SEC_CONTEXT));
   return NS_OK;
 }
 
@@ -1161,7 +1095,7 @@ NS_IMETHODIMP
 LoadInfo::GetCookiePolicy(uint32_t* aResult) {
   uint32_t policy = mSecurityFlags & sCookiePolicyMask;
   if (policy == nsILoadInfo::SEC_COOKIES_DEFAULT) {
-    policy = (mSecurityFlags & SEC_REQUIRE_CORS_DATA_INHERITS)
+    policy = (mSecurityFlags & SEC_REQUIRE_CORS_INHERITS_SEC_CONTEXT)
                  ? nsILoadInfo::SEC_COOKIES_SAME_ORIGIN
                  : nsILoadInfo::SEC_COOKIES_INCLUDE;
   }
@@ -1416,29 +1350,6 @@ LoadInfo::GetInnerWindowID(uint64_t* aResult) {
   return NS_OK;
 }
 
-NS_IMETHODIMP
-LoadInfo::GetOuterWindowID(uint64_t* aResult) {
-  *aResult = mOuterWindowID;
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-LoadInfo::GetParentOuterWindowID(uint64_t* aResult) {
-  *aResult = mParentOuterWindowID;
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-LoadInfo::GetTopOuterWindowID(uint64_t* aResult) {
-  *aResult = mTopOuterWindowID;
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-LoadInfo::GetFrameOuterWindowID(uint64_t* aResult) {
-  *aResult = mFrameOuterWindowID;
-  return NS_OK;
-}
 
 NS_IMETHODIMP
 LoadInfo::GetBrowsingContextID(uint64_t* aResult) {
@@ -1620,7 +1531,8 @@ const nsTArray<uint64_t>& LoadInfo::AncestorBrowsingContextIDs() {
 
 void LoadInfo::SetCorsPreflightInfo(const nsTArray<nsCString>& aHeaders,
                                     bool aForcePreflight) {
-  MOZ_ASSERT(GetSecurityMode() == nsILoadInfo::SEC_REQUIRE_CORS_DATA_INHERITS);
+  MOZ_ASSERT(GetSecurityMode() ==
+             nsILoadInfo::SEC_REQUIRE_CORS_INHERITS_SEC_CONTEXT);
   MOZ_ASSERT(!mInitialSecurityCheckDone);
   mCorsUnsafeHeaders = aHeaders.Clone();
   mForcePreflight = aForcePreflight;
@@ -1637,7 +1549,8 @@ LoadInfo::GetForcePreflight(bool* aForcePreflight) {
 }
 
 void LoadInfo::SetIsPreflight() {
-  MOZ_ASSERT(GetSecurityMode() == nsILoadInfo::SEC_REQUIRE_CORS_DATA_INHERITS);
+  MOZ_ASSERT(GetSecurityMode() ==
+             nsILoadInfo::SEC_REQUIRE_CORS_INHERITS_SEC_CONTEXT);
   MOZ_ASSERT(!mInitialSecurityCheckDone);
   mIsPreflight = true;
 }
@@ -1846,8 +1759,9 @@ LoadInfo::SetParserCreatedScript(bool aParserCreatedScript) {
 
 NS_IMETHODIMP
 LoadInfo::GetIsTopLevelLoad(bool* aResult) {
-  *aResult = mFrameOuterWindowID ? mFrameOuterWindowID == mOuterWindowID
-                                 : mParentOuterWindowID == mOuterWindowID;
+  RefPtr<dom::BrowsingContext> bc;
+  GetTargetBrowsingContext(getter_AddRefs(bc));
+  *aResult = !bc || bc->IsTop();
   return NS_OK;
 }
 

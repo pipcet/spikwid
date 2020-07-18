@@ -219,6 +219,7 @@ static const char* gCallbackPrefsForSocketProcess[] = {
     "network.trr.",
     "network.dns.disableIPv6",
     "network.dns.skipTRR-when-parental-control-enabled",
+    "network.offline-mirrors-connectivity",
     nullptr,
 };
 
@@ -1284,6 +1285,9 @@ nsresult nsIOService::SetConnectivityInternal(bool aConnectivity) {
     observerService->NotifyObservers(nullptr,
                                      NS_IPC_IOSERVICE_SET_CONNECTIVITY_TOPIC,
                                      aConnectivity ? u"true" : u"false");
+    if (SocketProcessReady()) {
+      Unused << mSocketProcess->GetActor()->SendSetConnectivity(aConnectivity);
+    }
   }
 
   if (mOffline) {
@@ -1862,13 +1866,13 @@ nsresult nsIOService::SpeculativeConnectInternal(
   // channel we create underneath - hence it's safe to use
   // the systemPrincipal as the loadingPrincipal for this channel.
   nsCOMPtr<nsIChannel> channel;
-  rv = NewChannelFromURI(aURI,
-                         nullptr,  // aLoadingNode,
-                         loadingPrincipal,
-                         nullptr,  // aTriggeringPrincipal,
-                         nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
-                         nsIContentPolicy::TYPE_SPECULATIVE,
-                         getter_AddRefs(channel));
+  rv = NewChannelFromURI(
+      aURI,
+      nullptr,  // aLoadingNode,
+      loadingPrincipal,
+      nullptr,  // aTriggeringPrincipal,
+      nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL,
+      nsIContentPolicy::TYPE_SPECULATIVE, getter_AddRefs(channel));
   NS_ENSURE_SUCCESS(rv, rv);
 
   if (aAnonymous) {

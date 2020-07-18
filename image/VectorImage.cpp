@@ -21,6 +21,7 @@
 #include "mozilla/PendingAnimationTracker.h"
 #include "mozilla/PresShell.h"
 #include "mozilla/RefPtr.h"
+#include "mozilla/SVGObserverUtils.h"  // for SVGRenderingObserver
 #include "mozilla/Tuple.h"
 #include "nsIStreamListener.h"
 #include "nsMimeTypes.h"
@@ -28,7 +29,6 @@
 #include "nsRect.h"
 #include "nsString.h"
 #include "nsStubDocumentObserver.h"
-#include "SVGObserverUtils.h"  // for SVGRenderingObserver
 #include "nsWindowSizes.h"
 #include "ImageRegion.h"
 #include "ISurfaceProvider.h"
@@ -254,7 +254,7 @@ class SVGDrawingCallback : public gfxDrawingCallback {
   uint32_t mImageFlags;
 };
 
-// Based loosely on nsSVGIntegrationUtils' PaintFrameCallback::operator()
+// Based loosely on SVGIntegrationUtils' PaintFrameCallback::operator()
 bool SVGDrawingCallback::operator()(gfxContext* aContext,
                                     const gfxRect& aFillRect,
                                     const SamplingFilter aSamplingFilter,

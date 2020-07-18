@@ -64,6 +64,15 @@ const click = el => {
 
 add_task(async function toolbarButtons() {
   await BrowserTestUtils.withNewTab("http://example.com", async () => {
+    let customButton = await new Promise(resolve => {
+      CustomizableUI.createWidget({
+        // In CSS identifiers cannot start with a number but CustomizableUI accepts that.
+        id: "12foo",
+        onCreated: resolve,
+        defaultArea: "nav-bar",
+      });
+    });
+
     Services.telemetry.getSnapshotForKeyedScalars("main", true);
 
     let newTab = await BrowserTestUtils.openNewForegroundTab(gBrowser);
@@ -114,10 +123,13 @@ add_task(async function toolbarButtons() {
     click("pageAction-panel-copyURL");
     await hidden;
 
+    click(customButton);
+
     assertInteractionScalars({
       nav_bar: {
         "stop-reload-button": 1,
         "back-button": 2,
+        "12foo": 1,
       },
       tabs_bar: {
         "alltabs-button": 1,
@@ -133,6 +145,8 @@ add_task(async function toolbarButtons() {
         copyURL: 1,
       },
     });
+
+    CustomizableUI.destroyWidget("12foo");
   });
 });
 
@@ -459,6 +473,44 @@ add_task(async function webextension() {
     });
 
     await extension2.unload();
+  });
+});
+
+add_task(async function mainMenu() {
+  // macOS does not use the menu bar.
+  if (AppConstants.platform == "macosx") {
+    return;
+  }
+
+  BrowserUsageTelemetry._resetAddonIds();
+
+  await BrowserTestUtils.withNewTab("http://example.com", async browser => {
+    Services.telemetry.getSnapshotForKeyedScalars("main", true);
+
+    CustomizableUI.setToolbarVisibility("toolbar-menubar", true);
+
+    let shown = BrowserTestUtils.waitForEvent(
+      elem("menu_EditPopup"),
+      "popupshown"
+    );
+    click("edit-menu");
+    await shown;
+
+    let hidden = BrowserTestUtils.waitForEvent(
+      elem("menu_EditPopup"),
+      "popuphidden"
+    );
+    click("menu_selectAll");
+    await hidden;
+
+    assertInteractionScalars({
+      menu_bar: {
+        // Note that the _ is replaced with - for telemetry identifiers.
+        "menu-selectAll": 1,
+      },
+    });
+
+    CustomizableUI.setToolbarVisibility("toolbar-menubar", false);
   });
 });
 

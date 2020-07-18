@@ -390,8 +390,8 @@ void nsListControlFrame::Reflow(nsPresContext* aPresContext,
 
   bool autoBSize = (aReflowInput.ComputedBSize() == NS_UNCONSTRAINEDSIZE);
 
-  mMightNeedSecondPass = autoBSize && (NS_SUBTREE_DIRTY(this) ||
-                                       aReflowInput.ShouldReflowAllKids());
+  mMightNeedSecondPass =
+      autoBSize && (IsSubtreeDirty() || aReflowInput.ShouldReflowAllKids());
 
   ReflowInput state(aReflowInput);
   int32_t length = GetNumberOfRows();
@@ -473,8 +473,7 @@ void nsListControlFrame::ReflowAsDropdown(nsPresContext* aPresContext,
   MOZ_ASSERT(aReflowInput.ComputedBSize() == NS_UNCONSTRAINEDSIZE,
              "We should not have a computed block size here!");
 
-  mMightNeedSecondPass =
-      NS_SUBTREE_DIRTY(this) || aReflowInput.ShouldReflowAllKids();
+  mMightNeedSecondPass = IsSubtreeDirty() || aReflowInput.ShouldReflowAllKids();
 
   WritingMode wm = aReflowInput.GetWritingMode();
 #ifdef DEBUG
@@ -2062,11 +2061,20 @@ nsresult nsListControlFrame::KeyDown(dom::Event* aKeyEvent) {
         return NS_OK;
       }
 
+      // We don't want to preventDefault for escape key if the dropdown
+      // popup is not shown.
+      // Need to do the check before AboutToRollup because AboutToRollup
+      // may update the dropdown flags.
+      bool doPreventDefault =
+          !mComboboxFrame || mComboboxFrame->IsDroppedDownOrHasParentPopup();
+
       AboutToRollup();
-      // If the select element is a dropdown style, Enter key should be
+      // If the select element is a dropdown style, Escape key should be
       // consumed everytime since Escape key may be pressed accidentally after
       // the dropdown is closed by Escepe key.
-      aKeyEvent->PreventDefault();
+      if (doPreventDefault) {
+        aKeyEvent->PreventDefault();
+      }
       return NS_OK;
     }
     case NS_VK_PAGE_UP: {

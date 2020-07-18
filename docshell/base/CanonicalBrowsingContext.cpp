@@ -85,6 +85,12 @@ const CanonicalBrowsingContext* CanonicalBrowsingContext::Cast(
   return static_cast<const CanonicalBrowsingContext*>(aContext);
 }
 
+already_AddRefed<CanonicalBrowsingContext> CanonicalBrowsingContext::Cast(
+    already_AddRefed<BrowsingContext>&& aContext) {
+  MOZ_RELEASE_ASSERT(XRE_IsParentProcess());
+  return aContext.downcast<CanonicalBrowsingContext>();
+}
+
 ContentParent* CanonicalBrowsingContext::GetContentParent() const {
   if (mProcessId == 0) {
     return nullptr;
@@ -268,25 +274,29 @@ nsISHistory* CanonicalBrowsingContext::GetSessionHistory() {
 UniquePtr<SessionHistoryInfo>
 CanonicalBrowsingContext::CreateSessionHistoryEntryForLoad(
     nsDocShellLoadState* aLoadState, nsIChannel* aChannel) {
-  MOZ_ASSERT(GetSessionHistory(),
-             "Creating an entry but session history is not enabled for this "
-             "browsing context!");
   RefPtr<SessionHistoryEntry> entry =
-      new SessionHistoryEntry(GetSessionHistory(), aLoadState, aChannel);
+      new SessionHistoryEntry(aLoadState, aChannel);
   mLoadingEntries.AppendElement(entry);
+  MOZ_ASSERT(SessionHistoryEntry::GetByInfoId(entry->Info().Id()) == entry);
   return MakeUnique<SessionHistoryInfo>(entry->Info());
 }
 
 void CanonicalBrowsingContext::SessionHistoryCommit(
-    uint64_t aSessionHistoryEntryId) {
+    uint64_t aSessionHistoryEntryId, const nsID& aChangeID) {
   for (size_t i = 0; i < mLoadingEntries.Length(); ++i) {
     if (mLoadingEntries[i]->Info().Id() == aSessionHistoryEntryId) {
+      nsISHistory* shistory = GetSessionHistory();
+      if (!shistory) {
+        mLoadingEntries.RemoveElementAt(i);
+        return;
+      }
+
       RefPtr<SessionHistoryEntry> oldActiveEntry = mActiveEntry.forget();
       mActiveEntry = mLoadingEntries[i];
       mLoadingEntries.RemoveElementAt(i);
       if (IsTop()) {
-        GetSessionHistory()->AddEntry(mActiveEntry,
-                                      /* FIXME aPersist = */ true);
+        shistory->AddEntry(mActiveEntry,
+                           /* FIXME aPersist = */ true);
       } else {
         // FIXME Check if we're replacing before adding a child.
         // FIXME The old implementations adds it to the parent's mLSHE if there
@@ -294,8 +304,8 @@ void CanonicalBrowsingContext::SessionHistoryCommit(
         //       doesn't think it would).
         if (oldActiveEntry) {
           // FIXME Need to figure out the right value for aCloneChildren.
-          GetSessionHistory()->AddChildSHEntryHelper(oldActiveEntry,
-                                                     mActiveEntry, Top(), true);
+          shistory->AddChildSHEntryHelper(oldActiveEntry, mActiveEntry, Top(),
+                                          true);
         } else {
           SessionHistoryEntry* parentEntry =
               static_cast<CanonicalBrowsingContext*>(GetParent())->mActiveEntry;
@@ -309,10 +319,13 @@ void CanonicalBrowsingContext::SessionHistoryCommit(
         }
       }
       Group()->EachParent([&](ContentParent* aParent) {
-        // FIXME Should we return the length to the one process that committed
-        //       as an async return value? Or should this use synced fields?
-        Unused << aParent->SendHistoryCommitLength(
-            Top(), GetSessionHistory()->GetCount());
+        nsISHistory* shistory = GetSessionHistory();
+        int32_t index = 0;
+        int32_t length = 0;
+        shistory->GetIndex(&index);
+        shistory->GetCount(&length);
+        Unused << aParent->SendHistoryCommitIndexAndLength(Top(), index, length,
+                                                           aChangeID);
       });
       return;
     }
@@ -419,10 +432,11 @@ uint32_t CanonicalBrowsingContext::CountSiteOrigins(
   return uniqueSiteOrigins.Count();
 }
 
-void CanonicalBrowsingContext::UpdateMediaControlKey(MediaControlKey aKey) {
-  ContentMediaControlKeyHandler::HandleMediaControlKey(this, aKey);
+void CanonicalBrowsingContext::UpdateMediaControlAction(
+    const MediaControlAction& aAction) {
+  ContentMediaControlKeyHandler::HandleMediaControlAction(this, aAction);
   Group()->EachParent([&](ContentParent* aParent) {
-    Unused << aParent->SendUpdateMediaControlKey(this, aKey);
+    Unused << aParent->SendUpdateMediaControlAction(this, aAction);
   });
 }
 

@@ -928,7 +928,7 @@ already_AddRefed<ContentParent> ContentParent::GetUsedBrowserProcess(
     p->AssertAlive();
 
     // p may be a preallocated process, or (if not PREALLOC_REMOTE_TYPE)
-    // a perviously-used process that's being recycled.  Currently this is
+    // a previously-used process that's being recycled.  Currently this is
     // only done for short-duration web (DEFAULT_REMOTE_TYPE) processes
     preallocated = p->mRemoteType == PREALLOC_REMOTE_TYPE;
     // For pre-allocated process we have not set the opener yet.
@@ -6804,9 +6804,10 @@ mozilla::ipc::IPCResult ContentParent::RecvNotifyOnHistoryReload(
 
 mozilla::ipc::IPCResult ContentParent::RecvHistoryCommit(
     const MaybeDiscarded<BrowsingContext>& aContext,
-    uint64_t aSessionHistoryEntryID) {
+    const uint64_t& aSessionHistoryEntryID, const nsID& aChangeID) {
   if (!aContext.IsDiscarded()) {
-    aContext.get_canonical()->SessionHistoryCommit(aSessionHistoryEntryID);
+    aContext.get_canonical()->SessionHistoryCommit(aSessionHistoryEntryID,
+                                                   aChangeID);
   }
 
   return IPC_OK();
@@ -6826,6 +6827,24 @@ mozilla::ipc::IPCResult ContentParent::RecvHistoryGo(
     aResolveRequestedIndex(shistory->GetRequestedIndex());
     shistory->LoadURIs(loadResults);
   }
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult ContentParent::RecvSessionHistoryUpdate(
+    const MaybeDiscarded<BrowsingContext>& aContext, const int32_t& aIndex,
+    const int32_t& aLength, const nsID& aChangeID) {
+  if (aContext.IsNullOrDiscarded()) {
+    MOZ_LOG(
+        BrowsingContext::GetLog(), LogLevel::Debug,
+        ("ParentIPC: Trying to send a message to dead or detached context"));
+    return IPC_OK();
+  }
+
+  CanonicalBrowsingContext* context = aContext.get_canonical();
+  context->Group()->EachParent([&](ContentParent* aParent) {
+    Unused << aParent->SendHistoryCommitIndexAndLength(aContext, aIndex,
+                                                       aLength, aChangeID);
+  });
   return IPC_OK();
 }
 

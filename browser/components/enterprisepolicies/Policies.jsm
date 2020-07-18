@@ -537,7 +537,8 @@ var Policies = {
     onBeforeAddons(manager, param) {
       if (param) {
         setAndLockPref("identity.fxaccounts.enabled", false);
-        setAndLockPref("trailhead.firstrun.branches", "nofirstrun");
+        setAndLockPref("trailhead.firstrun.branches", "nofirstrun-empty");
+        setAndLockPref("browser.aboutwelcome.enabled", false);
       }
     },
   },
@@ -1052,7 +1053,7 @@ var Policies = {
       }
       if ("Pocket" in param) {
         setDefaultPref(
-          "browser.newtabpage.activity-stream.feeds.section.topstories",
+          "browser.newtabpage.activity-stream.feeds.system.topstories",
           param.Pocket,
           locked
         );
@@ -1247,16 +1248,6 @@ var Policies = {
     },
   },
 
-  MasterPassword: {
-    onAllWindowsRestored(manager, param) {
-      if (param) {
-        manager.disallowFeature("removeMasterPassword");
-      } else {
-        manager.disallowFeature("createMasterPassword");
-      }
-    },
-  },
-
   NetworkPrediction: {
     onBeforeAddons(manager, param) {
       setAndLockPref("network.dns.disablePrefetch", !param);
@@ -1294,7 +1285,8 @@ var Policies = {
     onProfileAfterChange(manager, param) {
       let url = param ? param.href : "";
       setAndLockPref("startup.homepage_welcome_url", url);
-      setAndLockPref("trailhead.firstrun.branches", "nofirstrun");
+      setAndLockPref("trailhead.firstrun.branches", "nofirstrun-empty");
+      setAndLockPref("browser.aboutwelcome.enabled", false);
     },
   },
 
@@ -1433,6 +1425,16 @@ var Policies = {
     onBeforeAddons(manager, param) {
       for (let preference in param) {
         setAndLockPref(preference, param[preference]);
+      }
+    },
+  },
+
+  PrimaryPassword: {
+    onAllWindowsRestored(manager, param) {
+      if (param) {
+        manager.disallowFeature("removeMasterPassword");
+      } else {
+        manager.disallowFeature("createMasterPassword");
       }
     },
   },
@@ -1643,22 +1645,26 @@ var Policies = {
             JSON.stringify(engineNameList),
             async function() {
               for (let newEngine of param.Add) {
-                let newEngineParameters = {
-                  template: newEngine.URLTemplate,
-                  iconURL: newEngine.IconURL ? newEngine.IconURL.href : null,
-                  alias: newEngine.Alias,
+                let manifest = {
                   description: newEngine.Description,
-                  method: newEngine.Method,
-                  postData: newEngine.PostData,
-                  suggestURL: newEngine.SuggestURLTemplate,
-                  extensionID: "set-via-policy",
-                  queryCharset: "UTF-8",
+                  iconURL: newEngine.IconURL ? newEngine.IconURL.href : null,
+                  chrome_settings_overrides: {
+                    search_provider: {
+                      name: newEngine.Name,
+                      // Policies currently only use this encoding, see bug 1649164.
+                      encoding: "windows-1252",
+                      search_url: encodeURI(newEngine.URLTemplate),
+                      keyword: newEngine.Alias,
+                      search_url_post_params:
+                        newEngine.Method == "POST"
+                          ? newEngine.PostData
+                          : undefined,
+                      suggestUrlGetParams: newEngine.SuggestURLTemplate,
+                    },
+                  },
                 };
                 try {
-                  await Services.search.addEngineWithDetails(
-                    newEngine.Name,
-                    newEngineParameters
-                  );
+                  await Services.search.addPolicyEngine(manifest);
                 } catch (ex) {
                   log.error("Unable to add search engine", ex);
                 }
@@ -1845,6 +1851,10 @@ var Policies = {
       }
       if ("UrlbarInterventions" in param && !param.UrlbarInterventions) {
         manager.disallowFeature("urlbarinterventions");
+      }
+      if ("SkipOnboarding") {
+        setAndLockPref("trailhead.firstrun.branches", "nofirstrun-empty");
+        setAndLockPref("browser.aboutwelcome.enabled", false);
       }
     },
   },
@@ -2191,7 +2201,7 @@ let ChromeURLBlockPolicy = {
   classDescription: "Policy Engine Content Policy",
   contractID: "@mozilla-org/policy-engine-content-policy-service;1",
   classID: Components.ID("{ba7b9118-cabc-4845-8b26-4215d2a59ed7}"),
-  QueryInterface: ChromeUtils.generateQI([Ci.nsIContentPolicy]),
+  QueryInterface: ChromeUtils.generateQI(["nsIContentPolicy"]),
   createInstance(outer, iid) {
     return this.QueryInterface(iid);
   },

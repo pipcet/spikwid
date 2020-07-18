@@ -11,8 +11,8 @@
 #include "mozilla/SVGContainerFrame.h"
 #include "mozilla/SVGObserverUtils.h"
 #include "mozilla/SVGTextFrame.h"
+#include "mozilla/SVGUtils.h"
 #include "mozilla/dom/SVGSwitchElement.h"
-#include "nsSVGUtils.h"
 
 using namespace mozilla::dom;
 using namespace mozilla::gfx;
@@ -48,7 +48,7 @@ class SVGSwitchFrame final : public SVGGFrame {
   virtual void BuildDisplayList(nsDisplayListBuilder* aBuilder,
                                 const nsDisplayListSet& aLists) override;
 
-  // nsSVGDisplayableFrame interface:
+  // ISVGDisplayableFrame interface:
   virtual void PaintSVG(gfxContext& aContext, const gfxMatrix& aTransform,
                         imgDrawingParams& aImgParams,
                         const nsIntRect* aDirtyRect = nullptr) override;
@@ -68,7 +68,8 @@ class SVGSwitchFrame final : public SVGGFrame {
 //----------------------------------------------------------------------
 // Implementation
 
-nsIFrame* NS_NewSVGSwitchFrame(PresShell* aPresShell, ComputedStyle* aStyle) {
+nsIFrame* NS_NewSVGSwitchFrame(mozilla::PresShell* aPresShell,
+                               mozilla::ComputedStyle* aStyle) {
   return new (aPresShell)
       mozilla::SVGSwitchFrame(aStyle, aPresShell->GetPresContext());
 }
@@ -111,10 +112,9 @@ void SVGSwitchFrame::PaintSVG(gfxContext& aContext, const gfxMatrix& aTransform,
   if (kid) {
     gfxMatrix tm = aTransform;
     if (kid->GetContent()->IsSVGElement()) {
-      tm = nsSVGUtils::GetTransformMatrixInUserSpace(kid) * tm;
+      tm = SVGUtils::GetTransformMatrixInUserSpace(kid) * tm;
     }
-    nsSVGUtils::PaintFrameWithEffects(kid, aContext, tm, aImgParams,
-                                      aDirtyRect);
+    SVGUtils::PaintFrameWithEffects(kid, aContext, tm, aImgParams, aDirtyRect);
   }
 }
 
@@ -125,7 +125,7 @@ nsIFrame* SVGSwitchFrame::GetFrameForPoint(const gfxPoint& aPoint) {
                "SVG should take this code path");
 
   nsIFrame* kid = GetActiveChildFrame();
-  nsSVGDisplayableFrame* svgFrame = do_QueryFrame(kid);
+  ISVGDisplayableFrame* svgFrame = do_QueryFrame(kid);
   if (svgFrame) {
     // Transform the point from our SVG user space to our child's.
     gfxPoint point = aPoint;
@@ -153,7 +153,7 @@ static bool shouldReflowSVGTextFrameInside(nsIFrame* aFrame) {
 }
 
 void SVGSwitchFrame::AlwaysReflowSVGTextFrameDoForOneKid(nsIFrame* aKid) {
-  if (!NS_SUBTREE_DIRTY(aKid)) {
+  if (!aKid->IsSubtreeDirty()) {
     return;
   }
 
@@ -191,13 +191,13 @@ void SVGSwitchFrame::ReflowAllSVGTextFramesInsideNonActiveChildren(
 }
 
 void SVGSwitchFrame::ReflowSVG() {
-  NS_ASSERTION(nsSVGUtils::OuterSVGIsCallingReflowSVG(this),
+  NS_ASSERTION(SVGUtils::OuterSVGIsCallingReflowSVG(this),
                "This call is probably a wasteful mistake");
 
   MOZ_ASSERT(!HasAnyStateBits(NS_FRAME_IS_NONDISPLAY),
              "ReflowSVG mechanism not designed for this");
 
-  if (!nsSVGUtils::NeedsReflowSVG(this)) {
+  if (!SVGUtils::NeedsReflowSVG(this)) {
     return;
   }
 
@@ -222,7 +222,7 @@ void SVGSwitchFrame::ReflowSVG() {
   nsIFrame* child = GetActiveChildFrame();
   ReflowAllSVGTextFramesInsideNonActiveChildren(child);
 
-  nsSVGDisplayableFrame* svgChild = do_QueryFrame(child);
+  ISVGDisplayableFrame* svgChild = do_QueryFrame(child);
   if (svgChild) {
     MOZ_ASSERT(!child->HasAnyStateBits(NS_FRAME_IS_NONDISPLAY),
                "Check for this explicitly in the |if|, then");
@@ -256,14 +256,14 @@ void SVGSwitchFrame::ReflowSVG() {
 SVGBBox SVGSwitchFrame::GetBBoxContribution(const Matrix& aToBBoxUserspace,
                                             uint32_t aFlags) {
   nsIFrame* kid = GetActiveChildFrame();
-  nsSVGDisplayableFrame* svgKid = do_QueryFrame(kid);
+  ISVGDisplayableFrame* svgKid = do_QueryFrame(kid);
   if (svgKid) {
     nsIContent* content = kid->GetContent();
     gfxMatrix transform = ThebesMatrix(aToBBoxUserspace);
     if (content->IsSVGElement()) {
       transform = static_cast<SVGElement*>(content)->PrependLocalTransformsTo(
                       {}, eChildToUserSpace) *
-                  nsSVGUtils::GetTransformMatrixInUserSpace(kid) * transform;
+                  SVGUtils::GetTransformMatrixInUserSpace(kid) * transform;
     }
     return svgKid->GetBBoxContribution(ToMatrix(transform), aFlags);
   }

@@ -120,9 +120,9 @@
 #include "nsStyleSheetService.h"
 #include "gfxUtils.h"
 #include "mozilla/SMILAnimationController.h"
-#include "SVGContentUtils.h"
-#include "SVGObserverUtils.h"
-#include "SVGFragmentIdentifier.h"
+#include "mozilla/SVGContentUtils.h"
+#include "mozilla/SVGObserverUtils.h"
+#include "mozilla/SVGFragmentIdentifier.h"
 #include "nsFrameSelection.h"
 
 #include "mozilla/dom/Performance.h"
@@ -2703,7 +2703,7 @@ void PresShell::FrameNeedsReflow(nsIFrame* aFrame,
 
     // Grab |wasDirty| now so we can go ahead and update the bits on
     // subtreeRoot.
-    bool wasDirty = NS_SUBTREE_DIRTY(subtreeRoot);
+    bool wasDirty = subtreeRoot->IsSubtreeDirty();
     subtreeRoot->AddStateBits(aBitToAdd);
 
     // Determine whether we need to keep looking for the next ancestor
@@ -2811,7 +2811,7 @@ void PresShell::FrameNeedsReflow(nsIFrame* aFrame,
 
       nsIFrame* child = f;
       f = f->GetParent();
-      wasDirty = NS_SUBTREE_DIRTY(f);
+      wasDirty = f->IsSubtreeDirty();
       f->ChildIsDirty(child);
       NS_ASSERTION(f->HasAnyStateBits(NS_FRAME_HAS_DIRTY_CHILDREN),
                    "ChildIsDirty didn't do its job");
@@ -3303,19 +3303,12 @@ static void AccumulateFrameBounds(nsIFrame* aContainerFrame, nsIFrame* aFrame,
       if (aLines) {
         int32_t index = aLines->FindLineContaining(prevFrame, aCurLine);
         if (index >= 0) {
-          aCurLine = index;
-          nsIFrame* trash1;
-          int32_t trash2;
-          nsRect lineBounds;
-
-          if (NS_SUCCEEDED(
-                  aLines->GetLine(index, &trash1, &trash2, lineBounds))) {
-            frameBounds += frame->GetOffsetTo(f);
-            frame = f;
-            if (lineBounds.y < frameBounds.y) {
-              frameBounds.height = frameBounds.YMost() - lineBounds.y;
-              frameBounds.y = lineBounds.y;
-            }
+          auto line = aLines->GetLine(index).unwrap();
+          frameBounds += frame->GetOffsetTo(f);
+          frame = f;
+          if (line.mLineBounds.y < frameBounds.y) {
+            frameBounds.height = frameBounds.YMost() - line.mLineBounds.y;
+            frameBounds.y = line.mLineBounds.y;
           }
         }
       }
@@ -4740,7 +4733,7 @@ static bool gDumpRangePaintList = false;
 
 UniquePtr<RangePaintInfo> PresShell::CreateRangePaintInfo(
     nsRange* aRange, nsRect& aSurfaceRect, bool aForPrimarySelection) {
-  nsIFrame* ancestorFrame;
+  nsIFrame* ancestorFrame = nullptr;
   nsIFrame* rootFrame = GetRootFrame();
 
   // If the start or end of the range is the document, just use the root
@@ -5296,9 +5289,10 @@ void PresShell::UpdateCanvasBackground() {
     bool drawBackgroundImage = false;
     bool drawBackgroundColor = false;
     const nsStyleDisplay* disp = rootStyleFrame->StyleDisplay();
+    StyleAppearance appearance = disp->EffectiveAppearance();
     if (rootStyleFrame->IsThemed(disp) &&
-        disp->mAppearance != StyleAppearance::MozWinGlass &&
-        disp->mAppearance != StyleAppearance::MozWinBorderlessGlass) {
+        appearance != StyleAppearance::MozWinGlass &&
+        appearance != StyleAppearance::MozWinBorderlessGlass) {
       // Ignore the CSS background-color if -moz-appearance is used and it is
       // not one of the glass values. (Windows 7 Glass has traditionally not
       // overridden background colors, so we preserve that behavior for now.)
@@ -9663,7 +9657,7 @@ bool PresShell::DoReflow(nsIFrame* target, bool aInterruptible,
     for (auto iter = mFramesToDirty.Iter(); !iter.Done(); iter.Next()) {
       // Mark frames dirty until target frame.
       nsPtrHashKey<nsIFrame>* p = iter.Get();
-      for (nsIFrame* f = p->GetKey(); f && !NS_SUBTREE_DIRTY(f);
+      for (nsIFrame* f = p->GetKey(); f && !f->IsSubtreeDirty();
            f = f->GetParent()) {
         f->AddStateBits(NS_FRAME_HAS_DIRTY_CHILDREN);
         if (f->IsFlexItem()) {
@@ -9676,11 +9670,11 @@ bool PresShell::DoReflow(nsIFrame* target, bool aInterruptible,
       }
     }
 
-    NS_ASSERTION(NS_SUBTREE_DIRTY(target), "Why is the target not dirty?");
+    NS_ASSERTION(target->IsSubtreeDirty(), "Why is the target not dirty?");
     mDirtyRoots.Add(target);
     SetNeedLayoutFlush();
 
-    // Clear mFramesToDirty after we've done the NS_SUBTREE_DIRTY(target)
+    // Clear mFramesToDirty after we've done the target->IsSubtreeDirty()
     // assertion so that if it fails it's easier to see what's going on.
 #ifdef NOISY_INTERRUPTIBLE_REFLOW
     printf("mFramesToDirty.Count() == %u\n", mFramesToDirty.Count());
@@ -9771,7 +9765,7 @@ bool PresShell::ProcessReflowCommands(bool aInterruptible) {
         // Send an incremental reflow notification to the target frame.
         nsIFrame* target = mDirtyRoots.PopShallowestRoot();
 
-        if (!NS_SUBTREE_DIRTY(target)) {
+        if (!target->IsSubtreeDirty()) {
           // It's not dirty anymore, which probably means the notification
           // was posted in the middle of a reflow (perhaps with a reflow
           // root in the middle).  Don't do anything.

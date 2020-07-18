@@ -14,6 +14,7 @@
 #include "jit/CacheIR.h"
 #include "jit/CacheIRCompiler.h"
 #include "jit/CacheIROpsGenerated.h"
+#include "jit/CompileInfo.h"
 #include "jit/JitScript.h"
 #include "jit/JitSpewer.h"
 #include "jit/MIRGenerator.h"
@@ -21,6 +22,7 @@
 #include "jit/WarpCacheIRTranspiler.h"
 #include "vm/BytecodeIterator.h"
 #include "vm/BytecodeLocation.h"
+#include "vm/EnvironmentObject.h"
 #include "vm/Instrumentation.h"
 #include "vm/Opcodes.h"
 
@@ -32,6 +34,8 @@
 using namespace js;
 using namespace js::jit;
 
+using mozilla::Maybe;
+
 // WarpScriptOracle creates a WarpScriptSnapshot for a single JSScript. Note
 // that a single WarpOracle can use multiple WarpScriptOracles when scripts are
 // inlined.
@@ -41,6 +45,8 @@ class MOZ_STACK_CLASS WarpScriptOracle {
   MIRGenerator& mirGen_;
   TempAllocator& alloc_;
   HandleScript script_;
+  const CompileInfo* info_;
+  ICScript* icScript_;
 
   // Index of the next ICEntry for getICEntry. This assumes the script's
   // bytecode is processed from first to last instruction.
@@ -59,12 +65,15 @@ class MOZ_STACK_CLASS WarpScriptOracle {
                                            uint8_t* stubDataCopy);
 
  public:
-  WarpScriptOracle(JSContext* cx, WarpOracle* oracle, HandleScript script)
+  WarpScriptOracle(JSContext* cx, WarpOracle* oracle, HandleScript script,
+                   const CompileInfo* info, ICScript* icScript)
       : cx_(cx),
         oracle_(oracle),
         mirGen_(oracle->mirGen()),
         alloc_(mirGen_.alloc()),
-        script_(script) {}
+        script_(script),
+        info_(info),
+        icScript_(icScript) {}
 
   AbortReasonOr<WarpScriptSnapshot*> createScriptSnapshot();
 
@@ -97,6 +106,10 @@ mozilla::GenericErrorResult<AbortReason> WarpOracle::abort(HandleScript script,
   return res;
 }
 
+void WarpOracle::addScriptSnapshot(WarpScriptSnapshot* scriptSnapshot) {
+  scriptSnapshots_.insertBack(scriptSnapshot);
+}
+
 AbortReasonOr<WarpSnapshot*> WarpOracle::createSnapshot() {
   JitSpew(JitSpew_IonScripts,
           "Warp %sompiling script %s:%u:%u (%p) (warmup-counter=%" PRIu32
@@ -107,13 +120,19 @@ AbortReasonOr<WarpSnapshot*> WarpOracle::createSnapshot() {
           outerScript_->getWarmUpCount(),
           OptimizationLevelString(mirGen_.optimizationInfo().level()));
 
-  WarpScriptOracle scriptOracle(cx_, this, outerScript_);
+  MOZ_ASSERT(outerScript_->hasJitScript());
+  ICScript* icScript = outerScript_->jitScript()->icScript();
+  WarpScriptOracle scriptOracle(cx_, this, outerScript_, &mirGen_.outerInfo(),
+                                icScript);
 
   WarpScriptSnapshot* scriptSnapshot;
   MOZ_TRY_VAR(scriptSnapshot, scriptOracle.createScriptSnapshot());
 
+  // Insert the outermost scriptSnapshot at the front of the list.
+  scriptSnapshots_.insertFront(scriptSnapshot);
+
   auto* snapshot = new (alloc_.fallible())
-      WarpSnapshot(cx_, alloc_, scriptSnapshot, bailoutInfo_);
+      WarpSnapshot(cx_, alloc_, std::move(scriptSnapshots_), bailoutInfo_);
   if (!snapshot) {
     return abort(outerScript_, AbortReason::Alloc);
   }
@@ -174,7 +193,7 @@ const ICEntry& WarpScriptOracle::getICEntry(BytecodeLocation loc) {
 
   const ICEntry* entry;
   do {
-    entry = &script_->jitScript()->icEntry(icEntryIndex_);
+    entry = &icScript_->icEntry(icEntryIndex_);
     icEntryIndex_++;
   } while (entry->pcOffset() < offset);
 
@@ -490,6 +509,20 @@ AbortReasonOr<WarpScriptSnapshot*> WarpScriptOracle::createScriptSnapshot() {
         break;
       }
 
+      case JSOp::BindGName: {
+        RootedGlobalObject global(cx_, &script_->global());
+        RootedPropertyName name(cx_, loc.getPropertyName(script_));
+        if (JSObject* env = MaybeOptimizeBindGlobalName(cx_, global, name)) {
+          MOZ_ASSERT(env->isTenured());
+          if (!AddOpSnapshot<WarpBindGName>(alloc_, opSnapshots, offset, env)) {
+            return abort(AbortReason::Alloc);
+          }
+        } else {
+          MOZ_TRY(maybeInlineIC(opSnapshots, loc));
+        }
+        break;
+      }
+
       case JSOp::GetName:
       case JSOp::GetGName:
       case JSOp::GetProp:
@@ -520,7 +553,6 @@ AbortReasonOr<WarpScriptSnapshot*> WarpScriptOracle::createScriptSnapshot() {
       case JSOp::StrictEq:
       case JSOp::StrictNe:
       case JSOp::BindName:
-      case JSOp::BindGName:
       case JSOp::Add:
       case JSOp::Sub:
       case JSOp::Mul:
@@ -704,7 +736,6 @@ AbortReasonOr<WarpScriptSnapshot*> WarpScriptOracle::createScriptSnapshot() {
   }
 
   autoClearOpSnapshots.release();
-
   return scriptSnapshot;
 }
 
@@ -724,6 +755,9 @@ AbortReasonOr<Ok> WarpScriptOracle::maybeInlineIC(WarpOpSnapshotList& snapshots,
   //
   // * If the Baseline IC has a single ICStub we can inline, add a WarpCacheIR
   //   snapshot to transpile it to MIR.
+  //
+  // * If that single ICStub is a call IC with a known target, instead add a
+  //   WarpInline snapshot to transpile the guards to MIR and inline the target.
   //
   // * If the Baseline IC is cold (never executed), add a WarpBailout snapshot
   //   so that we can collect information in Baseline.
@@ -859,6 +893,57 @@ AbortReasonOr<Ok> WarpScriptOracle::maybeInlineIC(WarpOpSnapshotList& snapshots,
   }
 
   JitCode* jitCode = stub->jitCode();
+
+  Maybe<InlinableCallData> callData;
+  if (loc.isInvokeOp()) {
+    callData = FindInlinableCallData(stub);
+  }
+  if (callData.isSome() && callData->icScript) {
+    RootedFunction targetFunction(cx_, callData->target);
+    RootedScript targetScript(cx_, targetFunction->nonLazyScript());
+    ICScript* icScript = callData->icScript;
+    MOZ_ASSERT(targetScript->jitScript() == icScript->jitScript());
+    MOZ_ASSERT(TrialInliner::canInline(targetFunction));
+
+    // Add the inlined script to the inline script tree.
+    LifoAlloc* lifoAlloc = alloc_.lifoAlloc();
+    InlineScriptTree* inlineScriptTree = info_->inlineScriptTree()->addCallee(
+        &alloc_, loc.toRawBytecode(), targetScript);
+    if (!inlineScriptTree) {
+      return abort(AbortReason::Alloc);
+    }
+
+    // Create a CompileInfo for the inlined script.
+    jsbytecode* osrPc = nullptr;
+    bool needsArgsObj = false;
+    CompileInfo* info = lifoAlloc->new_<CompileInfo>(
+        mirGen_.runtime, targetScript, targetFunction, osrPc,
+        info_->analysisMode(), needsArgsObj, inlineScriptTree);
+    if (!info) {
+      return abort(AbortReason::Alloc);
+    }
+
+    // Take a snapshot of the CacheIR.
+    WarpCacheIR* cacheIRSnapshot = new (alloc_.fallible())
+        WarpCacheIR(offset, jitCode, stubInfo, stubDataCopy);
+    if (!cacheIRSnapshot) {
+      return abort(AbortReason::Alloc);
+    }
+
+    // Take a snapshot of the inlined script (which may do more
+    // inlining recursively).
+    WarpScriptOracle scriptOracle(cx_, oracle_, targetScript, info, icScript);
+
+    WarpScriptSnapshot* scriptSnapshot;
+    MOZ_TRY_VAR(scriptSnapshot, scriptOracle.createScriptSnapshot());
+    oracle_->addScriptSnapshot(scriptSnapshot);
+
+    if (!AddOpSnapshot<WarpInlinedCall>(
+            alloc_, snapshots, offset, cacheIRSnapshot, scriptSnapshot, info)) {
+      return abort(AbortReason::Alloc);
+    }
+    return Ok();
+  }
 
   if (!AddOpSnapshot<WarpCacheIR>(alloc_, snapshots, offset, jitCode, stubInfo,
                                   stubDataCopy)) {

@@ -279,7 +279,8 @@ __webpack_require__.r(__webpack_exports__);
 
 
 const DEFAULT_SITES = ["youtube-com", "facebook-com", "amazon", "reddit-com", "wikipedia-org", "twitter-com"].map(site => ({
-  icon: `resource://activity-stream/data/content/tippytop/images/${site}@2x.png`
+  icon: `resource://activity-stream/data/content/tippytop/images/${site}@2x.png`,
+  title: site.split("-")[0]
 }));
 const MultiStageAboutWelcome = props => {
   const [index, setScreenIndex] = Object(react__WEBPACK_IMPORTED_MODULE_0__["useState"])(0);
@@ -340,7 +341,7 @@ const MultiStageAboutWelcome = props => {
     })();
   }, [useImportable]);
   return react__WEBPACK_IMPORTED_MODULE_0___default.a.createElement(react__WEBPACK_IMPORTED_MODULE_0___default.a.Fragment, null, react__WEBPACK_IMPORTED_MODULE_0___default.a.createElement("div", {
-    className: `multistageContainer`
+    className: `outer-wrapper multistageContainer`
   }, props.screens.map(screen => {
     return index === screen.order ? react__WEBPACK_IMPORTED_MODULE_0___default.a.createElement(WelcomeScreen, {
       id: screen.id,
@@ -459,10 +460,13 @@ class WelcomeScreen extends react__WEBPACK_IMPORTED_MODULE_0___default.a.PureCom
           className: "tiles-topsites-section"
         }, this.props.topSites.slice(0, 5).map(({
           icon,
-          label
+          label,
+          title
         }) => react__WEBPACK_IMPORTED_MODULE_0___default.a.createElement("div", {
           className: "site",
-          key: icon + label
+          key: icon + label,
+          "aria-label": title ? title : label,
+          role: "img"
         }, react__WEBPACK_IMPORTED_MODULE_0___default.a.createElement("div", {
           className: "icon",
           style: icon ? {
@@ -532,8 +536,10 @@ class WelcomeScreen extends react__WEBPACK_IMPORTED_MODULE_0___default.a.PureCom
       className: "primary",
       value: "primary_button",
       onClick: this.handleAction
-    }))), content.secondary_button && content.secondary_button.position !== "top" ? this.renderSecondaryCTA() : null, react__WEBPACK_IMPORTED_MODULE_0___default.a.createElement("div", {
-      className: "steps"
+    }))), content.secondary_button && content.secondary_button.position !== "top" ? this.renderSecondaryCTA() : null, react__WEBPACK_IMPORTED_MODULE_0___default.a.createElement("nav", {
+      className: "steps",
+      "data-l10n-id": "onboarding-welcome-steps-indicator",
+      "data-l10n-args": `{"current": ${parseInt(this.props.order, 10) + 1}, "total": ${this.props.totalNumberOfScreens}}`
     }, this.renderStepsIndicator()));
   }
 

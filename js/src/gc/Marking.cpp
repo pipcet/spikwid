@@ -1437,7 +1437,9 @@ inline void js::GCMarker::eagerlyMarkChildren(Scope* scope) {
 
       case ScopeKind::Module: {
         ModuleScope::Data& data = scope->as<ModuleScope>().data();
-        traverseObjectEdge(scope, data.module);
+        if (data.module) {
+          traverseObjectEdge(scope, data.module);
+        }
         names = &data.trailingNames;
         length = data.length;
         break;
@@ -3928,16 +3930,6 @@ bool js::gc::IsMarkedInternal(JSRuntime* rt, T** thingp) {
   return (*thingp)->asTenured().isMarkedAny();
 }
 
-bool js::gc::IsAboutToBeFinalizedDuringSweep(TenuredCell& tenured) {
-  MOZ_ASSERT(!IsInsideNursery(&tenured));
-  MOZ_ASSERT(tenured.zoneFromAnyThread()->isGCSweeping());
-
-  // Don't depend on the mark state of other cells during finalization.
-  MOZ_ASSERT(!CurrentThreadIsGCFinalizing());
-
-  return !tenured.isMarkedAny();
-}
-
 template <typename T>
 bool js::gc::IsAboutToBeFinalizedInternal(T** thingp) {
   // Don't depend on the mark state of other cells during finalization.
@@ -3960,8 +3952,10 @@ bool js::gc::IsAboutToBeFinalizedInternal(T** thingp) {
 
   Zone* zone = thing->asTenured().zoneFromAnyThread();
   if (zone->isGCSweeping()) {
-    return IsAboutToBeFinalizedDuringSweep(thing->asTenured());
-  } else if (zone->isGCCompacting() && IsForwarded(thing)) {
+    return !thing->asTenured().isMarkedAny();
+  }
+
+  if (zone->isGCCompacting() && IsForwarded(thing)) {
     *thingp = Forwarded(thing);
     return false;
   }

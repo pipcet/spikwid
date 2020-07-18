@@ -664,6 +664,9 @@ def target_tasks_general_perf_testing(full_task_graph, parameters, graph_config)
                     if 'tp6' in try_name and 'amazon' in try_name:
                         return True
             else:
+                # Bug 1652451 - Perma-failing due to server issues
+                if 'youtube-playback' in try_name and 'youtube-playback-chrome' not in try_name:
+                    return False
                 # Run tests on all chrome variants
                 if '-chrome' in try_name:
                     return True
@@ -882,6 +885,16 @@ def target_tasks_merge_automation(full_task_graph, parameters, graph_config):
     def filter(task):
         # For now any task in the repo-update kind is ok
         return task.kind in ['merge-automation']
+    return [l for l, t in six.iteritems(full_task_graph.tasks) if filter(t)]
+
+
+@_target_task('scriptworker_canary')
+def target_tasks_scriptworker_canary(full_task_graph, parameters, graph_config):
+    """Select the set of tasks required to run scriptworker canaries.
+    """
+    def filter(task):
+        # For now any task in the repo-update kind is ok
+        return task.kind in ['scriptworker-canary']
     return [l for l, t in six.iteritems(full_task_graph.tasks) if filter(t)]
 
 

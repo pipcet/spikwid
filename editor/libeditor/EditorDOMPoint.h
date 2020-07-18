@@ -71,6 +71,7 @@ typedef EditorDOMPointBase<nsCOMPtr<nsINode>, nsCOMPtr<nsIContent>>
     EditorDOMPoint;
 typedef EditorDOMPointBase<nsINode*, nsIContent*> EditorRawDOMPoint;
 typedef EditorDOMPointBase<RefPtr<dom::Text>, nsIContent*> EditorDOMPointInText;
+typedef EditorDOMPointBase<dom::Text*, nsIContent*> EditorRawDOMPointInText;
 
 template <typename ParentType, typename ChildType>
 class EditorDOMPointBase final {
@@ -907,6 +908,15 @@ class EditorDOMPointBase final {
     return RawRangeBoundary(mParent, mParent->GetLastChild());
   }
 
+  EditorDOMPointInText GetAsInText() const {
+    return IsInTextNode() ? EditorDOMPointInText(ContainerAsText(), Offset())
+                          : EditorDOMPointInText();
+  }
+  MOZ_NEVER_INLINE_DEBUG EditorDOMPointInText AsInText() const {
+    MOZ_ASSERT(IsInTextNode());
+    return EditorDOMPointInText(ContainerAsText(), Offset());
+  }
+
   template <typename A, typename B>
   bool IsBefore(const EditorDOMPointBase<A, B>& aOther) const {
     if (!IsSetAndValid() || !aOther.IsSetAndValid()) {
@@ -986,6 +996,7 @@ class EditorDOMRangeBase;
 typedef EditorDOMRangeBase<EditorDOMPoint> EditorDOMRange;
 typedef EditorDOMRangeBase<EditorRawDOMPoint> EditorRawDOMRange;
 typedef EditorDOMRangeBase<EditorDOMPointInText> EditorDOMRangeInTexts;
+typedef EditorDOMRangeBase<EditorRawDOMPointInText> EditorRawDOMRangeInTexts;
 
 template <typename EditorDOMPointType>
 class EditorDOMRangeBase final {
@@ -1006,6 +1017,23 @@ class EditorDOMRangeBase final {
                   mStart.EqualsOrIsBefore(mEnd));
   }
 
+  template <typename PointType>
+  MOZ_NEVER_INLINE_DEBUG void SetStart(const PointType& aStart) {
+    mStart = aStart;
+  }
+  template <typename PointType>
+  MOZ_NEVER_INLINE_DEBUG void SetEnd(const PointType& aEnd) {
+    mEnd = aEnd;
+  }
+  template <typename StartPointType, typename EndPointType>
+  MOZ_NEVER_INLINE_DEBUG void SetStartAndEnd(const StartPointType& aStart,
+                                             const EndPointType& aEnd) {
+    MOZ_ASSERT_IF(aStart.IsSet() && aEnd.IsSet(),
+                  aStart.EqualsOrIsBefore(aEnd));
+    mStart = aStart;
+    mEnd = aEnd;
+  }
+
   const EditorDOMPointType& StartRef() const { return mStart; }
   const EditorDOMPointType& EndRef() const { return mEnd; }
 
@@ -1014,9 +1042,26 @@ class EditorDOMRangeBase final {
     return mStart == mEnd;
   }
   bool IsPositioned() const { return mStart.IsSet() && mEnd.IsSet(); }
+  bool IsPositionedAndValid() const {
+    return mStart.IsSetAndValid() && mEnd.IsSetAndValid() &&
+           mStart.EqualsOrIsBefore(mEnd);
+  }
+  template <typename OtherPointType>
+  bool Contains(const OtherPointType& aPoint) const {
+    return IsPositioned() && mStart.EqualsOrIsBefore(aPoint) &&
+           mEnd.IsBefore(aPoint);
+  }
   bool InSameContainer() const {
     MOZ_ASSERT(IsPositioned());
     return IsPositioned() && mStart.GetContainer() == mEnd.GetContainer();
+  }
+  bool IsInContentNodes() const {
+    MOZ_ASSERT(IsPositioned());
+    return IsPositioned() && mStart.IsInContentNode() && mEnd.IsInContentNode();
+  }
+  bool IsInTextNodes() const {
+    MOZ_ASSERT(IsPositioned());
+    return IsPositioned() && mStart.IsInTextNode() && mEnd.IsInTextNode();
   }
   template <typename OtherRangeType>
   bool operator==(const OtherRangeType& aOther) const {
@@ -1025,6 +1070,16 @@ class EditorDOMRangeBase final {
   template <typename OtherRangeType>
   bool operator!=(const OtherRangeType& aOther) const {
     return *this == aOther;
+  }
+
+  EditorDOMRangeInTexts GetAsInTexts() const {
+    return IsInTextNodes()
+               ? EditorDOMRangeInTexts(mStart.AsInText(), mEnd.AsInText())
+               : EditorDOMRangeInTexts();
+  }
+  MOZ_NEVER_INLINE_DEBUG EditorDOMRangeInTexts AsInTexts() const {
+    MOZ_ASSERT(IsInTextNodes());
+    return EditorDOMRangeInTexts(mStart.AsInText(), mEnd.AsInText());
   }
 
  private:

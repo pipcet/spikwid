@@ -371,7 +371,7 @@ nsDocShell::nsDocShell(BrowsingContext* aBrowsingContext,
 #ifdef DEBUG
       mInEnsureScriptEnv(false),
 #endif
-      mCreated(false),
+      mInitialized(false),
       mAllowSubframes(true),
       mAllowJavascript(true),
       mAllowMetaRedirects(true),
@@ -458,6 +458,34 @@ nsDocShell::~nsDocShell() {
              nsIDToCString(mHistoryID).get(), url.get()));
   }
 #endif
+}
+
+bool nsDocShell::Initialize() {
+  if (mInitialized) {
+    // We've already been initialized.
+    return true;
+  }
+
+  NS_ASSERTION(mItemType == typeContent || mItemType == typeChrome,
+               "Unexpected item type in docshell");
+
+  NS_ENSURE_TRUE(Preferences::GetRootBranch(), false);
+  mInitialized = true;
+
+  mDisableMetaRefreshWhenInactive =
+      Preferences::GetBool("browser.meta_refresh_when_inactive.disabled",
+                           mDisableMetaRefreshWhenInactive);
+
+  mDeviceSizeIsPageSize = Preferences::GetBool(
+      "docshell.device_size_is_page_size", mDeviceSizeIsPageSize);
+
+  if (nsCOMPtr<nsIObserverService> serv = services::GetObserverService()) {
+    const char* msg = mItemType == typeContent ? NS_WEBNAVIGATION_CREATE
+                                               : NS_CHROME_WEBNAVIGATION_CREATE;
+    serv->NotifyWhenScriptSafe(GetAsSupports(this), msg, nullptr);
+  }
+
+  return true;
 }
 
 /* static */
@@ -2832,29 +2860,10 @@ nsDocShell::AddChildSHEntry(nsISHEntry* aCloneRef, nsISHEntry* aNewEntry,
       rv = mOSHE->AddChild(aNewEntry, aChildOffset, UseRemoteSubframes());
     }
   } else {
-    rv = AddChildSHEntryInternal(aCloneRef, aNewEntry, aChildOffset, aLoadType,
-                                 aCloneChildren);
-  }
-  return rv;
-}
-
-nsresult nsDocShell::AddChildSHEntryInternal(nsISHEntry* aCloneRef,
-                                             nsISHEntry* aNewEntry,
-                                             int32_t aChildOffset,
-                                             uint32_t aLoadType,
-                                             bool aCloneChildren) {
-  nsresult rv = NS_OK;
-  if (GetSessionHistory()) {
-    rv = GetSessionHistory()->LegacySHistory()->AddChildSHEntryHelper(
-        aCloneRef, aNewEntry, mBrowsingContext, aCloneChildren);
-  } else {
-    /* Just pass this along */
-    nsCOMPtr<nsIDocShell> parent =
-        do_QueryInterface(GetAsSupports(mParent), &rv);
-    if (parent) {
-      rv = static_cast<nsDocShell*>(parent.get())
-               ->AddChildSHEntryInternal(aCloneRef, aNewEntry, aChildOffset,
-                                         aLoadType, aCloneChildren);
+    RefPtr<ChildSHistory> shistory = GetRootSessionHistory();
+    if (shistory) {
+      rv = shistory->LegacySHistory()->AddChildSHEntryHelper(
+          aCloneRef, aNewEntry, mBrowsingContext->Top(), aCloneChildren);
     }
   }
   return rv;
@@ -2899,8 +2908,7 @@ nsresult nsDocShell::AddChildSHEntryToParent(nsISHEntry* aNewEntry,
 
 NS_IMETHODIMP
 nsDocShell::RemoveFromSessionHistory() {
-  RefPtr<ChildSHistory> sessionHistory =
-      mBrowsingContext->Top()->GetChildSessionHistory();
+  RefPtr<ChildSHistory> sessionHistory = GetRootSessionHistory();
   if (!sessionHistory) {
     return NS_OK;
   }
@@ -4097,36 +4105,7 @@ nsDocShell::InitWindow(nativeWindow aParentNativeWindow,
                        int32_t aWidth, int32_t aHeight) {
   SetParentWidget(aParentWidget);
   SetPositionAndSize(aX, aY, aWidth, aHeight, 0);
-
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsDocShell::Create() {
-  if (mCreated) {
-    // We've already been created
-    return NS_OK;
-  }
-
-  NS_ASSERTION(mItemType == typeContent || mItemType == typeChrome,
-               "Unexpected item type in docshell");
-
-  NS_ENSURE_TRUE(Preferences::GetRootBranch(), NS_ERROR_FAILURE);
-  mCreated = true;
-
-  mDisableMetaRefreshWhenInactive =
-      Preferences::GetBool("browser.meta_refresh_when_inactive.disabled",
-                           mDisableMetaRefreshWhenInactive);
-
-  mDeviceSizeIsPageSize = Preferences::GetBool(
-      "docshell.device_size_is_page_size", mDeviceSizeIsPageSize);
-
-  nsCOMPtr<nsIObserverService> serv = services::GetObserverService();
-  if (serv) {
-    const char* msg = mItemType == typeContent ? NS_WEBNAVIGATION_CREATE
-                                               : NS_CHROME_WEBNAVIGATION_CREATE;
-    serv->NotifyObservers(GetAsSupports(this), msg, nullptr);
-  }
+  NS_ENSURE_TRUE(Initialize(), NS_ERROR_FAILURE);
 
   return NS_OK;
 }
@@ -5387,17 +5366,22 @@ nsresult nsDocShell::Embed(nsIContentViewer* aContentViewer,
     SetDocCurrentStateObj(mLSHE);
 
     SetHistoryEntryAndUpdateBC(Nothing(), Some<nsISHEntry*>(mLSHE));
+    nsID changeID = {};
     if (StaticPrefs::fission_sessionHistoryInParent()) {
       mActiveEntry = nullptr;
       mLoadingEntry.swap(mActiveEntry);
       if (mActiveEntry) {
         if (XRE_IsParentProcess()) {
           mBrowsingContext->Canonical()->SessionHistoryCommit(
-              mActiveEntry->Id());
+              mActiveEntry->Id(), changeID);
         } else {
+          RefPtr<ChildSHistory> rootSH = GetRootSessionHistory();
+          if (rootSH) {
+            changeID = rootSH->AddPendingHistoryChange();
+          }
           ContentChild* cc = ContentChild::GetSingleton();
-          mozilla::Unused << cc->SendHistoryCommit(mBrowsingContext,
-                                                   mActiveEntry->Id());
+          mozilla::Unused << cc->SendHistoryCommit(
+              mBrowsingContext, mActiveEntry->Id(), changeID);
         }
       }
     }
@@ -6639,8 +6623,22 @@ nsresult nsDocShell::CaptureState() {
   NS_ENSURE_TRUE(windowState, NS_ERROR_FAILURE);
 
   if (MOZ_UNLIKELY(MOZ_LOG_TEST(gPageCacheLog, LogLevel::Debug))) {
-    nsCOMPtr<nsIURI> uri = mOSHE->GetURI();
     nsAutoCString spec;
+    nsCOMPtr<nsIURI> uri;
+    if (StaticPrefs::fission_sessionHistoryInParent()) {
+      uri = mActiveEntry->GetURI();
+#ifdef DEBUG
+      nsCOMPtr<nsIURI> debugURI(mOSHE->GetURI());
+      MOZ_ASSERT(!uri == !debugURI);
+      if (uri && debugURI) {
+        bool debugURIEquals;
+        debugURI->Equals(uri, &debugURIEquals);
+        MOZ_ASSERT(debugURIEquals);
+      }
+#endif
+    } else {
+      uri = mOSHE->GetURI();
+    }
     if (uri) {
       uri->GetSpec(spec);
     }
@@ -8231,7 +8229,14 @@ bool nsDocShell::IsSameDocumentNavigation(nsDocShellLoadState* aLoadState,
 
 #ifdef DEBUG
     if (aState.mHistoryNavBetweenSameDoc) {
-      nsCOMPtr<nsIInputStream> currentPostData = mOSHE->GetPostData();
+      nsCOMPtr<nsIInputStream> currentPostData;
+      if (StaticPrefs::fission_sessionHistoryInParent()) {
+        currentPostData = mActiveEntry->GetPostData();
+        MOZ_ASSERT(!(nsCOMPtr<nsIInputStream>(mOSHE->GetPostData())) ==
+                   !currentPostData);
+      } else {
+        currentPostData = mOSHE->GetPostData();
+      }
       NS_ASSERTION(currentPostData == aLoadState->PostDataStream(),
                    "Different POST data for entries for the same page?");
     }
@@ -8340,9 +8345,13 @@ nsresult nsDocShell::HandleSameDocumentNavigation(
   if (mOSHE) {
     /* save current position of scroller(s) (bug 59774) */
     mOSHE->SetScrollPosition(scrollPos.x, scrollPos.y);
-    DebugOnly<nsresult> rv =
-        mOSHE->GetScrollRestorationIsManual(&scrollRestorationIsManual);
-    MOZ_ASSERT(NS_SUCCEEDED(rv), "Didn't expect this to fail.");
+    if (StaticPrefs::fission_sessionHistoryInParent()) {
+      scrollRestorationIsManual = mActiveEntry->GetScrollRestorationIsManual();
+      MOZ_ASSERT(mOSHE->GetScrollRestorationIsManual() ==
+                 scrollRestorationIsManual);
+    } else {
+      scrollRestorationIsManual = mOSHE->GetScrollRestorationIsManual();
+    }
     // Get the postdata and page ident from the current page, if
     // the new load is being done via normal means.  Note that
     // "normal means" can be checked for just by checking for
@@ -8447,7 +8456,16 @@ nsresult nsDocShell::HandleSameDocumentNavigation(
        aLoadState->LoadType() == LOAD_RELOAD_NORMAL) &&
       !scrollRestorationIsManual) {
     needsScrollPosUpdate = true;
-    mOSHE->GetScrollPosition(&bx, &by);
+    if (StaticPrefs::fission_sessionHistoryInParent()) {
+      mActiveEntry->GetScrollPosition(&bx, &by);
+#ifdef DEBUG
+      nscoord x, y;
+      mOSHE->GetScrollPosition(&x, &y);
+      MOZ_ASSERT(x == bx && y == by);
+#endif
+    } else {
+      mOSHE->GetScrollPosition(&bx, &by);
+    }
   }
 
   // Dispatch the popstate and hashchange events, as appropriate.
@@ -9515,7 +9533,7 @@ nsresult nsDocShell::DoURILoad(nsDocShellLoadState* aLoadState,
 
   uint32_t sandboxFlags = mBrowsingContext->GetSandboxFlags();
   nsSecurityFlags securityFlags =
-      nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL;
+      nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL;
 
   if (mLoadType == LOAD_ERROR_PAGE) {
     securityFlags |= nsILoadInfo::SEC_LOAD_ERROR_PAGE;
@@ -9559,7 +9577,18 @@ nsresult nsDocShell::DoURILoad(nsDocShellLoadState* aLoadState,
     cacheKey = mOSHE->GetCacheKey();
   }
 
-  bool uriModified = mLSHE ? mLSHE->GetURIWasModified() : false;
+  bool uriModified;
+  if (mLSHE) {
+    if (StaticPrefs::fission_sessionHistoryInParent()) {
+      uriModified = mLoadingEntry->GetURIWasModified();
+      MOZ_ASSERT(uriModified == mLSHE->GetURIWasModified());
+    } else {
+      uriModified = mLSHE->GetURIWasModified();
+    }
+  } else {
+    uriModified = false;
+  }
+
   bool isXFOError = false;
   if (mFailedChannel) {
     nsresult status;
@@ -10062,8 +10091,7 @@ bool nsDocShell::OnNewURI(nsIURI* aURI, nsIChannel* aChannel,
 
   // Create SH Entry (mLSHE) only if there is a SessionHistory object in the
   // in the root browsing context.
-  RefPtr<ChildSHistory> rootSH =
-      mBrowsingContext->Top()->GetChildSessionHistory();
+  RefPtr<ChildSHistory> rootSH = GetRootSessionHistory();
   if (!rootSH) {
     updateSHistory = false;
     updateGHistory = false;  // XXX Why global history too?
@@ -10451,18 +10479,22 @@ nsresult nsDocShell::UpdateURLAndHistory(Document* aDocument, nsIURI* aNewURI,
     mOSHE->SetScrollPosition(scrollPos.x, scrollPos.y);
 
     bool scrollRestorationIsManual;
-    nsresult rv =
-        mOSHE->GetScrollRestorationIsManual(&scrollRestorationIsManual);
-    MOZ_ASSERT(NS_SUCCEEDED(rv), "Didn't expect this to fail.");
+    if (StaticPrefs::fission_sessionHistoryInParent()) {
+      scrollRestorationIsManual = mActiveEntry->GetScrollRestorationIsManual();
+      MOZ_ASSERT(mOSHE->GetScrollRestorationIsManual() ==
+                 scrollRestorationIsManual);
+    } else {
+      scrollRestorationIsManual = mOSHE->GetScrollRestorationIsManual();
+    }
 
     nsCOMPtr<nsIContentSecurityPolicy> csp = aDocument->GetCsp();
 
     // Since we're not changing which page we have loaded, pass
     // true for aCloneChildren.
-    rv = AddToSessionHistory(aNewURI, nullptr,
-                             aDocument->NodePrincipal(),  // triggeringPrincipal
-                             nullptr, nullptr, csp, true,
-                             getter_AddRefs(newSHEntry));
+    nsresult rv = AddToSessionHistory(
+        aNewURI, nullptr,
+        aDocument->NodePrincipal(),  // triggeringPrincipal
+        nullptr, nullptr, csp, true, getter_AddRefs(newSHEntry));
     NS_ENSURE_SUCCESS(rv, rv);
 
     NS_ENSURE_TRUE(newSHEntry, NS_ERROR_FAILURE);
@@ -10477,7 +10509,16 @@ nsresult nsDocShell::UpdateURLAndHistory(Document* aDocument, nsIURI* aNewURI,
 
     // Set the new SHEntry's title (bug 655273).
     nsString title;
-    mOSHE->GetTitle(title);
+    if (StaticPrefs::fission_sessionHistoryInParent()) {
+      title = mActiveEntry->GetTitle();
+#ifdef DEBUG
+      nsString debugTitle;
+      mOSHE->GetTitle(debugTitle);
+      MOZ_ASSERT(title.Equals(debugTitle));
+#endif
+    } else {
+      mOSHE->GetTitle(title);
+    }
     newSHEntry->SetTitle(title);
 
     // AddToSessionHistory may not modify mOSHE.  In case it doesn't,
@@ -10581,6 +10622,11 @@ NS_IMETHODIMP
 nsDocShell::GetCurrentScrollRestorationIsManual(bool* aIsManual) {
   *aIsManual = false;
   if (mOSHE) {
+    if (StaticPrefs::fission_sessionHistoryInParent()) {
+      *aIsManual = mActiveEntry->GetScrollRestorationIsManual();
+      MOZ_ASSERT(mOSHE->GetScrollRestorationIsManual() == *aIsManual);
+      return NS_OK;
+    }
     return mOSHE->GetScrollRestorationIsManual(aIsManual);
   }
 
@@ -10659,16 +10705,13 @@ nsresult nsDocShell::AddToSessionHistory(
   nsresult rv = NS_OK;
   nsCOMPtr<nsISHEntry> entry;
 
-  // Get a handle to the root docshell
-  nsCOMPtr<nsIDocShellTreeItem> root;
-  GetInProcessSameTypeRootTreeItem(getter_AddRefs(root));
   /*
    * If this is a LOAD_FLAGS_REPLACE_HISTORY in a subframe, we use
    * the existing SH entry in the page and replace the url and
    * other vitalities.
    */
   if (LOAD_TYPE_HAS_FLAGS(mLoadType, LOAD_FLAGS_REPLACE_HISTORY) &&
-      root != static_cast<nsIDocShellTreeItem*>(this)) {
+      !mBrowsingContext->IsTop()) {
     // This is a subframe
     entry = mOSHE;
     if (entry) {
@@ -10678,11 +10721,7 @@ nsresult nsDocShell::AddToSessionHistory(
 
   // Create a new entry if necessary.
   if (!entry) {
-    nsCOMPtr<nsIWebNavigation> webnav = do_QueryInterface(root);
-    NS_ENSURE_TRUE(webnav, NS_ERROR_FAILURE);
-
-    RefPtr<ChildSHistory> shistory = webnav->GetSessionHistory();
-    entry = new nsSHEntry(shistory ? shistory->LegacySHistory() : nullptr);
+    entry = new nsSHEntry();
   }
 
   // Get the post data & referrer
@@ -10810,7 +10849,7 @@ nsresult nsDocShell::AddToSessionHistory(
                 resultPrincipalURI, loadReplace, referrerInfo, srcdoc,
                 srcdocEntry, baseURI, saveLayoutState, expired);
 
-  if (root == static_cast<nsIDocShellTreeItem*>(this) && GetSessionHistory()) {
+  if (mBrowsingContext->IsTop() && GetSessionHistory()) {
     bool shouldPersist = ShouldAddToSessionHistory(aURI, aChannel);
     Maybe<int32_t> previousEntryIndex;
     Maybe<int32_t> loadedEntryIndex;
@@ -10950,7 +10989,13 @@ nsDocShell::PersistLayoutHistoryState() {
 
   if (mOSHE) {
     bool scrollRestorationIsManual;
-    Unused << mOSHE->GetScrollRestorationIsManual(&scrollRestorationIsManual);
+    if (StaticPrefs::fission_sessionHistoryInParent() && mActiveEntry) {
+      scrollRestorationIsManual = mActiveEntry->GetScrollRestorationIsManual();
+      MOZ_ASSERT(mOSHE->GetScrollRestorationIsManual() ==
+                 scrollRestorationIsManual);
+    } else {
+      scrollRestorationIsManual = mOSHE->GetScrollRestorationIsManual();
+    }
     nsCOMPtr<nsILayoutHistoryState> layoutState;
     if (RefPtr<PresShell> presShell = GetPresShell()) {
       rv = presShell->CaptureHistoryState(getter_AddRefs(layoutState));
@@ -11019,16 +11064,9 @@ already_AddRefed<nsISHEntry> nsDocShell::SetHistoryEntry(
 }
 
 already_AddRefed<ChildSHistory> nsDocShell::GetRootSessionHistory() {
-  nsCOMPtr<nsIDocShellTreeItem> root;
-  nsresult rv = GetInProcessSameTypeRootTreeItem(getter_AddRefs(root));
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return nullptr;
-  }
-  nsCOMPtr<nsIWebNavigation> webnav = do_QueryInterface(root);
-  if (!webnav) {
-    return nullptr;
-  }
-  return webnav->GetSessionHistory();
+  RefPtr<ChildSHistory> childSHistory =
+      mBrowsingContext->Top()->GetChildSessionHistory();
+  return childSHistory.forget();
 }
 
 nsresult nsDocShell::GetHttpChannel(nsIChannel* aChannel,

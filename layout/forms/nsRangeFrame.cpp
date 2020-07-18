@@ -460,7 +460,7 @@ Decimal nsRangeFrame::GetValueAtEventPoint(WidgetGUIEvent* aEvent) {
 }
 
 void nsRangeFrame::UpdateForValueChange() {
-  if (NS_SUBTREE_DIRTY(this)) {
+  if (IsSubtreeDirty()) {
     return;  // we're going to be updated when we reflow
   }
   nsIFrame* rangeProgressFrame = mProgressDiv->GetPrimaryFrame();
@@ -709,7 +709,8 @@ bool nsRangeFrame::ShouldUseNativeStyle() const {
   nsIFrame* progressFrame = mProgressDiv->GetPrimaryFrame();
   nsIFrame* thumbFrame = mThumbDiv->GetPrimaryFrame();
 
-  return StyleDisplay()->mAppearance == StyleAppearance::Range && trackFrame &&
+  return StyleDisplay()->EffectiveAppearance() == StyleAppearance::Range &&
+         trackFrame &&
          !PresContext()->HasAuthorSpecifiedRules(
              trackFrame, STYLES_DISABLING_NATIVE_THEMING) &&
          progressFrame &&

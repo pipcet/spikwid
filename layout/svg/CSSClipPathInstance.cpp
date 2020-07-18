@@ -12,7 +12,7 @@
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/PathHelpers.h"
 #include "mozilla/ShapeUtils.h"
-#include "nsSVGUtils.h"
+#include "mozilla/SVGUtils.h"
 #include "gfx2DGlue.h"
 #include "gfxContext.h"
 #include "gfxPlatform.h"
@@ -28,7 +28,7 @@ namespace mozilla {
 /* static*/
 void CSSClipPathInstance::ApplyBasicShapeOrPathClip(
     gfxContext& aContext, nsIFrame* aFrame, const gfxMatrix& aTransform) {
-  auto& clipPathStyle = aFrame->StyleSVGReset()->mClipPath;
+  const auto& clipPathStyle = aFrame->StyleSVGReset()->mClipPath;
   MOZ_ASSERT(clipPathStyle.IsShape() || clipPathStyle.IsBox() ||
                  clipPathStyle.IsPath(),
              "This is used with basic-shape, geometry-box, and path() only");
@@ -48,7 +48,7 @@ void CSSClipPathInstance::ApplyBasicShapeOrPathClip(
 /* static*/
 bool CSSClipPathInstance::HitTestBasicShapeOrPathClip(nsIFrame* aFrame,
                                                       const gfxPoint& aPoint) {
-  auto& clipPathStyle = aFrame->StyleSVGReset()->mClipPath;
+  const auto& clipPathStyle = aFrame->StyleSVGReset()->mClipPath;
   MOZ_ASSERT(!clipPathStyle.IsNone(), "unexpected none value");
   // In the future CSSClipPathInstance may handle <clipPath> references as
   // well. For the time being return early.
@@ -61,7 +61,7 @@ bool CSSClipPathInstance::HitTestBasicShapeOrPathClip(nsIFrame* aFrame,
   RefPtr<DrawTarget> drawTarget =
       gfxPlatform::GetPlatform()->ScreenReferenceDrawTarget();
   RefPtr<Path> path = instance.CreateClipPath(
-      drawTarget, nsSVGUtils::GetCSSPxToDevPxMatrix(aFrame));
+      drawTarget, SVGUtils::GetCSSPxToDevPxMatrix(aFrame));
   float pixelRatio = float(AppUnitsPerCSSPixel()) /
                      aFrame->PresContext()->AppUnitsPerDevPixel();
   return path && path->ContainsPoint(ToPoint(aPoint) * pixelRatio, Matrix());
@@ -78,7 +78,7 @@ Maybe<Rect> CSSClipPathInstance::GetBoundingRectForBasicShapeOrPathClip(
   RefPtr<DrawTarget> drawTarget =
       gfxPlatform::GetPlatform()->ScreenReferenceDrawTarget();
   RefPtr<Path> path = instance.CreateClipPath(
-      drawTarget, nsSVGUtils::GetCSSPxToDevPxMatrix(aFrame));
+      drawTarget, SVGUtils::GetCSSPxToDevPxMatrix(aFrame));
   return path ? Some(path->GetBounds()) : Nothing();
 }
 

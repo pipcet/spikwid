@@ -4,8 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef mozilla_dom_SVGFESpotLightElement_h
-#define mozilla_dom_SVGFESpotLightElement_h
+#ifndef DOM_SVG_SVGFESPOTLIGHTELEMENT_H_
+#define DOM_SVG_SVGFESPOTLIGHTELEMENT_H_
 
 #include "SVGAnimatedNumber.h"
 #include "SVGFilters.h"
@@ -16,7 +16,7 @@ nsresult NS_NewSVGFESpotLightElement(
 namespace mozilla {
 namespace dom {
 
-typedef SVGFELightElement SVGFESpotLightElementBase;
+using SVGFESpotLightElementBase = SVGFELightElement;
 
 class SVGFESpotLightElement : public SVGFESpotLightElementBase {
   friend nsresult(::NS_NewSVGFESpotLightElement(
@@ -69,4 +69,4 @@ class SVGFESpotLightElement : public SVGFESpotLightElementBase {
 }  // namespace dom
 }  // namespace mozilla
 
-#endif  // mozilla_dom_SVGFESpotLightElement_h
+#endif  // DOM_SVG_SVGFESPOTLIGHTELEMENT_H_

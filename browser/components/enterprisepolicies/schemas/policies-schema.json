@@ -645,10 +645,6 @@
       }
     },
 
-    "MasterPassword": {
-      "type": "boolean"
-    },
-
     "NetworkPrediction": {
       "type": "boolean"
     },
@@ -1029,6 +1025,10 @@
       }
     },
 
+    "PrimaryPassword": {
+      "type": "boolean"
+    },
+
     "PromptForDownloadLocation": {
       "type": "boolean"
     },
@@ -1241,6 +1241,9 @@
           "type": "boolean"
         },
         "UrlbarInterventions": {
+          "type": "boolean"
+        },
+        "SkipOnboarding": {
           "type": "boolean"
         },
         "Locked": {

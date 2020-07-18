@@ -406,6 +406,12 @@ class HttpChannelChild final : public PHttpChannelChild,
   bool mDoDiagnosticAssertWhenOnStopNotCalledOnDestroy = false;
   bool mAsyncOpenSucceeded = false;
   bool mSuccesfullyRedirected = false;
+  bool mRemoteChannelExistedAtCancel = false;
+  bool mEverHadBgChildAtAsyncOpen = false;
+  bool mEverHadBgChildAtConnectParent = false;
+  bool mCreateBackgroundChannelFailed = false;
+  bool mBgInitFailCallbackTriggered = false;
+  bool mCanSendAtCancel = false;
   // State of the HttpBackgroundChannelChild's event queue during destruction.
   enum BckChildQueueStatus {
     // BckChild never told us
@@ -480,6 +486,11 @@ class HttpChannelChild final : public PHttpChannelChild,
 
   void FinishInterceptedRedirect();
   void CleanupRedirectingChannel(nsresult rv);
+
+  // Calls OnStartRequest and/or OnStopRequest on our listener in case we didn't
+  // do that so far.  If we already did, it will just release references to
+  // cleanup.
+  void NotifyOrReleaseListeners(nsresult rv);
 
   // true after successful AsyncOpen until OnStopRequest completes.
   bool RemoteChannelExists() { return CanSend() && !mKeptAlive; }

@@ -57,9 +57,9 @@
 #include "nsImageFrame.h"
 #include "nsINamed.h"
 #include "nsIObserverService.h"
+#include "nsMenuPopupFrame.h"
 #include "nsLayoutUtils.h"
 #include "nsPluginFrame.h"
-#include "SVGGeometryFrame.h"
 #include "nsTreeBodyFrame.h"
 #include "nsTreeColumns.h"
 #include "nsTreeUtils.h"
@@ -70,6 +70,7 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/PresShell.h"
 #include "mozilla/Services.h"
+#include "mozilla/SVGGeometryFrame.h"
 #include "nsDeckFrame.h"
 
 #ifdef MOZ_XUL

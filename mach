@@ -35,7 +35,6 @@ py2commands="
     raptor
     raptor-test
     reftest
-    release
     talos-test
     taskcluster-load-image
     taskgraph
@@ -45,8 +44,6 @@ py2commands="
     visualmetrics
     web-platform-tests
     web-platform-tests-update
-    webidl-example
-    webidl-parser-test
     wpt
     wpt-manifest-update
     wpt-metadata-merge
@@ -55,7 +52,6 @@ py2commands="
     wpt-test-paths
     wpt-unittest
     wpt-update
-    xpcshell-test
 "
 
 run_py() {

@@ -55,6 +55,8 @@ pref("security.ssl3.dhe_rsa_aes_128_sha", false);
 pref("security.ssl3.dhe_rsa_aes_256_sha", false);
 pref("security.ssl3.rsa_aes_128_sha", true);
 pref("security.ssl3.rsa_aes_256_sha", true);
+pref("security.ssl3.rsa_aes_128_gcm_sha256", true);
+pref("security.ssl3.rsa_aes_256_gcm_sha384", true);
 pref("security.ssl3.rsa_des_ede3_sha", true);
 
 pref("security.content.signature.root_hash",
@@ -239,9 +241,6 @@ pref("general.warnOnAboutConfig", true);
 // maximum number of dated backups to keep at any time
 pref("browser.bookmarks.max_backups",       5);
 
-// Size (in KB) explicitly set by the user. Used when smart_size.enabled == false
-pref("browser.cache.disk.capacity",         256000);
-
 pref("browser.cache.disk_cache_ssl",        true);
 // The half life used to re-compute cache entries frecency in hours.
 pref("browser.cache.frecency_half_life_hours", 6);
@@ -348,6 +347,9 @@ pref("print.shrink-to-fit.scale-limit-percent", 20);
 // Whether we should display simplify page checkbox on print preview UI
 pref("print.use_simplify_page", false);
 
+// The tab modal print dialog is currently only for testing/experiments.
+pref("print.tab_modal.enabled", false);
+
 // Disable support for MathML
 pref("mathml.disabled",    false);
 
@@ -418,14 +420,9 @@ pref("media.videocontrols.picture-in-picture.video-toggle.min-video-secs", 45);
   pref("media.navigator.video.enabled", true);
   pref("media.navigator.video.default_fps",30);
   pref("media.navigator.video.use_remb", true);
-  #ifdef EARLY_BETA_OR_EARLIER
-    pref("media.navigator.video.use_transport_cc", true);
-    pref("media.peerconnection.video.use_rtx", true);
-  #else
-    pref("media.navigator.video.use_transport_cc", false);
-    pref("media.peerconnection.video.use_rtx", false);
-  #endif
-  pref("media.peerconnection.video.use_rtx.blocklist", "*.google.com");
+  pref("media.navigator.video.use_transport_cc", true);
+  pref("media.peerconnection.video.use_rtx", true);
+  pref("media.peerconnection.video.use_rtx.blocklist", "");
   pref("media.navigator.video.use_tmmbr", false);
   pref("media.navigator.audio.use_fec", true);
   pref("media.navigator.video.red_ulpfec_enabled", false);
@@ -455,7 +452,6 @@ pref("media.videocontrols.picture-in-picture.video-toggle.min-video-secs", 45);
   pref("media.navigator.video.h264.max_mbps", 0);
   pref("media.peerconnection.video.vp9_enabled", true);
   pref("media.peerconnection.video.vp9_preferred", false);
-  pref("media.getusermedia.browser.enabled", false);
   pref("media.getusermedia.channels", 0);
   #if defined(ANDROID)
     pref("media.getusermedia.camera.off_while_disabled.enabled", false);
@@ -519,7 +515,6 @@ pref("media.videocontrols.picture-in-picture.video-toggle.min-video-secs", 45);
   pref("media.getusermedia.agc", 1); // kAdaptiveDigital
   pref("media.getusermedia.hpf_enabled", true);
   pref("media.getusermedia.aecm_output_routing", 3); // kSpeakerphone
-  pref("media.getusermedia.experimental_input_processing", false);
 #endif // MOZ_WEBRTC
 
 #if !defined(ANDROID)
@@ -562,10 +557,6 @@ pref("media.video-queue.send-to-compositor-size", 9999);
 // Log level for cubeb, the audio input/output system. Valid values are
 // "verbose", "normal" and "" (log disabled).
 pref("media.cubeb.logging_level", "");
-
-#if defined(XP_MACOSX)
-  pref("media.cubeb.backend", "audiounit-rust");
-#endif
 
 pref("media.cubeb.output_voice_routing", true);
 
@@ -994,16 +985,6 @@ pref("dom.popup_allowed_events", "change click dblclick auxclick mouseup pointer
 pref("dom.serviceWorkers.disable_open_click_delay", 1000);
 
 pref("dom.storage.enabled", true);
-// Whether or not LSNG (Next Generation Local Storage) is enabled.
-// See bug 1517090 for enabling this on Nightly.
-// See bug 1534736 for changing it to EARLY_BETA_OR_EARLIER.
-// See bug 1539835 for enabling this unconditionally.
-// See bug 1619948 for changing it back to EARLY_BETA_OR_EARLIER.
-#ifdef EARLY_BETA_OR_EARLIER
-pref("dom.storage.next_gen", true);
-#else
-pref("dom.storage.next_gen", false);
-#endif
 pref("dom.storage.shadow_writes", true);
 pref("dom.storage.snapshot_prefill", 16384);
 pref("dom.storage.snapshot_gradual_prefill", 4096);
@@ -1927,7 +1908,7 @@ pref("network.cookie.move.interval_sec",    10);
 
 // This pref contains the list of hostnames (such as
 // "mozilla.org,example.net"). For these hosts, firefox will treat
-// sameSite=none if nothing else is specified, even if
+// SameSite=None if nothing else is specified, even if
 // network.cookie.sameSite.laxByDefault if set to true.
 // To know the correct syntax, see nsContentUtils::IsURIInList()
 pref("network.cookie.sameSite.laxByDefault.disabledHosts", "");
@@ -2418,14 +2399,6 @@ pref("bidi.numeral", 0);
 // to be exposed, and enables the directional caret hook. By default, only
 // expose it for bidi-associated system locales.
 pref("bidi.browser.ui", false);
-
-// used for double-click word selection behavior. Win will override.
-pref("layout.word_select.eat_space_to_next_word", false);
-pref("layout.word_select.stop_at_punctuation", true);
-
-// Whether underscore should be treated as a word-breaking character for
-// word selection/arrow-key movement purposes.
-pref("layout.word_select.stop_at_underscore", false);
 
 // Override DPI. A value of -1 means use the maximum of 96 and the system DPI.
 // A value of 0 means use the system DPI. A positive value is used as the DPI.
@@ -2953,9 +2926,6 @@ pref("font.size.monospace.x-math", 13);
   // The maximum size at which we will force GDI classic mode using
   // force_gdi_classic_for_families.
   pref("gfx.font_rendering.cleartype_params.force_gdi_classic_max_size", 15);
-
-  // override double-click word selection behavior.
-  pref("layout.word_select.eat_space_to_next_word", true);
 
   // Locate plugins by the directories specified in the Windows registry for PLIDs
   // Which is currently HKLM\Software\MozillaPlugins\xxxPLIDxxx\Path
@@ -3889,10 +3859,7 @@ pref("browser.region.network.url", "");
 pref("browser.region.network.scan", false);
 // Timeout for whole region request.
 pref("browser.region.timeout", 5000);
-
-#ifdef EARLY_BETA_OR_EARLIER
-  pref("browser.region.update.enabled", true);
-#endif
+pref("browser.region.update.enabled", true);
 
 // Enable/Disable the device storage API for content
 pref("device.storage.enabled", false);
@@ -4651,7 +4618,9 @@ pref("devtools.errorconsole.deprecation_warnings", true);
 #endif
 
 pref("devtools.debugger.features.watchpoints", true);
-pref("devtools.debugger.features.windowless-service-workers", true);
+
+// Disable service worker debugging on all channels (see Bug 1651605).
+pref("devtools.debugger.features.windowless-service-workers", false);
 
 // Disable remote debugging protocol logging.
 pref("devtools.debugger.log", false);

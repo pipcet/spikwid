@@ -289,6 +289,9 @@ pref("browser.urlbar.speculativeConnect.enabled", true);
 // search for bookmarklets typing "javascript: " followed by the actual query.
 pref("browser.urlbar.filter.javascript", true);
 
+// Enable a certain level of urlbar logging to the Browser Console. See Log.jsm.
+pref("browser.urlbar.loglevel", "Error");
+
 // the maximum number of results to show in autocomplete when doing richResults
 pref("browser.urlbar.maxRichResults", 10);
 
@@ -322,15 +325,23 @@ pref("browser.urlbar.switchTabs.adoptIntoActiveWindow", false);
 pref("browser.urlbar.openintab", false);
 
 // If true, we show tail suggestions when available.
-#ifdef EARLY_BETA_OR_EARLIER
 pref("browser.urlbar.richSuggestions.tail", true);
-#else
-pref("browser.urlbar.richSuggestions.tail", false);
-#endif
 
-// Whether we expand the font size when when the urlbar is
-// focused in design update 2.
-pref("browser.urlbar.update2.expandTextOnFocus", false);
+// Whether aliases are styled as a "chiclet" separated from the Urlbar.
+// Also controls the other urlbar.update2 prefs.
+pref("browser.urlbar.update2", false);
+
+// Whether the urlbar displays one-offs to filter searches to history,
+// bookmarks, or tabs.
+pref("browser.urlbar.update2.localOneOffs", false);
+
+// Whether the urlbar one-offs act as search filters instead of executing a
+// search immediately.
+pref("browser.urlbar.update2.oneOffsRefresh", false);
+
+// Whether we display a tab-to-complete result when the user types an engine
+// name.
+pref("browser.urlbar.update2.tabToComplete", false);
 
 pref("browser.urlbar.eventTelemetry.enabled", false);
 
@@ -766,8 +777,18 @@ pref("browser.preferences.experimental", false);
 pref("browser.preferences.experimental.hidden", false);
 pref("browser.preferences.defaultPerformanceSettings.enabled", true);
 
+#if defined(NIGHTLY_BUILD)
+pref("browser.preferences.exposeHTTPSOnly", true);
+#else
+pref("browser.preferences.exposeHTTPSOnly", false);
+#endif
+
 pref("browser.download.show_plugins_in_list", true);
 pref("browser.download.hide_plugins_without_extensions", true);
+
+// URL for "Learn More" for HttpsOnly
+pref("domsecurity.httpsonly.infoURL",
+     "https://developer.mozilla.org/en-US/docs/Glossary/https");
 
 // Backspace and Shift+Backspace behavior
 // 0 goes Back/Forward
@@ -1307,17 +1328,12 @@ pref("browser.newtabpage.activity-stream.discoverystream.spocs-endpoint", "");
 // List of regions that get stories by default.
 pref("browser.newtabpage.activity-stream.discoverystream.region-stories-config", "US,DE,CA,GB");
 // List of regions that get spocs by default.
-pref("browser.newtabpage.activity-stream.discoverystream.region-spocs-config", "US");
+pref("browser.newtabpage.activity-stream.discoverystream.region-spocs-config", "US,CA");
 // List of regions that get the 7 row layout.
-pref("browser.newtabpage.activity-stream.discoverystream.region-layout-config", "US,CA,GB");
+pref("browser.newtabpage.activity-stream.discoverystream.region-layout-config", "US,CA,GB,DE");
 // Allows Pocket story collections to be dismissed.
 pref("browser.newtabpage.activity-stream.discoverystream.isCollectionDismissible", true);
-// Switch between different versions of the recommendation provider.
-#ifdef NIGHTLY_BUILD
-  pref("browser.newtabpage.activity-stream.discoverystream.personalization.version", 2);
-#else
-  pref("browser.newtabpage.activity-stream.discoverystream.personalization.version", 1);
-#endif
+pref("browser.newtabpage.activity-stream.discoverystream.personalization.version", 2);
 // Configurable keys used by personalization version 2.
 pref("browser.newtabpage.activity-stream.discoverystream.personalization.modelKeys", "nb_model_arts_and_entertainment, nb_model_autos_and_vehicles, nb_model_beauty_and_fitness, nb_model_blogging_resources_and_services, nb_model_books_and_literature, nb_model_business_and_industrial, nb_model_computers_and_electronics, nb_model_finance, nb_model_food_and_drink, nb_model_games, nb_model_health, nb_model_hobbies_and_leisure, nb_model_home_and_garden, nb_model_internet_and_telecom, nb_model_jobs_and_education, nb_model_law_and_government, nb_model_online_communities, nb_model_people_and_society, nb_model_pets_and_animals, nb_model_real_estate, nb_model_reference, nb_model_science, nb_model_shopping, nb_model_sports, nb_model_travel");
 // System pref to allow Pocket stories personalization to be turned on/off.
@@ -1339,8 +1355,8 @@ pref("trailhead.firstrun.branches", "join-dynamic");
 
 // Separate about welcome
 pref("browser.aboutwelcome.enabled", true);
-// Used for switching simplified 3 cards welcome to multistage welcome
-pref("browser.aboutwelcome.overrideContent", "");
+// Used to set multistage welcome UX
+pref("browser.aboutwelcome.overrideContent", "{\"id\": \"multi-stage-welcome-importable-theme\",\"template\": \"multistage\",\"screens\": [{\"id\": \"AW_GET_STARTED\",\"order\": 0,\"content\": {\"zap\": true,\"title\": {\"string_id\": \"onboarding-multistage-welcome-header\"},\"subtitle\": {\"string_id\": \"onboarding-multistage-welcome-subtitle\"},\"primary_button\": {\"label\": {\"string_id\": \"onboarding-multistage-welcome-primary-button-label\"},\"action\": {\"navigate\": true}},\"secondary_button\": {\"text\": {\"string_id\": \"onboarding-multistage-welcome-secondary-button-text\"},\"label\": {\"string_id\": \"onboarding-multistage-welcome-secondary-button-label\"},\"position\": \"top\",\"action\": {\"type\": \"OPEN_URL\",\"addFlowParams\": true,\"data\": {\"args\": \"https://accounts.firefox.com/?service=sync&action=email&context=fx_desktop_v3&entrypoint=activity-stream-firstrun&style=trailhead\",\"where\": \"current\"}}}}}, {\"id\": \"AW_IMPORT_SETTINGS\",\"order\": 1,\"content\": {\"zap\": true,\"title\": {\"string_id\": \"onboarding-multistage-import-header\"},\"subtitle\": {\"string_id\": \"onboarding-multistage-import-subtitle\"},\"tiles\": {\"type\": \"topsites\",\"tooltip\": {\"string_id\": \"onboarding-import-sites-info\"}},\"primary_button\": {\"label\": {\"string_id\": \"onboarding-multistage-import-primary-button-label\"},\"action\": {\"type\": \"SHOW_MIGRATION_WIZARD\",\"navigate\": true}},\"secondary_button\": {\"label\":  {\"string_id\": \"onboarding-multistage-import-secondary-button-label\"},\"action\": {\"navigate\": true}}}},{\"id\": \"AW_CHOOSE_THEME\",\"order\": 2,\"content\": {\"zap\": true,\"title\":  {\"string_id\": \"onboarding-multistage-theme-header\"},\"subtitle\": {\"string_id\": \"onboarding-multistage-theme-subtitle\"},\"tiles\": {\"type\": \"theme\",\"action\": {\"theme\": \"<event>\"},\"data\": [{\"theme\": \"light\",\"label\": {\"string_id\": \"onboarding-multistage-theme-label-light\"}},{\"theme\": \"dark\",\"label\": {\"string_id\": \"onboarding-multistage-theme-label-dark\"}}]},\"primary_button\": {\"label\": {\"string_id\": \"onboarding-multistage-theme-primary-button-label\"},\"action\": {\"navigate\": true}},\"secondary_button\": {\"label\": {\"string_id\": \"onboarding-multistage-theme-secondary-button-label\"},\"action\": {\"theme\": \"default\",\"navigate\": true}}}}]}");
 
 // The pref that controls if the What's New panel is enabled.
 pref("browser.messaging-system.whatsNewPanel.enabled", true);
@@ -1689,6 +1705,7 @@ pref("privacy.userContext.newTabContainerOnLeftClick.enabled", false);
 pref("privacy.webrtc.allowSilencingNotifications", true);
 // Set to true to use the legacy WebRTC global indicator
 pref("privacy.webrtc.legacyGlobalIndicator", false);
+pref("privacy.webrtc.hideGlobalIndicator", false);
 #else
 pref("privacy.webrtc.allowSilencingNotifications", false);
 pref("privacy.webrtc.legacyGlobalIndicator", true);
@@ -2193,8 +2210,12 @@ pref("devtools.netmonitor.features.webSockets", true);
 // netmonitor audit
 pref("devtools.netmonitor.audits.slow", 500);
 
-// Disable the EventSource Inspector.
-pref("devtools.netmonitor.features.serverSentEvents", false);
+// Enable the EventSource Inspector in Nightly.
+#if defined(NIGHTLY_BUILD)
+  pref("devtools.netmonitor.features.serverSentEvents", true);
+#else
+  pref("devtools.netmonitor.features.serverSentEvents", false);
+#endif
 
 // Enable the Storage Inspector
 pref("devtools.storage.enabled", true);
@@ -2339,8 +2360,6 @@ pref("devtools.responsive.touchSimulation.enabled", false);
 pref("devtools.responsive.metaViewport.enabled", true);
 // The user agent of the viewport.
 pref("devtools.responsive.userAgent", "");
-// Enable the RDM browser UI in all builds.
-pref("devtools.responsive.browserUI.enabled", true);
 
 // Show the custom user agent input only in Nightly.
 #if defined(NIGHTLY_BUILD)

@@ -4,8 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef mozilla_dom_SVGImageElement_h
-#define mozilla_dom_SVGImageElement_h
+#ifndef DOM_SVG_SVGIMAGEELEMENT_H_
+#define DOM_SVG_SVGIMAGEELEMENT_H_
 
 #include "nsImageLoadingContent.h"
 #include "SVGAnimatedLength.h"
@@ -22,7 +22,7 @@ class SVGImageFrame;
 namespace dom {
 class DOMSVGAnimatedPreserveAspectRatio;
 
-typedef SVGGeometryElement SVGImageElementBase;
+using SVGImageElementBase = SVGGeometryElement;
 
 class SVGImageElement : public SVGImageElementBase,
                         public nsImageLoadingContent {
@@ -76,7 +76,7 @@ class SVGImageElement : public SVGImageElementBase,
       const Matrix* aToNonScalingStrokeSpace = nullptr) override;
   virtual already_AddRefed<Path> BuildPath(PathBuilder* aBuilder) override;
 
-  // nsSVGSVGElement methods:
+  // SVGSVGElement methods:
   virtual bool HasValidDimensions() const override;
 
   virtual nsresult Clone(dom::NodeInfo*, nsINode** aResult) const override;
@@ -127,4 +127,4 @@ class SVGImageElement : public SVGImageElementBase,
 }  // namespace dom
 }  // namespace mozilla
 
-#endif  // mozilla_dom_SVGImageElement_h
+#endif  // DOM_SVG_SVGIMAGEELEMENT_H_

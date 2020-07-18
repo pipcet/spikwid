@@ -12,6 +12,7 @@
 #include "nsIChannel.h"
 #include "nsIContentPolicy.h"
 #include "nsIContentSecurityPolicy.h"
+#include "nsICookieJarSettings.h"
 #include "nsIDocShell.h"
 #include "nsIHttpChannel.h"
 #include "nsIHttpChannelInternal.h"
@@ -156,9 +157,9 @@ nsresult ChannelFromScriptURL(
     parentDoc = nullptr;
   }
 
-  uint32_t secFlags = aIsMainScript
-                          ? nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_DATA_IS_BLOCKED
-                          : nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_INHERITS;
+  uint32_t secFlags =
+      aIsMainScript ? nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_DATA_IS_BLOCKED
+                    : nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_INHERITS_SEC_CONTEXT;
 
   bool inheritAttrs = nsContentUtils::ChannelShouldInheritPrincipal(
       principal, uri, true /* aInheritForAboutBlank */,
@@ -190,7 +191,7 @@ nsresult ChannelFromScriptURL(
   // Note: this is for backwards compatibility and goes against spec.
   // We should find a better solution.
   if (aIsMainScript && isData) {
-    secFlags = nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL;
+    secFlags = nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL;
   }
 
   nsContentPolicyType contentPolicyType =

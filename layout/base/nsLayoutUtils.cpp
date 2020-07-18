@@ -33,7 +33,10 @@
 #include "mozilla/StaticPrefs_image.h"
 #include "mozilla/StaticPrefs_layers.h"
 #include "mozilla/StaticPrefs_layout.h"
+#include "mozilla/SVGImageContext.h"
+#include "mozilla/SVGIntegrationUtils.h"
 #include "mozilla/SVGTextFrame.h"
+#include "mozilla/SVGUtils.h"
 #include "mozilla/Unused.h"
 #include "mozilla/ViewportFrame.h"
 #include "mozilla/ViewportUtils.h"
@@ -106,9 +109,6 @@
 #include "nsTableWrapperFrame.h"
 #include "nsTextFrame.h"
 #include "nsFontInflationData.h"
-#include "nsSVGIntegrationUtils.h"
-#include "nsSVGUtils.h"
-#include "SVGImageContext.h"
 #include "nsStyleStructInlines.h"
 #include "nsStyleTransformMatrix.h"
 #include "nsIFrameInlines.h"
@@ -134,7 +134,7 @@
 #include "mozilla/ServoStyleSet.h"
 #include "mozilla/WheelHandlingHelper.h"  // for WheelHandlingUtils
 #include "RegionBuilder.h"
-#include "SVGViewportElement.h"
+#include "mozilla/dom/SVGViewportElement.h"
 #include "DisplayItemClip.h"
 #include "mozilla/layers/StackingContextHelper.h"
 #include "mozilla/layers/WebRenderLayerManager.h"
@@ -183,6 +183,7 @@ typedef ScrollableLayerGuid::ViewID ViewID;
 typedef nsStyleTransformMatrix::TransformReferenceBox TransformReferenceBox;
 
 static ViewID sScrollIdCounter = ScrollableLayerGuid::START_SCROLL_ID;
+static mozilla::LazyLogModule sDisplayportLog("apz.displayport");
 
 typedef nsDataHashtable<nsUint64HashKey, nsIContent*> ContentMap;
 static ContentMap* sContentMap = nullptr;
@@ -1384,6 +1385,18 @@ bool nsLayoutUtils::SetDisplayPortMargins(nsIContent* aContent,
       GetHighResolutionDisplayPort(aContent, &newDisplayPort);
   MOZ_ASSERT(hasDisplayPort);
 
+  if (MOZ_LOG_TEST(sDisplayportLog, LogLevel::Debug)) {
+    if (!hadDisplayPort) {
+      mozilla::layers::ScrollableLayerGuid::ViewID viewID =
+          mozilla::layers::ScrollableLayerGuid::NULL_SCROLL_ID;
+      nsLayoutUtils::FindIDFor(aContent, &viewID);
+      MOZ_LOG(sDisplayportLog, LogLevel::Debug,
+              ("SetDisplayPortMargins %s on scrollId=%" PRIu64 ", newDp=%s\n",
+               Stringify(aMargins).c_str(), viewID,
+               Stringify(newDisplayPort).c_str()));
+    }
+  }
+
   InvalidateForDisplayPortChange(aContent, hadDisplayPort, oldDisplayPort,
                                  newDisplayPort, aRepaintMode);
 
@@ -2342,7 +2355,7 @@ nsPoint GetEventCoordinatesRelativeTo(nsIWidget* aWidget,
   /* If we encountered a transform, we can't do simple arithmetic to figure
    * out how to convert back to aFrame's coordinates and must use the CTM.
    */
-  if (transformFound || nsSVGUtils::IsInSVGTextSubtree(frame)) {
+  if (transformFound || SVGUtils::IsInSVGTextSubtree(frame)) {
     return nsLayoutUtils::TransformRootPointToFrame(ViewportType::Visual,
                                                     aFrame, widgetToView);
   }
@@ -3098,7 +3111,7 @@ static Rect TransformGfxRectToAncestor(
 }
 
 static SVGTextFrame* GetContainingSVGTextFrame(const nsIFrame* aFrame) {
-  if (!nsSVGUtils::IsInSVGTextSubtree(aFrame)) {
+  if (!SVGUtils::IsInSVGTextSubtree(aFrame)) {
     return nullptr;
   }
 
@@ -3465,6 +3478,15 @@ bool nsLayoutUtils::MaybeCreateDisplayPort(nsDisplayListBuilder* aBuilder,
       scrollableFrame->WantAsyncScroll()) {
     // If we don't already have a displayport, calculate and set one.
     if (!haveDisplayPort) {
+      // We only use the viewId for logging purposes, but create it
+      // unconditionally to minimize impact of enabling logging. If we don't
+      // assign a viewId here it will get assigned later anyway so functionally
+      // there should be no difference.
+      ViewID viewId = nsLayoutUtils::FindOrCreateIDFor(content);
+      MOZ_LOG(
+          sDisplayportLog, LogLevel::Debug,
+          ("Setting DP on first-encountered scrollId=%" PRIu64 "\n", viewId));
+
       CalculateAndSetDisplayPortMargins(scrollableFrame, aRepaintMode);
 #ifdef DEBUG
       haveDisplayPort = HasDisplayPort(content);
@@ -4498,7 +4520,7 @@ struct BoxToRect : public nsLayoutUtils::BoxCallback {
 
   virtual void AddBox(nsIFrame* aFrame) override {
     nsRect r;
-    nsIFrame* outer = nsSVGUtils::GetOuterSVGFrameAndCoveredRegion(aFrame, &r);
+    nsIFrame* outer = SVGUtils::GetOuterSVGFrameAndCoveredRegion(aFrame, &r);
     if (!outer) {
       outer = aFrame;
       switch (mFlags & nsLayoutUtils::RECTS_WHICH_BOX_MASK) {
@@ -5502,8 +5524,8 @@ static nscoord AddIntrinsicSizeOffset(
     LayoutDeviceIntSize devSize;
     bool canOverride = true;
     nsPresContext* pc = aFrame->PresContext();
-    pc->Theme()->GetMinimumWidgetSize(pc, aFrame, disp->mAppearance, &devSize,
-                                      &canOverride);
+    pc->Theme()->GetMinimumWidgetSize(pc, aFrame, disp->EffectiveAppearance(),
+                                      &devSize, &canOverride);
     nscoord themeSize = pc->DevPixelsToAppUnits(
         aAxis == eAxisVertical ? devSize.height : devSize.width);
     // GetMinimumWidgetSize() returns a border-box width.
@@ -7429,12 +7451,12 @@ nsTransparencyMode nsLayoutUtils::GetFrameTransparency(
   if (HasNonZeroCorner(aCSSRootFrame->StyleBorder()->mBorderRadius))
     return eTransparencyTransparent;
 
-  if (aCSSRootFrame->StyleDisplay()->mAppearance ==
-      StyleAppearance::MozWinGlass)
-    return eTransparencyGlass;
+  StyleAppearance appearance =
+      aCSSRootFrame->StyleDisplay()->EffectiveAppearance();
 
-  if (aCSSRootFrame->StyleDisplay()->mAppearance ==
-      StyleAppearance::MozWinBorderlessGlass)
+  if (appearance == StyleAppearance::MozWinGlass) return eTransparencyGlass;
+
+  if (appearance == StyleAppearance::MozWinBorderlessGlass)
     return eTransparencyBorderlessGlass;
 
   nsITheme::Transparency transparency;
@@ -8573,7 +8595,7 @@ nscoord nsLayoutUtils::InflationMinFontSizeFor(const nsIFrame* aFrame) {
 }
 
 float nsLayoutUtils::FontSizeInflationFor(const nsIFrame* aFrame) {
-  if (nsSVGUtils::IsInSVGTextSubtree(aFrame)) {
+  if (SVGUtils::IsInSVGTextSubtree(aFrame)) {
     const nsIFrame* container = aFrame;
     while (!container->IsSVGTextFrame()) {
       container = container->GetParent();
@@ -8620,9 +8642,9 @@ nsRect nsLayoutUtils::GetBoxShadowRectForFrame(nsIFrame* aFrame,
     // border-box path with border-radius disabled.
     if (transparency != nsITheme::eOpaque) {
       nsPresContext* presContext = aFrame->PresContext();
-      presContext->Theme()->GetWidgetOverflow(presContext->DeviceContext(),
-                                              aFrame, styleDisplay->mAppearance,
-                                              &inputRect);
+      presContext->Theme()->GetWidgetOverflow(
+          presContext->DeviceContext(), aFrame,
+          styleDisplay->EffectiveAppearance(), &inputRect);
     }
   }
 
@@ -10017,8 +10039,8 @@ static nsRect ComputeSVGReferenceRect(nsIFrame* aFrame,
       // The size of stroke-box is not correct if this graphic element has
       // specific stroke-linejoin or stroke-linecap.
       gfxRect bbox =
-          nsSVGUtils::GetBBox(aFrame, nsSVGUtils::eBBoxIncludeFillGeometry |
-                                          nsSVGUtils::eBBoxIncludeStroke);
+          SVGUtils::GetBBox(aFrame, SVGUtils::eBBoxIncludeFillGeometry |
+                                        SVGUtils::eBBoxIncludeStroke);
       r = nsLayoutUtils::RoundGfxRectToAppRect(bbox, AppUnitsPerCSSPixel());
       break;
     }
@@ -10058,14 +10080,14 @@ static nsRect ComputeSVGReferenceRect(nsIFrame* aFrame,
     case StyleGeometryBox::MarginBox:
     case StyleGeometryBox::FillBox: {
       gfxRect bbox =
-          nsSVGUtils::GetBBox(aFrame, nsSVGUtils::eBBoxIncludeFillGeometry);
+          SVGUtils::GetBBox(aFrame, SVGUtils::eBBoxIncludeFillGeometry);
       r = nsLayoutUtils::RoundGfxRectToAppRect(bbox, AppUnitsPerCSSPixel());
       break;
     }
     default: {
       MOZ_ASSERT_UNREACHABLE("unknown StyleGeometryBox type");
       gfxRect bbox =
-          nsSVGUtils::GetBBox(aFrame, nsSVGUtils::eBBoxIncludeFillGeometry);
+          SVGUtils::GetBBox(aFrame, SVGUtils::eBBoxIncludeFillGeometry);
       r = nsLayoutUtils::RoundGfxRectToAppRect(bbox, AppUnitsPerCSSPixel());
       break;
     }
@@ -10166,7 +10188,7 @@ nsPoint nsLayoutUtils::ComputeOffsetToUserSpace(nsDisplayListBuilder* aBuilder,
                                                 nsIFrame* aFrame) {
   nsPoint offsetToBoundingBox =
       aBuilder->ToReferenceFrame(aFrame) -
-      nsSVGIntegrationUtils::GetOffsetToBoundingBox(aFrame);
+      SVGIntegrationUtils::GetOffsetToBoundingBox(aFrame);
   if (!aFrame->IsFrameOfType(nsIFrame::eSVG)) {
     // Snap the offset if the reference frame is not a SVG frame, since other
     // frames will be snapped to pixel when rendering.
@@ -10190,7 +10212,7 @@ nsPoint nsLayoutUtils::ComputeOffsetToUserSpace(nsDisplayListBuilder* aBuilder,
   // frame's position so that SVG painting can later add it again and the
   // frame is painted in the right place.
   gfxPoint toUserSpaceGfx =
-      nsSVGUtils::FrameSpaceInCSSPxToUserSpaceOffset(aFrame);
+      SVGUtils::FrameSpaceInCSSPxToUserSpaceOffset(aFrame);
   nsPoint toUserSpace =
       nsPoint(nsPresContext::CSSPixelsToAppUnits(float(toUserSpaceGfx.x)),
               nsPresContext::CSSPixelsToAppUnits(float(toUserSpaceGfx.y)));

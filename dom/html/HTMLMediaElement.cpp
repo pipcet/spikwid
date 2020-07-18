@@ -829,6 +829,10 @@ class HTMLMediaElement::MediaStreamRenderer
 
     for (const auto& t : mAudioTracks) {
       if (t) {
+        if (mAudioOutputSink) {
+          t->AsAudioStreamTrack()->SetAudioOutputDevice(mAudioOutputKey,
+                                                        mAudioOutputSink);
+        }
         t->AsAudioStreamTrack()->AddAudioOutput(mAudioOutputKey);
         t->AsAudioStreamTrack()->SetAudioOutputVolume(mAudioOutputKey,
                                                       mAudioOutputVolume);
@@ -878,11 +882,47 @@ class HTMLMediaElement::MediaStreamRenderer
     }
   }
 
+  RefPtr<GenericPromise::AllPromiseType> SetAudioOutputDevice(
+      AudioDeviceInfo* aSink) {
+    MOZ_ASSERT(aSink);
+    MOZ_ASSERT(mAudioOutputSink != aSink);
+
+    mAudioOutputSink = aSink;
+
+    if (!mRendering) {
+      return GenericPromise::AllPromiseType::CreateAndResolve(nsTArray<bool>(),
+                                                              __func__);
+    }
+
+    nsTArray<RefPtr<GenericPromise>> promises;
+    for (const auto& t : mAudioTracks) {
+      // SetAudioOutputDevice will create a new output MediaTrack, so the
+      // AudioOutput is removed for the current MediaTrack and re-added after
+      // the new MediaTrack has been created.
+      t->AsAudioStreamTrack()->RemoveAudioOutput(mAudioOutputKey);
+      promises.AppendElement(t->AsAudioStreamTrack()->SetAudioOutputDevice(
+          mAudioOutputKey, mAudioOutputSink));
+      t->AsAudioStreamTrack()->AddAudioOutput(mAudioOutputKey);
+      t->AsAudioStreamTrack()->SetAudioOutputVolume(mAudioOutputKey,
+                                                    mAudioOutputVolume);
+    }
+    if (!promises.Length()) {
+      // Not active track, save it for later
+      return GenericPromise::AllPromiseType::CreateAndResolve(nsTArray<bool>(),
+                                                              __func__);
+    }
+
+    return GenericPromise::All(GetCurrentSerialEventTarget(), promises);
+  }
+
   void AddTrack(AudioStreamTrack* aTrack) {
     MOZ_DIAGNOSTIC_ASSERT(!mAudioTracks.Contains(aTrack));
     mAudioTracks.AppendElement(aTrack);
     EnsureGraphTimeDummy();
     if (mRendering) {
+      if (mAudioOutputSink) {
+        aTrack->SetAudioOutputDevice(mAudioOutputKey, mAudioOutputSink);
+      }
       aTrack->AddAudioOutput(mAudioOutputKey);
       aTrack->SetAudioOutputVolume(mAudioOutputKey, mAudioOutputVolume);
     }
@@ -971,6 +1011,9 @@ class HTMLMediaElement::MediaStreamRenderer
 
   // The audio output volume for all audio tracks.
   float mAudioOutputVolume = 1.0f;
+
+  // The sink device for all audio tracks.
+  RefPtr<AudioDeviceInfo> mAudioOutputSink;
 
   // WatchManager for mGraphTime.
   WatchManager<MediaStreamRenderer> mWatchManager;
@@ -1490,17 +1533,20 @@ class HTMLMediaElement::AudioChannelAgentCallback final
 
   void NotifyAudioPlaybackChanged(AudibleChangedReasons aReason) {
     MOZ_ASSERT(!mIsShutDown);
-    if (!IsPlayingStarted()) {
-      return;
-    }
-
     AudibleState newAudibleState = IsOwnerAudible();
+    MOZ_LOG(AudioChannelService::GetAudioChannelLog(), LogLevel::Debug,
+            ("HTMLMediaElement::AudioChannelAgentCallback, "
+             "NotifyAudioPlaybackChanged, this=%p, current=%s, new=%s",
+             this, AudibleStateToStr(mIsOwnerAudible),
+             AudibleStateToStr(newAudibleState)));
     if (mIsOwnerAudible == newAudibleState) {
       return;
     }
 
     mIsOwnerAudible = newAudibleState;
-    mAudioChannelAgent->NotifyStartedAudible(mIsOwnerAudible, aReason);
+    if (IsPlayingStarted()) {
+      mAudioChannelAgent->NotifyStartedAudible(mIsOwnerAudible, aReason);
+    }
   }
 
   void Shutdown() {
@@ -1664,8 +1710,8 @@ class HTMLMediaElement::ChannelLoader final {
     // determine what security checks need to be performed in AsyncOpen().
     nsSecurityFlags securityFlags =
         aElement->ShouldCheckAllowOrigin()
-            ? nsILoadInfo::SEC_REQUIRE_CORS_DATA_INHERITS
-            : nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_INHERITS;
+            ? nsILoadInfo::SEC_REQUIRE_CORS_INHERITS_SEC_CONTEXT
+            : nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_INHERITS_SEC_CONTEXT;
 
     if (aElement->GetCORSMode() == CORS_USE_CREDENTIALS) {
       securityFlags |= nsILoadInfo::SEC_COOKIES_INCLUDE;
@@ -2308,7 +2354,24 @@ void HTMLMediaElement::NoSupportedMediaSourceError(
   if (mDecoder) {
     ShutdownDecoder();
   }
-  mErrorSink->SetError(MEDIA_ERR_SRC_NOT_SUPPORTED, aErrorDetails);
+
+  bool isThirdPartyLoad = false;
+  nsresult rv = NS_ERROR_NOT_AVAILABLE;
+  if (mSrcAttrTriggeringPrincipal) {
+    rv = mSrcAttrTriggeringPrincipal->IsThirdPartyURI(mLoadingSrc,
+                                                      &isThirdPartyLoad);
+  }
+
+  if (NS_SUCCEEDED(rv) && isThirdPartyLoad) {
+    // aErrorDetails can include sensitive details like MimeType or HTTP Status
+    // Code. In case we're loading a 3rd party resource we should not leak this
+    // and pass a Generic Error Message
+    mErrorSink->SetError(MEDIA_ERR_SRC_NOT_SUPPORTED,
+                         "Failed to open media"_ns);
+  } else {
+    mErrorSink->SetError(MEDIA_ERR_SRC_NOT_SUPPORTED, aErrorDetails);
+  }
+
   RemoveMediaTracks();
   ChangeDelayLoadStatus(false);
   UpdateAudioChannelPlayingState();
@@ -3372,7 +3435,6 @@ void HTMLMediaElement::PauseIfShouldNotBePlaying() {
     AUTOPLAY_LOG("pause because not allowed to play, element=%p", this);
     ErrorResult rv;
     Pause(rv);
-    OwnerDoc()->SetDocTreeHadPlayRevoked();
   }
 }
 
@@ -5230,7 +5292,7 @@ void HTMLMediaElement::SetupSrcMediaStreamPlayback(DOMMediaStream* aStream) {
                       &HTMLMediaElement::UpdateSrcStreamTime);
   SetVolumeInternal();
   if (mSink.second) {
-    SetSrcMediaStreamSink(mSink.second);
+    mMediaStreamRenderer->SetAudioOutputDevice(mSink.second);
   }
 
   UpdateSrcMediaStreamPlaying();
@@ -7678,8 +7740,9 @@ already_AddRefed<Promise> HTMLMediaElement::SetSinkId(const nsAString& aSinkId,
               return p;
             }
             if (self->mSrcStream) {
+              MOZ_ASSERT(self->mMediaStreamRenderer);
               RefPtr<SinkInfoPromise> p =
-                  self->SetSrcMediaStreamSink(aInfo)->Then(
+                  self->mMediaStreamRenderer->SetAudioOutputDevice(aInfo)->Then(
                       self->mAbstractMainThread, __func__,
                       [aInfo](const GenericPromise::AllPromiseType::
                                   ResolveOrRejectValue& aValue) {
@@ -7726,43 +7789,6 @@ already_AddRefed<Promise> HTMLMediaElement::SetSinkId(const nsAString& aSinkId,
 
   aRv = NS_OK;
   return promise.forget();
-}
-
-RefPtr<GenericPromise::AllPromiseType> HTMLMediaElement::SetSrcMediaStreamSink(
-    AudioDeviceInfo* aSink) {
-  MOZ_ASSERT(mSrcStream);
-  nsTArray<RefPtr<AudioStreamTrack>> audioTracks;
-  mSrcStream->GetAudioTracks(audioTracks);
-  if (audioTracks.Length() == 0) {
-    // Save it for later. At the moment the element does not contain any audio
-    // track. Nevertheless, the requested sink-id is saved to be used when the
-    // first audio track is available.
-    return GenericPromise::AllPromiseType::CreateAndResolve(nsTArray<bool>(),
-                                                            __func__);
-  }
-
-  nsTArray<RefPtr<GenericPromise>> promises;
-  for (const auto& audioTrack : audioTracks) {
-    if (audioTrack->Ended()) {
-      continue;
-    }
-    if (!mPaused) {
-      audioTrack->RemoveAudioOutput(this);
-    }
-    promises.AppendElement(audioTrack->SetAudioOutputDevice(this, aSink));
-    if (!mPaused) {
-      audioTrack->AddAudioOutput(this);
-      audioTrack->SetAudioOutputVolume(this, ComputedVolume());
-    }
-  }
-
-  if (!promises.Length()) {
-    // Not active track, save it for later
-    return GenericPromise::AllPromiseType::CreateAndResolve(nsTArray<bool>(),
-                                                            __func__);
-  }
-
-  return GenericPromise::All(GetCurrentSerialEventTarget(), promises);
 }
 
 void HTMLMediaElement::NotifyTextTrackModeChanged() {

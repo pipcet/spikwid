@@ -258,7 +258,7 @@ bool Proxy::has(JSContext* cx, HandleObject proxy, HandleId id, bool* bp) {
 bool js::ProxyHas(JSContext* cx, HandleObject proxy, HandleValue idVal,
                   bool* result) {
   RootedId id(cx);
-  if (!ValueToId<CanGC>(cx, idVal, &id)) {
+  if (!ToPropertyKey(cx, idVal, &id)) {
     return false;
   }
 
@@ -281,7 +281,7 @@ bool Proxy::hasOwn(JSContext* cx, HandleObject proxy, HandleId id, bool* bp) {
 bool js::ProxyHasOwn(JSContext* cx, HandleObject proxy, HandleValue idVal,
                      bool* result) {
   RootedId id(cx);
-  if (!ValueToId<CanGC>(cx, idVal, &id)) {
+  if (!ToPropertyKey(cx, idVal, &id)) {
     return false;
   }
 
@@ -348,7 +348,7 @@ bool js::ProxyGetProperty(JSContext* cx, HandleObject proxy, HandleId id,
 bool js::ProxyGetPropertyByValue(JSContext* cx, HandleObject proxy,
                                  HandleValue idVal, MutableHandleValue vp) {
   RootedId id(cx);
-  if (!ValueToId<CanGC>(cx, idVal, &id)) {
+  if (!ToPropertyKey(cx, idVal, &id)) {
     return false;
   }
 
@@ -404,7 +404,7 @@ bool js::ProxySetPropertyByValue(JSContext* cx, HandleObject proxy,
                                  HandleValue idVal, HandleValue val,
                                  bool strict) {
   RootedId id(cx);
-  if (!ValueToId<CanGC>(cx, idVal, &id)) {
+  if (!ToPropertyKey(cx, idVal, &id)) {
     return false;
   }
 

@@ -6,6 +6,7 @@
 
 #include "vm/HelperThreads.h"
 
+#include "mozilla/DebugOnly.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/ScopeExit.h"
 #include "mozilla/Unused.h"
@@ -611,18 +612,20 @@ void ScriptParseTask<Unit>::parse(JSContext* cx) {
     return;
   }
 
-  // Whatever happens to the top-level script compilation (even if it fails),
-  // we must finish initializing the SSO.  This is because there may be valid
-  // inner scripts observable by the debugger which reference the partially-
-  // initialized SSO.
-  sourceObjects.infallibleAppend(compilationInfo.sourceObject);
-
   uint32_t len = data.length();
   SourceExtent extent = SourceExtent::makeGlobalExtent(len, options);
   frontend::GlobalSharedContext globalsc(cx, scopeKind, compilationInfo,
                                          compilationInfo.directives, extent);
   JSScript* script =
       frontend::CompileGlobalScript(compilationInfo, globalsc, data);
+
+  // Whatever happens to the top-level script compilation (even if it fails),
+  // we must finish initializing the SSO.  This is because there may be valid
+  // inner scripts observable by the debugger which reference the partially-
+  // initialized SSO.
+  if (compilationInfo.sourceObject) {
+    sourceObjects.infallibleAppend(compilationInfo.sourceObject);
+  }
 
   if (script) {
     scripts.infallibleAppend(script);
@@ -654,11 +657,13 @@ void ModuleParseTask<Unit>::parse(JSContext* cx) {
 
   ModuleObject* module =
       frontend::ParseModule(cx, options, data, &sourceObject.get());
+
+  if (sourceObject) {
+    sourceObjects.infallibleAppend(sourceObject);
+  }
+
   if (module) {
     scripts.infallibleAppend(module->script());
-    if (sourceObject) {
-      sourceObjects.infallibleAppend(sourceObject);
-    }
   }
 }
 
@@ -683,13 +688,16 @@ void ScriptDecodeTask::parse(JSContext* cx) {
     ReportOutOfMemory(cx);
     return;
   }
-  XDRResult res = decoder->codeScript(&resultScript);
-  MOZ_ASSERT(bool(resultScript) == res.isOk());
-  if (res.isOk()) {
+
+  mozilla::DebugOnly<XDRResult> res = decoder->codeScript(&resultScript);
+  MOZ_ASSERT(bool(resultScript) == static_cast<XDRResult>(res).isOk());
+
+  if (sourceObject) {
+    sourceObjects.infallibleAppend(sourceObject);
+  }
+
+  if (resultScript) {
     scripts.infallibleAppend(resultScript);
-    if (sourceObject) {
-      sourceObjects.infallibleAppend(sourceObject);
-    }
   }
 }
 
@@ -722,15 +730,20 @@ void MultiScriptsDecodeTask::parse(JSContext* cx) {
       ReportOutOfMemory(cx);
       return;
     }
-    XDRResult res = decoder->codeScript(&resultScript);
-    MOZ_ASSERT(bool(resultScript) == res.isOk());
 
-    if (res.isErr()) {
+    mozilla::DebugOnly<XDRResult> res = decoder->codeScript(&resultScript);
+    MOZ_ASSERT(bool(resultScript) == static_cast<XDRResult>(res).isOk());
+
+    if (sourceObject) {
+      sourceObjects.infallibleAppend(sourceObject);
+    }
+
+    if (resultScript) {
+      scripts.infallibleAppend(resultScript);
+    } else {
+      // If any decodes fail, don't process the rest. We likely are hitting OOM.
       break;
     }
-    MOZ_ASSERT(resultScript);
-    scripts.infallibleAppend(resultScript);
-    sourceObjects.infallibleAppend(sourceObject);
   }
 }
 
@@ -756,8 +769,7 @@ void js::CancelOffThreadParses(JSRuntime* rt) {
     bool pending = false;
     GlobalHelperThreadState::ParseTaskVector& worklist =
         HelperThreadState().parseWorklist(lock);
-    for (size_t i = 0; i < worklist.length(); i++) {
-      ParseTask* task = worklist[i];
+    for (const auto& task : worklist) {
       if (task->runtimeMatches(rt)) {
         pending = true;
       }
@@ -800,8 +812,7 @@ void js::CancelOffThreadParses(JSRuntime* rt) {
 #ifdef DEBUG
   GlobalHelperThreadState::ParseTaskVector& worklist =
       HelperThreadState().parseWorklist(lock);
-  for (size_t i = 0; i < worklist.length(); i++) {
-    ParseTask* task = worklist[i];
+  for (const auto& task : worklist) {
     MOZ_ASSERT(!task->runtimeMatches(rt));
   }
 #endif
@@ -907,18 +918,12 @@ static bool QueueOffThreadParseTask(JSContext* cx, UniquePtr<ParseTask> task) {
   AutoLockHelperThreadState lock;
 
   bool mustWait = OffThreadParsingMustWaitForGC(cx->runtime());
-
-  // Append null first, then overwrite it on  success, to avoid having two
-  // |task| pointers (one ostensibly "unique") in flight at once.  (Obviously it
-  // would be better if these vectors stored unique pointers themselves....)
   auto& queue = mustWait ? HelperThreadState().parseWaitingOnGC(lock)
                          : HelperThreadState().parseWorklist(lock);
-  if (!queue.append(nullptr)) {
+  if (!queue.append(std::move(task))) {
     ReportOutOfMemory(cx);
     return false;
   }
-
-  queue.back() = task.release();
 
   if (!mustWait) {
     queue.back()->activate(cx->runtime());
@@ -1054,42 +1059,28 @@ bool js::StartOffThreadDecodeMultiScripts(JSContext* cx,
 void js::EnqueuePendingParseTasksAfterGC(JSRuntime* rt) {
   MOZ_ASSERT(!OffThreadParsingMustWaitForGC(rt));
 
-  GlobalHelperThreadState::ParseTaskVector newTasks;
-  {
-    AutoLockHelperThreadState lock;
-    GlobalHelperThreadState::ParseTaskVector& waiting =
-        HelperThreadState().parseWaitingOnGC(lock);
-
-    for (size_t i = 0; i < waiting.length(); i++) {
-      ParseTask* task = waiting[i];
-      if (task->runtimeMatches(rt)) {
-        AutoEnterOOMUnsafeRegion oomUnsafe;
-        if (!newTasks.append(task)) {
-          oomUnsafe.crash("EnqueuePendingParseTasksAfterGC");
-        }
-        HelperThreadState().remove(waiting, &i);
-      }
-    }
-  }
-
-  if (newTasks.empty()) {
-    return;
-  }
-
-  // This logic should mirror the contents of the
-  // !OffThreadParsingMustWaitForGC() branch in QueueOffThreadParseTask:
-
-  for (size_t i = 0; i < newTasks.length(); i++) {
-    newTasks[i]->activate(rt);
-  }
-
   AutoLockHelperThreadState lock;
 
-  {
-    AutoEnterOOMUnsafeRegion oomUnsafe;
-    if (!HelperThreadState().parseWorklist(lock).appendAll(newTasks)) {
-      oomUnsafe.crash("EnqueuePendingParseTasksAfterGC");
+  GlobalHelperThreadState::ParseTaskVector& waiting =
+      HelperThreadState().parseWaitingOnGC(lock);
+  GlobalHelperThreadState::ParseTaskVector& worklist =
+      HelperThreadState().parseWorklist(lock);
+  for (size_t i = 0; i < waiting.length(); i++) {
+    if (!waiting[i]->runtimeMatches(rt)) {
+      continue;
     }
+
+    // This logic should mirror the contents of the
+    // !OffThreadParsingMustWaitForGC() branch in QueueOffThreadParseTask:
+    waiting[i]->activate(rt);
+
+    {
+      AutoEnterOOMUnsafeRegion oomUnsafe;
+      if (!worklist.append(std::move(waiting[i]))) {
+        oomUnsafe.crash("EnqueuePendingParseTasksAfterGC");
+      }
+    }
+    HelperThreadState().remove(waiting, &i);
   }
 
   HelperThreadState().notifyAll(GlobalHelperThreadState::PRODUCER, lock);
@@ -1404,13 +1395,13 @@ void GlobalHelperThreadState::addSizeOfIncludingThis(
       helperContexts_.sizeOfExcludingThis(mallocSizeOf);
 
   // Report ParseTasks on wait lists
-  for (auto task : parseWorklist_) {
+  for (const auto& task : parseWorklist_) {
     htStats.parseTask += task->sizeOfIncludingThis(mallocSizeOf);
   }
   for (auto task : parseFinishedList_) {
     htStats.parseTask += task->sizeOfIncludingThis(mallocSizeOf);
   }
-  for (auto task : parseWaitingOnGC_) {
+  for (const auto& task : parseWaitingOnGC_) {
     htStats.parseTask += task->sizeOfIncludingThis(mallocSizeOf);
   }
 
@@ -1751,11 +1742,15 @@ UniquePtr<ParseTask> GlobalHelperThreadState::finishParseTaskCommon(
     cx->releaseCheck(script);
   }
 
+  // Finish initializing ScriptSourceObject now that we are back on main-thread
+  // and in the correct realm.
   for (auto& sourceObject : parseTask->sourceObjects) {
     RootedScriptSourceObject sso(cx, sourceObject);
+
     if (!ScriptSourceObject::initFromOptions(cx, sso, parseTask->options)) {
       return nullptr;
     }
+
     if (!sso->source()->tryCompressOffThread(cx)) {
       return nullptr;
     }
@@ -2170,9 +2165,15 @@ void HelperThread::handleParseWorkload(AutoLockHelperThreadState& locked) {
   MOZ_ASSERT(HelperThreadState().canStartParseTask(locked));
   MOZ_ASSERT(idle());
 
-  currentTask.emplace(HelperThreadState().parseWorklist(locked).popCopy());
-  ParseTask* task = parseTask();
+  {
+    auto& worklist = HelperThreadState().parseWorklist(locked);
+    UniquePtr<ParseTask> task;
+    task = std::move(worklist.back());
+    worklist.popBack();
+    currentTask.emplace(task.release());
+  }
 
+  ParseTask* task = parseTask();
   task->runTaskLocked(locked);
 
   currentTask.reset();
@@ -2369,13 +2370,13 @@ void GlobalHelperThreadState::trace(JSTracer* trc) {
     }
   }
 
-  for (auto parseTask : parseWorklist_) {
+  for (auto& parseTask : parseWorklist_) {
     parseTask->trace(trc);
   }
   for (auto parseTask : parseFinishedList_) {
     parseTask->trace(trc);
   }
-  for (auto parseTask : parseWaitingOnGC_) {
+  for (auto& parseTask : parseWaitingOnGC_) {
     parseTask->trace(trc);
   }
 }

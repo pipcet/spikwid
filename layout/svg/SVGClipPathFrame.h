@@ -4,18 +4,17 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef __NS_SVGCLIPPATHFRAME_H__
-#define __NS_SVGCLIPPATHFRAME_H__
+#ifndef LAYOUT_SVG_SVGCLIPPATHFRAME_H_
+#define LAYOUT_SVG_SVGCLIPPATHFRAME_H_
 
 #include "gfxMatrix.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/SVGContainerFrame.h"
-#include "nsSVGUtils.h"
 
 class gfxContext;
-class nsSVGDisplayableFrame;
 
 namespace mozilla {
+class ISVGDisplayableFrame;
 class PresShell;
 }  // namespace mozilla
 
@@ -28,9 +27,9 @@ class SVGClipPathFrame final : public SVGContainerFrame {
   friend nsIFrame* ::NS_NewSVGClipPathFrame(mozilla::PresShell* aPresShell,
                                             ComputedStyle* aStyle);
 
-  typedef gfx::Matrix Matrix;
-  typedef gfx::SourceSurface SourceSurface;
-  typedef image::imgDrawingParams imgDrawingParams;
+  using Matrix = gfx::Matrix;
+  using SourceSurface = gfx::SourceSurface;
+  using imgDrawingParams = image::imgDrawingParams;
 
  protected:
   explicit SVGClipPathFrame(ComputedStyle* aStyle, nsPresContext* aPresContext)
@@ -114,7 +113,7 @@ class SVGClipPathFrame final : public SVGContainerFrame {
   // Check if this clipPath is made up of more than one geometry object.
   // If so, the clipping API in cairo isn't enough and we need to use
   // mask based clipping.
-  bool IsTrivial(nsSVGDisplayableFrame** aSingleChild = nullptr);
+  bool IsTrivial(ISVGDisplayableFrame** aSingleChild = nullptr);
 
   bool IsValid();
 
@@ -174,4 +173,4 @@ class SVGClipPathFrame final : public SVGContainerFrame {
 
 }  // namespace mozilla
 
-#endif
+#endif  // LAYOUT_SVG_SVGCLIPPATHFRAME_H_

@@ -922,7 +922,8 @@ void nsBoxFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
     // Check for frames that are marked as a part of the region used
     // in calculating glass margins on Windows.
     const nsStyleDisplay* styles = StyleDisplay();
-    if (styles && styles->mAppearance == StyleAppearance::MozWinExcludeGlass) {
+    if (styles &&
+        styles->EffectiveAppearance() == StyleAppearance::MozWinExcludeGlass) {
       aBuilder->AddWindowExcludeGlassRegion(
           this, nsRect(aBuilder->ToReferenceFrame(this), GetSize()));
     }
@@ -1044,7 +1045,7 @@ nsresult nsBoxFrame::LayoutChildAt(nsBoxLayoutState& aState, nsIFrame* aBox,
   nsRect oldRect(aBox->GetRect());
   aBox->SetXULBounds(aState, aRect);
 
-  bool layout = NS_SUBTREE_DIRTY(aBox);
+  bool layout = aBox->IsSubtreeDirty();
 
   if (layout ||
       (oldRect.width != aRect.width || oldRect.height != aRect.height)) {

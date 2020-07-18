@@ -2778,7 +2778,7 @@
     "n_buckets": 50,
     "description": "SPDY: Streams concurrent active per connection"
   },
-  "SPDY_REQUEST_PER_CONN_2": {
+  "SPDY_REQUEST_PER_CONN_3": {
     "record_in_processes": ["main", "content"],
     "products": ["firefox", "fennec"],
     "alert_emails": ["necko@mozilla.com", "ddamjanovic@mozilla.com"],
@@ -2786,7 +2786,7 @@
     "kind": "exponential",
     "high": 1000,
     "n_buckets": 50,
-    "bug_numbers": [1505500],
+    "bug_numbers": [1505500,1642559],
     "description": "SPDY: Streams created per connection"
   },
   "SPDY_SERVER_INITIATED_STREAMS": {
@@ -3318,6 +3318,17 @@
     "n_values": 100,
     "keyed": true,
     "description": "Error code when http3 connection is closed. Look at Http3Session for more details."
+  },
+  "HTTP3_REQUEST_PER_CONN": {
+    "record_in_processes": ["main", "content"],
+    "products": ["firefox"],
+    "alert_emails": ["necko@mozilla.com", "ddamjanovic@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": 1000,
+    "n_buckets": 50,
+    "bug_numbers": [1652104],
+    "description": "HTTP3: Streams created per connection"
   },
   "HTTP_CONTENT_ENCODING": {
     "record_in_processes": ["main", "content"],
@@ -4007,6 +4018,28 @@
     "bug_numbers": [1460589],
     "releaseChannelCollection": "opt-out",
     "description": "DNS: success distribution when both native and TRR were used"
+  },
+  "TRR_SKIP_REASON_TRR_FIRST": {
+    "record_in_processes": ["main", "socket"],
+    "products": ["firefox", "fennec"],
+    "alert_emails": ["necko@mozilla.com", "vgosu@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "enumerated",
+    "n_values": 50,
+    "bug_numbers": [1649143],
+    "releaseChannelCollection": "opt-out",
+    "description": "When in TRR-first mode, it lists the reason we may have skipped TRR"
+  },
+  "TRR_SKIP_REASON_DNS_WORKED": {
+    "record_in_processes": ["main", "socket"],
+    "products": ["firefox", "fennec"],
+    "alert_emails": ["necko@mozilla.com", "vgosu@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "enumerated",
+    "n_values": 50,
+    "bug_numbers": [1649143],
+    "releaseChannelCollection": "opt-out",
+    "description": "When in TRR-first mode if DNS succeeded, it lists the reason we may have skipped TRR"
   },
   "DNS_TRR_FIRST3": {
     "record_in_processes": ["main"],
@@ -10906,6 +10939,15 @@
     "n_values": 10,
     "description": "How often would blocked mixed content be allowed if HSTS upgrades were allowed? 0=display/no-HSTS, 1=display/HSTS, 2=active/no-HSTS, 3=active/HSTS"
   },
+  "MIXED_CONTENT_DOWNLOADS": {
+    "record_in_processes": ["main","content"],
+    "products": ["firefox"],
+    "alert_emails": ["seceng-telemetry@mozilla.com", "sstreich@mozilla.com"],
+    "bug_numbers": [1646768],
+    "expires_in_version": "85",
+    "kind": "boolean",
+    "description": "Accumulates how many downloads are mixed-content (True = The download is MixedContent, False= is not MixedContent)"
+  },
   "CONTENT_SIGNATURE_VERIFICATION_STATUS": {
     "record_in_processes": ["main", "content"],
     "products": ["firefox", "fennec", "thunderbird"],
@@ -13333,8 +13375,8 @@
     "record_in_processes": ["main", "content"],
     "products": ["firefox", "fennec"],
     "alert_emails": ["dtownsend@mozilla.com"],
-    "expires_in_version": "81",
-    "bug_numbers": [1296606, 1488881, 1490342, 1621948],
+    "expires_in_version": "85",
+    "bug_numbers": [1296606, 1488881, 1490342, 1621948, 1649958],
     "kind": "count",
     "description": "Number of named browser profiles for the current user, as reported by the profile service at startup.",
     "releaseChannelCollection": "opt-out"
@@ -14965,7 +15007,7 @@
     "products": ["firefox", "fennec"],
     "alert_emails": ["opettay@mozilla.com" ],
     "bug_numbers": [1554292, 1566485, 1606208],
-    "expires_in_version": "80",
+    "expires_in_version": "85",
     "kind": "exponential",
     "high": 60000,
     "n_buckets": 100,
@@ -15113,16 +15155,6 @@
     "high": 1000,
     "n_buckets": 50,
     "description": "Time in milliseconds spent in the layout system per Refresh Driver tick."
-  },
-  "WINDOW_OPEN_OUTER_SIZE": {
-    "record_in_processes": ["main", "content"],
-    "products": ["firefox"],
-    "alert_emails": ["tfujisawa.birchill@mozilla.com"],
-    "expires_in_version": "80",
-    "kind": "boolean",
-    "bug_numbers": [1624150],
-    "releaseChannelCollection": "opt-out",
-    "description": "Flag indicating consumer of non-standard outerWidth/outerHeight features in window.open"
   },
   "WINDOW_REMOTE_SUBFRAMES_ENABLED_STATUS": {
     "record_in_processes": ["main"],
@@ -15363,6 +15395,32 @@
     "n_values": 5,
     "bug_numbers": [1627708],
     "description": "Input device that triggered the zoom gesture (InputData::PinchGestureSource)",
+    "releaseChannelCollection": "opt-out"
+  },
+  "FOG_EVAL_USER_ACTIVE_S" : {
+    "products": ["firefox"],
+    "record_in_processes": ["main"],
+    "alert_emails": ["chutten@mozilla.com"],
+    "expires_in_version": "85",
+    "kind": "exponential",
+    "keyed": false,
+    "high": 7200,
+    "n_buckets": 50,
+    "bug_numbers": [1647876],
+    "description": "Seconds between `user-interaction-active` and `user-interaction-inactive`. For use in evaluating baseline engagement for Project FOG.",
+    "releaseChannelCollection": "opt-out"
+  },
+  "FOG_EVAL_WINDOW_RAISED_S" : {
+    "products": ["firefox"],
+    "record_in_processes": ["main"],
+    "alert_emails": ["chutten@mozilla.com"],
+    "expires_in_version": "85",
+    "kind": "exponential",
+    "keyed": false,
+    "high": 7200,
+    "n_buckets": 50,
+    "bug_numbers": [1647876],
+    "description": "Seconds between a Firefox window being raised and lowered. For use in evaluating baseline engagement for Project FOG.",
     "releaseChannelCollection": "opt-out"
   }
 }

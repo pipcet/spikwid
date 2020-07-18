@@ -25,6 +25,7 @@
 #include "mozilla/dom/Console.h"
 #include "mozilla/dom/DOMTypes.h"
 #include "mozilla/dom/Event.h"
+#include "mozilla/dom/Exceptions.h"
 #include "mozilla/dom/FunctionBinding.h"
 #include "mozilla/dom/IndexedDatabaseManager.h"
 #include "mozilla/dom/MessageEvent.h"
@@ -1371,7 +1372,7 @@ void WorkerPrivate::StoreCSPOnClient() {
   auto data = mWorkerThreadAccessible.Access();
   MOZ_ASSERT(data->mScope);
   if (mLoadInfo.mCSPInfo) {
-    data->mScope->GetClientSource()->SetCspInfo(*mLoadInfo.mCSPInfo);
+    data->mScope->MutableClientSourceRef().SetCspInfo(*mLoadInfo.mCSPInfo);
   }
 }
 
@@ -2098,7 +2099,8 @@ WorkerPrivate::WorkerThreadAccessible::WorkerThreadAccessible(
       mPeriodicGCTimerRunning(false),
       mIdleGCTimerRunning(false),
       mOnLine(aParent ? aParent->OnLine() : !NS_IsOffline()),
-      mJSThreadExecutionGranted(false) {}
+      mJSThreadExecutionGranted(false),
+      mCCCollectedAnything(false) {}
 
 namespace {
 
@@ -3228,10 +3230,7 @@ void WorkerPrivate::ExecutionReady() {
     }
   }
 
-  MOZ_ASSERT(data->mScope);
-  auto& clientSource = data->mScope->GetClientSource();
-  MOZ_DIAGNOSTIC_ASSERT(clientSource);
-  clientSource->WorkerExecutionReady(this);
+  data->mScope->MutableClientSourceRef().WorkerExecutionReady(this);
 }
 
 void WorkerPrivate::InitializeGCTimers() {
@@ -3593,14 +3592,13 @@ void WorkerPrivate::ClearDebuggerEventQueue() {
 
 bool WorkerPrivate::FreezeInternal() {
   auto data = mWorkerThreadAccessible.Access();
-  MOZ_ASSERT(data->mScope);
   NS_ASSERTION(!data->mFrozen, "Already frozen!");
 
   AutoYieldJSThreadExecution yield;
 
-  auto& clientSource = data->mScope->GetClientSource();
-  if (clientSource) {
-    clientSource->Freeze();
+  // The worker can freeze even if it failed to run (and doesn't have a global).
+  if (data->mScope) {
+    data->mScope->MutableClientSourceRef().Freeze();
   }
 
   data->mFrozen = true;
@@ -3614,7 +3612,6 @@ bool WorkerPrivate::FreezeInternal() {
 
 bool WorkerPrivate::ThawInternal() {
   auto data = mWorkerThreadAccessible.Access();
-  MOZ_ASSERT(data->mScope);
   NS_ASSERTION(data->mFrozen, "Not yet frozen!");
 
   for (uint32_t index = 0; index < data->mChildWorkers.Length(); index++) {
@@ -3623,9 +3620,9 @@ bool WorkerPrivate::ThawInternal() {
 
   data->mFrozen = false;
 
-  auto& clientSource = data->mScope->GetClientSource();
-  if (clientSource) {
-    clientSource->Thaw();
+  // The worker can thaw even if it failed to run (and doesn't have a global).
+  if (data->mScope) {
+    data->mScope->MutableClientSourceRef().Thaw();
   }
 
   return true;
@@ -4860,8 +4857,15 @@ void WorkerPrivate::SetLowMemoryStateInternal(JSContext* aCx, bool aState) {
   }
 }
 
+void WorkerPrivate::SetCCCollectedAnything(bool collectedAnything) {
+  mWorkerThreadAccessible.Access()->mCCCollectedAnything = collectedAnything;
+}
+
 void WorkerPrivate::GarbageCollectInternal(JSContext* aCx, bool aShrinking,
                                            bool aCollectChildren) {
+  // Perform GC followed by CC (the CC is triggered by
+  // WorkerJSRuntime::CustomGCCallback at the end of the collection).
+
   auto data = mWorkerThreadAccessible.Access();
 
   if (!GlobalScope()) {
@@ -4874,6 +4878,12 @@ void WorkerPrivate::GarbageCollectInternal(JSContext* aCx, bool aShrinking,
 
     if (aShrinking) {
       JS::NonIncrementalGC(aCx, GC_SHRINK, JS::GCReason::DOM_WORKER);
+
+      // Check whether the CC collected anything and if so GC again. This is
+      // necessary to collect all garbage.
+      if (data->mCCCollectedAnything) {
+        JS::NonIncrementalGC(aCx, GC_NORMAL, JS::GCReason::DOM_WORKER);
+      }
 
       if (!aCollectChildren) {
         LOG(WorkerLog(), ("Worker %p collected idle garbage\n", this));

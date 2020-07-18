@@ -32,18 +32,19 @@ job-defaults:
             - 'config/mozunit/**'
             - 'python/mach_commands.py'
 
-taskgraph-tests:
+firefox-ci:
     description: taskcluster/taskgraph unit tests
-    python-version: [2, 3]
+    python-version: [2]
     treeherder:
-        symbol: tg
+        symbol: ci
     run:
         using: python-test
-        subsuite: taskgraph
+        subsuite: ci
     when:
         files-changed:
+            - 'taskcluster/ci/**'
             - 'taskcluster/**/*.py'
-            - 'python/mach/**/*.py'
+            - 'tools/tryselect/selectors/auto.py'
 
 mach:
     description: python/mach unit tests
@@ -311,6 +312,19 @@ reftest-harness:
             - 'testing/mozharness/mozharness/mozilla/structuredlog.py'
             - 'testing/mozharness/mozharness/mozilla/testing/errors.py'
 
+taskgraph-tests:
+    description: taskcluster/taskgraph unit tests
+    python-version: [2, 3]
+    treeherder:
+        symbol: tg
+    run:
+        using: python-test
+        subsuite: taskgraph
+    when:
+        files-changed:
+            - 'taskcluster/**/*.py'
+            - 'python/mach/**/*.py'
+
 tryselect:
     description: tools/tryselect unit tests
     platform:
@@ -354,6 +368,7 @@ mozbuild:
             - '**/moz.configure'
             - 'build/moz.configure/**'
             - 'config/tests/**'
+            - 'dom/bindings/mozwebidlcodegen/**'
             - 'python/mach/**'
             - 'python/mozboot/**'
             - 'python/mozbuild/**'
@@ -402,6 +417,28 @@ condprof:
         files-changed:
             - 'testing/condprofile/condprof**'
             - 'testing/condprofile/setup.py'
+
+featuregates:
+    description: featuregates Python unit tests
+    platform:
+        - linux1804-64/opt
+        - windows10-64/opt
+    python-version: [2, 3]
+    treeherder:
+        symbol: fg
+    run:
+        using: python-test
+        subsuite: featuregates
+    fetches:
+        toolchain:
+            by-platform:
+                linux1804-64/opt:
+                    - linux64-node-10
+                windows10-64/opt:
+                    - win64-node-10
+    when:
+        files-changed:
+            - 'toolkit/components/featuregates/**'
 
 talos:
     description: testing/talos unit tests
@@ -453,3 +490,18 @@ telemetry-integration-tests:
     when:
         files-changed:
             - 'toolkit/components/telemetry/**'
+
+xpcom:
+    description: xpcom unit tests
+    platform:
+        - linux1804-64/opt
+    python-version: [3]
+    treeherder:
+        symbol: xpcom
+    run:
+        using: python-test
+        subsuite: xpcom
+    when:
+        files-changed:
+            - 'xpcom/ds/tools/**'
+            - 'xpcom/ds/test/**'

@@ -18,6 +18,7 @@ from mozperftest.utils import (
     build_test_list,
     get_multi_tasks_url,
     convert_day,
+    load_class,
 )
 from mozperftest.tests.support import temp_file, requests_content, EXAMPLE_TESTS_DIR
 
@@ -76,8 +77,25 @@ def _req(package):
 def test_install_package():
     vem = mock.Mock()
     vem.bin_path = "someplace"
-    install_package(vem, "foo")
+    assert install_package(vem, "foo")
     vem._run_pip.assert_called()
+
+
+@mock.patch("pip._internal.req.constructors.install_req_from_line", new=_req)
+def test_install_package_failures():
+    vem = mock.Mock()
+    vem.bin_path = "someplace"
+
+    def run_pip(*args):
+        raise Exception()
+
+    vem._run_pip = run_pip
+
+    with pytest.raises(Exception):
+        install_package(vem, "foo")
+
+    # we can also absorb the error, and just return False
+    assert not install_package(vem, "foo", ignore_failure=True)
 
 
 @mock.patch("mozperftest.utils.requests.get", requests_content())
@@ -118,6 +136,28 @@ def test_multibuild_url():
             mockeddate.strftime.return_value = "2020.08.09"
             buildurl = get_multi_tasks_url(route)
             assert "2020.08.09" in buildurl and route in buildurl
+
+
+class ImportMe:
+    pass
+
+
+def test_load_class():
+
+    with pytest.raises(ImportError):
+        load_class("notimportable")
+
+    with pytest.raises(ImportError):
+        load_class("notim:por:table")
+
+    with pytest.raises(ImportError):
+        load_class("notim:portable")
+
+    with pytest.raises(ImportError):
+        load_class("mozperftest.tests.test_utils:NOEXIST")
+
+    klass = load_class("mozperftest.tests.test_utils:ImportMe")
+    assert klass is ImportMe
 
 
 if __name__ == "__main__":

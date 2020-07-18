@@ -235,6 +235,7 @@
 #include "mozilla/dom/U2F.h"
 #include "mozilla/dom/WebIDLGlobalNameHash.h"
 #include "mozilla/dom/Worklet.h"
+#include "AccessCheck.h"
 
 #ifdef HAVE_SIDEBAR
 #  include "mozilla/dom/ExternalBinding.h"
@@ -243,13 +244,6 @@
 #ifdef MOZ_WEBSPEECH
 #  include "mozilla/dom/SpeechSynthesis.h"
 #endif
-
-// Apple system headers seem to have a check() macro.  <sigh>
-#ifdef check
-class nsIScriptTimeoutHandler;
-#  undef check
-#endif  // check
-#include "AccessCheck.h"
 
 #ifdef ANDROID
 #  include <android/log.h>
@@ -5181,53 +5175,27 @@ void nsGlobalWindowOuter::PrintOuter(ErrorResult& aError) {
     return;
   }
 
-  nsCOMPtr<nsIWebBrowserPrint> webBrowserPrint;
-  if (NS_SUCCEEDED(GetInterface(NS_GET_IID(nsIWebBrowserPrint),
-                                getter_AddRefs(webBrowserPrint)))) {
-    nsAutoSyncOperation sync(GetCurrentInnerWindowInternal()
-                                 ? GetCurrentInnerWindowInternal()->mDoc.get()
-                                 : nullptr);
-
-    nsCOMPtr<nsIPrintSettingsService> printSettingsService =
-        do_GetService("@mozilla.org/gfx/printsettings-service;1");
-
-    nsCOMPtr<nsIPrintSettings> printSettings;
-    if (printSettingsService) {
-      printSettingsService->GetGlobalPrintSettings(
-          getter_AddRefs(printSettings));
-
-      nsAutoString printerName;
-      printSettings->GetPrinterName(printerName);
-
-      bool shouldGetLastUsedPrinterName = printerName.IsEmpty();
-#  ifdef MOZ_X11
-      // In Linux, GTK backend does not support per printer settings.
-      // Calling GetLastUsedPrinterName causes a sandbox violation (see Bug
-      // 1329216). The printer name is not needed anywhere else on Linux
-      // before it gets to the parent. In the parent, we will then query the
-      // last-used printer name if no name is set. Unless we are in the parent,
-      // we will skip this part.
-      if (!XRE_IsParentProcess()) {
-        shouldGetLastUsedPrinterName = false;
-      }
-#  endif
-      if (shouldGetLastUsedPrinterName) {
-        printSettingsService->GetLastUsedPrinterName(printerName);
-        printSettings->SetPrinterName(printerName);
-      }
-      printSettingsService->InitPrintSettingsFromPrinter(printerName,
-                                                         printSettings);
-      printSettingsService->InitPrintSettingsFromPrefs(
-          printSettings, true, nsIPrintSettings::kInitSaveAll);
-
-      EnterModalState();
-      webBrowserPrint->Print(printSettings, nullptr);
-      LeaveModalState();
-    } else {
-      webBrowserPrint->GetGlobalPrintSettings(getter_AddRefs(printSettings));
-      webBrowserPrint->Print(printSettings, nullptr);
-    }
+  nsCOMPtr<nsIPrintSettingsService> printSettingsService =
+      do_GetService("@mozilla.org/gfx/printsettings-service;1");
+  if (!printSettingsService) {
+    // we currently return here in headless mode - should we?
+    aError.Throw(NS_ERROR_NOT_AVAILABLE);
+    return;
   }
+
+  nsCOMPtr<nsIWebBrowserPrint> webBrowserPrint =
+      do_GetInterface(static_cast<nsIInterfaceRequestor*>(this));
+  if (!webBrowserPrint) {
+    aError.Throw(NS_ERROR_NOT_AVAILABLE);
+    return;
+  }
+
+  nsAutoSyncOperation sync(GetCurrentInnerWindowInternal()
+                               ? GetCurrentInnerWindowInternal()->mDoc.get()
+                               : nullptr);
+  EnterModalState();
+  webBrowserPrint->Print(nullptr, nullptr);
+  LeaveModalState();
 #endif  // NS_PRINTING
 }
 

@@ -76,7 +76,7 @@ class LoginManagerPrompter {
   }
 
   get QueryInterface() {
-    return ChromeUtils.generateQI([Ci.nsILoginManagerPrompter]);
+    return ChromeUtils.generateQI(["nsILoginManagerPrompter"]);
   }
 
   /**
@@ -175,11 +175,6 @@ class LoginManagerPrompter {
       `_showLoginCaptureDoorhanger, got autoFilledLoginGuid: ${autoFilledLoginGuid}`
     );
 
-    LoginManagerPrompter._setUsernameAutocomplete(
-      login,
-      possibleValues?.usernames
-    );
-
     let saveMsgNames = {
       prompt: login.username === "" ? "saveLoginMsgNoUser" : "saveLoginMsg",
       buttonLabel: "saveLoginButtonAllow.label",
@@ -219,6 +214,12 @@ class LoginManagerPrompter {
 
     let chromeDoc = browser.ownerDocument;
     let currentNotification;
+
+    let wasModifiedEvent = {
+      // Values are mutated
+      did_edit_un: "false",
+      did_edit_pw: "false",
+    };
 
     let updateButtonStatus = element => {
       let mainActionButton = element.button;
@@ -307,6 +308,16 @@ class LoginManagerPrompter {
     let onInput = () => {
       readDataFromUI();
       updateButtonLabel();
+    };
+
+    let onUsernameInput = () => {
+      wasModifiedEvent.did_edit_un = "true";
+      onInput();
+    };
+
+    let onPasswordInput = () => {
+      wasModifiedEvent.did_edit_pw = "true";
+      onInput();
     };
 
     let onKeyUp = e => {
@@ -458,6 +469,26 @@ class LoginManagerPrompter {
         } else {
           throw new Error("Unknown histogram");
         }
+
+        let eventObject;
+        if (type == "password-change") {
+          eventObject = "update";
+        } else if (type == "password-save") {
+          eventObject = "save";
+        } else {
+          throw new Error(
+            `Unexpected doorhanger type. Expected either 'password-save' or 'password-change', got ${type}`
+          );
+        }
+
+        Services.telemetry.recordEvent(
+          "pwmgr",
+          "doorhanger_submitted",
+          eventObject,
+          null,
+          wasModifiedEvent
+        );
+
         persistData();
         Services.obs.notifyObservers(
           null,
@@ -581,7 +612,7 @@ class LoginManagerPrompter {
                 .removeAttribute("focused");
               chromeDoc
                 .getElementById("password-notification-username")
-                .addEventListener("input", onInput);
+                .addEventListener("input", onUsernameInput);
               chromeDoc
                 .getElementById("password-notification-username")
                 .addEventListener("keyup", onKeyUp);
@@ -590,25 +621,32 @@ class LoginManagerPrompter {
                 .addEventListener("keyup", onKeyUp);
               chromeDoc
                 .getElementById("password-notification-password")
-                .addEventListener("input", onInput);
+                .addEventListener("input", onPasswordInput);
               chromeDoc
                 .getElementById("password-notification-username-dropmarker")
                 .addEventListener("click", togglePopup);
 
-              let usernameSuggestions = LoginManagerPrompter._getUsernameSuggestions(
+              LoginManagerPrompter._getUsernameSuggestions(
                 login,
                 possibleValues?.usernames
-              );
-              chromeDoc.getElementById(
-                "password-notification-username-dropmarker"
-              ).hidden = !usernameSuggestions.length;
-
-              chromeDoc
-                .getElementById("password-notification-username")
-                .classList.toggle(
-                  "ac-has-end-icon",
-                  !!usernameSuggestions.length
+              ).then(usernameSuggestions => {
+                let dropmarker = chromeDoc?.getElementById(
+                  "password-notification-username-dropmarker"
                 );
+                if (dropmarker) {
+                  dropmarker.hidden = !usernameSuggestions.length;
+                }
+
+                let usernameField = chromeDoc?.getElementById(
+                  "password-notification-username"
+                );
+                if (usernameField) {
+                  usernameField.classList.toggle(
+                    "ac-has-end-icon",
+                    !!usernameSuggestions.length
+                  );
+                }
+              });
 
               let toggleBtn = chromeDoc.getElementById(
                 "password-notification-visibilityToggle"
@@ -639,6 +677,11 @@ class LoginManagerPrompter {
                 toggleBtn.setAttribute("hidden", hideToggle);
               }
 
+              LoginManagerPrompter._setUsernameAutocomplete(
+                login,
+                possibleValues?.usernames
+              );
+
               break;
             case "shown": {
               log.debug("shown");
@@ -663,12 +706,12 @@ class LoginManagerPrompter {
               let usernameField = chromeDoc.getElementById(
                 "password-notification-username"
               );
-              usernameField.removeEventListener("input", onInput);
+              usernameField.removeEventListener("input", onUsernameInput);
               usernameField.removeEventListener("keyup", onKeyUp);
               let passwordField = chromeDoc.getElementById(
                 "password-notification-password"
               );
-              passwordField.removeEventListener("input", onInput);
+              passwordField.removeEventListener("input", onPasswordInput);
               passwordField.removeEventListener("keyup", onKeyUp);
               passwordField.removeEventListener("command", onVisibilityToggle);
               chromeDoc
@@ -934,13 +977,16 @@ class LoginManagerPrompter {
    * @param {nsILoginInfo} login - used only for its information about the current domain.
    * @param {Set<String>?} possibleUsernames - values that we believe may be new/changed login usernames.
    */
-  static _setUsernameAutocomplete(login, possibleUsernames = new Set()) {
+  static async _setUsernameAutocomplete(login, possibleUsernames = new Set()) {
     let result = Cc["@mozilla.org/autocomplete/simple-result;1"].createInstance(
       Ci.nsIAutoCompleteSimpleResult
     );
     result.setDefaultIndex(0);
 
-    let usernames = this._getUsernameSuggestions(login, possibleUsernames);
+    let usernames = await this._getUsernameSuggestions(
+      login,
+      possibleUsernames
+    );
     for (let { text, style } of usernames) {
       let value = text;
       let comment = "";
@@ -964,34 +1010,37 @@ class LoginManagerPrompter {
    *
    * @returns {object[]} an ordered list of usernames to be used the next time the username autocomplete popup is opened.
    */
-  static _getUsernameSuggestions(login, possibleUsernames = new Set()) {
-    // TODO uncomment in bug 1641413
-    // let sameOriginLogins = LoginHelper.searchLoginsWithObject({
-    //   formActionOrigin: login.formActionOrigin,
-    //   origin: login.origin,
-    //   httpRealm: login.httpRealm,
-    //   schemeUpgrades: LoginHelper.schemeUpgrades,
-    // });
+  static async _getUsernameSuggestions(login, possibleUsernames = new Set()) {
+    if (!Services.prefs.getBoolPref("signon.capture.inputChanges.enabled")) {
+      return [];
+    }
 
-    // let saved = sameOriginLogins.map(login => {
-    //   return { text: login.username, style: "login" };
-    // });
-    let possible = [...possibleUsernames].map(username => {
-      // TODO style will be "possible-username" in bug 1641413
-      return { text: username, style: "" };
+    let baseDomainLogins = await Services.logins.searchLoginsAsync({
+      origin: login.origin,
+      schemeUpgrades: LoginHelper.schemeUpgrades,
     });
 
-    // TODO concat with `saved` in bug 1641413
-    return possible.reduce((acc, next) => {
-      let alreadyInAcc = acc.findIndex(entry => entry.text == next.text) != -1;
-      if (!alreadyInAcc) {
-        acc.push(next);
-      } else if (next.style == "possible-username") {
-        let existingIndex = acc.findIndex(entry => entry.text == next.text);
-        acc[existingIndex] = next;
-      }
-      return acc;
-    }, []);
+    let saved = baseDomainLogins.map(login => {
+      return { text: login.username, style: "login" };
+    });
+    let possible = [...possibleUsernames].map(username => {
+      return { text: username, style: "possible-username" };
+    });
+
+    return possible
+      .concat(saved)
+      .reduce((acc, next) => {
+        let alreadyInAcc =
+          acc.findIndex(entry => entry.text == next.text) != -1;
+        if (!alreadyInAcc) {
+          acc.push(next);
+        } else if (next.style == "possible-username") {
+          let existingIndex = acc.findIndex(entry => entry.text == next.text);
+          acc[existingIndex] = next;
+        }
+        return acc;
+      }, [])
+      .filter(suggestion => !!suggestion.text);
   }
 }
 

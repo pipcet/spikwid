@@ -344,7 +344,7 @@ sccache:
         type: git
         repo: https://github.com/mozilla/sccache
         # 0.2.13 release + various changes
-        revision: e654df8ade1cf087b0940bcb939e277d0aae57de
+        revision: d172e77c1bfd08714e71fe80f80cc149eeae1749
 
 fxc2:
     description: fxc2 source code
@@ -456,8 +456,8 @@ dump-syms:
     fetch:
         type: git
         repo: https://github.com/mozilla/dump_syms/
-        # 0.0.5
-        revision: 2603fb01a18e4e11d95b95fc08d9dacad9076f43
+        # 0.0.5 + ELF/MachO/fixes
+        revision: 756bf4b555418960564c0a7c6d5ed0b1a8329283
 
 fix-stacks:
     description: fix-stacks source code

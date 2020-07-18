@@ -21,7 +21,7 @@
 
 #include "jsapi.h"  // CompletionKind
 
-#include "frontend/AbstractScopePtr.h"
+#include "frontend/AbstractScopePtr.h"           // ScopeIndex
 #include "frontend/BCEParserHandle.h"            // BCEParserHandle
 #include "frontend/BytecodeControlStructures.h"  // NestableControl
 #include "frontend/BytecodeOffset.h"             // BytecodeOffset
@@ -235,6 +235,7 @@ struct MOZ_STACK_CLASS BytecodeEmitter {
     return perScriptData().gcThingList().firstScope();
   }
   AbstractScopePtr innermostScope() const;
+  ScopeIndex innermostScopeIndex() const;
   AbstractScopePtr bodyScope() const {
     return perScriptData().gcThingList().getScope(bodyScopeIndex);
   }
@@ -851,6 +852,8 @@ struct MOZ_STACK_CLASS BytecodeEmitter {
       const std::function<bool(uint32_t)>& pushOperandsCallback);
   MOZ_MUST_USE bool emitInstrumentationForOpcodeSlow(JSOp op,
                                                      uint32_t atomIndex);
+
+  MOZ_MUST_USE bool allowSelfHostedIter(ParseNode* parseNode);
 };
 
 class MOZ_RAII AutoCheckUnstableEmitterScope {

@@ -4,8 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef __NS_SVGGRADIENTELEMENT_H__
-#define __NS_SVGGRADIENTELEMENT_H__
+#ifndef DOM_SVG_SVGGRADIENTELEMENT_H_
+#define DOM_SVG_SVGGRADIENTELEMENT_H_
 
 #include "SVGAnimatedEnumeration.h"
 #include "SVGAnimatedLength.h"
@@ -30,7 +30,7 @@ class DOMSVGAnimatedTransformList;
 
 //--------------------- Gradients------------------------
 
-typedef SVGElement SVGGradientElementBase;
+using SVGGradientElementBase = SVGElement;
 
 class SVGGradientElement : public SVGGradientElementBase {
   friend class mozilla::SVGGradientFrame;
@@ -78,7 +78,7 @@ class SVGGradientElement : public SVGGradientElementBase {
 
 //---------------------Linear Gradients------------------------
 
-typedef SVGGradientElement SVGLinearGradientElementBase;
+using SVGLinearGradientElementBase = SVGGradientElement;
 
 class SVGLinearGradientElement : public SVGLinearGradientElementBase {
   friend class mozilla::SVGLinearGradientFrame;
@@ -111,7 +111,7 @@ class SVGLinearGradientElement : public SVGLinearGradientElementBase {
 
 //-------------------------- Radial Gradients ----------------------------
 
-typedef SVGGradientElement SVGRadialGradientElementBase;
+using SVGRadialGradientElementBase = SVGGradientElement;
 
 class SVGRadialGradientElement : public SVGRadialGradientElementBase {
   friend class mozilla::SVGRadialGradientFrame;
@@ -147,4 +147,4 @@ class SVGRadialGradientElement : public SVGRadialGradientElementBase {
 }  // namespace dom
 }  // namespace mozilla
 
-#endif
+#endif  // DOM_SVG_SVGGRADIENTELEMENT_H_

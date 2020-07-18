@@ -11,6 +11,7 @@
 #include "nsHttpHandler.h"
 #include "nsCOMPtr.h"
 #include "nsIOService.h"
+#include "nsNetUtil.h"
 #include "nsQueryObject.h"
 #include "nsThreadUtils.h"
 #include "NullHttpChannel.h"
@@ -110,8 +111,13 @@ nsHttpActivityDistributor::ObserveActivityWithArgs(
     }
   };
 
-  return NS_DispatchToMainThread(NS_NewRunnableFunction(
-      "net::nsHttpActivityDistributor::ObserveActivityWithArgs", task));
+  if (!NS_IsMainThread()) {
+    return NS_DispatchToMainThread(NS_NewRunnableFunction(
+        "net::nsHttpActivityDistributor::ObserveActivityWithArgs", task));
+  }
+
+  task();
+  return NS_OK;
 }
 
 NS_IMETHODIMP

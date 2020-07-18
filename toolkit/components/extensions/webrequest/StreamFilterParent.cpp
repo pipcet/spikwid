@@ -314,7 +314,10 @@ void StreamFilterParent::FinishDisconnect() {
     self->FlushBufferedData();
 
     RunOnMainThread(FUNC, [=] {
-      if (self->mLoadGroup && !self->mDisconnected) {
+      if (self->mReceivedStop && !self->mSentStop) {
+        nsresult rv = self->EmitStopRequest(NS_OK);
+        Unused << NS_WARN_IF(NS_FAILED(rv));
+      } else if (self->mLoadGroup && !self->mDisconnected) {
         Unused << self->mLoadGroup->RemoveRequest(self, nullptr, NS_OK);
       }
       self->mDisconnected = true;
@@ -605,7 +608,7 @@ StreamFilterParent::OnDataAvailable(nsIRequest* aRequest,
                                     uint64_t aOffset, uint32_t aCount) {
   AssertIsIOThread();
 
-  if (mState == State::Disconnected || mDisconnectedByOnStartRequest) {
+  if (mDisconnectedByOnStartRequest || mState == State::Disconnected) {
     // If we're offloading data in a thread pool, it's possible that we'll
     // have buffered some additional data while waiting for the buffer to
     // flush. So, if there's any buffered data left, flush that before we
@@ -659,16 +662,6 @@ nsresult StreamFilterParent::FlushBufferedData() {
 
     nsresult rv = Write(data->mData);
     NS_ENSURE_SUCCESS(rv, rv);
-  }
-
-  if (mReceivedStop && !mSentStop) {
-    RefPtr<StreamFilterParent> self(this);
-    RunOnMainThread(FUNC, [=] {
-      if (!mSentStop) {
-        nsresult rv = self->EmitStopRequest(NS_OK);
-        Unused << NS_WARN_IF(NS_FAILED(rv));
-      }
-    });
   }
 
   return NS_OK;

@@ -4,8 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef mozilla_dom_SVGFEDistantLightElement_h
-#define mozilla_dom_SVGFEDistantLightElement_h
+#ifndef DOM_SVG_SVGFEDISTANTLIGHTELEMENT_H_
+#define DOM_SVG_SVGFEDISTANTLIGHTELEMENT_H_
 
 #include "SVGAnimatedNumber.h"
 #include "SVGFilters.h"
@@ -16,7 +16,7 @@ nsresult NS_NewSVGFEDistantLightElement(
 namespace mozilla {
 namespace dom {
 
-typedef SVGFELightElement SVGFEDistantLightElementBase;
+using SVGFEDistantLightElementBase = SVGFELightElement;
 
 class SVGFEDistantLightElement : public SVGFEDistantLightElementBase {
   friend nsresult(::NS_NewSVGFEDistantLightElement(
@@ -53,4 +53,4 @@ class SVGFEDistantLightElement : public SVGFEDistantLightElementBase {
 }  // namespace dom
 }  // namespace mozilla
 
-#endif  // mozilla_dom_SVGFEDistantLightElement_h
+#endif  // DOM_SVG_SVGFEDISTANTLIGHTELEMENT_H_

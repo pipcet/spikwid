@@ -2080,8 +2080,8 @@ DownloadCopySaver.prototype = {
       let resumeFromBytes = 0;
 
       const notificationCallbacks = {
-        QueryInterface: ChromeUtils.generateQI([Ci.nsIInterfaceRequestor]),
-        getInterface: ChromeUtils.generateQI([Ci.nsIProgressEventSink]),
+        QueryInterface: ChromeUtils.generateQI(["nsIInterfaceRequestor"]),
+        getInterface: ChromeUtils.generateQI(["nsIProgressEventSink"]),
         onProgress: function DCSE_onProgress(
           aRequest,
           aProgress,
@@ -2248,7 +2248,8 @@ DownloadCopySaver.prototype = {
             uri: download.source.url,
             contentPolicyType: Ci.nsIContentPolicy.TYPE_SAVEAS_DOWNLOAD,
             loadingPrincipal: download.source.loadingPrincipal,
-            securityFlags: Ci.nsILoadInfo.SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
+            securityFlags:
+              Ci.nsILoadInfo.SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL,
           });
         } else {
           channel = NetUtil.newChannel({

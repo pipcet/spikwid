@@ -174,7 +174,7 @@ var SysInfo = {
       return this.overrides[name];
     }
 
-    return this._genuine.getProperty(name);
+    return this._genuine.QueryInterface(Ci.nsIPropertyBag).getProperty(name);
   },
 
   getPropertyAsUint32(name) {
@@ -182,7 +182,7 @@ var SysInfo = {
   },
 
   get(name) {
-    return this._genuine.get(name);
+    return this._genuine.QueryInterface(Ci.nsIPropertyBag2).get(name);
   },
 
   get diskInfo() {
@@ -2043,7 +2043,7 @@ async function checkDefaultSearch(privateOn, reInitSearchService) {
   const EXPECTED_SEARCH_ENGINE = "other-" + SEARCH_ENGINE_ID;
   const EXPECTED_SEARCH_ENGINE_DATA = {
     name: "telemetry_default",
-    loadPath: "[other]addEngineWithDetails",
+    loadPath: "[other]addEngineWithDetails:telemetry_default@test.engine",
     origin: "verified",
   };
   if (privateOn) {
@@ -2102,10 +2102,9 @@ add_task(async function test_defaultSearchEngine() {
         reject(ex);
       }
     }, "browser-search-engine-modified");
-    Services.search.addEngine(
+    Services.search.addOpenSearchEngine(
       "file://" + do_get_cwd().path + "/engine.xml",
-      null,
-      false
+      null
     );
   });
   await Services.search.setDefault(engine);

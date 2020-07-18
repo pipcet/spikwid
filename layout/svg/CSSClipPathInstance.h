@@ -4,8 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef __NS_CSSCLIPPATHINSTANCE_H__
-#define __NS_CSSCLIPPATHINSTANCE_H__
+#ifndef LAYOUT_SVG_CSSCLIPPATHINSTANCE_H_
+#define LAYOUT_SVG_CSSCLIPPATHINSTANCE_H_
 
 #include "gfxMatrix.h"
 #include "gfxPoint.h"
@@ -19,9 +19,9 @@ class gfxContext;
 namespace mozilla {
 
 class MOZ_STACK_CLASS CSSClipPathInstance {
-  typedef gfx::DrawTarget DrawTarget;
-  typedef gfx::Path Path;
-  typedef gfx::Rect Rect;
+  using DrawTarget = gfx::DrawTarget;
+  using Path = gfx::Path;
+  using Rect = gfx::Rect;
 
  public:
   static void ApplyBasicShapeOrPathClip(gfxContext& aContext, nsIFrame* aFrame,
@@ -63,4 +63,4 @@ class MOZ_STACK_CLASS CSSClipPathInstance {
 
 }  // namespace mozilla
 
-#endif
+#endif  // LAYOUT_SVG_CSSCLIPPATHINSTANCE_H_

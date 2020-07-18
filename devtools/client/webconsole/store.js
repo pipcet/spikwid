@@ -95,7 +95,7 @@ function configureStore(webConsoleUI, options = {}) {
   const { toolbox } = options.thunkArgs;
   const sessionId = (toolbox && toolbox.sessionId) || -1;
   const middleware = applyMiddleware(
-    performanceMarker,
+    performanceMarker(sessionId),
     ignore,
     thunkWithOptions.bind(null, {
       prefsService,

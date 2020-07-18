@@ -1477,7 +1477,9 @@ const WebConsoleActor = ActorClassWithSpec(webconsoleSpec, {
     // cached messages for that window (and not the content messages for example).
     if (this.parentActor.isRootActor) {
       Services.console.reset();
-    } else {
+    } else if (this.consoleServiceListener) {
+      // If error and css messages are handled by the ResourceWatcher, the
+      // consoleServiceListener is never instantiated.
       this.consoleServiceListener.clearCachedMessages();
     }
   },
@@ -1707,9 +1709,11 @@ const WebConsoleActor = ActorClassWithSpec(webconsoleSpec, {
       columnNumber = stack[0].columnNumber;
     }
 
+    const isCSSMessage = pageError.category === "CSS Parser";
+
     const result = {
       errorMessage: this._createStringGrip(pageError.errorMessage),
-      errorMessageName: pageError.errorMessageName,
+      errorMessageName: isCSSMessage ? undefined : pageError.errorMessageName,
       exceptionDocURL: ErrorDocs.GetURL(pageError),
       sourceName,
       sourceId: this.getActorIdForInternalSourceId(sourceId),
@@ -1726,9 +1730,11 @@ const WebConsoleActor = ActorClassWithSpec(webconsoleSpec, {
       stacktrace: stack,
       notes: notesArray,
       chromeContext: pageError.isFromChromeContext,
-      cssSelectors: pageError.cssSelectors,
-      isPromiseRejection: pageError.isPromiseRejection,
+      isPromiseRejection: isCSSMessage
+        ? undefined
+        : pageError.isPromiseRejection,
       isForwardedFromContentProcess: pageError.isForwardedFromContentProcess,
+      cssSelectors: isCSSMessage ? pageError.cssSelectors : undefined,
     };
 
     // If the pageError does have an exception object, we want to return the grip for it,
@@ -1762,54 +1768,6 @@ const WebConsoleActor = ActorClassWithSpec(webconsoleSpec, {
   },
 
   /**
-   * Get the NetworkEventActor for a given URL that may have been noticed by the network
-   * listener.  Requests are added when they start, so the actor might not yet have all
-   * data for the request until it has completed.
-   *
-   * @param string url
-   *        The URL of the request to search for.
-   */
-  getRequestContentForURL(url) {
-    if (!this.netmonitors) {
-      return null;
-    }
-    return new Promise(resolve => {
-      let messagesReceived = 0;
-      const onMessage = ({ data }) => {
-        // Resolve early if the console actor is destroyed
-        if (!this.netmonitors) {
-          resolve(null);
-          return;
-        }
-        if (data.url != url) {
-          return;
-        }
-        messagesReceived++;
-        // Either use the first response with a content, or return a null content
-        // if we received the responses from all the message managers.
-        if (data.content || messagesReceived == this.netmonitors.length) {
-          for (const { messageManager } of this.netmonitors) {
-            messageManager.removeMessageListener(
-              "debug:request-content:response",
-              onMessage
-            );
-          }
-          resolve(data.content);
-        }
-      };
-      for (const { messageManager } of this.netmonitors) {
-        messageManager.addMessageListener(
-          "debug:request-content:response",
-          onMessage
-        );
-        messageManager.sendAsyncMessage("debug:request-content:request", {
-          url,
-        });
-      }
-    });
-  },
-
-  /**
    * Send a new HTTP request from the target's window.
    *
    * @param object request
@@ -1824,7 +1782,7 @@ const WebConsoleActor = ActorClassWithSpec(webconsoleSpec, {
     const channel = NetUtil.newChannel({
       uri: NetUtil.newURI(url),
       loadingNode: doc,
-      securityFlags: Ci.nsILoadInfo.SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
+      securityFlags: Ci.nsILoadInfo.SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL,
       contentPolicyType:
         stringToCauseType(cause.type) || Ci.nsIContentPolicy.TYPE_OTHER,
     });

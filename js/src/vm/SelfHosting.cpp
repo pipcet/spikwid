@@ -42,7 +42,6 @@
 #include "builtin/String.h"
 #include "builtin/TypedObject.h"
 #include "builtin/WeakMapObject.h"
-#include "frontend/BytecodeCompiler.h"  // js::frontend::CreateScriptSourceObject
 #include "gc/Marking.h"
 #include "gc/Policy.h"
 #include "jit/AtomicOperations.h"
@@ -587,7 +586,7 @@ static bool intrinsic_DefineDataProperty(JSContext* cx, unsigned argc,
 
   RootedObject obj(cx, &args[0].toObject());
   RootedId id(cx);
-  if (!ValueToId<CanGC>(cx, args[1], &id)) {
+  if (!ToPropertyKey(cx, args[1], &id)) {
     return false;
   }
   RootedValue value(cx, args[2]);
@@ -641,7 +640,7 @@ static bool intrinsic_DefineProperty(JSContext* cx, unsigned argc, Value* vp) {
 
   RootedObject obj(cx, &args[0].toObject());
   RootedId id(cx);
-  if (!ValueToId<CanGC>(cx, args[1], &id)) {
+  if (!PrimitiveValueToId<CanGC>(cx, args[1], &id)) {
     return false;
   }
 
@@ -1955,6 +1954,23 @@ static bool intrinsic_CreateNamespaceBinding(JSContext* cx, unsigned argc,
   return true;
 }
 
+static bool intrinsic_EnsureModuleEnvironmentNamespace(JSContext* cx,
+                                                       unsigned argc,
+                                                       Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  MOZ_ASSERT(args.length() == 2);
+  RootedModuleObject module(cx, &args[0].toObject().as<ModuleObject>());
+  MOZ_ASSERT(args[1].toObject().is<ModuleNamespaceObject>());
+  RootedModuleEnvironmentObject environment(cx, &module->initialEnvironment());
+  // The property already exists in the evironment but is not writable, so set
+  // the slot directly.
+  RootedShape shape(cx, environment->lookup(cx, cx->names().starNamespaceStar));
+  MOZ_ASSERT(shape);
+  environment->setSlot(shape->slot(), args[1]);
+  args.rval().setUndefined();
+  return true;
+}
+
 static bool intrinsic_InstantiateModuleFunctionDeclarations(JSContext* cx,
                                                             unsigned argc,
                                                             Value* vp) {
@@ -2112,6 +2128,20 @@ static bool intrinsic_NewIteratorHelper(JSContext* cx, unsigned argc,
   return true;
 }
 
+static bool intrinsic_NewAsyncIteratorHelper(JSContext* cx, unsigned argc,
+                                             Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  MOZ_ASSERT(args.length() == 0);
+
+  JSObject* obj = NewAsyncIteratorHelper(cx);
+  if (!obj) {
+    return false;
+  }
+
+  args.rval().setObject(*obj);
+  return true;
+}
+
 // The self-hosting global isn't initialized with the normal set of builtins.
 // Instead, individual C++-implemented functions that're required by
 // self-hosted code are defined as global functions. Accessing these
@@ -2142,8 +2172,6 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_INLINABLE_FN("std_Math_abs", math_abs, 1, 0, MathAbs),
 
     JS_FN("std_Map_entries", MapObject::entries, 0, 0),
-
-    JS_FN("std_Number_valueOf", num_valueOf, 0, 0),
 
     JS_INLINABLE_FN("std_Object_create", obj_create, 2, 0, ObjectCreate),
     JS_FN("std_Object_propertyIsEnumerable", obj_propertyIsEnumerable, 1, 0),
@@ -2232,6 +2260,9 @@ static const JSFunctionSpec intrinsic_functions[] = {
                     intrinsic_UnsafeGetBooleanFromReservedSlot, 2, 0,
                     IntrinsicUnsafeGetBooleanFromReservedSlot),
 
+    JS_FN("ThisNumberValueForToLocaleString", ThisNumberValueForToLocaleString,
+          0, 0),
+
     JS_INLINABLE_FN("IsPackedArray", intrinsic_IsPackedArray, 1, 0,
                     IntrinsicIsPackedArray),
 
@@ -2261,12 +2292,6 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_INLINABLE_FN("GuardToRegExpStringIterator",
                     intrinsic_GuardToBuiltin<RegExpStringIteratorObject>, 1, 0,
                     IntrinsicGuardToRegExpStringIterator),
-    JS_INLINABLE_FN("GuardToWrapForValidIterator",
-                    intrinsic_GuardToBuiltin<WrapForValidIteratorObject>, 1, 0,
-                    IntrinsicGuardToWrapForValidIterator),
-    JS_INLINABLE_FN("GuardToIteratorHelper",
-                    intrinsic_GuardToBuiltin<IteratorHelperObject>, 1, 0,
-                    IntrinsicGuardToIteratorHelper),
 
     JS_FN("_CreateMapIterationResultPair",
           intrinsic_CreateMapIterationResultPair, 0, 0),
@@ -2564,6 +2589,8 @@ static const JSFunctionSpec intrinsic_functions[] = {
           intrinsic_IsInstanceOfBuiltin<ModuleEnvironmentObject>, 1, 0),
     JS_FN("CreateImportBinding", intrinsic_CreateImportBinding, 4, 0),
     JS_FN("CreateNamespaceBinding", intrinsic_CreateNamespaceBinding, 3, 0),
+    JS_FN("EnsureModuleEnvironmentNamespace",
+          intrinsic_EnsureModuleEnvironmentNamespace, 1, 0),
     JS_FN("InstantiateModuleFunctionDeclarations",
           intrinsic_InstantiateModuleFunctionDeclarations, 1, 0),
     JS_FN("ExecuteModule", intrinsic_ExecuteModule, 1, 0),
@@ -2577,7 +2604,26 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_FN("ToBigInt", intrinsic_ToBigInt, 1, 0),
 
     JS_FN("NewWrapForValidIterator", intrinsic_NewWrapForValidIterator, 0, 0),
+    JS_INLINABLE_FN("GuardToWrapForValidIterator",
+                    intrinsic_GuardToBuiltin<WrapForValidIteratorObject>, 1, 0,
+                    IntrinsicGuardToWrapForValidIterator),
+    JS_FN("CallWrapForValidIteratorMethodIfWrapped",
+          CallNonGenericSelfhostedMethod<Is<WrapForValidIteratorObject>>, 2, 0),
     JS_FN("NewIteratorHelper", intrinsic_NewIteratorHelper, 0, 0),
+    JS_INLINABLE_FN("GuardToIteratorHelper",
+                    intrinsic_GuardToBuiltin<IteratorHelperObject>, 1, 0,
+                    IntrinsicGuardToIteratorHelper),
+    JS_FN("CallIteratorHelperMethodIfWrapped",
+          CallNonGenericSelfhostedMethod<Is<IteratorHelperObject>>, 2, 0),
+    JS_FN("NewAsyncIteratorHelper", intrinsic_NewAsyncIteratorHelper, 0, 0),
+    JS_INLINABLE_FN("GuardToAsyncIteratorHelper",
+                    intrinsic_GuardToBuiltin<AsyncIteratorHelperObject>, 1, 0,
+                    IntrinsicGuardToAsyncIteratorHelper),
+    JS_FN("CallAsyncIteratorHelperMethodIfWrapped",
+          CallNonGenericSelfhostedMethod<Is<AsyncIteratorHelperObject>>, 2, 0),
+    JS_FN("IntrinsicAsyncGeneratorNext", AsyncGeneratorNext, 1, 0),
+    JS_FN("IntrinsicAsyncGeneratorReturn", AsyncGeneratorReturn, 1, 0),
+    JS_FN("IntrinsicAsyncGeneratorThrow", AsyncGeneratorThrow, 1, 0),
 
     JS_FN("NewPrivateName", intrinsic_NewPrivateName, 1, 0),
 
@@ -2939,9 +2985,22 @@ static ScriptSourceObject* SelfHostingScriptSourceObject(JSContext* cx) {
   CompileOptions options(cx);
   FillSelfHostingCompileOptions(options);
 
-  ScriptSourceObject* sourceObject =
-      frontend::CreateScriptSourceObject(cx, options);
+  ScriptSource* ss = cx->new_<ScriptSource>();
+  if (!ss) {
+    return nullptr;
+  }
+  Rooted<ScriptSourceHolder> ssHolder(cx, ss);
+
+  if (!ss->initFromOptions(cx, options)) {
+    return nullptr;
+  }
+
+  RootedScriptSourceObject sourceObject(cx, ScriptSourceObject::create(cx, ss));
   if (!sourceObject) {
+    return nullptr;
+  }
+
+  if (!ScriptSourceObject::initFromOptions(cx, sourceObject, options)) {
     return nullptr;
   }
 

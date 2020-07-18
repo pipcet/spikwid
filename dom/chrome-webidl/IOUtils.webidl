@@ -9,22 +9,43 @@ namespace IOUtils {
    * Reads up to |maxBytes| of the file at |path|. If |maxBytes| is unspecified,
    * the entire file is read.
    *
-   * @param path      A forward-slash separated path.
+   * @param path      An absolute file path.
    * @param maxBytes  The max bytes to read from the file at path.
    */
   Promise<Uint8Array> read(DOMString path, optional unsigned long maxBytes);
   /**
-   * Atomically write |data| to a file at |path|. This operation attempts to
-   * ensure that until the data is entirely written to disk, the destination
-   * file is not modified.
+   * Attempts to safely write |data| to a file at |path|.
    *
-   * This is generally accomplished by writing to a temporary file, then
-   * performing an overwriting move.
+   * This operation can be made atomic by specifying the |tmpFile| option. If
+   * specified, then this method ensures that the destination file is not
+   * modified until the data is entirely written to the temporary file, after
+   * which point the |tmpFile| is moved to the specified |path|.
    *
-   * @param path    A forward-slash separated path.
+   * The target file can also be backed up to a |backupFile| before any writes
+   * are performed to prevent data loss in case of corruption.
+   *
+   * @param path    An absolute file path.
    * @param data    Data to write to the file at path.
    */
   Promise<unsigned long long> writeAtomic(DOMString path, Uint8Array data, optional WriteAtomicOptions options = {});
+  /**
+   * Moves the file from |sourcePath| to |destPath|, creating necessary parents.
+   * If |destPath| is a directory, then the source file will be moved into the
+   * destination directory.
+   *
+   * @param sourcePath An absolute file path identifying the file or directory
+   *                   to move.
+   * @param destPath   An absolute file path identifying the destination
+   *                   directory and/or file name.
+   */
+  Promise<void> move(DOMString sourcePath, DOMString destPath, optional MoveOptions options = {});
+  /**
+   * Removes a file or directory at |path| according to |options|.
+   *
+   * @param path An absolute file path identifying the file or directory to
+   *             remove.
+   */
+  Promise<void> remove(DOMString path, optional RemoveOptions options = {});
 };
 
 /**
@@ -36,8 +57,10 @@ dictionary WriteAtomicOptions {
    */
   DOMString backupFile;
   /**
-   * If specified, write the data to a file at |tmpPath|. Once the write is
-   * complete, the destination will be overwritten by a move.
+   * If specified, write the data to a file at |tmpPath| instead of directly to
+   * the destination. Once the write is complete, the destination will be
+   * overwritten by a move. Specifying this option will make the write a little
+   * slower, but also safer.
    */
   DOMString tmpPath;
   /**
@@ -51,4 +74,28 @@ dictionary WriteAtomicOptions {
    * disconnection before the buffers are flushed.
    */
   boolean flush = false;
+};
+
+/**
+ * Options to be passed to the |IOUtils.move| method.
+ */
+dictionary MoveOptions {
+  /**
+   * If true, fail if the destination already exists.
+   */
+  boolean noOverwrite = false;
+};
+
+/**
+ * Options to be passed to the |IOUtils.remove| method.
+ */
+dictionary RemoveOptions {
+  /**
+   * If true, no error will be reported if the target file is missing.
+   */
+  boolean ignoreAbsent = true;
+  /**
+   * If true, and the target is a directory, recursively remove files.
+   */
+  boolean recursive = false;
 };

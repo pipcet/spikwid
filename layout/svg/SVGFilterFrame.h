@@ -4,14 +4,12 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef __NS_SVGFILTERFRAME_H__
-#define __NS_SVGFILTERFRAME_H__
+#ifndef LAYOUT_SVG_SVGFILTERFRAME_H_
+#define LAYOUT_SVG_SVGFILTERFRAME_H_
 
 #include "mozilla/Attributes.h"
 #include "mozilla/SVGContainerFrame.h"
-#include "nsIFrame.h"
 #include "nsQueryFrame.h"
-#include "nsSVGUtils.h"
 
 class nsAtom;
 class nsIContent;
@@ -92,4 +90,4 @@ class SVGFilterFrame final : public SVGContainerFrame {
 
 }  // namespace mozilla
 
-#endif
+#endif  // LAYOUT_SVG_SVGFILTERFRAME_H_

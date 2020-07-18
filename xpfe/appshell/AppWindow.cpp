@@ -43,7 +43,6 @@
 #include "nsStyleConsts.h"
 #include "nsPresContext.h"
 #include "nsContentUtils.h"
-#include "nsDocShell.h"
 #include "nsGlobalWindow.h"
 #include "nsXULTooltipListener.h"
 #include "nsXULPopupManager.h"
@@ -109,6 +108,7 @@ AppWindow::AppWindow(uint32_t aChromeFlags)
       mContentTreeOwner(nullptr),
       mPrimaryContentTreeOwner(nullptr),
       mModalStatus(NS_OK),
+      mFullscreenChangeState(FullscreenChangeState::NotChanging),
       mContinueModalLoop(false),
       mDebuting(false),
       mChromeLoaded(false),
@@ -240,26 +240,18 @@ nsresult AppWindow::Initialize(nsIAppWindow* aParent, nsIAppWindow* aOpener,
   NS_ENSURE_TRUE(mDocShell, NS_ERROR_FAILURE);
 
   // Make sure to set the item type on the docshell _before_ calling
-  // Create() so it knows what type it is.
-  nsCOMPtr<nsIDocShellTreeItem> docShellAsItem(mDocShell);
-  NS_ENSURE_TRUE(docShellAsItem, NS_ERROR_FAILURE);
+  // InitWindow() so it knows what type it is.
   NS_ENSURE_SUCCESS(EnsureChromeTreeOwner(), NS_ERROR_FAILURE);
 
-  docShellAsItem->SetTreeOwner(mChromeTreeOwner);
+  mDocShell->SetTreeOwner(mChromeTreeOwner);
 
   r.MoveTo(0, 0);
-  nsCOMPtr<nsIBaseWindow> docShellAsWin(do_QueryInterface(mDocShell));
-  NS_ENSURE_SUCCESS(docShellAsWin->InitWindow(nullptr, mWindow, r.X(), r.Y(),
-                                              r.Width(), r.Height()),
+  NS_ENSURE_SUCCESS(mDocShell->InitWindow(nullptr, mWindow, r.X(), r.Y(),
+                                          r.Width(), r.Height()),
                     NS_ERROR_FAILURE);
-  NS_ENSURE_SUCCESS(docShellAsWin->Create(), NS_ERROR_FAILURE);
 
   // Attach a WebProgress listener.during initialization...
-  nsCOMPtr<nsIWebProgress> webProgress(do_GetInterface(mDocShell, &rv));
-  if (webProgress) {
-    webProgress->AddProgressListener(this,
-                                     nsIWebProgress::NOTIFY_STATE_NETWORK);
-  }
+  mDocShell->AddProgressListener(this, nsIWebProgress::NOTIFY_STATE_NETWORK);
 
   return rv;
 }
@@ -534,19 +526,11 @@ NS_IMETHODIMP AppWindow::InitWindow(nativeWindow aParentNativeWindow,
   return NS_OK;
 }
 
-NS_IMETHODIMP AppWindow::Create() {
-  // XXX First Check In
-  NS_ASSERTION(false, "Not Yet Implemented");
-  return NS_OK;
-}
-
 NS_IMETHODIMP AppWindow::Destroy() {
   nsCOMPtr<nsIAppWindow> kungFuDeathGrip(this);
 
-  nsresult rv;
-  nsCOMPtr<nsIWebProgress> webProgress(do_GetInterface(mDocShell, &rv));
-  if (webProgress) {
-    webProgress->RemoveProgressListener(this);
+  if (mDocShell) {
+    mDocShell->RemoveProgressListener(this);
   }
 
   {
@@ -626,8 +610,7 @@ NS_IMETHODIMP AppWindow::Destroy() {
   mDOMWindow = nullptr;
   if (mDocShell) {
     RefPtr<BrowsingContext> bc(mDocShell->GetBrowsingContext());
-    nsCOMPtr<nsIBaseWindow> shellAsWin(do_QueryInterface(mDocShell));
-    shellAsWin->Destroy();
+    mDocShell->Destroy();
     bc->Detach();
     mDocShell = nullptr;  // this can cause reentrancy of this function
   }
@@ -963,8 +946,7 @@ NS_IMETHODIMP AppWindow::SetVisibility(bool aVisibility) {
 
   // XXXTAB Do we really need to show docshell and the window?  Isn't
   // the window good enough?
-  nsCOMPtr<nsIBaseWindow> shellAsWin(do_QueryInterface(mDocShell));
-  shellAsWin->SetVisibility(aVisibility);
+  mDocShell->SetVisibility(aVisibility);
   // Store locally so it doesn't die on us. 'Show' can result in the window
   // being closed with AppWindow::Destroy being called. That would set
   // mWindow to null and posibly destroy the nsIWidget while its Show method
@@ -2050,14 +2032,12 @@ nsresult AppWindow::SetPrimaryRemoteTabSize(int32_t aWidth, int32_t aHeight) {
 }
 
 nsresult AppWindow::GetRootShellSize(int32_t* aWidth, int32_t* aHeight) {
-  nsCOMPtr<nsIBaseWindow> shellAsWin = do_QueryInterface(mDocShell);
-  NS_ENSURE_TRUE(shellAsWin, NS_ERROR_FAILURE);
-  return shellAsWin->GetSize(aWidth, aHeight);
+  NS_ENSURE_TRUE(mDocShell, NS_ERROR_FAILURE);
+  return mDocShell->GetSize(aWidth, aHeight);
 }
 
 nsresult AppWindow::SetRootShellSize(int32_t aWidth, int32_t aHeight) {
-  nsCOMPtr<nsIDocShellTreeItem> docShellAsItem = mDocShell;
-  return SizeShellTo(docShellAsItem, aWidth, aHeight);
+  return SizeShellTo(mDocShell, aWidth, aHeight);
 }
 
 NS_IMETHODIMP AppWindow::SizeShellTo(nsIDocShellTreeItem* aShellItem,
@@ -2498,15 +2478,15 @@ void AppWindow::SizeShell() {
     nsCOMPtr<nsIContentViewer> cv;
     mDocShell->GetContentViewer(getter_AddRefs(cv));
     if (cv) {
-      nsCOMPtr<nsIDocShellTreeItem> docShellAsItem = mDocShell;
+      RefPtr<nsDocShell> docShell = mDocShell;
       nsCOMPtr<nsIDocShellTreeOwner> treeOwner;
-      docShellAsItem->GetTreeOwner(getter_AddRefs(treeOwner));
+      docShell->GetTreeOwner(getter_AddRefs(treeOwner));
       if (treeOwner) {
         // GetContentSize can fail, so initialise |width| and |height| to be
         // on the safe side.
         int32_t width = 0, height = 0;
         if (NS_SUCCEEDED(cv->GetContentSize(&width, &height))) {
-          treeOwner->SizeShellTo(docShellAsItem, width, height);
+          treeOwner->SizeShellTo(docShell, width, height);
           // Update specified size for the final LoadPositionFromXUL call.
           specWidth = width + windowDiff.width;
           specHeight = height + windowDiff.height;
@@ -2611,13 +2591,27 @@ bool AppWindow::WindowMoved(nsIWidget* aWidget, int32_t x, int32_t y) {
 
 bool AppWindow::WindowResized(nsIWidget* aWidget, int32_t aWidth,
                               int32_t aHeight) {
-  nsCOMPtr<nsIBaseWindow> shellAsWin(do_QueryInterface(mDocShell));
-  if (shellAsWin) {
-    shellAsWin->SetPositionAndSize(0, 0, aWidth, aHeight, 0);
+  if (mDocShell) {
+    mDocShell->SetPositionAndSize(0, 0, aWidth, aHeight, 0);
   }
   // Persist size, but not immediately, in case this OS is firing
   // repeated size events as the user drags the sizing handle
   if (!IsLocked()) SetPersistenceTimer(PAD_POSITION | PAD_SIZE | PAD_MISC);
+  // Check if we need to continue a fullscreen change.
+  switch (mFullscreenChangeState) {
+    case FullscreenChangeState::WillChange:
+      mFullscreenChangeState = FullscreenChangeState::WidgetResized;
+      break;
+    case FullscreenChangeState::WidgetEnteredFullscreen:
+      FinishFullscreenChange(true);
+      break;
+    case FullscreenChangeState::WidgetExitedFullscreen:
+      FinishFullscreenChange(false);
+      break;
+    case FullscreenChangeState::WidgetResized:
+    case FullscreenChangeState::NotChanging:
+      break;
+  }
   return true;
 }
 
@@ -2716,9 +2710,40 @@ void AppWindow::FullscreenWillChange(bool aInFullscreen) {
       ourWindow->FullscreenWillChange(aInFullscreen);
     }
   }
+  MOZ_ASSERT(mFullscreenChangeState == FullscreenChangeState::NotChanging);
+  mFullscreenChangeState = FullscreenChangeState::WillChange;
 }
 
 void AppWindow::FullscreenChanged(bool aInFullscreen) {
+  if (mFullscreenChangeState == FullscreenChangeState::WidgetResized) {
+    FinishFullscreenChange(aInFullscreen);
+  } else {
+    NS_WARNING_ASSERTION(
+        mFullscreenChangeState == FullscreenChangeState::WillChange,
+        "Unexpected fullscreen change state");
+    FullscreenChangeState newState =
+        aInFullscreen ? FullscreenChangeState::WidgetEnteredFullscreen
+                      : FullscreenChangeState::WidgetExitedFullscreen;
+    mFullscreenChangeState = newState;
+    nsCOMPtr<nsIAppWindow> kungFuDeathGrip(this);
+    // Wait for resize for a small amount of time.
+    // 80ms is actually picked arbitrarily. But it shouldn't be too large
+    // in case the widget resize is not going to happen at all, which can
+    // be the case for some Linux window managers and possibly Android.
+    NS_DelayedDispatchToCurrentThread(
+        NS_NewRunnableFunction(
+            "AppWindow::FullscreenChanged",
+            [this, kungFuDeathGrip, newState, aInFullscreen]() {
+              if (mFullscreenChangeState == newState) {
+                FinishFullscreenChange(aInFullscreen);
+              }
+            }),
+        80);
+  }
+}
+
+void AppWindow::FinishFullscreenChange(bool aInFullscreen) {
+  mFullscreenChangeState = FullscreenChangeState::NotChanging;
   if (mDocShell) {
     if (nsCOMPtr<nsPIDOMWindowOuter> ourWindow = mDocShell->GetWindow()) {
       ourWindow->FinishFullscreenChange(aInFullscreen);

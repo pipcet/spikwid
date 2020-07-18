@@ -11,10 +11,6 @@
 #include "mozilla/PresShell.h"
 #include "nsGkAtoms.h"
 #include "nsIFrame.h"
-#include "nsSVGIntegrationUtils.h"
-#include "nsSVGUtils.h"
-#include "SVGGraphicsElement.h"
-#include "SVGTransformableElement.h"
 
 using namespace mozilla::dom;
 
@@ -43,7 +39,7 @@ void SVGGFrame::Init(nsIContent* aContent, nsContainerFrame* aParent,
 #endif /* DEBUG */
 
 //----------------------------------------------------------------------
-// nsSVGDisplayableFrame methods
+// ISVGDisplayableFrame methods
 
 nsresult SVGGFrame::AttributeChanged(int32_t aNameSpaceID, nsAtom* aAttribute,
                                      int32_t aModType) {

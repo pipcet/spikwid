@@ -1526,8 +1526,36 @@ pub enum Resize {
 pub enum Appearance {
     /// No appearance at all.
     None,
+    /// Default appearance for the element.
+    ///
+    /// This value doesn't make sense for -moz-default-appearance, but we don't bother to guard
+    /// against parsing it.
+    Auto,
+    /// A searchfield.
+    Searchfield,
+    /// A multi-line text field, e.g. HTML <textarea>.
+    #[parse(aliases = "textfield-multiline")]
+    Textarea,
+    /// A checkbox element.
+    Checkbox,
+    /// A radio element within a radio group.
+    Radio,
+    /// A dropdown list.
+    Menulist,
+    /// List boxes.
+    Listbox,
+    /// A horizontal meter bar.
+    #[parse(aliases = "meterbar")]
+    Meter,
+    /// A horizontal progress bar.
+    #[parse(aliases = "progressbar")]
+    ProgressBar,
     /// A typical dialog button.
     Button,
+    /// A single-line text field, e.g. HTML <input type=text>.
+    Textfield,
+    /// The dropdown button(s) that open up a dropdown list.
+    MenulistButton,
     /// Various arrows that go in buttons
     #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
     ButtonArrowDown,
@@ -1546,10 +1574,6 @@ pub enum Appearance {
     /// A groupbox.
     #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
     Groupbox,
-    /// A inner-spin button.
-    InnerSpinButton,
-    /// List boxes.
-    Listbox,
     /// Menu Bar background
     #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
     Menubar,
@@ -1563,10 +1587,6 @@ pub enum Appearance {
     /// For text on non-iconic menuitems only
     #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
     Menuitemtext,
-    /// A dropdown list.
-    Menulist,
-    /// The dropdown button(s) that open up a dropdown list.
-    MenulistButton,
     /// The text part of a dropdown list, to left of button.
     #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
     MenulistText,
@@ -1585,9 +1605,6 @@ pub enum Appearance {
     /// An image in the menu gutter, like in bookmarks or history.
     #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
     Menuimage,
-    /// A horizontal meter bar.
-    #[parse(aliases = "meterbar")]
-    Meter,
     /// The meter bar's meter indicator.
     #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
     Meterchunk,
@@ -1595,19 +1612,11 @@ pub enum Appearance {
     #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
     MozMenulistArrowButton,
     /// For HTML's <input type=number>
+    #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
     NumberInput,
-    /// A horizontal progress bar.
-    #[parse(aliases = "progressbar")]
-    ProgressBar,
     /// The progress bar's progress indicator
     #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
     Progresschunk,
-    /// A vertical progress bar.
-    ProgressbarVertical,
-    /// A checkbox element.
-    Checkbox,
-    /// A radio element within a radio group.
-    Radio,
     /// A generic container that always repaints on state changes. This is a
     /// hack to make XUL checkboxes and radio buttons work.
     #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
@@ -1621,8 +1630,10 @@ pub enum Appearance {
     #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
     RadioLabel,
     /// nsRangeFrame and its subparts
+    #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
     Range,
-    RangeThumb, // FIXME: This should not be exposed to content.
+    #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
+    RangeThumb,
     /// The resizer background area in a status bar for the resizer widget in
     /// the corner of a window.
     #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
@@ -1630,17 +1641,6 @@ pub enum Appearance {
     /// The resizer itself.
     #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
     Resizer,
-    /// A slider.
-    ScaleHorizontal,
-    ScaleVertical,
-    /// A slider's thumb.
-    ScalethumbHorizontal,
-    ScalethumbVertical,
-    /// If the platform supports it, the left/right chunks of the slider thumb.
-    Scalethumbstart,
-    Scalethumbend,
-    /// The ticks for a slider.
-    Scalethumbtick,
     /// A scrollbar.
     #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
     Scrollbar,
@@ -1664,16 +1664,18 @@ pub enum Appearance {
     #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
     ScrollbarbuttonRight,
     /// The scrollbar thumb.
+    #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
     ScrollbarthumbHorizontal,
+    #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
     ScrollbarthumbVertical,
     /// The scrollbar track.
+    #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
     ScrollbartrackHorizontal,
+    #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
     ScrollbartrackVertical,
     /// The scroll corner
     #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
     Scrollcorner,
-    /// A searchfield.
-    Searchfield,
     /// A separator.  Can be horizontal or vertical.
     #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
     Separator,
@@ -1712,11 +1714,6 @@ pub enum Appearance {
     TabScrollArrowBack,
     #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
     TabScrollArrowForward,
-    /// A multi-line text field, e.g. HTML <textarea>.
-    #[parse(aliases = "textfield-multiline")]
-    Textarea,
-    /// A single-line text field, e.g. HTML <input type=text>.
-    Textfield,
     /// A toolbar in an application window.
     #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
     Toolbar,
@@ -1846,6 +1843,31 @@ pub enum Appearance {
     /// A dummy variant that should be last to let the GTK widget do hackery.
     #[css(skip)]
     Count,
+}
+
+/// The effect of `appearance: button` on an element.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    MallocSizeOf,
+    Parse,
+    PartialEq,
+    SpecifiedValueInfo,
+    ToCss,
+    ToComputedValue,
+    ToResolvedValue,
+    ToShmem,
+)]
+#[repr(u8)]
+pub enum ButtonAppearance {
+    /// `appearance: button` means the element is rendered with button
+    /// appearance.
+    Allow,
+    /// `appearance: button` is treated like `appearance: auto`.
+    Disallow,
 }
 
 /// A kind of break between two boxes.
