@@ -23,9 +23,9 @@
 #include "nsDeviceContext.h"
 #include "nsIFrame.h"
 #include "nsStyleStructInlines.h"
-#include "nsSVGDisplayableFrame.h"
-#include "SVGObserverUtils.h"
-#include "nsSVGIntegrationUtils.h"
+#include "mozilla/ISVGDisplayableFrame.h"
+#include "mozilla/SVGIntegrationUtils.h"
+#include "mozilla/SVGObserverUtils.h"
 
 using namespace mozilla;
 using namespace mozilla::gfx;
@@ -177,7 +177,7 @@ bool nsImageRenderer::PrepareImage() {
       if (!paintServerFrame ||
           (paintServerFrame->IsFrameOfType(nsIFrame::eSVG) &&
            !paintServerFrame->IsFrameOfType(nsIFrame::eSVGPaintServer) &&
-           !static_cast<nsSVGDisplayableFrame*>(
+           !static_cast<ISVGDisplayableFrame*>(
                do_QueryFrame(paintServerFrame)))) {
         mPrepareResult = ImgDrawResult::BAD_IMAGE;
         return false;
@@ -243,7 +243,7 @@ CSSSizeOrRatio nsImageRenderer::ComputeIntrinsicSize() {
           int32_t appUnitsPerDevPixel =
               mForFrame->PresContext()->AppUnitsPerDevPixel();
           result.SetSize(IntSizeToAppUnits(
-              nsSVGIntegrationUtils::GetContinuationUnionSize(mPaintServerFrame)
+              SVGIntegrationUtils::GetContinuationUnionSize(mPaintServerFrame)
                   .ToNearestPixels(appUnitsPerDevPixel),
               appUnitsPerDevPixel));
         }
@@ -699,10 +699,10 @@ already_AddRefed<gfxDrawable> nsImageRenderer::DrawableForElement(
     // Don't allow creating images that are too big
     if (aContext.GetDrawTarget()->CanCreateSimilarDrawTarget(imageSize,
                                                              format)) {
-      drawable = nsSVGIntegrationUtils::DrawableFromPaintServer(
+      drawable = SVGIntegrationUtils::DrawableFromPaintServer(
           mPaintServerFrame, mForFrame, mSize, imageSize,
           aContext.GetDrawTarget(), aContext.CurrentMatrixDouble(),
-          nsSVGIntegrationUtils::FLAG_SYNC_DECODE_IMAGES);
+          SVGIntegrationUtils::FLAG_SYNC_DECODE_IMAGES);
     }
 
     return drawable.forget();

@@ -4,13 +4,13 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef __NS_SVGOUTERSVGFRAME_H__
-#define __NS_SVGOUTERSVGFRAME_H__
+#ifndef LAYOUT_SVG_SVGOUTERSVGFRAME_H_
+#define LAYOUT_SVG_SVGOUTERSVGFRAME_H_
 
 #include "mozilla/Attributes.h"
+#include "mozilla/ISVGSVGFrame.h"
 #include "mozilla/SVGContainerFrame.h"
 #include "mozilla/UniquePtr.h"
-#include "nsISVGSVGFrame.h"
 #include "nsRegion.h"
 
 class gfxContext;
@@ -31,8 +31,8 @@ namespace mozilla {
 // SVGOuterSVGFrame class
 
 class SVGOuterSVGFrame final : public SVGDisplayContainerFrame,
-                               public nsISVGSVGFrame {
-  typedef image::imgDrawingParams imgDrawingParams;
+                               public ISVGSVGFrame {
+  using imgDrawingParams = image::imgDrawingParams;
 
   friend nsContainerFrame* ::NS_NewSVGOuterSVGFrame(
       mozilla::PresShell* aPresShell, ComputedStyle* aStyle);
@@ -109,10 +109,10 @@ class SVGOuterSVGFrame final : public SVGDisplayContainerFrame,
   // Return our anonymous box child.
   void AppendDirectlyOwnedAnonBoxes(nsTArray<OwnedAnonBox>& aResult) override;
 
-  // nsISVGSVGFrame interface:
+  // ISVGSVGFrame interface:
   virtual void NotifyViewportOrTransformChanged(uint32_t aFlags) override;
 
-  // nsSVGDisplayableFrame methods:
+  // ISVGDisplayableFrame methods:
   virtual void PaintSVG(gfxContext& aContext, const gfxMatrix& aTransform,
                         imgDrawingParams& aImgParams,
                         const nsIntRect* aDirtyRect = nullptr) override;
@@ -267,13 +267,6 @@ class SVGOuterSVGAnonChildFrame final : public SVGDisplayContainerFrame {
   }
 };
 
-/**
- * Recursively checks if any atom in the parameter pack is equal to |aString|.
- */
-template <typename... Atoms>
-bool IsAnyAtomEqual(const nsAString& aString, nsAtom* aFirst, Atoms... aArgs);
-bool IsAnyAtomEqual(const nsAString& aString);
-
 }  // namespace mozilla
 
-#endif
+#endif  // LAYOUT_SVG_SVGOUTERSVGFRAME_H_

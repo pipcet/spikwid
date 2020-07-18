@@ -56,7 +56,7 @@ class Runnable;
 class SplitNodeTransaction;
 class SplitRangeOffFromNodeResult;
 class SplitRangeOffResult;
-class WSRunObject;
+class WhiteSpaceVisibilityKeeper;
 class WSRunScanner;
 class WSScanResult;
 enum class EditSubAction : int32_t;
@@ -704,8 +704,8 @@ class HTMLEditor final : public TextEditor,
   /**
    * DeleteParentBlocksIfEmpty() removes parent block elements if they
    * don't have visible contents.  Note that due performance issue of
-   * WSRunObject, this call may be expensive.  And also note that this
-   * removes a empty block with a transaction.  So, please make sure that
+   * WhiteSpaceVisibilityKeeper, this call may be expensive.  And also note that
+   * this removes a empty block with a transaction.  So, please make sure that
    * you've already created `AutoPlaceholderBatch`.
    *
    * @param aPoint      The point whether this method climbing up the DOM
@@ -2626,13 +2626,13 @@ class HTMLEditor final : public TextEditor,
    * collapsed selection at white-spaces in a text node.
    *
    * @param aDirectionAndAmount Direction of the deletion.
-   * @param aWSRunObjectAtCaret WSRunObject instance which was initialized with
-   *                            the caret point.
+   * @param aPointToDelete      The point to delete.  I.e., typically, caret
+   *                            position.
    */
   [[nodiscard]] MOZ_CAN_RUN_SCRIPT EditActionResult
   HandleDeleteCollapsedSelectionAtWhiteSpaces(
       nsIEditor::EDirection aDirectionAndAmount,
-      WSRunObject& aWSRunObjectAtCaret);
+      const EditorDOMPoint& aPointToDelete);
 
   /**
    * HandleDeleteCollapsedSelectionAtTextNode() handles deletion of
@@ -4383,25 +4383,6 @@ class HTMLEditor final : public TextEditor,
                        char16_t** aCfcontext);
 
   /**
-   * CollectTopMostChildContentsCompletelyInRange() collects topmost child
-   * contents which are completely in the given range.
-   * For example, if the range points a node with its container node, the
-   * result is only the node (meaning does not include its descendants).
-   * If the range starts start of a node and ends end of it, and if the node
-   * does not have children, returns no nodes, otherwise, if the node has
-   * some children, the result includes its all children (not including their
-   * descendants).
-   *
-   * @param aStartPoint         Start point of the range.
-   * @param aEndPoint           End point of the range.
-   * @param aOutArrayOfContents [Out] Topmost children which are completely in
-   *                            the range.
-   */
-  static void CollectTopMostChildContentsCompletelyInRange(
-      const EditorRawDOMPoint& aStartPoint, const EditorRawDOMPoint& aEndPoint,
-      nsTArray<OwningNonNull<nsIContent>>& aOutArrayOfContents);
-
-  /**
    * AutoHTMLFragmentBoundariesFixer fixes both edges of topmost child contents
    * which are created with SubtreeContentIterator.
    */
@@ -5034,7 +5015,7 @@ class HTMLEditor final : public TextEditor,
   friend class SlurpBlobEventListener;
   friend class SplitNodeTransaction;
   friend class TextEditor;
-  friend class WSRunObject;
+  friend class WhiteSpaceVisibilityKeeper;
   friend class WSRunScanner;
   friend class WSScanResult;
 };

@@ -9,6 +9,7 @@
 #include "nsILayoutHistoryState.h"
 #include "nsSHEntryShared.h"
 #include "nsStructuredCloneContainer.h"
+#include "nsXULAppAPI.h"
 
 namespace mozilla {
 namespace dom {
@@ -41,12 +42,22 @@ SessionHistoryInfo::SessionHistoryInfo(nsDocShellLoadState* aLoadState,
 }
 
 static uint32_t gEntryID;
+nsDataHashtable<nsUint64HashKey, SessionHistoryEntry*>*
+    SessionHistoryEntry::sInfoIdToEntry = nullptr;
 
-SessionHistoryEntry::SessionHistoryEntry(nsISHistory* aSessionHistory,
-                                         nsDocShellLoadState* aLoadState,
+SessionHistoryEntry* SessionHistoryEntry::GetByInfoId(uint64_t aId) {
+  MOZ_ASSERT(XRE_IsParentProcess());
+  if (!sInfoIdToEntry) {
+    return nullptr;
+  }
+
+  return sInfoIdToEntry->Get(aId);
+}
+
+SessionHistoryEntry::SessionHistoryEntry(nsDocShellLoadState* aLoadState,
                                          nsIChannel* aChannel)
     : mInfo(new SessionHistoryInfo(aLoadState, aChannel)),
-      mSharedInfo(new SHEntrySharedParentState(aSessionHistory)),
+      mSharedInfo(new SHEntrySharedParentState()),
       mID(++gEntryID) {
   mSharedInfo->mTriggeringPrincipal = aLoadState->TriggeringPrincipal();
   mSharedInfo->mPrincipalToInherit = aLoadState->PrincipalToInherit();
@@ -54,6 +65,20 @@ SessionHistoryEntry::SessionHistoryEntry(nsISHistory* aSessionHistory,
       aLoadState->PartitionedPrincipalToInherit();
   mSharedInfo->mCsp = aLoadState->Csp();
   // FIXME Set remaining shared fields!
+
+  if (!sInfoIdToEntry) {
+    sInfoIdToEntry =
+        new nsDataHashtable<nsUint64HashKey, SessionHistoryEntry*>();
+  }
+  sInfoIdToEntry->Put(Info().Id(), this);
+}
+
+SessionHistoryEntry::~SessionHistoryEntry() {
+  sInfoIdToEntry->Remove(Info().Id());
+  if (sInfoIdToEntry->IsEmpty()) {
+    delete sInfoIdToEntry;
+    sInfoIdToEntry = nullptr;
+  }
 }
 
 NS_IMPL_ISUPPORTS(SessionHistoryEntry, nsISHEntry)
@@ -135,14 +160,15 @@ SessionHistoryEntry::SetIsSubFrame(bool aIsSubFrame) {
 
 NS_IMETHODIMP
 SessionHistoryEntry::GetHasUserInteraction(bool* aFlag) {
-  MOZ_CRASH("Not needed in the parent process?");
-  return NS_ERROR_FAILURE;
+  NS_WARNING("Not implemented in the parent process!");
+  *aFlag = true;
+  return NS_OK;
 }
 
 NS_IMETHODIMP
 SessionHistoryEntry::SetHasUserInteraction(bool aFlag) {
-  MOZ_CRASH("Not needed in the parent process?");
-  return NS_ERROR_FAILURE;
+  NS_WARNING("Not implemented in the parent process!");
+  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -460,6 +486,15 @@ NS_IMETHODIMP
 SessionHistoryEntry::GetShistory(nsISHistory** aShistory) {
   nsCOMPtr<nsISHistory> sHistory = do_QueryReferent(mSharedInfo->mSHistory);
   sHistory.forget(aShistory);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+SessionHistoryEntry::SetShistory(nsISHistory* aShistory) {
+  nsWeakPtr shistory = do_GetWeakReference(aShistory);
+  // mSHistory can not be changed once it's set
+  MOZ_ASSERT(!mSharedInfo->mSHistory || (mSharedInfo->mSHistory == shistory));
+  mSharedInfo->mSHistory = shistory;
   return NS_OK;
 }
 

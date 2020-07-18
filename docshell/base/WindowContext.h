@@ -46,11 +46,15 @@ class BrowsingContextGroup;
    * mixed content loads to happen */                                  \
   FIELD(AllowMixedContent, bool)                                       \
   FIELD(EmbedderPolicy, nsILoadInfo::CrossOriginEmbedderPolicy)        \
+  /* True if this document tree contained an HTMLMediaElement that     \
+   * played audibly. This should only be set on top level context. */  \
+  FIELD(DocTreeHadAudibleMedia, bool)                                  \
   FIELD(AutoplayPermission, uint32_t)                                  \
   FIELD(DelegatedPermissions,                                          \
         PermissionDelegateHandler::DelegatedPermissionList)            \
   FIELD(DelegatedExactHostMatchPermissions,                            \
-        PermissionDelegateHandler::DelegatedPermissionList)
+        PermissionDelegateHandler::DelegatedPermissionList)            \
+  FIELD(HasReportedShadowDOMUsage, bool)
 
 class WindowContext : public nsISupports, public nsWrapperCache {
   MOZ_DECL_SYNCED_CONTEXT(WindowContext, MOZ_EACH_WC_FIELD)
@@ -160,6 +164,8 @@ class WindowContext : public nsISupports, public nsWrapperCache {
               ContentParent* aSource);
   bool CanSet(FieldIndex<IDX_IsSecureContext>, const bool& aIsSecureContext,
               ContentParent* aSource);
+  bool CanSet(FieldIndex<IDX_DocTreeHadAudibleMedia>, const bool& aValue,
+              ContentParent* aSource);
   bool CanSet(FieldIndex<IDX_AutoplayPermission>, const uint32_t& aValue,
               ContentParent* aSource);
   bool CanSet(FieldIndex<IDX_SHEntryHasUserInteraction>,
@@ -172,6 +178,12 @@ class WindowContext : public nsISupports, public nsWrapperCache {
   bool CanSet(FieldIndex<IDX_DelegatedExactHostMatchPermissions>,
               const PermissionDelegateHandler::DelegatedPermissionList& aValue,
               ContentParent* aSource);
+
+  bool CanSet(FieldIndex<IDX_HasReportedShadowDOMUsage>, const bool& aValue,
+              ContentParent* aSource) {
+    return true;
+  }
+  void DidSet(FieldIndex<IDX_HasReportedShadowDOMUsage>, bool aOldValue);
 
   // Overload `DidSet` to get notifications for a particular field being set.
   //

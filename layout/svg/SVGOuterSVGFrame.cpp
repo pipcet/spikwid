@@ -13,9 +13,9 @@
 #include "nsIInterfaceRequestorUtils.h"
 #include "nsIObjectLoadingContent.h"
 #include "nsSubDocumentFrame.h"
-#include "nsSVGIntegrationUtils.h"
 #include "mozilla/PresShell.h"
 #include "mozilla/SVGForeignObjectFrame.h"
+#include "mozilla/SVGUtils.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/SVGSVGElement.h"
@@ -24,6 +24,15 @@
 using namespace mozilla::dom;
 using namespace mozilla::gfx;
 using namespace mozilla::image;
+
+/**
+ * Recursively checks if any atom in the parameter pack is equal to |aString|.
+ */
+template <typename... Atoms>
+bool IsAnyAtomEqual(const nsAString& aString, nsAtom* aFirst, Atoms... aArgs) {
+  return aFirst->Equals(aString) || IsAnyAtomEqual(aString, aArgs...);
+}
+bool IsAnyAtomEqual(const nsAString& aString) { return false; }
 
 namespace mozilla {
 
@@ -159,7 +168,7 @@ void SVGOuterSVGFrame::Init(nsIContent* aContent, nsContainerFrame* aParent,
 // nsQueryFrame methods
 
 NS_QUERYFRAME_HEAD(SVGOuterSVGFrame)
-  NS_QUERYFRAME_ENTRY(nsISVGSVGFrame)
+  NS_QUERYFRAME_ENTRY(ISVGSVGFrame)
 NS_QUERYFRAME_TAIL_INHERITING(SVGDisplayContainerFrame)
 
 //----------------------------------------------------------------------
@@ -592,7 +601,7 @@ void nsDisplayOuterSVG::HitTest(nsDisplayListBuilder* aBuilder,
       outerSVGFrame->PrincipalChildList().FirstChild());
 
   nsIFrame* frame =
-      nsSVGUtils::HitTestChildren(anonKid, svgViewportRelativePoint);
+      SVGUtils::HitTestChildren(anonKid, svgViewportRelativePoint);
   if (frame) {
     aOutFrames->AppendElement(frame);
   }
@@ -628,10 +637,10 @@ void nsDisplayOuterSVG::Paint(nsDisplayListBuilder* aBuilder,
   imgDrawingParams imgParams(aBuilder->GetImageDecodeFlags());
   // We include the offset of our frame and a scale from device pixels to user
   // units (i.e. CSS px) in the matrix that we pass to our children):
-  gfxMatrix tm = nsSVGUtils::GetCSSPxToDevPxMatrix(mFrame) *
+  gfxMatrix tm = SVGUtils::GetCSSPxToDevPxMatrix(mFrame) *
                  gfxMatrix::Translation(devPixelOffset);
-  nsSVGUtils::PaintFrameWithEffects(mFrame, *aContext, tm, imgParams,
-                                    &contentAreaDirtyRect);
+  SVGUtils::PaintFrameWithEffects(mFrame, *aContext, tm, imgParams,
+                                  &contentAreaDirtyRect);
   nsDisplayItemGenericImageGeometry::UpdateDrawResult(this, imgParams.result);
   aContext->Restore();
 
@@ -665,7 +674,7 @@ void nsDisplayOuterSVG::ComputeInvalidationRegion(
   nsDisplayItem::ComputeInvalidationRegion(aBuilder, aGeometry, aInvalidRegion);
   aInvalidRegion->Or(*aInvalidRegion, result);
 
-  auto geometry =
+  const auto* geometry =
       static_cast<const nsDisplayItemGenericImageGeometry*>(aGeometry);
 
   if (aBuilder->ShouldSyncDecodeImages() &&
@@ -686,7 +695,7 @@ nsresult SVGOuterSVGFrame::AttributeChanged(int32_t aNameSpaceID,
       // make sure our cached transform matrix gets (lazily) updated
       mCanvasTM = nullptr;
 
-      nsSVGUtils::NotifyChildrenOfSVGChange(
+      SVGUtils::NotifyChildrenOfSVGChange(
           PrincipalChildList().FirstChild(),
           aAttribute == nsGkAtoms::viewBox
               ? TRANSFORM_CHANGED | COORD_CONTEXT_CHANGED
@@ -791,7 +800,7 @@ void SVGOuterSVGFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
 }
 
 //----------------------------------------------------------------------
-// nsISVGSVGFrame methods:
+// ISVGSVGFrame methods:
 
 void SVGOuterSVGFrame::NotifyViewportOrTransformChanged(uint32_t aFlags) {
   MOZ_ASSERT(aFlags && !(aFlags & ~(COORD_CONTEXT_CHANGED | TRANSFORM_CHANGED |
@@ -843,12 +852,12 @@ void SVGOuterSVGFrame::NotifyViewportOrTransformChanged(uint32_t aFlags) {
     }
   }
 
-  nsSVGUtils::NotifyChildrenOfSVGChange(PrincipalChildList().FirstChild(),
-                                        aFlags);
+  SVGUtils::NotifyChildrenOfSVGChange(PrincipalChildList().FirstChild(),
+                                      aFlags);
 }
 
 //----------------------------------------------------------------------
-// nsSVGDisplayableFrame methods:
+// ISVGDisplayableFrame methods:
 
 void SVGOuterSVGFrame::PaintSVG(gfxContext& aContext,
                                 const gfxMatrix& aTransform,
@@ -905,7 +914,7 @@ bool SVGOuterSVGFrame::IsContainingWindowElementOfType(
       RefPtr<BrowsingContext> bc = docShell->GetBrowsingContext();
       const Maybe<nsString>& type = bc->GetEmbedderElementType();
 
-      if (type && IsAnyAtomEqual(*type, aArgs...)) {
+      if (type && ::IsAnyAtomEqual(*type, aArgs...)) {
         if (aContainingWindowFrame) {
           if (const Element* const element = bc->GetEmbedderElement()) {
             *aContainingWindowFrame = element->GetPrimaryFrame();
@@ -1047,11 +1056,5 @@ bool SVGOuterSVGAnonChildFrame::IsSVGTransformed(
 
   return true;
 }
-
-template <typename... Atoms>
-bool IsAnyAtomEqual(const nsAString& aString, nsAtom* aFirst, Atoms... aArgs) {
-  return aFirst->Equals(aString) || IsAnyAtomEqual(aString, aArgs...);
-}
-bool IsAnyAtomEqual(const nsAString& aString) { return false; }
 
 }  // namespace mozilla

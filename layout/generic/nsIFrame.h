@@ -63,11 +63,9 @@
 #include "nsFrameList.h"
 #include "nsFrameState.h"
 #include "mozilla/ReflowInput.h"
-#include "nsHTMLParts.h"
 #include "nsITheme.h"
 #include "nsLayoutUtils.h"
 #include "nsQueryFrame.h"
-#include "nsString.h"
 #include "mozilla/ComputedStyle.h"
 #include "nsStyleStruct.h"
 #include "Visibility.h"
@@ -101,7 +99,6 @@
  */
 
 class nsAtom;
-class nsPresContext;
 class nsView;
 class nsFrameSelection;
 class nsIWidget;
@@ -118,7 +115,6 @@ class gfxSkipCharsIterator;
 class gfxContext;
 class nsLineList_iterator;
 class nsAbsoluteContainingBlock;
-class nsIContent;
 class nsContainerFrame;
 class nsPlaceholderFrame;
 class nsStyleChangeList;
@@ -126,10 +122,6 @@ class nsWindowSizes;
 
 struct nsBoxLayoutMetrics;
 struct nsPeekOffsetStruct;
-struct nsPoint;
-struct nsRect;
-struct nsSize;
-struct nsMargin;
 struct CharacterDataChangeInfo;
 
 namespace mozilla {
@@ -137,9 +129,6 @@ namespace mozilla {
 enum class PseudoStyleType : uint8_t;
 enum class TableSelectionMode : uint32_t;
 class EventStates;
-class PresShell;
-struct ReflowInput;
-class ReflowOutput;
 class ServoRestyleState;
 class DisplayItemData;
 class EffectSet;
@@ -153,16 +142,9 @@ namespace layout {
 class ScrollAnchorContainer;
 }  // namespace layout
 
-namespace dom {
-class Selection;
-}  // namespace dom
-
 }  // namespace mozilla
 
 //----------------------------------------------------------------------
-
-#define NS_SUBTREE_DIRTY(_frame) \
-  (_frame)->HasAnyStateBits(NS_FRAME_IS_DIRTY | NS_FRAME_HAS_DIRTY_CHILDREN)
 
 // 1 million CSS pixels less than our max app unit measure.
 // For reflowing with an "infinite" available inline space per [css-sizing].
@@ -922,9 +904,6 @@ class nsIFrame : public nsQueryFrame {
   // Use PeekStyleData instead.
   virtual void DidSetComputedStyle(ComputedStyle* aOldComputedStyle);
 
- private:
-  void RecordAppearanceTelemetry();
-
  public:
 /**
  * Define typesafe getter functions for each style struct by
@@ -1063,10 +1042,10 @@ class nsIFrame : public nsQueryFrame {
    *
    * Frames that are laid out according to SVG's coordinate space based rules
    * (frames with the NS_FRAME_SVG_LAYOUT bit set, which *excludes*
-   * nsSVGOuterSVGFrame) are different.  Many frames of this type do not set or
+   * SVGOuterSVGFrame) are different.  Many frames of this type do not set or
    * use mRect, in which case the frame rect is undefined.  The exceptions are:
    *
-   *   - nsSVGInnerSVGFrame
+   *   - SVGInnerSVGFrame
    *   - SVGGeometryFrame (used for <path>, <circle>, etc.)
    *   - SVGImageFrame
    *   - SVGForeignObjectFrame
@@ -1869,12 +1848,13 @@ class nsIFrame : public nsQueryFrame {
     nsIFrame* mutable_this = const_cast<nsIFrame*>(this);
     nsPresContext* pc = PresContext();
     nsITheme* theme = pc->Theme();
-    if (!theme->ThemeSupportsWidget(pc, mutable_this, aDisp->mAppearance)) {
+    if (!theme->ThemeSupportsWidget(pc, mutable_this,
+                                    aDisp->EffectiveAppearance())) {
       return false;
     }
     if (aTransparencyState) {
-      *aTransparencyState =
-          theme->GetWidgetTransparency(mutable_this, aDisp->mAppearance);
+      *aTransparencyState = theme->GetWidgetTransparency(
+          mutable_this, aDisp->EffectiveAppearance());
     }
     return true;
   }
@@ -3319,7 +3299,7 @@ class nsIFrame : public nsQueryFrame {
   bool IsBlockFrameOrSubclass() const;
 
   /**
-   * Returns true if the frame is an instance of nsSVGGeometryFrame or one
+   * Returns true if the frame is an instance of SVGGeometryFrame or one
    * of its subclasses.
    */
   inline bool IsSVGGeometryFrameOrSubclass() const;
@@ -3752,10 +3732,26 @@ class nsIFrame : public nsQueryFrame {
    * Uses frame's begin selection state to start. If no selection on this frame
    * will return NS_ERROR_FAILURE.
    *
-   * @param aPOS is defined in nsFrameSelection
+   * @param aPos is defined in nsFrameSelection
    */
   virtual nsresult PeekOffset(nsPeekOffsetStruct* aPos);
 
+ private:
+  nsresult PeekOffsetForCharacter(nsPeekOffsetStruct* aPos, int32_t offset);
+  nsresult PeekOffsetForWord(nsPeekOffsetStruct* aPos, int32_t offset);
+  nsresult PeekOffsetForLine(nsPeekOffsetStruct* aPos);
+  nsresult PeekOffsetForLineEdge(nsPeekOffsetStruct* aPos);
+
+  /**
+   * Search for the first paragraph boundary before or after the given position
+   * @param  aPos See description in nsFrameSelection.h. The following fields
+   *              are used by this method:
+   *              Input: mDirection
+   *              Output: mResultContent, mContentOffset
+   */
+  nsresult PeekOffsetForParagraph(nsPeekOffsetStruct* aPos);
+
+ public:
   // given a frame five me the first/last leaf available
   // XXX Robert O'Callahan wants to move these elsewhere
   static void GetLastLeaf(nsIFrame** aFrame);
@@ -4567,6 +4563,13 @@ class nsIFrame : public nsQueryFrame {
   }
 
   /**
+   * Return whether this frame or any of its children is dirty.
+   */
+  bool IsSubtreeDirty() const {
+    return HasAnyStateBits(NS_FRAME_IS_DIRTY | NS_FRAME_HAS_DIRTY_CHILDREN);
+  }
+
+  /**
    * Return whether this frame keeps track of overflow areas. (Frames for
    * non-display SVG elements -- e.g. <clipPath> -- do not maintain overflow
    * areas, because they're never painted.)
@@ -5139,9 +5142,14 @@ class nsIFrame : public nsQueryFrame {
     // true when we're still at the start of the search, i.e., we can't return
     // this point as a valid offset!
     bool mAtStart;
-    // true when we've encountered at least one character of the pre-boundary
-    // type (whitespace if aWordSelectEatSpace is true, non-whitespace
-    // otherwise)
+    // true when we've encountered at least one character of the type before the
+    // boundary we're looking for:
+    // 1. If we're moving forward and eating whitepace, looking for a word
+    //    beginning (i.e. a boundary between whitespace and non-whitespace),
+    //    then mSawBeforeType==true means "we already saw some whitespace".
+    // 2. Otherwise, looking for a word beginning (i.e. a boundary between
+    //    non-whitespace and whitespace), then mSawBeforeType==true means "we
+    //    already saw some non-whitespace".
     bool mSawBeforeType;
     // true when the last character encountered was punctuation
     bool mLastCharWasPunctuation;
@@ -5206,15 +5214,6 @@ class nsIFrame : public nsQueryFrame {
                                           bool aForward, bool aPunctAfter,
                                           bool aWhitespaceAfter,
                                           bool aIsKeyboardSelect);
-
-  /**
-   * Search for the first paragraph boundary before or after the given position
-   * @param  aPos See description in nsFrameSelection.h. The following fields
-   *              are used by this method:
-   *              Input: mDirection
-   *              Output: mResultContent, mContentOffset
-   */
-  nsresult PeekOffsetParagraph(nsPeekOffsetStruct* aPos);
 
  private:
   // Get a pointer to the overflow areas property attached to the frame.

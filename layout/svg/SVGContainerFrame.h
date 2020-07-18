@@ -4,17 +4,16 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef NS_SVGCONTAINERFRAME_H
-#define NS_SVGCONTAINERFRAME_H
+#ifndef LAYOUT_SVG_SVGCONTAINERFRAME_H_
+#define LAYOUT_SVG_SVGCONTAINERFRAME_H_
 
 #include "mozilla/Attributes.h"
+#include "mozilla/ISVGDisplayableFrame.h"
 #include "mozilla/UniquePtr.h"
 #include "nsContainerFrame.h"
 #include "nsIFrame.h"
-#include "nsSVGDisplayableFrame.h"
 #include "nsQueryFrame.h"
 #include "nsRect.h"
-#include "nsSVGUtils.h"
 
 class gfxContext;
 class nsFrameList;
@@ -110,11 +109,11 @@ class SVGContainerFrame : public nsContainerFrame {
  *
  * This class's methods can *not* assume that mContent points to an instance of
  * an SVG element class since this class is inherited by
- * nsSVGGenericContainerFrame which is used for unrecognized elements in the
+ * SVGGenericContainerFrame which is used for unrecognized elements in the
  * SVG namespace. Do *not* blindly cast to SVG element types.
  */
 class SVGDisplayContainerFrame : public SVGContainerFrame,
-                                 public nsSVGDisplayableFrame {
+                                 public ISVGDisplayableFrame {
  protected:
   SVGDisplayContainerFrame(ComputedStyle* aStyle, nsPresContext* aPresContext,
                            nsIFrame::ClassID aID)
@@ -142,7 +141,7 @@ class SVGDisplayContainerFrame : public SVGContainerFrame,
       Matrix* aOwnTransform = nullptr,
       Matrix* aFromParentTransform = nullptr) const override;
 
-  // nsSVGDisplayableFrame interface:
+  // ISVGDisplayableFrame interface:
   virtual void PaintSVG(gfxContext& aContext, const gfxMatrix& aTransform,
                         imgDrawingParams& aImgParams,
                         const nsIntRect* aDirtyRect = nullptr) override;
@@ -163,4 +162,4 @@ class SVGDisplayContainerFrame : public SVGContainerFrame,
 
 }  // namespace mozilla
 
-#endif
+#endif  // LAYOUT_SVG_SVGCONTAINERFRAME_H_

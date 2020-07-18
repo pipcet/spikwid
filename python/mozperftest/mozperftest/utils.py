@@ -13,6 +13,8 @@ import requests
 from collections import defaultdict
 from pathlib import Path
 import tempfile
+import shutil
+import importlib
 
 
 RETRY_SLEEP = 10
@@ -29,8 +31,11 @@ def silence(layer=None):
     meths = ("info", "debug", "warning", "error", "log")
     patched = defaultdict(dict)
 
+    oldout, olderr = sys.stdout, sys.stderr
+    sys.stdout, sys.stderr = StringIO(), StringIO()
+
     def _vacuum(*args, **kw):
-        pass
+        sys.stdout.write(str(args))
 
     for obj in to_patch:
         for meth in meths:
@@ -39,13 +44,19 @@ def silence(layer=None):
             patched[obj][meth] = getattr(obj, meth)
             setattr(obj, meth, _vacuum)
 
-    oldout, olderr = sys.stdout, sys.stderr
+    stdout = stderr = None
     try:
-        sys.stdout, sys.stderr = StringIO(), StringIO()
         sys.stdout.buffer = sys.stdout
         sys.stderr.buffer = sys.stderr
         sys.stdout.fileno = sys.stderr.fileno = lambda: -1
-        yield sys.stdout, sys.stderr
+        try:
+            yield sys.stdout, sys.stderr
+        except Exception:
+            sys.stdout.seek(0)
+            stdout = sys.stdout.read()
+            sys.stderr.seek(0)
+            stderr = sys.stderr.read()
+            raise
     finally:
         sys.stdout, sys.stderr = oldout, olderr
         for obj, meths in patched.items():
@@ -54,6 +65,10 @@ def silence(layer=None):
                     setattr(obj, name, old_func)
                 except Exception:
                     pass
+        if stdout is not None:
+            print(stdout)
+        if stderr is not None:
+            print(stderr)
 
 
 def host_platform():
@@ -95,7 +110,15 @@ class MachLogger:
         self._logger(logging.ERROR, name, kwargs, msg)
 
 
-def install_package(virtualenv_manager, package):
+def install_package(virtualenv_manager, package, ignore_failure=False):
+    """Installs a package using the virtualenv manager.
+
+    Makes sure the package is really installed when the user already has it
+    in their local installation.
+
+    Returns True on success, or re-raise the error. If ignore_failure
+    is set to True, ignore the error and return False
+    """
     from pip._internal.req.constructors import install_req_from_line
 
     req = install_req_from_line(package)
@@ -108,9 +131,15 @@ def install_package(virtualenv_manager, package):
         site_packages = os.path.abspath(req.satisfied_by.location)
         if site_packages.startswith(venv_site_lib):
             # already installed in this venv, we can skip
-            return
+            return True
     with silence():
-        virtualenv_manager._run_pip(["install", package])
+        try:
+            virtualenv_manager._run_pip(["install", package])
+            return True
+        except Exception:
+            if not ignore_failure:
+                raise
+    return False
 
 
 def build_test_list(tests, randomized=False):
@@ -231,3 +260,38 @@ def strtobool(val):
         return 0
     else:
         raise ValueError("invalid truth value %r" % (val,))
+
+
+@contextlib.contextmanager
+def temp_dir():
+    tempdir = tempfile.mkdtemp()
+    try:
+        yield tempdir
+    finally:
+        shutil.rmtree(tempdir)
+
+
+def load_class(path):
+    """Loads a class given its path and returns it.
+
+    The path is a string of the form `package.module:class` that points
+    to the class to be imported.
+
+    If if can't find it, or if the path is malformed,
+    an ImportError is raised.
+    """
+    if ":" not in path:
+        raise ImportError(f"Malformed path '{path}'")
+    elmts = path.split(":")
+    if len(elmts) != 2:
+        raise ImportError(f"Malformed path '{path}'")
+    mod_name, klass_name = elmts
+    try:
+        mod = importlib.import_module(mod_name)
+    except ModuleNotFoundError:
+        raise ImportError(f"Can't find '{mod_name}'")
+    try:
+        klass = getattr(mod, klass_name)
+    except AttributeError:
+        raise ImportError(f"Can't find '{klass_name}' in '{mod_name}'")
+    return klass

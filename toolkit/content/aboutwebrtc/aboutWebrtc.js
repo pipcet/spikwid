@@ -209,9 +209,10 @@ class AecLogging extends Control {
 
   let peerConnections = renderElement("div");
   let connectionLog = renderElement("div");
+  let userPrefs = renderElement("div");
 
   const content = document.querySelector("#content");
-  content.append(peerConnections, connectionLog);
+  content.append(peerConnections, connectionLog, userPrefs);
 
   function refresh() {
     const pcDiv = renderElements("div", { className: "stats" }, [
@@ -250,14 +251,35 @@ class AecLogging extends Control {
       div.append(...log.map(line => renderText("p", line)));
       logDiv.append(div);
     }
-
     // Replace previous info
     peerConnections.replaceWith(pcDiv);
     connectionLog.replaceWith(logDiv);
+    userPrefs.replaceWith((userPrefs = renderUserPrefs()));
+
     peerConnections = pcDiv;
     connectionLog = logDiv;
   }
   refresh();
+
+  window.setInterval(
+    async history => {
+      userPrefs.replaceWith((userPrefs = renderUserPrefs()));
+      const reports = await getStats();
+      reports.forEach(report => {
+        const replace = (id, renderFunc) => {
+          const elem = document.getElementById(`${id}: ${report.pcid}`);
+          if (elem) {
+            elem.replaceWith(renderFunc(report, history));
+          }
+        };
+        replace("ice-stats", renderICEStats);
+        replace("rtp-stats", renderRTPStats);
+        replace("frame-stats", renderFrameRateStats);
+      });
+    },
+    500,
+    {}
+  );
 })();
 
 function renderPeerConnection(report) {
@@ -284,7 +306,7 @@ function renderPeerConnection(report) {
       renderConfiguration(configuration),
       renderICEStats(report),
       renderSDPStats(report),
-      ...report.videoFrameHistories.map(h => renderFrameRateStats(h)),
+      renderFrameRateStats(report),
       renderRTPStats(report)
     );
     pcDiv.append(section);
@@ -293,101 +315,144 @@ function renderPeerConnection(report) {
 }
 
 function renderSDPStats({ offerer, localSdp, remoteSdp, sdpHistory }) {
+  const trimNewlines = sdp => sdp.replaceAll("\r\n", "\n");
+
   const statsDiv = renderElements("div", {}, [
     renderText("h4", string("sdp_heading")),
     renderText(
       "h5",
       `${string("local_sdp_heading")} (${string(offerer ? "offer" : "answer")})`
     ),
-    renderText("pre", localSdp),
+    renderText("pre", trimNewlines(localSdp)),
     renderText(
       "h5",
       `${string("remote_sdp_heading")} (${string(
         offerer ? "answer" : "offer"
       )})`
     ),
-    renderText("pre", remoteSdp),
+    renderText("pre", trimNewlines(remoteSdp)),
     renderText("h4", string("sdp_history_heading")),
   ]);
+
+  // All SDP in sequential order. Add onclick handler to scroll the associated
+  // SDP into view below.
+  for (const { isLocal, timestamp } of sdpHistory) {
+    const histDiv = renderElement("div", {});
+    const text = renderText(
+      "h5",
+      format("sdp_set_at_timestamp", [
+        string(`${isLocal ? "local" : "remote"}_sdp_heading`),
+        timestamp,
+      ]),
+      { className: "sdp-history-link" }
+    );
+    text.onclick = () => {
+      const elem = document.getElementById("sdp-history: " + timestamp);
+      if (elem) {
+        elem.scrollIntoView();
+      }
+    };
+    histDiv.append(text);
+    statsDiv.append(histDiv);
+  }
+
+  // Render the SDP into separate columns for local and remote.
+  const section = renderElement("div", { className: "sdp-history" });
+  const localDiv = renderElements("div", {}, [
+    renderText("h4", `${string("local_sdp_heading")}`),
+  ]);
+  const remoteDiv = renderElements("div", {}, [
+    renderText("h4", `${string("remote_sdp_heading")}`),
+  ]);
+
+  let first = NaN;
   for (const { isLocal, timestamp, sdp, errors } of sdpHistory) {
-    const histDiv = renderElements("div", { className: "sdp-history" }, [
+    if (isNaN(first)) {
+      first = timestamp;
+    }
+    const histDiv = isLocal ? localDiv : remoteDiv;
+    histDiv.append(
       renderText(
         "h5",
-        format("sdp_set_at_timestamp", [
-          string(`${isLocal ? "local" : "remote"}_sdp_heading`),
-          timestamp,
-        ])
-      ),
-    ]);
-    const sdpSection = renderFoldableSection(histDiv);
+        format("sdp_set_timestamp", [timestamp, timestamp - first]),
+        { id: "sdp-history: " + timestamp }
+      )
+    );
     if (errors.length) {
       histDiv.append(renderElement("h5", string("sdp_parsing_errors_heading")));
     }
     for (const { lineNumber, error } of errors) {
       histDiv.append(renderElement("br"), `${lineNumber}: ${error}`);
     }
-    sdpSection.append(renderText("pre", sdp));
-    histDiv.append(sdpSection);
-    statsDiv.append(histDiv);
+    histDiv.append(renderText("pre", trimNewlines(sdp)));
   }
+  section.append(localDiv, remoteDiv);
+  statsDiv.append(section);
   return statsDiv;
 }
 
-function renderFrameRateStats({ trackIdentifier: id, entries }) {
-  const stats = entries.map(stat => {
-    stat.elapsed = stat.lastFrameTimestamp - stat.firstFrameTimestamp;
-    if (stat.elapsed < 1) {
-      stat.elapsed = 0;
-    }
-    stat.elapsed = stat.elapsed / 1_000;
-    if (stat.elapsed && stat.consecutiveFrames) {
-      stat.avgFramerate = stat.consecutiveFrames / stat.elapsed;
-    } else {
-      stat.avgFramerate = string("n_a");
-    }
-    return stat;
+function renderFrameRateStats(report) {
+  const statsDiv = renderElement("div", { id: "frame-stats: " + report.pcid });
+  report.videoFrameHistories.forEach(history => {
+    const stats = history.entries.map(stat => {
+      stat.elapsed = stat.lastFrameTimestamp - stat.firstFrameTimestamp;
+      if (stat.elapsed < 1) {
+        stat.elapsed = 0;
+      }
+      stat.elapsed = (stat.elapsed / 1_000).toFixed(3);
+      if (stat.elapsed && stat.consecutiveFrames) {
+        stat.avgFramerate = (stat.consecutiveFrames / stat.elapsed).toFixed(2);
+      } else {
+        stat.avgFramerate = string("n_a");
+      }
+      return stat;
+    });
+
+    const table = renderSimpleTable(
+      "",
+      [
+        "width_px",
+        "height_px",
+        "consecutive_frames",
+        "time_elapsed",
+        "estimated_framerate",
+        "rotation_degrees",
+        "first_frame_timestamp",
+        "last_frame_timestamp",
+        "local_receive_ssrc",
+        "remote_send_ssrc",
+      ].map(columnName => string(columnName)),
+      stats.map(stat =>
+        [
+          stat.width,
+          stat.height,
+          stat.consecutiveFrames,
+          stat.elapsed,
+          stat.avgFramerate,
+          stat.rotationAngle,
+          stat.firstFrameTimestamp,
+          stat.lastFrameTimestamp,
+          stat.localSsrc,
+          stat.remoteSsrc || "?",
+        ].map(entry => (Object.is(entry, undefined) ? "<<undefined>>" : entry))
+      )
+    );
+
+    statsDiv.append(
+      renderText(
+        "h4",
+        `${string("frame_stats_heading")} - MediaStreamTrack Id: ${
+          history.trackIdentifier
+        }`
+      ),
+      table
+    );
   });
 
-  const table = renderSimpleTable(
-    "",
-    [
-      "width_px",
-      "height_px",
-      "consecutive_frames",
-      "time_elapsed",
-      "estimated_framerate",
-      "rotation_degrees",
-      "first_frame_timestamp",
-      "last_frame_timestamp",
-      "local_receive_ssrc",
-      "remote_send_ssrc",
-    ].map(columnName => string(columnName)),
-    stats.map(stat =>
-      [
-        stat.width,
-        stat.height,
-        stat.consecutiveFrames,
-        stat.elapsed,
-        stat.avgFramerate,
-        stat.rotationAngle,
-        stat.lastFrameTimestamp,
-        stat.firstFrameTimestamp,
-        stat.localSsrc,
-        stat.remoteSsrc || "?",
-      ].map(entry => (Object.is(entry, undefined) ? "<<undefined>>" : entry))
-    )
-  );
-
-  return renderElements("div", {}, [
-    renderText(
-      "h4",
-      `${string("frame_stats_heading")} - MediaStreamTrack Id: ${id}`
-    ),
-    table,
-  ]);
+  return statsDiv;
 }
 
-function renderRTPStats(report) {
+function renderRTPStats(report, history) {
   const rtpStats = [
     ...(report.inboundRtpStreamStats || []),
     ...(report.outboundRtpStreamStats || []),
@@ -413,17 +478,17 @@ function renderRTPStats(report) {
   const stats = [...rtpStats, ...remoteRtpStats];
 
   // Render stats set
-  return renderElements("div", {}, [
+  return renderElements("div", { id: "rtp-stats: " + report.pcid }, [
     renderText("h4", string("rtp_stats_heading")),
     ...stats.map(stat => {
       const { id, remoteId, remoteRtpStats } = stat;
       const div = renderElements("div", {}, [
         renderText("h5", id),
         renderCoderStats(stat),
-        renderTransportStats(stat, string("typeLocal")),
+        renderTransportStats(stat, true, history),
       ]);
       if (remoteId && remoteRtpStats) {
-        div.append(renderTransportStats(remoteRtpStats, string("typeRemote")));
+        div.append(renderTransportStats(remoteRtpStats, false));
       }
       return div;
     }),
@@ -469,6 +534,7 @@ function renderCoderStats({
 
 function renderTransportStats(
   {
+    id,
     timestamp,
     type,
     ssrc,
@@ -480,8 +546,28 @@ function renderTransportStats(
     packetsSent,
     bytesSent,
   },
-  typeLabel
+  local,
+  history
 ) {
+  const typeLabel = local ? string("typeLocal") : string("typeRemote");
+
+  if (history) {
+    if (history[id] === undefined) {
+      history[id] = {};
+    }
+  }
+
+  const estimateKbps = (timestamp, lastTimestamp, bytes, lastBytes) => {
+    if (!timestamp || !lastTimestamp || !bytes || !lastBytes) {
+      return string("n_a");
+    }
+    const elapsedTime = timestamp - lastTimestamp;
+    if (elapsedTime <= 0) {
+      return string("n_a");
+    }
+    return ((bytes - lastBytes) / elapsedTime).toFixed(1);
+  };
+
   const time = new Date(timestamp).toTimeString();
   let s = `${typeLabel}: ${time} ${type} SSRC: ${ssrc}`;
 
@@ -490,8 +576,18 @@ function renderTransportStats(
     s += ` ${string("received_label")}: ${packetsReceived} ${packets}`;
 
     if (bytesReceived) {
-      s += ` (${(bytesReceived / 1024).toFixed(2)} Kb)`;
+      s += ` (${(bytesReceived / 1024).toFixed(2)} Kb`;
+      if (local && history) {
+        s += ` , ~${estimateKbps(
+          timestamp,
+          history[id].lastTimestamp,
+          bytesReceived,
+          history[id].lastBytesReceived
+        )} Kbps`;
+      }
+      s += ")";
     }
+
     s += ` ${string("lost_label")}: ${packetsLost} ${string(
       "jitter_label"
     )}: ${jitter}`;
@@ -502,9 +598,26 @@ function renderTransportStats(
   } else if (packetsSent) {
     s += ` ${string("sent_label")}: ${packetsSent} ${packets}`;
     if (bytesSent) {
-      s += ` (${(bytesSent / 1024).toFixed(2)} Kb)`;
+      s += ` (${(bytesSent / 1024).toFixed(2)} Kb`;
+      if (local && history) {
+        s += `, ~${estimateKbps(
+          timestamp,
+          history[id].lastTimestamp,
+          bytesSent,
+          history[id].lastBytesSent
+        )} Kbps`;
+      }
+      s += ")";
     }
   }
+
+  // Update history
+  if (history) {
+    history[id].lastBytesReceived = bytesReceived;
+    history[id].lastBytesSent = bytesSent;
+    history[id].lastTimestamp = timestamp;
+  }
+
   return renderText("p", s);
 }
 
@@ -561,7 +674,7 @@ function renderConfiguration(c) {
 }
 
 function renderICEStats(report) {
-  const iceDiv = renderElements("div", {}, [
+  const iceDiv = renderElements("div", { id: "ice-stats: " + report.pcid }, [
     renderText("h4", string("ice_stats_heading")),
   ]);
 
@@ -786,6 +899,44 @@ function candidateToString({
   }
   proxied = type == "local-candidate" ? ` [${proxied}]` : "";
   return `${address}:${port}/${protocol}(${candidateType})${proxied}`;
+}
+
+function renderUserPrefs() {
+  const getPref = key => {
+    switch (Services.prefs.getPrefType(key)) {
+      case Services.prefs.PREF_BOOL:
+        return Services.prefs.getBoolPref(key);
+      case Services.prefs.PREF_INT:
+        return Services.prefs.getIntPref(key);
+      case Services.prefs.PREF_STRING:
+        return Services.prefs.getStringPref(key);
+    }
+    return "";
+  };
+  const prefs = [
+    "media.peerconnection",
+    "media.navigator",
+    "media.getusermedia",
+  ];
+  const renderPref = p => renderText("p", `${p}: ${getPref(p)}`);
+  const display = prefs
+    .flatMap(Services.prefs.getChildList)
+    .filter(Services.prefs.prefHasUserValue)
+    .map(renderPref);
+  return renderElements(
+    "div",
+    {
+      id: "prefs",
+      className: "prefs",
+      style: display.length ? "" : "visibility:hidden",
+    },
+    [
+      renderElements("span", { className: "section-heading" }, [
+        renderText("h3", string("custom_webrtc_configuration_heading")),
+      ]),
+      ...display,
+    ]
+  );
 }
 
 function renderFoldableSection(parent, options = {}) {

@@ -569,7 +569,7 @@ const browsingContextTargetPrototype = {
       browsingContextID: this.browsingContextID,
       traits: {
         // FF64+ exposes a new trait to help identify BrowsingContextActor's inherited
-        // actorss from the client side.
+        // actors from the client side.
         isBrowsingContext: true,
       },
     };
@@ -636,14 +636,6 @@ const browsingContextTargetPrototype = {
    * be added as a debuggee, false otherwise.
    */
   _shouldAddNewGlobalAsDebuggee(wrappedGlobal) {
-    if (
-      wrappedGlobal.hostAnnotations &&
-      wrappedGlobal.hostAnnotations.type == "document" &&
-      wrappedGlobal.hostAnnotations.element === this.window
-    ) {
-      return true;
-    }
-
     // Otherwise, check if it is a WebExtension content script sandbox
     const global = unwrapDebuggerObjectGlobal(wrappedGlobal);
     if (!global) {
@@ -1229,7 +1221,7 @@ const browsingContextTargetPrototype = {
           continue;
         }
         // Reparse the sheet so that we see the existing errors.
-        const onStyleSheetParsed = getSheetText(sheet, this._consoleActor)
+        const onStyleSheetParsed = getSheetText(sheet)
           .then(text => {
             InspectorUtils.parseStyleSheet(sheet, text, /* aUpdate = */ false);
           })
@@ -1662,8 +1654,8 @@ function DebuggerProgressListener(targetActor) {
 
 DebuggerProgressListener.prototype = {
   QueryInterface: ChromeUtils.generateQI([
-    Ci.nsIWebProgressListener,
-    Ci.nsISupportsWeakReference,
+    "nsIWebProgressListener",
+    "nsISupportsWeakReference",
   ]),
 
   destroy() {

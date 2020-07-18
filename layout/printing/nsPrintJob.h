@@ -14,9 +14,9 @@
 #include "nsPrintObject.h"
 #include "nsPrintData.h"
 #include "nsFrameList.h"
-#include "nsIFrame.h"
 #include "nsIWebProgress.h"
 #include "mozilla/dom/HTMLCanvasElement.h"
+#include "nsIFrame.h"  // for WeakFrame only
 #include "nsIWebProgressListener.h"
 #include "nsWeakReference.h"
 
@@ -27,6 +27,7 @@
 class nsPagePrintTimer;
 class nsIDocShell;
 class nsIDocumentViewerPrint;
+class nsIFrame;
 class nsPrintObject;
 class nsIDocShell;
 class nsPageSequenceFrame;
@@ -46,7 +47,6 @@ class nsPrintJob final : public nsIObserver,
                          public nsIWebProgressListener,
                          public nsSupportsWeakReference {
  public:
-  static nsresult GetGlobalPrintSettings(nsIPrintSettings** aPrintSettings);
   static void CloseProgressDialog(nsIWebProgressListener* aWebProgressListener);
 
   nsPrintJob() = default;
@@ -127,16 +127,10 @@ class nsPrintJob final : public nsIObserver,
   bool GetIsPrintPreview() { return mIsDoingPrintPreview; }
   bool GetIsCreatingPrintPreview() { return mIsCreatingPrintPreview; }
 
-  nsresult GetSeqFrameAndCountPages(nsIFrame*& aSeqFrame, int32_t& aCount);
+  std::tuple<nsPageSequenceFrame*, int32_t> GetSeqFrameAndCountPages();
 
   void TurnScriptingOn(bool aDoTurnOn);
 
-  /**
-   * Checks to see if the document this print engine is associated with has any
-   * canvases that have a mozPrintCallback.
-   * https://developer.mozilla.org/en-US/docs/Web/API/HTMLCanvasElement#Properties
-   */
-  bool HasPrintCallbackCanvas() { return mHasMozPrintCallback; }
   bool PrePrintPage();
   bool PrintPage(nsPrintObject* aPOect, bool& aInRange);
   bool DonePrintingPages(nsPrintObject* aPO, nsresult aResult);
@@ -150,10 +144,6 @@ class nsPrintJob final : public nsIObserver,
 
   mozilla::PresShell* GetPrintPreviewPresShell() {
     return mPrtPreview->mPrintObject->mPresShell;
-  }
-
-  float GetPrintPreviewScale() {
-    return mPrtPreview->mPrintObject->mPresContext->GetPrintPreviewScale();
   }
 
   nsresult Cancel();

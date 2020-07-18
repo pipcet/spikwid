@@ -16,6 +16,7 @@ from .taskgraph import TaskGraph
 from .task import Task
 from .optimize import optimize_task_graph
 from .morph import morph
+from .parameters import Parameters
 from .util.python_path import find_object
 from .transforms.base import TransformSequence, TransformConfig
 from .util.verify import (
@@ -54,8 +55,8 @@ class Kind(object):
         config = copy.deepcopy(self.config)
 
         kind_dependencies = config.get('kind-dependencies', [])
-        kind_dependencies_tasks = [task for task in loaded_tasks
-                                   if task.kind in kind_dependencies]
+        kind_dependencies_tasks = {task.label: task for task in loaded_tasks
+                                   if task.kind in kind_dependencies}
 
         inputs = loader(self.name, self.path, config, parameters, loaded_tasks)
 
@@ -114,7 +115,6 @@ class TaskGraphGenerator(object):
         parameters,
         decision_task_id="DECISION-TASK",
         write_artifacts=False,
-        target_kind=None,
     ):
         """
         @param root_dir: root directory, with subdirectories for each kind
@@ -126,7 +126,6 @@ class TaskGraphGenerator(object):
             root_dir = 'taskcluster/ci'
         self.root_dir = ensure_text(root_dir)
         self._parameters = parameters
-        self._target_kind = target_kind
         self._decision_task_id = decision_task_id
         self._write_artifacts = write_artifacts
 
@@ -262,11 +261,12 @@ class TaskGraphGenerator(object):
                 edges.add((kind.name, dep, 'kind-dependency'))
         kind_graph = Graph(set(kinds), edges)
 
-        if self._target_kind:
+        if parameters.get('target-kind'):
+            target_kind = parameters['target-kind']
             logger.info(
                 "Limiting kinds to {target_kind} and dependencies".format(
-                    target_kind=self._target_kind))
-            kind_graph = kind_graph.transitive_closure({self._target_kind, 'docker-image'})
+                    target_kind=target_kind))
+            kind_graph = kind_graph.transitive_closure({target_kind, 'docker-image'})
 
         logger.info("Generating full task set")
         all_tasks = {}
@@ -419,7 +419,11 @@ def load_tasks_for_kind(parameters, kind, root_dir=None):
 
     This function is designed to be called from outside of taskgraph.
     """
-    tgg = TaskGraphGenerator(root_dir=root_dir, parameters=parameters, target_kind=kind)
+    # make parameters read-write
+    parameters = dict(parameters)
+    parameters['target-kind'] = kind
+    parameters = Parameters(strict=False, **parameters)
+    tgg = TaskGraphGenerator(root_dir=root_dir, parameters=parameters)
     return {
         task.task['metadata']['name']: task
         for task in tgg.full_task_set

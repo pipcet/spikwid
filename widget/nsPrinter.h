@@ -6,19 +6,24 @@
 #ifndef nsPrinter_h__
 #define nsPrinter_h__
 
+#include "nsIPaper.h"
 #include "nsIPrinter.h"
 #include "nsISupportsImpl.h"
+#include "nsString.h"
 
 class nsPrinter final : public nsIPrinter {
  public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSIPRINTER
   nsPrinter() = delete;
-  explicit nsPrinter(nsAString& aName) : mName(aName) {}
+  nsPrinter(const nsAString& aName,
+            const nsTArray<RefPtr<nsIPaper>>& aPaperList);
 
  private:
-  nsString mName;
   ~nsPrinter() = default;
+
+  nsString mName;
+  nsTArray<RefPtr<nsIPaper>> mPaperList;
 };
 
 #endif /* nsPrinter_h__ */

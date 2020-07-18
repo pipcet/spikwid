@@ -19,7 +19,6 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   AppMenuNotifications: "resource://gre/modules/AppMenuNotifications.jsm",
   DefaultBrowserCheck: "resource:///modules/BrowserGlue.jsm",
   BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.jsm",
-  Log: "resource://gre/modules/Log.jsm",
   ProfileAge: "resource://gre/modules/ProfileAge.jsm",
   Services: "resource://gre/modules/Services.jsm",
   setTimeout: "resource://gre/modules/Timer.jsm",
@@ -29,10 +28,6 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   UrlbarResult: "resource:///modules/UrlbarResult.jsm",
   UrlbarUtils: "resource:///modules/UrlbarUtils.jsm",
 });
-
-XPCOMUtils.defineLazyGetter(this, "logger", () =>
-  Log.repository.getLogger("Urlbar.Provider.SearchTips")
-);
 
 XPCOMUtils.defineLazyServiceGetter(
   this,
@@ -97,8 +92,6 @@ const LAST_UPDATE_THRESHOLD_MS = 24 * 60 * 60 * 1000;
 class ProviderSearchTips extends UrlbarProvider {
   constructor() {
     super();
-    // Maps the running queries by queryContext.
-    this.queries = new Map();
 
     // Whether we should disable tips for the current browser session, for
     // example because a tip was already shown.
@@ -174,8 +167,7 @@ class ProviderSearchTips extends UrlbarProvider {
    *       is done searching AND returning results.
    */
   async startQuery(queryContext, addCallback) {
-    let instance = {};
-    this.queries.set(queryContext, instance);
+    let instance = this.queryInstance;
 
     let tip = this.currentTip;
     this.showedTipTypeInCurrentEngagement = this.currentTip;
@@ -214,14 +206,13 @@ class ProviderSearchTips extends UrlbarProvider {
         break;
     }
 
-    if (!this.queries.has(queryContext)) {
+    if (instance != this.queryInstance) {
       return;
     }
 
     Services.telemetry.keyedScalarAdd("urlbar.tips", `${tip}-shown`, 1);
 
     addCallback(this, result);
-    this.queries.delete(queryContext);
   }
 
   /**
@@ -229,10 +220,7 @@ class ProviderSearchTips extends UrlbarProvider {
    * @param {UrlbarQueryContext} queryContext the query context object to cancel
    *        query for.
    */
-  cancelQuery(queryContext) {
-    logger.info(`Canceling query for ${queryContext.searchString}`);
-    this.queries.delete(queryContext);
-  }
+  cancelQuery(queryContext) {}
 
   /**
    * Called when the tip is selected.

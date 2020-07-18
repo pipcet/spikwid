@@ -665,7 +665,7 @@ function updateFxaToolbarMenu(enable, isInitialUpdate = false) {
     false
   );
   const mainWindowEl = document.documentElement;
-  const fxaPanelEl = document.getElementById("PanelUI-fxa");
+  const fxaPanelEl = PanelMultiView.getViewNode(document, "PanelUI-fxa");
 
   mainWindowEl.setAttribute("fxastatus", "not_configured");
   fxaPanelEl.addEventListener("ViewShowing", gSync.updateSendToDeviceTitle);
@@ -687,16 +687,24 @@ function updateFxaToolbarMenu(enable, isInitialUpdate = false) {
     // When the pref for a FxA service is removed, we remove it from
     // the FxA toolbar menu as well. This is useful when the service
     // might not be available that browser.
-    document.getElementById(
+    PanelMultiView.getViewNode(
+      document,
       "PanelUI-fxa-menu-send-button"
     ).hidden = !gFxaSendLoginUrl;
-    document.getElementById(
+    PanelMultiView.getViewNode(
+      document,
       "PanelUI-fxa-menu-monitor-button"
     ).hidden = !gFxaMonitorLoginUrl;
     // If there are no services left, remove the label and sep.
     let hideSvcs = !gFxaSendLoginUrl && !gFxaMonitorLoginUrl;
-    document.getElementById("fxa-menu-service-separator").hidden = hideSvcs;
-    document.getElementById("fxa-menu-service-label").hidden = hideSvcs;
+    PanelMultiView.getViewNode(
+      document,
+      "fxa-menu-service-separator"
+    ).hidden = hideSvcs;
+    PanelMultiView.getViewNode(
+      document,
+      "fxa-menu-service-label"
+    ).hidden = hideSvcs;
   } else {
     mainWindowEl.removeAttribute("fxatoolbarmenu");
   }
@@ -2648,7 +2656,7 @@ const SiteSpecificBrowserUI = {
     document.getElementById("appMenu-ssb-button").hidden = false;
   },
 
-  QueryInterface: ChromeUtils.generateQI([Ci.nsISupportsWeakReference]),
+  QueryInterface: ChromeUtils.generateQI(["nsISupportsWeakReference"]),
 };
 
 function HandleAppCommandEvent(evt) {
@@ -5920,7 +5928,7 @@ var TabsProgressListener = {
 function nsBrowserAccess() {}
 
 nsBrowserAccess.prototype = {
-  QueryInterface: ChromeUtils.generateQI([Ci.nsIBrowserDOMWindow]),
+  QueryInterface: ChromeUtils.generateQI(["nsIBrowserDOMWindow"]),
 
   _openURIInNewTab(
     aURI,
@@ -7617,7 +7625,7 @@ var CanvasPermissionPromptHelper = {
 
     let options = {
       checkbox,
-      name: principal.URI.host,
+      name: principal.host,
       learnMoreURL:
         Services.urlFormatter.formatURLPref("app.support.baseURL") +
         "fingerprint-permission",
@@ -8431,8 +8439,8 @@ var RestoreLastSessionObserver = {
   },
 
   QueryInterface: ChromeUtils.generateQI([
-    Ci.nsIObserver,
-    Ci.nsISupportsWeakReference,
+    "nsIObserver",
+    "nsISupportsWeakReference",
   ]),
 };
 
@@ -8787,7 +8795,14 @@ const SafeBrowsingNotificationBox = {
     let uri = gBrowser.currentURI;
 
     // start tracking host so that we know when we leave the domain
-    this._currentURIBaseDomain = Services.eTLD.getBaseDomain(uri);
+    try {
+      this._currentURIBaseDomain = Services.eTLD.getBaseDomain(uri);
+    } catch (e) {
+      // If we can't get the base domain, fallback to use host instead. However,
+      // host is sometimes empty when the scheme is file. In this case, just use
+      // spec.
+      this._currentURIBaseDomain = uri.asciiHost || uri.asciiSpec;
+    }
 
     let notificationBox = gBrowser.getNotificationBox();
     let value = "blocked-badware-page";

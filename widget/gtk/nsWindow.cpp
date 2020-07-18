@@ -6078,6 +6078,11 @@ nsresult nsWindow::MakeFullScreen(bool aFullScreen, nsIScreen* aTargetScreen) {
     return NS_ERROR_NOT_AVAILABLE;
   }
 
+  bool wasFullscreen = mSizeState == nsSizeMode_Fullscreen;
+  if (aFullScreen != wasFullscreen && mWidgetListener) {
+    mWidgetListener->FullscreenWillChange(aFullScreen);
+  }
+
   if (aFullScreen) {
     if (mSizeMode != nsSizeMode_Fullscreen) mLastSizeMode = mSizeMode;
 
@@ -8198,9 +8203,10 @@ bool nsWindow::GetTopLevelWindowActiveState(nsIFrame* aFrame) {
 
 static nsIFrame* FindTitlebarFrame(nsIFrame* aFrame) {
   for (nsIFrame* childFrame : aFrame->PrincipalChildList()) {
-    const nsStyleDisplay* frameDisp = childFrame->StyleDisplay();
-    if (frameDisp->mAppearance == StyleAppearance::MozWindowTitlebar ||
-        frameDisp->mAppearance == StyleAppearance::MozWindowTitlebarMaximized) {
+    StyleAppearance appearance =
+        childFrame->StyleDisplay()->EffectiveAppearance();
+    if (appearance == StyleAppearance::MozWindowTitlebar ||
+        appearance == StyleAppearance::MozWindowTitlebarMaximized) {
       return childFrame;
     }
 

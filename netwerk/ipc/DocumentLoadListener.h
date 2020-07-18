@@ -298,7 +298,7 @@ class DocumentLoadListener : public nsIInterfaceRequestor,
   // Construct a LoadInfo object to use for the internal channel.
   already_AddRefed<LoadInfo> CreateLoadInfo(
       dom::CanonicalBrowsingContext* aBrowsingContext,
-      nsDocShellLoadState* aLoadState, uint64_t aOuterWindowId);
+      nsDocShellLoadState* aLoadState);
 
   void AddURIVisit(nsIChannel* aChannel, uint32_t aLoadFlags);
   bool HasCrossOriginOpenerPolicyMismatch() const;
@@ -473,9 +473,6 @@ class DocumentLoadListener : public nsIInterfaceRequestor,
   // The id of the currently pending load which is
   // passed to the childChannel in order to identify it in the new process.
   uint64_t mLoadIdentifier = 0;
-
-  // True if cancelled.
-  bool mCancelled = false;
 
   Maybe<nsCString> mOriginalUriString;
 

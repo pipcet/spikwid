@@ -375,6 +375,7 @@ IonBuilder::InliningResult IonBuilder::inlineNativeCall(CallInfo& callInfo,
     case InlinableNative::IntrinsicGuardToRegExpStringIterator:
     case InlinableNative::IntrinsicGuardToWrapForValidIterator:
     case InlinableNative::IntrinsicGuardToIteratorHelper:
+    case InlinableNative::IntrinsicGuardToAsyncIteratorHelper:
       return inlineGuardToClass(callInfo, inlNative);
     case InlinableNative::IntrinsicObjectHasPrototype:
       return inlineObjectHasPrototype(callInfo);
@@ -936,7 +937,9 @@ IonBuilder::InliningResult IonBuilder::inlineArrayPush(CallInfo& callInfo) {
 
     // Restore the stack, such that resume points are created with the stack
     // as it was before the call.
-    MOZ_TRY(callInfo.pushPriorCallStack(&mirGen_, current));
+    if (!callInfo.pushPriorCallStack(&mirGen_, current)) {
+      return abort(AbortReason::Alloc);
+    }
   }
 
   MInstruction* ins = nullptr;

@@ -4,18 +4,17 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef __SVGGEOMETRYFRAME_H__
-#define __SVGGEOMETRYFRAME_H__
+#ifndef LAYOUT_SVG_SVGGEOMETRYFRAME_H_
+#define LAYOUT_SVG_SVGGEOMETRYFRAME_H_
 
 #include "mozilla/Attributes.h"
+#include "mozilla/ISVGDisplayableFrame.h"
 #include "gfxMatrix.h"
 #include "gfxRect.h"
 #include "nsDisplayList.h"
 #include "nsIFrame.h"
-#include "nsSVGDisplayableFrame.h"
 #include "nsLiteralString.h"
 #include "nsQueryFrame.h"
-#include "nsSVGUtils.h"
 
 namespace mozilla {
 
@@ -37,7 +36,6 @@ struct imgDrawingParams;
 class gfxContext;
 class nsAtom;
 class nsIFrame;
-class nsSVGMarkerFrame;
 
 struct nsRect;
 
@@ -46,8 +44,8 @@ nsIFrame* NS_NewSVGGeometryFrame(mozilla::PresShell* aPresShell,
 
 namespace mozilla {
 
-class SVGGeometryFrame : public nsIFrame, public nsSVGDisplayableFrame {
-  typedef gfx::DrawTarget DrawTarget;
+class SVGGeometryFrame : public nsIFrame, public ISVGDisplayableFrame {
+  using DrawTarget = gfx::DrawTarget;
 
   friend nsIFrame* ::NS_NewSVGGeometryFrame(mozilla::PresShell* aPresShell,
                                             ComputedStyle* aStyle);
@@ -99,7 +97,7 @@ class SVGGeometryFrame : public nsIFrame, public nsSVGDisplayableFrame {
   gfxMatrix GetCanvasTM();
 
  protected:
-  // nsSVGDisplayableFrame interface:
+  // ISVGDisplayableFrame interface:
   virtual void PaintSVG(gfxContext& aContext, const gfxMatrix& aTransform,
                         imgDrawingParams& aImgParams,
                         const nsIntRect* aDirtyRect = nullptr) override;
@@ -145,7 +143,7 @@ class SVGGeometryFrame : public nsIFrame, public nsSVGDisplayableFrame {
 // Display list item:
 
 class DisplaySVGGeometry final : public nsPaintedDisplayItem {
-  typedef image::imgDrawingParams imgDrawingParams;
+  using imgDrawingParams = image::imgDrawingParams;
 
  public:
   DisplaySVGGeometry(nsDisplayListBuilder* aBuilder, SVGGeometryFrame* aFrame)
@@ -208,4 +206,4 @@ class DisplaySVGGeometry final : public nsPaintedDisplayItem {
 };
 }  // namespace mozilla
 
-#endif  // __SVGGEOMETRYFRAME_H__
+#endif  // LAYOUT_SVG_SVGGEOMETRYFRAME_H_

@@ -168,6 +168,7 @@ export PKG_CONFIG
 export PKG_CONFIG_ALLOW_CROSS=1
 export RUST_BACKTRACE=full
 export MOZ_TOPOBJDIR=$(topobjdir)
+export PYTHON3
 
 # Set COREAUDIO_SDK_PATH for third_party/rust/coreaudio-sys/build.rs
 ifeq ($(OS_ARCH), Darwin)
@@ -188,17 +189,17 @@ $(target_rust_nonltoable): RUSTFLAGS:=$(rustflags_override) $(rustflags_sancov) 
 
 TARGET_RECIPES := $(target_rust_ltoable) $(target_rust_nonltoable)
 
-# If this is a release build we want rustc to generate one codegen unit per
-# crate. This results in better optimization and less code duplication at the
-# cost of longer compile times.
-ifndef DEVELOPER_OPTIONS
-$(TARGET_RECIPES): RUSTFLAGS += -C codegen-units=1
-endif
-
 HOST_RECIPES := \
   $(foreach a,library program,$(foreach b,build check,force-cargo-host-$(a)-$(b)))
 
 $(HOST_RECIPES): RUSTFLAGS:=$(rustflags_override)
+
+# If this is a release build we want rustc to generate one codegen unit per
+# crate. This results in better optimization and less code duplication at the
+# cost of longer compile times.
+ifndef DEVELOPER_OPTIONS
+$(TARGET_RECIPES) $(HOST_RECIPES): RUSTFLAGS += -C codegen-units=1
+endif
 
 cargo_env = $(subst -,_,$(subst a,A,$(subst b,B,$(subst c,C,$(subst d,D,$(subst e,E,$(subst f,F,$(subst g,G,$(subst h,H,$(subst i,I,$(subst j,J,$(subst k,K,$(subst l,L,$(subst m,M,$(subst n,N,$(subst o,O,$(subst p,P,$(subst q,Q,$(subst r,R,$(subst s,S,$(subst t,T,$(subst u,U,$(subst v,V,$(subst w,W,$(subst x,X,$(subst y,Y,$(subst z,Z,$1)))))))))))))))))))))))))))
 
@@ -342,7 +343,7 @@ force-cargo-host-library-build:
 	$(REPORT_BUILD)
 	$(call CARGO_BUILD) --lib $(cargo_host_flag) $(host_rust_features_flag)
 
-$(HOST_RUST_LIBRARY_FILE): force-cargo-host-library-build
+$(HOST_RUST_LIBRARY_FILE): force-cargo-host-library-build ;
 
 force-cargo-host-library-check:
 	$(call CARGO_CHECK) --lib $(cargo_host_flag) $(host_rust_features_flag)
@@ -359,7 +360,7 @@ force-cargo-program-build: $(RESFILE)
 	$(REPORT_BUILD)
 	$(call CARGO_BUILD) $(addprefix --bin ,$(RUST_CARGO_PROGRAMS)) $(cargo_target_flag) -- $(if $(RESFILE),-C link-arg=$(CURDIR)/$(RESFILE))
 
-$(RUST_PROGRAMS): force-cargo-program-build
+$(RUST_PROGRAMS): force-cargo-program-build ;
 
 force-cargo-program-check:
 	$(call CARGO_CHECK) $(addprefix --bin ,$(RUST_CARGO_PROGRAMS)) $(cargo_target_flag)
@@ -375,7 +376,7 @@ force-cargo-host-program-build:
 	$(REPORT_BUILD)
 	$(call CARGO_BUILD) $(addprefix --bin ,$(HOST_RUST_CARGO_PROGRAMS)) $(cargo_host_flag)
 
-$(HOST_RUST_PROGRAMS): force-cargo-host-program-build
+$(HOST_RUST_PROGRAMS): force-cargo-host-program-build ;
 
 force-cargo-host-program-check:
 	$(REPORT_BUILD)

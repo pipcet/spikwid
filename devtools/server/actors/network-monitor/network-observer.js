@@ -6,7 +6,6 @@
 
 const { Cc, Ci, Cr, Cu } = require("chrome");
 const Services = require("Services");
-const flags = require("devtools/shared/flags");
 const {
   wildcardToRegExp,
 } = require("devtools/server/actors/network-monitor/utils/wildcard-to-regexp");
@@ -82,7 +81,6 @@ function matchRequest(channel, filters) {
   // Ignore requests from chrome or add-on code when we are monitoring
   // content.
   if (
-    !flags.wantAllNetworkRequests &&
     channel.loadInfo &&
     channel.loadInfo.loadingDocument === null &&
     (channel.loadInfo.loadingPrincipal ===
@@ -1099,6 +1097,16 @@ NetworkObserver.prototype = {
     response.waitingTime = this._convertTimeToMs(
       this._getWaitTiming(httpActivity.timings)
     );
+    // Mime type needs to be sent on response start for identifying an sse channel.
+    const contentType = headers.find(header => {
+      const lowerName = header.toLowerCase();
+      return lowerName.startsWith("content-type");
+    });
+
+    if (contentType) {
+      response.mimeType = contentType.slice("Content-Type: ".length);
+    }
+
     httpActivity.responseStatus = response.status;
     httpActivity.headersSize = response.headersSize;
 

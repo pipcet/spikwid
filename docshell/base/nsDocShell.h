@@ -194,10 +194,12 @@ class nsDocShell final : public nsDocLoader,
   NS_DECL_NSINETWORKINTERCEPTCONTROLLER
   NS_DECL_NSIDEPRECATIONWARNER
 
-  // Create a new nsDocShell object, initializing it.
+  // Create a new nsDocShell object.
   static already_AddRefed<nsDocShell> Create(
       mozilla::dom::BrowsingContext* aBrowsingContext,
       uint64_t aContentWindowID = 0);
+
+  bool Initialize();
 
   NS_IMETHOD Stop() override {
     // Need this here because otherwise nsIWebNavigation::Stop
@@ -601,10 +603,6 @@ class nsDocShell final : public nsDocLoader,
                                bool aCloneChildren, nsISHEntry** aNewEntry);
 
   nsresult AddChildSHEntryToParent(nsISHEntry* aNewEntry, int32_t aChildOffset,
-                                   bool aCloneChildren);
-
-  nsresult AddChildSHEntryInternal(nsISHEntry* aCloneRef, nsISHEntry* aNewEntry,
-                                   int32_t aChildOffset, uint32_t aLoadType,
                                    bool aCloneChildren);
 
   // Call this method to swap in a new history entry to m[OL]SHE, rather than
@@ -1190,7 +1188,7 @@ class nsDocShell final : public nsDocLoader,
   bool mInEnsureScriptEnv;
 #endif
 
-  bool mCreated : 1;
+  bool mInitialized : 1;
   bool mAllowSubframes : 1;
   bool mAllowJavascript : 1;
   bool mAllowMetaRedirects : 1;

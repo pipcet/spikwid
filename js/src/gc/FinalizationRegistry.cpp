@@ -14,6 +14,7 @@
 #include "vm/JSContext.h"
 
 #include "gc/PrivateIterators-inl.h"
+#include "vm/JSObject-inl.h"
 
 using namespace js;
 using namespace js::gc;
@@ -116,16 +117,22 @@ void GCRuntime::sweepFinalizationRegistries(Zone* zone) {
 
 void GCRuntime::queueFinalizationRegistryForCleanup(
     FinalizationRegistryObject* registry) {
-  // Prod the embedding to call us back later to run the finalization callbacks.
-  if (!registry->isQueuedForCleanup()) {
-    callHostCleanupFinalizationRegistryCallback(registry);
-    registry->setQueuedForCleanup(true);
-  }
-}
+  // Prod the embedding to call us back later to run the finalization callbacks,
+  // if necessary.
 
-bool GCRuntime::cleanupQueuedFinalizationRegistry(
-    JSContext* cx, HandleFinalizationRegistryObject registry) {
-  registry->setQueuedForCleanup(false);
-  bool ok = FinalizationRegistryObject::cleanupQueuedRecords(cx, registry);
-  return ok;
+  if (registry->isQueuedForCleanup()) {
+    return;
+  }
+
+  // Derive the incumbent global by unwrapping the incumbent global object and
+  // then getting its global.
+  JSObject* object =
+      UncheckedUnwrapWithoutExpose(registry->incumbentObject());
+  MOZ_ASSERT(object);
+  GlobalObject* incumbentGlobal = &object->nonCCWGlobal();
+
+  callHostCleanupFinalizationRegistryCallback(registry->doCleanupFunction(),
+                                              incumbentGlobal);
+
+  registry->setQueuedForCleanup(true);
 }

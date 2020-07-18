@@ -4,8 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef mozilla_dom_SVGPatternElement_h
-#define mozilla_dom_SVGPatternElement_h
+#ifndef DOM_SVG_SVGPATTERNELEMENT_H_
+#define DOM_SVG_SVGPATTERNELEMENT_H_
 
 #include "SVGAnimatedEnumeration.h"
 #include "SVGAnimatedLength.h"
@@ -25,7 +25,7 @@ class SVGPatternFrame;
 namespace dom {
 class DOMSVGAnimatedTransformList;
 
-typedef SVGElement SVGPatternElementBase;
+using SVGPatternElementBase = SVGElement;
 
 class SVGPatternElement final : public SVGPatternElementBase {
   friend class mozilla::SVGPatternFrame;
@@ -48,7 +48,7 @@ class SVGPatternElement final : public SVGPatternElementBase {
 
   virtual nsresult Clone(dom::NodeInfo*, nsINode** aResult) const override;
 
-  // nsSVGSVGElement methods:
+  // SVGSVGElement methods:
   virtual bool HasValidDimensions() const override;
 
   virtual mozilla::SVGAnimatedTransformList* GetAnimatedTransformList(
@@ -99,4 +99,4 @@ class SVGPatternElement final : public SVGPatternElementBase {
 }  // namespace dom
 }  // namespace mozilla
 
-#endif  // mozilla_dom_SVGPatternElement_h
+#endif  // DOM_SVG_SVGPATTERNELEMENT_H_

@@ -1341,7 +1341,7 @@ FlexItem* nsFlexContainerFrame::GenerateFlexItemForChild(
     LayoutDeviceIntSize widgetMinSize;
     bool canOverride = true;
     PresContext()->Theme()->GetMinimumWidgetSize(PresContext(), aChildFrame,
-                                                 disp->mAppearance,
+                                                 disp->EffectiveAppearance(),
                                                  &widgetMinSize, &canOverride);
 
     nscoord widgetMainMinSize = PresContext()->DevPixelsToAppUnits(
@@ -1891,6 +1891,7 @@ class nsFlexContainerFrame::CachedFlexItemData {
 
 void nsFlexContainerFrame::MarkCachedFlexMeasurementsDirty(
     nsIFrame* aItemFrame) {
+  MOZ_ASSERT(aItemFrame->IsFlexItem());
   if (auto* cache = aItemFrame->GetProperty(CachedFlexItemData::Prop())) {
     cache->mBAxisMeasurement.reset();
     cache->mFinalReflowSize.reset();
@@ -2394,7 +2395,7 @@ bool FlexItem::NeedsFinalReflow(const nscoord aAvailableBSizeForItem) const {
   // recent "final reflow" had it at the correct content-box size &
   // definiteness.
   // Let's check for each condition that would still require us to reflow:
-  if (NS_SUBTREE_DIRTY(mFrame)) {
+  if (mFrame->IsSubtreeDirty()) {
     FLEX_LOG(
         "[perf] Flex item %p needed a final reflow due to its subtree"
         "being dirty",

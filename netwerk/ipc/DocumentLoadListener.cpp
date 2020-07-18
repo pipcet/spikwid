@@ -14,6 +14,7 @@
 #include "mozilla/StaticPrefs_extensions.h"
 #include "mozilla/StaticPrefs_fission.h"
 #include "mozilla/StaticPrefs_security.h"
+#include "mozilla/dom/BrowserParent.h"
 #include "mozilla/dom/BrowsingContextGroup.h"
 #include "mozilla/dom/CanonicalBrowsingContext.h"
 #include "mozilla/dom/ChildProcessChannelListener.h"
@@ -313,8 +314,8 @@ void DocumentLoadListener::AddURIVisit(nsIChannel* aChannel,
 }
 
 already_AddRefed<LoadInfo> DocumentLoadListener::CreateLoadInfo(
-    CanonicalBrowsingContext* aBrowsingContext, nsDocShellLoadState* aLoadState,
-    uint64_t aOuterWindowId) {
+    CanonicalBrowsingContext* aBrowsingContext,
+    nsDocShellLoadState* aLoadState) {
   // TODO: Block copied from nsDocShell::DoURILoad, refactor out somewhere
   bool inheritPrincipal = false;
 
@@ -333,7 +334,7 @@ already_AddRefed<LoadInfo> DocumentLoadListener::CreateLoadInfo(
   }
 
   nsSecurityFlags securityFlags =
-      nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL;
+      nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL;
   uint32_t sandboxFlags = aBrowsingContext->GetSandboxFlags();
 
   if (aLoadState->LoadType() == LOAD_ERROR_PAGE) {
@@ -348,13 +349,13 @@ already_AddRefed<LoadInfo> DocumentLoadListener::CreateLoadInfo(
   if (aBrowsingContext->GetParent()) {
     // Build LoadInfo for TYPE_SUBDOCUMENT
     loadInfo = new LoadInfo(aBrowsingContext, aLoadState->TriggeringPrincipal(),
-                            aOuterWindowId, securityFlags, sandboxFlags);
+                            securityFlags, sandboxFlags);
   } else {
     // Build LoadInfo for TYPE_DOCUMENT
     OriginAttributes attrs;
     aBrowsingContext->GetOriginAttributes(attrs);
     loadInfo = new LoadInfo(aBrowsingContext, aLoadState->TriggeringPrincipal(),
-                            attrs, aOuterWindowId, securityFlags, sandboxFlags);
+                            attrs, securityFlags, sandboxFlags);
   }
 
   loadInfo->SetHasValidUserGestureActivation(
@@ -392,8 +393,7 @@ auto DocumentLoadListener::Open(
   // If this is a top-level load, then rebuild the LoadInfo from scratch,
   // since the goal is to be able to initiate loads in the parent, where the
   // content process won't have provided us with an existing one.
-  RefPtr<LoadInfo> loadInfo =
-      CreateLoadInfo(browsingContext, aLoadState, aOuterWindowId);
+  RefPtr<LoadInfo> loadInfo = CreateLoadInfo(browsingContext, aLoadState);
 
   nsLoadFlags loadFlags = aLoadState->CalculateChannelLoadFlags(
       browsingContext, std::move(aUriModified), std::move(aIsXFOError));
@@ -544,8 +544,9 @@ auto DocumentLoadListener::Open(
   mSrcdocData = aLoadState->SrcdocData();
   mBaseURI = aLoadState->BaseURI();
   mOriginalUriString = aLoadState->GetOriginalURIString();
-  if (StaticPrefs::fission_sessionHistoryInParent() &&
-      browsingContext->GetSessionHistory()) {
+  if (StaticPrefs::fission_sessionHistoryInParent()) {
+    // It's hard to know at this point whether session history will be enabled
+    // in the browsing context, so we always create an entry for a load here.
     mSessionHistoryInfo =
         browsingContext->CreateSessionHistoryEntryForLoad(aLoadState, mChannel);
   }
@@ -800,15 +801,9 @@ void DocumentLoadListener::Cancel(const nsresult& aStatusCode) {
       ("DocumentLoadListener Cancel [this=%p, "
        "aStatusCode=%" PRIx32 " ]",
        this, static_cast<uint32_t>(aStatusCode)));
-  mCancelled = true;
-
-  if (mDoingProcessSwitch) {
-    // If we've already initiated process-switching
-    // then we can no longer be cancelled and we'll
-    // disconnect the old listeners when done.
+  if (mOpenPromiseResolved) {
     return;
   }
-
   if (mChannel) {
     mChannel->Cancel(aStatusCode);
   }
@@ -829,12 +824,16 @@ void DocumentLoadListener::DisconnectListeners(nsresult aStatus,
 
   Disconnect();
 
-  // If we're not going to send anything else to the content process, and
-  // we haven't yet consumed a stream filter promise, then we're never going
-  // to.
-  // TODO: This might be because we retargeted the stream to the download
-  // handler or similar. Do we need to attach a stream filter to that?
-  mStreamFilterRequests.Clear();
+  if (!aSwitchedProcess) {
+    // If we're not going to send anything else to the content process, and
+    // we haven't yet consumed a stream filter promise, then we're never going
+    // to. If we're disconnecting the old content process due to a proces
+    // switch, then we can rely on FinishReplacementChannelSetup being called
+    // (even if the switch failed), so we clear at that point instead.
+    // TODO: This might be because we retargeted the stream to the download
+    // handler or similar. Do we need to attach a stream filter to that?
+    mStreamFilterRequests.Clear();
+  }
 }
 
 void DocumentLoadListener::RedirectToRealChannelFinished(nsresult aRv) {
@@ -890,11 +889,7 @@ void DocumentLoadListener::FinishReplacementChannelSetup(nsresult aResult) {
       ctx->EndDocumentLoad(false);
     }
   });
-
-  if (mDoingProcessSwitch) {
-    DisconnectListeners(NS_BINDING_ABORTED, NS_BINDING_ABORTED,
-                        NS_SUCCEEDED(aResult));
-  }
+  mStreamFilterRequests.Clear();
 
   nsCOMPtr<nsIRedirectChannelRegistrar> registrar =
       RedirectChannelRegistrar::GetOrCreate();
@@ -1433,7 +1428,8 @@ bool DocumentLoadListener::MaybeTriggerProcessSwitch(
 
   // Get information about the current document loaded in our BrowsingContext.
   nsCOMPtr<nsIPrincipal> currentPrincipal;
-  if (auto* wgp = browsingContext->GetCurrentWindowGlobal()) {
+  RefPtr<WindowGlobalParent> wgp = browsingContext->GetCurrentWindowGlobal();
+  if (wgp) {
     currentPrincipal = wgp->DocumentPrincipal();
   }
 
@@ -1474,7 +1470,18 @@ bool DocumentLoadListener::MaybeTriggerProcessSwitch(
   LOG(("Process Switch: Changing Remoteness from '%s' to '%s'",
        currentRemoteType.get(), remoteType.get()));
 
+  // We're now committing to a process switch, so we can disconnect from
+  // the listeners in the old process.
   mDoingProcessSwitch = true;
+  if (wgp && wgp->IsProcessRoot()) {
+    if (RefPtr<BrowserParent> browserParent = wgp->GetBrowserParent()) {
+      // This load has already started, so we want to filter out any 'stop'
+      // progress events coming from the old process as a result of us
+      // disconnecting from it.
+      browserParent->SuspendProgressEventsUntilAfterNextLoadStarts();
+    }
+  }
+  DisconnectListeners(NS_BINDING_ABORTED, NS_BINDING_ABORTED, true);
 
   LOG(("Process Switch: Calling ChangeRemoteness"));
   browsingContext

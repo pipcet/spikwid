@@ -737,7 +737,7 @@ bool ContentChild::Init(MessageLoop* aIOLoop, base::ProcessId aParentPid,
   RefPtr<nsPrintingProxy> printingProxy = nsPrintingProxy::GetInstance();
 #endif
 
-  SetProcessName(u"Web Content"_ns);
+  SetProcessName("Web Content"_ns);
 
 #ifdef NIGHTLY_BUILD
   // NOTE: We have to register the annotator on the main thread, as annotators
@@ -753,7 +753,8 @@ bool ContentChild::Init(MessageLoop* aIOLoop, base::ProcessId aParentPid,
   return true;
 }
 
-void ContentChild::SetProcessName(const nsAString& aName) {
+void ContentChild::SetProcessName(const nsACString& aName,
+                                  const nsACString* aETLDplus1) {
   char* name;
   if ((name = PR_GetEnv("MOZ_DEBUG_APP_PROCESS")) && aName.EqualsASCII(name)) {
 #ifdef OS_POSIX
@@ -770,10 +771,16 @@ void ContentChild::SetProcessName(const nsAString& aName) {
   }
 
   mProcessName = aName;
-  NS_LossyConvertUTF16toASCII asciiName(aName);
-  mozilla::ipc::SetThisProcessName(asciiName.get());
 #ifdef MOZ_GECKO_PROFILER
-  profiler_set_process_name(asciiName);
+  if (aETLDplus1) {
+    mozilla::ipc::SetThisProcessName(PromiseFlatCString(*aETLDplus1).get());
+    profiler_set_process_name(mProcessName, aETLDplus1);
+  } else {
+    mozilla::ipc::SetThisProcessName(PromiseFlatCString(mProcessName).get());
+    profiler_set_process_name(mProcessName);
+  }
+#else
+  mozilla::ipc::SetThisProcessName(PromiseFlatCString(mProcessName).get());
 #endif
 }
 
@@ -1190,10 +1197,6 @@ nsresult ContentChild::ProvideWindowCommon(
   return rv;
 }
 
-void ContentChild::GetProcessName(nsAString& aName) const {
-  aName.Assign(mProcessName);
-}
-
 void ContentChild::LaunchRDDProcess() {
   SynchronousTask task("LaunchRDDProcess");
   SchedulerGroup::Dispatch(
@@ -1215,7 +1218,7 @@ bool ContentChild::IsAlive() const { return mIsAlive; }
 bool ContentChild::IsShuttingDown() const { return mShuttingDown; }
 
 void ContentChild::GetProcessName(nsACString& aName) const {
-  aName.Assign(NS_ConvertUTF16toUTF8(mProcessName));
+  aName = mProcessName;
 }
 
 /* static */
@@ -1650,11 +1653,7 @@ mozilla::ipc::IPCResult ContentChild::RecvSetProcessSandbox(
       CrashReporter::Annotation::ContentSandboxCapabilities,
       static_cast<int>(SandboxInfo::Get().AsInteger()));
 #  endif /* XP_LINUX && !OS_ANDROID */
-  // Use the prefix to avoid URIs from Fission isolated processes.
-  auto remoteTypePrefix = RemoteTypePrefix(GetRemoteType());
-  CrashReporter::AnnotateCrashReport(CrashReporter::Annotation::RemoteType,
-                                     remoteTypePrefix);
-#endif /* MOZ_SANDBOX */
+#endif   /* MOZ_SANDBOX */
 
   return IPC_OK();
 }
@@ -2588,21 +2587,48 @@ mozilla::ipc::IPCResult ContentChild::RecvRemoteType(
              aRemoteType.get()));
   }
 
+  auto remoteTypePrefix = RemoteTypePrefix(aRemoteType);
+
   // Update the process name so about:memory's process names are more obvious.
   if (aRemoteType == FILE_REMOTE_TYPE) {
-    SetProcessName(u"file:// Content"_ns);
+    SetProcessName("file:// Content"_ns);
   } else if (aRemoteType == EXTENSION_REMOTE_TYPE) {
-    SetProcessName(u"WebExtensions"_ns);
+    SetProcessName("WebExtensions"_ns);
   } else if (aRemoteType == PRIVILEGEDABOUT_REMOTE_TYPE) {
-    SetProcessName(u"Privileged Content"_ns);
+    SetProcessName("Privileged Content"_ns);
   } else if (aRemoteType == LARGE_ALLOCATION_REMOTE_TYPE) {
-    SetProcessName(u"Large Allocation Web Content"_ns);
+    SetProcessName("Large Allocation Web Content"_ns);
   } else if (RemoteTypePrefix(aRemoteType) == FISSION_WEB_REMOTE_TYPE) {
-    SetProcessName(u"Isolated Web Content"_ns);
+    SetProcessName("Isolated Web Content"_ns);
+#ifdef NIGHTLY_BUILD
+    // for Nightly only, and requires pref flip
+    if (StaticPrefs::fission_processOriginNames()) {
+      // Sets profiler process name
+      SetProcessName(
+          Substring(aRemoteType, FISSION_WEB_REMOTE_TYPE.Length() + 1));
+
+      MOZ_LOG(ContentParent::GetLog(), LogLevel::Debug,
+              ("Changed name of process %d from %s to %s", getpid(),
+               PromiseFlatCString(mRemoteType).get(),
+               PromiseFlatCString(
+                   Substring(aRemoteType, FISSION_WEB_REMOTE_TYPE.Length() + 1))
+                   .get()));
+    } else
+#endif
+    {
+      // The profiler can sanitize out the eTLD+1
+      nsCString etld(
+          Substring(aRemoteType, FISSION_WEB_REMOTE_TYPE.Length() + 1));
+      SetProcessName("Isolated Web Content"_ns, &etld);
+    }
   }
   // else "prealloc", "web" or "webCOOP+COEP" type -> "Web Content" already set
 
   mRemoteType.Assign(aRemoteType);
+
+  // Use the prefix to avoid URIs from Fission isolated processes.
+  CrashReporter::AnnotateCrashReport(CrashReporter::Annotation::RemoteType,
+                                     remoteTypePrefix);
 
   return IPC_OK();
 }
@@ -3491,13 +3517,15 @@ mozilla::ipc::IPCResult ContentChild::RecvStartDelayedAutoplayMediaComponents(
   return IPC_OK();
 }
 
-mozilla::ipc::IPCResult ContentChild::RecvUpdateMediaControlKey(
-    const MaybeDiscarded<BrowsingContext>& aContext, MediaControlKey aKey) {
+mozilla::ipc::IPCResult ContentChild::RecvUpdateMediaControlAction(
+    const MaybeDiscarded<BrowsingContext>& aContext,
+    const MediaControlAction& aAction) {
   if (NS_WARN_IF(aContext.IsNullOrDiscarded())) {
     return IPC_OK();
   }
 
-  ContentMediaControlKeyHandler::HandleMediaControlKey(aContext.get(), aKey);
+  ContentMediaControlKeyHandler::HandleMediaControlAction(aContext.get(),
+                                                          aAction);
   return IPC_OK();
 }
 
@@ -4141,10 +4169,14 @@ mozilla::ipc::IPCResult ContentChild::RecvDisplayLoadError(
   return IPC_OK();
 }
 
-mozilla::ipc::IPCResult ContentChild::RecvHistoryCommitLength(
-    const MaybeDiscarded<BrowsingContext>& aContext, uint32_t aLength) {
+mozilla::ipc::IPCResult ContentChild::RecvHistoryCommitIndexAndLength(
+    const MaybeDiscarded<BrowsingContext>& aContext, const uint32_t& aIndex,
+    const uint32_t& aLength, const nsID& aChangeID) {
   if (!aContext.IsNullOrDiscarded()) {
-    aContext.get()->GetChildSessionHistory()->SetLength(aLength);
+    ChildSHistory* shistory = aContext.get()->GetChildSessionHistory();
+    if (shistory) {
+      shistory->SetIndexAndLength(aIndex, aLength, aChangeID);
+    }
   }
   return IPC_OK();
 }

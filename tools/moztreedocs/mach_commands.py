@@ -32,7 +32,7 @@ JSDOC_NOT_FOUND = """\
 JSDoc==3.5.5 is required to build the docs but was not found on your system.
 Please install it globally by running:
 
-    $ npm install -g jsdoc@3.5.5
+    $ mach npm install -g jsdoc@3.5.5
 
 Bug 1498604 tracks bootstrapping jsdoc properly.
 Bug 1556460 tracks supporting newer versions of jsdoc.
@@ -274,7 +274,7 @@ class Documentation(MachCommandBase):
         # S3 bucket.
 
         files = list(distribution_files(root))
-        key_prefixes = [unique_id]
+        key_prefixes = []
         if version:
             key_prefixes.append('%s/%s' % (project, version))
 
@@ -282,6 +282,8 @@ class Documentation(MachCommandBase):
         # to the root.
         if project == 'main':
             key_prefixes.append('')
+
+        key_prefixes.append(unique_id)
 
         with open(os.path.join(DOC_ROOT, 'config.yml'), 'r') as fh:
             redirects = yaml.safe_load(fh)['redirects']

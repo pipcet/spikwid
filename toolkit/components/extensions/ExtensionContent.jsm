@@ -5,7 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-var EXPORTED_SYMBOLS = ["ExtensionContent"];
+var EXPORTED_SYMBOLS = ["ExtensionContent", "ExtensionContentChild"];
 
 const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 const { XPCOMUtils } = ChromeUtils.import(
@@ -321,8 +321,8 @@ class Script {
   /**
    * @param {BrowserExtensionContent} extension
    * @param {WebExtensionContentScript|object} matcher
-   *        An object with a "matchesWindow" method and content script execution
-   *        details. This is usually a plain WebExtensionContentScript object,
+   *        An object with a "matchesWindowGlobal" method and content script
+   *        execution details. This is usually a plain WebExtensionContentScript
    *        except when the script is run via `tabs.executeScript`. In this
    *        case, the object may have some extra properties:
    *        wantReturnValue, removeCSS, cssOrigin, jsCode
@@ -427,8 +427,8 @@ class Script {
     }
   }
 
-  matchesWindow(window) {
-    return this.matcher.matchesWindow(window);
+  matchesWindowGlobal(windowGlobal) {
+    return this.matcher.matchesWindowGlobal(windowGlobal);
   }
 
   async injectInto(window) {
@@ -630,8 +630,8 @@ class UserScript extends Script {
   /**
    * @param {BrowserExtensionContent} extension
    * @param {WebExtensionContentScript|object} matcher
-   *        An object with a "matchesWindow" method and content script execution
-   *        details.
+   *        An object with a "matchesWindowGlobal" method and content script
+   *        execution details.
    */
   constructor(extension, matcher) {
     super(extension, matcher);
@@ -1171,59 +1171,40 @@ var ExtensionContent = {
   },
 
   // Used to executeScript, insertCSS and removeCSS.
-  async handleExtensionExecute(global, target, options, script) {
-    let executeInWin = window => {
-      if (script.matchesWindow(window)) {
-        return script.injectInto(window);
+  async handleActorExecute({ options, windows }) {
+    let policy = WebExtensionPolicy.getByID(options.extensionId);
+    let matcher = new WebExtensionContentScript(policy, options);
+
+    Object.assign(matcher, {
+      wantReturnValue: options.wantReturnValue,
+      removeCSS: options.removeCSS,
+      cssOrigin: options.cssOrigin,
+      jsCode: options.jsCode,
+    });
+    let script = contentScripts.get(matcher);
+
+    // Add the cssCode to the script, so that it can be converted into a cached URL.
+    await script.addCSSCode(options.cssCode);
+    delete options.cssCode;
+
+    const executeInWin = innerId => {
+      let wg = WindowGlobalChild.getByInnerWindowId(innerId);
+      if (wg?.isCurrentGlobal && script.matchesWindowGlobal(wg)) {
+        return script.injectInto(wg.browsingContext.window);
       }
-      return null;
     };
 
-    let promises;
-    try {
-      promises = Array.from(
-        this.enumerateWindows(global.docShell),
-        executeInWin
-      ).filter(promise => promise);
-    } catch (e) {
-      Cu.reportError(e);
-      return Promise.reject({ message: "An unexpected error occurred" });
-    }
-
-    if (!promises.length) {
-      if (options.frameID) {
-        return Promise.reject({
-          message: `Frame not found, or missing host permission`,
-        });
-      }
-
-      let frames = options.allFrames ? ", and any iframes" : "";
-      return Promise.reject({
-        message: `Missing host permission for the tab${frames}`,
-      });
-    }
-    if (!options.allFrames && promises.length > 1) {
-      return Promise.reject({
-        message: `Internal error: Script matched multiple windows`,
-      });
-    }
-
-    let result = await Promise.all(promises);
+    let all = Promise.all(windows.map(executeInWin).filter(p => p));
+    let result = await all.catch(e => Promise.reject({ message: e.message }));
 
     try {
-      // Make sure we can structured-clone the result value before
-      // we try to send it back over the message manager.
-      Cu.cloneInto(result, target);
+      // Check if the result can be structured-cloned before sending back.
+      return Cu.cloneInto(result, this);
     } catch (e) {
-      const { jsPaths } = options;
-      const fileName = jsPaths.length
-        ? jsPaths[jsPaths.length - 1]
-        : "<anonymous code>";
-      const message = `Script '${fileName}' result is non-structured-clonable data`;
-      return Promise.reject({ message, fileName });
+      let path = options.jsPaths.slice(-1)[0] ?? "<anonymous code>";
+      let message = `Script '${path}' result is non-structured-clonable data`;
+      return Promise.reject({ message, fileName: path });
     }
-
-    return result;
   },
 
   handleWebNavigationGetFrame(global, { frameId }) {
@@ -1245,30 +1226,6 @@ var ExtensionContent = {
         );
       case "Extension:DetectLanguage":
         return this.handleDetectLanguage(global, target);
-      case "Extension:Execute":
-        let policy = WebExtensionPolicy.getByID(recipient.extensionId);
-
-        let matcher = new WebExtensionContentScript(policy, data.options);
-
-        Object.assign(matcher, {
-          wantReturnValue: data.options.wantReturnValue,
-          removeCSS: data.options.removeCSS,
-          cssOrigin: data.options.cssOrigin,
-          jsCode: data.options.jsCode,
-        });
-
-        let script = contentScripts.get(matcher);
-
-        // Add the cssCode to the script, so that it can be converted into a cached URL.
-        await script.addCSSCode(data.options.cssCode);
-        delete data.options.cssCode;
-
-        return this.handleExtensionExecute(
-          global,
-          target,
-          data.options,
-          script
-        );
       case "WebNavigation:GetFrame":
         return this.handleWebNavigationGetFrame(global, data.options);
       case "WebNavigation:GetAllFrames":
@@ -1295,3 +1252,18 @@ var ExtensionContent = {
     }
   },
 };
+
+/**
+ * Child side of the ExtensionContent process actor, handles some tabs.* APIs.
+ */
+class ExtensionContentChild extends JSProcessActorChild {
+  receiveMessage({ name, data }) {
+    if (!isContentScriptProcess) {
+      return;
+    }
+    switch (name) {
+      case "Execute":
+        return ExtensionContent.handleActorExecute(data);
+    }
+  }
+}

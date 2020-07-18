@@ -337,11 +337,6 @@ async function loadPageInfo(browsingContext, imageElement, browser) {
   browser = browser || window.opener.gBrowser.selectedBrowser;
   browsingContext = browsingContext || browser.browsingContext;
 
-  if (browser.outerBrowser) {
-    //We are in RDM mode
-    browser = browser.outerBrowser;
-  }
-
   let actor = browsingContext.currentWindowGlobal.getActor("PageInfo");
 
   let result = await actor.sendQuery("PageInfo:getData");
@@ -393,7 +388,8 @@ async function onNonMediaPageInfoLoad(browser, pageInfoData, imageInfo) {
   await makeGeneralTab(pageInfoData.metaViewRows, docInfo);
   if (
     uri.spec.startsWith("about:neterror") ||
-    uri.spec.startsWith("about:certerror")
+    uri.spec.startsWith("about:certerror") ||
+    uri.spec.startsWith("about:httpsonlyerror")
   ) {
     uri = browser.currentURI;
     principal = Services.scriptSecurityManager.createContentPrincipal(

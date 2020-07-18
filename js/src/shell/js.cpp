@@ -97,7 +97,7 @@
 #include "js/Array.h"        // JS::NewArrayObject
 #include "js/ArrayBuffer.h"  // JS::{CreateMappedArrayBufferContents,NewMappedArrayBufferWithContents,IsArrayBufferObject,GetArrayBufferLengthAndData}
 #include "js/BuildId.h"      // JS::BuildIdCharVector, JS::SetProcessBuildIdOp
-#include "js/CharacterEncoding.h"
+#include "js/CharacterEncoding.h"  // JS::StringIsASCII
 #include "js/CompilationAndEvaluation.h"
 #include "js/CompileOptions.h"
 #include "js/ContextOptions.h"  // JS::ContextOptions{,Ref}
@@ -106,6 +106,7 @@
 #include "js/ErrorReport.h"              // JS::PrintError
 #include "js/Exception.h"                // JS::StealPendingExceptionStack
 #include "js/experimental/SourceHook.h"  // js::{Set,Forget,}SourceHook
+#include "js/GCAPI.h"                    // JS::AutoCheckCannotGC
 #include "js/GCVector.h"
 #include "js/Initialization.h"
 #include "js/JSON.h"
@@ -657,7 +658,7 @@ ShellContext::ShellContext(JSContext* cx)
       errFilePtr(nullptr),
       outFilePtr(nullptr),
       offThreadMonitor(mutexid::ShellOffThreadState),
-      finalizationRegistriesToCleanUp(cx) {}
+      finalizationRegistryCleanupCallbacks(cx) {}
 
 ShellContext::~ShellContext() { MOZ_ASSERT(offThreadJobs.empty()); }
 
@@ -979,13 +980,16 @@ static MOZ_MUST_USE bool RunModule(JSContext* cx, const char* filename,
   return sc->moduleLoader->loadRootModule(cx, path);
 }
 
-static void ShellCleanupFinalizationRegistryCallback(JSObject* registry,
+static void ShellCleanupFinalizationRegistryCallback(JSFunction* doCleanup,
+                                                     JSObject* incumbentGlobal,
                                                      void* data) {
   // In the browser this queues a task. Shell jobs correspond to microtasks so
-  // we arrange for cleanup to happen after all jobs/microtasks have run.
+  // we arrange for cleanup to happen after all jobs/microtasks have run. The
+  // incumbent global is ignored in the shell.
+
   auto sc = static_cast<ShellContext*>(data);
   AutoEnterOOMUnsafeRegion oomUnsafe;
-  if (!sc->finalizationRegistriesToCleanUp.append(registry)) {
+  if (!sc->finalizationRegistryCleanupCallbacks.append(doCleanup)) {
     oomUnsafe.crash("ShellCleanupFinalizationRegistryCallback");
   }
 }
@@ -995,20 +999,22 @@ static bool MaybeRunFinalizationRegistryCleanupTasks(JSContext* cx) {
   ShellContext* sc = GetShellContext(cx);
   MOZ_ASSERT(!sc->quitting);
 
-  Rooted<ShellContext::ObjectVector> registries(cx);
-  std::swap(registries.get(), sc->finalizationRegistriesToCleanUp.get());
+  Rooted<ShellContext::FunctionVector> callbacks(cx);
+  std::swap(callbacks.get(), sc->finalizationRegistryCleanupCallbacks.get());
 
   bool ranTasks = false;
 
-  RootedObject registry(cx);
-  for (const auto& r : registries) {
-    registry = r;
+  RootedFunction callback(cx);
+  for (JSFunction* f : callbacks) {
+    callback = f;
 
-    AutoRealm ar(cx, registry);
+    AutoRealm ar(cx, f);
 
     {
       AutoReportException are(cx);
-      mozilla::Unused << JS::CleanupQueuedFinalizationRegistry(cx, registry);
+      RootedValue unused(cx);
+      mozilla::Unused << JS_CallFunction(cx, nullptr, callback,
+                                         HandleValueArray::empty(), &unused);
     }
 
     ranTasks = true;
@@ -5137,16 +5143,10 @@ static bool FullParseTest(JSContext* cx,
       return false;
     }
 
-    Rooted<ModuleObject*> module(cx, ModuleObject::create(cx));
-    if (!module) {
-      return false;
-    }
-
     ModuleBuilder builder(cx, &parser);
 
     SourceExtent extent = SourceExtent::makeGlobalExtent(length);
-    ModuleSharedContext modulesc(cx, module, compilationInfo, nullptr, builder,
-                                 extent);
+    ModuleSharedContext modulesc(cx, compilationInfo, builder, extent);
     pn = parser.moduleBody(&modulesc);
   }
   if (!pn) {
@@ -5230,16 +5230,35 @@ static bool Parse(JSContext* cx, unsigned argc, Value* vp) {
   }
 
   JSString* scriptContents = args[0].toString();
+  RootedLinearString linearString(cx, scriptContents->ensureLinear(cx));
+  if (!linearString) {
+    return false;
+  }
+
+  bool isAscii = false;
+  if (linearString->hasLatin1Chars()) {
+    JS::AutoCheckCannotGC nogc;
+    isAscii = JS::StringIsASCII(mozilla::MakeSpan(
+        reinterpret_cast<const char*>(linearString->latin1Chars(nogc)),
+        linearString->length()));
+  }
 
   AutoStableStringChars stableChars(cx);
-  if (!stableChars.init(cx, scriptContents)) {
-    return false;
+  if (isAscii) {
+    if (!stableChars.init(cx, scriptContents)) {
+      return false;
+    }
+    MOZ_ASSERT(stableChars.isLatin1());
+  } else {
+    if (!stableChars.initTwoByte(cx, scriptContents)) {
+      return false;
+    }
   }
 
   size_t length = scriptContents->length();
 #ifdef JS_ENABLE_SMOOSH
   if (smoosh) {
-    if (stableChars.isLatin1()) {
+    if (isAscii) {
       const Latin1Char* chars = stableChars.latin1Range().begin().get();
       if (goal == frontend::ParseGoal::Script) {
         if (!SmooshParseScript(cx, chars, length)) {
@@ -5253,7 +5272,8 @@ static bool Parse(JSContext* cx, unsigned argc, Value* vp) {
       args.rval().setUndefined();
       return true;
     }
-    JS_ReportErrorASCII(cx, "SmooshMonkey does not support two-byte chars yet");
+    JS_ReportErrorASCII(cx,
+                        "SmooshMonkey does not support non-ASCII chars yet");
     return false;
   }
 #endif  // JS_ENABLE_SMOOSH
@@ -5272,10 +5292,10 @@ static bool Parse(JSContext* cx, unsigned argc, Value* vp) {
     return false;
   }
 
-  if (stableChars.isLatin1()) {
-    const Latin1Char* chars_ = stableChars.latin1Range().begin().get();
-    auto chars = reinterpret_cast<const mozilla::Utf8Unit*>(chars_);
-    if (!FullParseTest<mozilla::Utf8Unit>(cx, options, chars, length,
+  if (isAscii) {
+    const Latin1Char* latin1 = stableChars.latin1Range().begin().get();
+    auto utf8 = reinterpret_cast<const mozilla::Utf8Unit*>(latin1);
+    if (!FullParseTest<mozilla::Utf8Unit>(cx, options, utf8, length,
                                           compilationInfo, goal)) {
       return false;
     }
@@ -7553,28 +7573,35 @@ static bool AddMarkObservers(JSContext* cx, unsigned argc, Value* vp) {
     return false;
   }
 
-  // WeakCaches are not swept during a minor GC. To prevent nursery-allocated
-  // contents from having the mark bits be deceptively black until the second
-  // GC, they would need to be marked weakly (cf NurseryAwareHashMap). It is
-  // simpler to evict the nursery to prevent nursery objects from being
-  // observed.
-  cx->runtime()->gc.evictNursery();
-
   RootedObject observersArg(cx, &args[0].toObject());
-  RootedValue v(cx);
   uint32_t length;
   if (!GetLengthProperty(cx, observersArg, &length)) {
     return false;
   }
+
+  RootedValue value(cx);
+  RootedObject object(cx);
   for (uint32_t i = 0; i < length; i++) {
-    if (!JS_GetElement(cx, observersArg, i, &v)) {
+    if (!JS_GetElement(cx, observersArg, i, &value)) {
       return false;
     }
-    if (!v.isObject()) {
+
+    if (!value.isObject()) {
       JS_ReportErrorASCII(cx, "argument must be an Array of objects");
       return false;
     }
-    if (!markObservers->get().append(&v.toObject())) {
+
+    object = &value.toObject();
+    if (gc::IsInsideNursery(object)) {
+      // WeakCaches are not swept during a minor GC. To prevent
+      // nursery-allocated contents from having the mark bits be deceptively
+      // black until the second GC, they would need to be marked weakly (cf
+      // NurseryAwareHashMap). It is simpler to evict the nursery to prevent
+      // nursery objects from being observed.
+      cx->runtime()->gc.evictNursery();
+    }
+
+    if (!markObservers->get().append(object)) {
       return false;
     }
   }

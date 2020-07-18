@@ -61,6 +61,7 @@
 #include "mozilla/dom/DOMSecurityMonitor.h"
 #include "mozilla/dom/DOMTypes.h"
 #include "mozilla/dom/Element.h"
+#include "mozilla/dom/ElementBinding.h"
 #include "mozilla/dom/ElementInlines.h"
 #include "mozilla/dom/Event.h"
 #include "mozilla/dom/FileSystemSecurity.h"
@@ -5562,9 +5563,8 @@ bool nsContentUtils::CheckForSubFrameDrop(nsIDragSession* aDragSession,
 
   // If there is no source node, then this is a drag from another
   // application, which should be allowed.
-  RefPtr<Document> doc;
-  aDragSession->GetSourceDocument(getter_AddRefs(doc));
-  if (doc) {
+  RefPtr<Document> doc(aDragSession->GetSourceDocument());
+  if (doc && doc->GetBrowsingContext()) {
     // Get each successive parent of the source document and compare it to
     // the drop document. If they match, then this is a drag from a child frame.
     for (BrowsingContext* bc = doc->GetBrowsingContext()->GetParent(); bc;
@@ -7272,7 +7272,7 @@ nsresult nsContentUtils::SlurpFileToString(nsIFile* aFile,
   nsCOMPtr<nsIChannel> channel;
   rv = NS_NewChannel(getter_AddRefs(channel), fileURI,
                      nsContentUtils::GetSystemPrincipal(),
-                     nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
+                     nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL,
                      nsIContentPolicy::TYPE_OTHER);
   if (NS_FAILED(rv)) {
     return rv;

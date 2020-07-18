@@ -760,6 +760,13 @@
   value: true
   mirror: always
 
+# Disk cache capacity in kilobytes. It's used only when
+# browser.cache.disk.smart_size.enabled == false
+- name: browser.cache.disk.capacity
+  type: RelaxedAtomicUint32
+  value: 256000
+  mirror: always
+
 # Enable/Disable Origin based cache isolation
 - name: browser.cache.cache_isolation
   type: RelaxedAtomicBool
@@ -1080,7 +1087,7 @@
 # from parent-process BrowsingContexts
 - name: browser.tabs.documentchannel.parent-controlled
   type: bool
-  value: false 
+  value: false
   mirror: always
 
 - name: browser.tabs.remote.desktopbehavior
@@ -1447,7 +1454,7 @@
 # Is support for composite operations from the Web Animations API enabled?
 - name: dom.animations-api.compositing.enabled
   type: bool
-  value: @IS_NOT_RELEASE_OR_BETA@
+  value: true
   mirror: always
 
 # Is support for the core interfaces of Web Animations API enabled?
@@ -2677,7 +2684,7 @@
 
 - name: dom.arena_allocator.enabled
   type: bool
-  value: @IS_EARLY_BETA_OR_EARLIER@
+  value: true
   mirror: once
 
 - name: dom.serviceWorkers.enabled
@@ -2699,13 +2706,6 @@
 
 - name: dom.workers.serialized-sab-access
   type: RelaxedAtomicBool
-  value: false
-  mirror: always
-
-# External.AddSearchProvider is deprecated and it will be removed in the next
-# cycles.
-- name: dom.sidebar.enabled
-  type: bool
   value: false
   mirror: always
 
@@ -2780,6 +2780,17 @@
   # synchronous IO is very bad. We are enforcing simple per-origin quota only.
   value: 5 * 1024
   mirror: always
+
+# Whether or not LSNG (Next Generation Local Storage) is enabled.
+# See bug 1517090 for enabling this on Nightly.
+# See bug 1534736 for changing it to EARLY_BETA_OR_EARLIER.
+# See bug 1539835 for enabling this unconditionally.
+# See bug 1619948 for changing it back to EARLY_BETA_OR_EARLIER.
+- name: dom.storage.next_gen
+  type: RelaxedAtomicBool
+  value: @IS_EARLY_BETA_OR_EARLIER@
+  mirror: always
+  do_not_use_directly: true
 
 # Is support for Storage test APIs enabled?
 - name: dom.storage.testing
@@ -3528,6 +3539,14 @@
 # Store the session history in the parent process, and access it over IPC
 # from the child processes.
 - name: fission.sessionHistoryInParent
+  type: bool
+  value: false
+  mirror: always
+
+# Allow renaming of process names to the origin on nightly
+# Setting this pref creates a privacy leak, but helps greatly with
+# debugging
+- name: fission.processOriginNames
   type: bool
   value: false
   mirror: always
@@ -6462,6 +6481,28 @@
   value: 0
   mirror: always
 
+# Controls double click and Alt+Arrow word selection behavior.
+- name: layout.word_select.eat_space_to_next_word
+  type: bool
+#ifdef XP_WIN
+  value: true
+#else
+  value: false
+#endif
+  mirror: always
+
+- name: layout.word_select.stop_at_punctuation
+  type: bool
+  value: true
+  mirror: always
+
+# Whether underscore should be treated as a word-breaking character for
+# word selection/arrow-key movement purposes.
+- name: layout.word_select.stop_at_underscore
+  type: bool
+  value: false
+  mirror: always
+
 #---------------------------------------------------------------------------
 # Prefs starting with "mathml."
 #---------------------------------------------------------------------------
@@ -6721,9 +6762,7 @@
 # Encrypted Media Extensions
 - name: media.eme.enabled
   type: bool
-#if defined(ANDROID)
-  value: @IS_NIGHTLY_BUILD@
-#elif defined(XP_LINUX)
+#if defined(XP_LINUX)
   # On Linux EME is visible but disabled by default. This is so that the "Play
   # DRM content" checkbox in the Firefox UI is unchecked by default. DRM
   # requires downloading and installing proprietary binaries, which users on an
@@ -7199,7 +7238,7 @@
   value: true
 #elif defined(XP_MACOSX)
   value: true
-#elif defined(XP_UNIX) && !defined(ANDROID)
+#elif defined(XP_UNIX)
   value: true
 #else
   value: false
@@ -7212,7 +7251,7 @@
   value: true
 #elif defined(XP_MACOSX)
   value: true
-#elif defined(XP_UNIX) && !defined(ANDROID)
+#elif defined(XP_UNIX)
   value: true
 #else
   value: false
@@ -7339,6 +7378,12 @@
 # in http, bypassing the instant NotAllowedError you get otherwise.
 - name: media.getusermedia.insecure.enabled
   type: bool
+  value: false
+  mirror: always
+
+# Enable tab sharing
+- name: media.getusermedia.browser.enabled
+  type: RelaxedAtomicBool
   value: false
   mirror: always
 
@@ -8899,6 +8944,18 @@
     mirror: always
 #endif
 
+#if defined(XP_LINUX) && defined(MOZ_SANDBOX)
+  # Run content processes in headless mode and disallow connections to
+  # the X server.  Experimental; breaks WebGL and Flash, and requires
+  # `widget.disable-native-theme-for-content`.  Changing it requires a
+  # restart because sandbox policy information dependent on it is cached.
+  # See bug 1640345 for details.
+- name: security.sandbox.content.headless
+  type: bool
+  value: false
+  mirror: once
+#endif
+
 # When comparing schemes, if this pref is set, view-source URIs are reachable
 # from same-protocol (so e.g. file: can link to view-source:file). This is
 # required for reftests.
@@ -8964,6 +9021,28 @@
   value: 0
 #endif
   mirror: once
+
+#---------------------------------------------------------------------------
+# Prefs starting with "storage."
+#---------------------------------------------------------------------------
+
+# Whether to use a non-exclusive VFS.
+# By default we use the unix-excl VFS, for the following reasons:
+# 1. It improves compatibility with NFS shares, whose implementation
+#    is incompatible with SQLite's locking requirements (reliable fcntl), and
+#    in particular with WAL journaling.
+#    Bug 433129 attempted to automatically identify such file-systems,
+#    but a reliable way was not found and the fallback locking is slower than
+#    POSIX locking, so we do not want to do it by default.
+# 2. It allows wal mode to avoid the memory mapped -shm file, reducing the
+#    likelihood of SIGBUS failures when disk space is exhausted.
+# 3. It provides some protection from third party database tampering while a
+#    connection is open.
+# Note there's no win32-excl VFS, so this has no effect on Windows.
+- name: storage.sqlite.exclusiveLock.enabled
+  type: RelaxedAtomicBool
+  value: @IS_NOT_ANDROID@
+  mirror: always
 
 #---------------------------------------------------------------------------
 # Prefs starting with "svg."

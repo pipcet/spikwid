@@ -4,8 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef __NS_SVGMASKFRAME_H__
-#define __NS_SVGMASKFRAME_H__
+#ifndef LAYOUT_SVG_SVGMASKFRAME_H_
+#define LAYOUT_SVG_SVGMASKFRAME_H_
 
 #include "mozilla/Attributes.h"
 #include "mozilla/RefPtr.h"
@@ -13,7 +13,6 @@
 #include "mozilla/gfx/2D.h"
 #include "gfxPattern.h"
 #include "gfxMatrix.h"
-#include "nsSVGUtils.h"
 
 class gfxContext;
 
@@ -30,9 +29,9 @@ class SVGMaskFrame final : public SVGContainerFrame {
   friend nsIFrame* ::NS_NewSVGMaskFrame(mozilla::PresShell* aPresShell,
                                         ComputedStyle* aStyle);
 
-  typedef gfx::Matrix Matrix;
-  typedef gfx::SourceSurface SourceSurface;
-  typedef image::imgDrawingParams imgDrawingParams;
+  using Matrix = gfx::Matrix;
+  using SourceSurface = gfx::SourceSurface;
+  using imgDrawingParams = image::imgDrawingParams;
 
  protected:
   explicit SVGMaskFrame(ComputedStyle* aStyle, nsPresContext* aPresContext)
@@ -109,4 +108,4 @@ class SVGMaskFrame final : public SVGContainerFrame {
 
 }  // namespace mozilla
 
-#endif
+#endif  // LAYOUT_SVG_SVGMASKFRAME_H_

@@ -181,6 +181,9 @@ void Http3Session::Shutdown() {
 Http3Session::~Http3Session() {
   LOG3(("Http3Session::~Http3Session %p", this));
 
+  Telemetry::Accumulate(Telemetry::HTTP3_REQUEST_PER_CONN,
+                        mTransactionCount);
+
   Shutdown();
 }
 
@@ -296,9 +299,8 @@ nsresult Http3Session::ProcessEvents(uint32_t count) {
   nsTArray<uint8_t> headerBytes;
   Http3Event event;
   event.tag = Http3Event::Tag::NoEvent;
-  bool fin = false;
 
-  nsresult rv = mHttp3Connection->GetEvent(&event, headerBytes, &fin);
+  nsresult rv = mHttp3Connection->GetEvent(&event, headerBytes);
   if (NS_FAILED(rv)) {
     LOG(("Http3Session::ProcessEvents [this=%p] rv=%" PRIx32, this,
          static_cast<uint32_t>(rv)));
@@ -321,7 +323,7 @@ nsresult Http3Session::ProcessEvents(uint32_t count) {
           continue;
         }
 
-        stream->SetResponseHeaders(headerBytes, fin);
+        stream->SetResponseHeaders(headerBytes, event.header_ready.fin);
 
         uint32_t read = 0;
         rv = ProcessTransactionRead(stream, count, &read);
@@ -357,7 +359,7 @@ nsresult Http3Session::ProcessEvents(uint32_t count) {
           RefPtr<Http3Stream> stream =
               mStreamIdHash.Get(event.data_writable.stream_id);
           if (stream) {
-            mReadyForWrite.Push(stream);
+            StreamReadyToWrite(stream);
           }
         }
         break;
@@ -365,8 +367,17 @@ nsresult Http3Session::ProcessEvents(uint32_t count) {
         LOG(("Http3Session::ProcessEvents - Reset"));
         ResetRecvd(event.reset.stream_id, event.reset.error);
         break;
-      case Http3Event::Tag::NewPushStream:
-        LOG(("Http3Session::ProcessEvents - NewPushStream"));
+      case Http3Event::Tag::PushPromise:
+        LOG(("Http3Session::ProcessEvents - PushPromise"));
+        break;
+      case Http3Event::Tag::PushHeaderReady:
+        LOG(("Http3Session::ProcessEvents - PushHeaderReady"));
+        break;
+      case Http3Event::Tag::PushDataReadable:
+        LOG(("Http3Session::ProcessEvents - PushDataReadable"));
+        break;
+      case Http3Event::Tag::PushCanceled:
+        LOG(("Http3Session::ProcessEvents - PushCanceled"));
         break;
       case Http3Event::Tag::RequestsCreatable:
         LOG(("Http3Session::ProcessEvents - StreamCreatable"));
@@ -416,7 +427,7 @@ nsresult Http3Session::ProcessEvents(uint32_t count) {
       default:
         break;
     }
-    rv = mHttp3Connection->GetEvent(&event, headerBytes, &fin);
+    rv = mHttp3Connection->GetEvent(&event, headerBytes);
     if (NS_FAILED(rv)) {
       LOG(("Http3Session::ProcessEvents [this=%p] rv=%" PRIx32, this,
            static_cast<uint32_t>(rv)));
@@ -548,7 +559,7 @@ bool Http3Session::AddStream(nsAHttpTransaction* aHttpTransaction,
   Http3Stream* stream = new Http3Stream(aHttpTransaction, this);
   mStreamTransactionHash.Put(aHttpTransaction, RefPtr{stream});
 
-  mReadyForWrite.Push(stream);
+  StreamReadyToWrite(stream);
 
   return true;
 }
@@ -577,10 +588,8 @@ void Http3Session::ProcessPending() {
     MOZ_ASSERT(stream->Queued());
     stream->SetQueued(false);
     mReadyForWrite.Push(stream);
-    if (mConnection) {
-      Unused << mConnection->ResumeSend();
-    }
   }
+  MaybeResumeSend();
 }
 
 static void RemoveStreamFromQueue(Http3Stream* aStream,
@@ -649,6 +658,7 @@ nsresult Http3Session::TryActivating(
 
   MOZ_ASSERT(*aStreamId != UINT64_MAX);
   mStreamIdHash.Put(*aStreamId, RefPtr{aStream});
+  mTransactionCount++;
   return NS_OK;
 }
 
@@ -826,6 +836,14 @@ nsresult Http3Session::ReadSegmentsAgain(nsAHttpSegmentReader* reader,
   }
 
   return rv;
+}
+
+void Http3Session::StreamReadyToWrite(Http3Stream* aStream) {
+  MOZ_ASSERT(aStream);
+  mReadyForWrite.Push(aStream);
+  if ((mState == CONNECTED) && mConnection) {
+    Unused << mConnection->ResumeSend();
+  }
 }
 
 void Http3Session::MaybeResumeSend() {
@@ -1160,8 +1178,7 @@ void Http3Session::TransactionHasDataToWrite(nsAHttpTransaction* caller) {
 
   MOZ_ASSERT(!mReadyForWriteButBlocked.Contains(stream->StreamId()));
   if (!IsClosing() && !mReadyForWriteButBlocked.Contains(stream->StreamId())) {
-    mReadyForWrite.Push(stream);
-    Unused << mConnection->ResumeSend();
+    StreamReadyToWrite(stream);
   } else {
     LOG3(
         ("Http3Session::TransactionHasDataToWrite %p closed so not setting "

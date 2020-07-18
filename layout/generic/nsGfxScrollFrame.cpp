@@ -59,7 +59,6 @@
 #include "ScrollbarActivity.h"
 #include "nsRefreshDriver.h"
 #include "nsStyleConsts.h"
-#include "nsSVGIntegrationUtils.h"
 #include "nsIScrollPositionListener.h"
 #include "StickyScrollContainer.h"
 #include "nsIFrameInlines.h"
@@ -102,6 +101,7 @@ static mozilla::LazyLogModule sRootScrollbarsLog("rootscrollbars");
   if (mHelper.mIsRoot) {                                         \
     MOZ_LOG(sRootScrollbarsLog, LogLevel::Debug, (__VA_ARGS__)); \
   }
+static mozilla::LazyLogModule sDisplayportLog("apz.displayport");
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -1163,7 +1163,7 @@ void nsHTMLScrollFrame::Reflow(nsPresContext* aPresContext,
   bool reflowVScrollbar = true;
   bool reflowScrollCorner = true;
   if (!aReflowInput.ShouldReflowAllKids()) {
-#define NEEDS_REFLOW(frame_) ((frame_) && NS_SUBTREE_DIRTY(frame_))
+#define NEEDS_REFLOW(frame_) ((frame_) && (frame_)->IsSubtreeDirty())
 
     reflowHScrollbar = NEEDS_REFLOW(mHelper.mHScrollbarBox);
     reflowVScrollbar = NEEDS_REFLOW(mHelper.mVScrollbarBox);
@@ -1442,8 +1442,15 @@ void ScrollFrameHelper::SetScrollableByAPZ(bool aScrollable) {
 }
 
 void ScrollFrameHelper::SetZoomableByAPZ(bool aZoomable) {
+  if (!nsLayoutUtils::UsesAsyncScrolling(mOuter)) {
+    // If APZ is disabled on this window, then we're never actually going to
+    // do any zooming. So we don't need to do any of the setup for it. Note
+    // that this function gets called from ZoomConstraintsClient even if APZ
+    // is disabled to indicate the zoomability of content.
+    aZoomable = false;
+  }
   if (mZoomableByAPZ != aZoomable) {
-    // We might be changing the result of WantAsyncScroll() so schedule a
+    // We might be changing the result of DecideScrollableLayer() so schedule a
     // paint to make sure we pick up the result of that change.
     mZoomableByAPZ = aZoomable;
     mOuter->SchedulePaint();
@@ -1455,12 +1462,6 @@ void ScrollFrameHelper::SetHasOutOfFlowContentInsideFilter() {
 }
 
 bool ScrollFrameHelper::WantAsyncScroll() const {
-  // If zooming is allowed, and this is a frame that's allowed to zoom, then
-  // we want it to be async-scrollable or zooming will not be permitted.
-  if (mZoomableByAPZ) {
-    return true;
-  }
-
   ScrollStyles styles = GetScrollStylesFromFrame();
   nscoord oneDevPixel =
       GetScrolledFrame()->PresContext()->AppUnitsPerDevPixel();
@@ -3427,6 +3428,48 @@ static void ClipListsExceptCaret(nsDisplayListCollection* aLists,
                        cache);
 }
 
+// This is similar to a "save-restore" RAII class for
+// DisplayListBuilder::ContainsBlendMode(), with a slight enhancement.
+// If this class is put on the stack and then unwound, the DL builder's
+// ContainsBlendMode flag will be effectively the same as if this class wasn't
+// put on the stack. However, if the CaptureContainsBlendMode method is called,
+// there will be a difference - the blend mode in the descendant display lists
+// will be "captured" and extracted.
+// The main goal here is to allow conditionally capturing the flag that
+// indicates whether or not a blend mode was encountered in the descendant part
+// of the display list.
+class MOZ_RAII AutoContainsBlendModeCapturer {
+  nsDisplayListBuilder& mBuilder;
+  bool mSavedContainsBlendMode;
+
+ public:
+  explicit AutoContainsBlendModeCapturer(nsDisplayListBuilder& aBuilder)
+      : mBuilder(aBuilder),
+        mSavedContainsBlendMode(aBuilder.ContainsBlendMode()) {
+    mBuilder.SetContainsBlendMode(false);
+  }
+
+  bool CaptureContainsBlendMode() {
+    // "Capture" the flag by extracting and clearing the ContainsBlendMode flag
+    // on the builder.
+    bool capturedBlendMode = mBuilder.ContainsBlendMode();
+    mBuilder.SetContainsBlendMode(false);
+    return capturedBlendMode;
+  }
+
+  ~AutoContainsBlendModeCapturer() {
+    // If CaptureContainsBlendMode() was called, the descendant blend mode was
+    // "captured" and so uncapturedContainsBlendMode will be false. If
+    // CaptureContainsBlendMode() wasn't called, then no capture occurred, and
+    // uncapturedContainsBlendMode may be true if there was a descendant blend
+    // mode. In that case, we set the flag on the DL builder so that we restore
+    // state to what it would have been without this RAII class on the stack.
+    bool uncapturedContainsBlendMode = mBuilder.ContainsBlendMode();
+    mBuilder.SetContainsBlendMode(mSavedContainsBlendMode ||
+                                  uncapturedContainsBlendMode);
+  }
+};
+
 void ScrollFrameHelper::BuildDisplayList(nsDisplayListBuilder* aBuilder,
                                          const nsDisplayListSet& aLists) {
   SetAndNullOnExit<const nsIFrame> tmpBuilder(
@@ -3639,6 +3682,7 @@ void ScrollFrameHelper::BuildDisplayList(nsDisplayListBuilder* aBuilder,
   }
 
   nsDisplayListCollection set(aBuilder);
+  AutoContainsBlendModeCapturer blendCapture(*aBuilder);
 
   bool willBuildAsyncZoomContainer =
       mWillBuildScrollableLayer && aBuilder->ShouldBuildAsyncZoomContainer() &&
@@ -3854,6 +3898,32 @@ void ScrollFrameHelper::BuildDisplayList(nsDisplayListBuilder* aBuilder,
 
     nsDisplayList resultList;
     set.SerializeWithCorrectZOrder(&resultList, mOuter->GetContent());
+
+    if (blendCapture.CaptureContainsBlendMode()) {
+      // The async zoom contents contain a mix-blend mode, so let's wrap all
+      // those contents into a blend container, and then wrap the blend
+      // container in the async zoom container. Otherwise the blend container
+      // ends up outside the zoom container which results in blend failure for
+      // WebRender.
+      nsDisplayItem* blendContainer =
+          nsDisplayBlendContainer::CreateForMixBlendMode(
+              aBuilder, mOuter, &resultList,
+              aBuilder->CurrentActiveScrolledRoot());
+      resultList.AppendToTop(blendContainer);
+
+      // Blend containers can be created or omitted during partial updates
+      // depending on the dirty rect. So we basically can't do partial updates
+      // if there's a blend container involved. There is equivalent code to this
+      // in the BuildDisplayListForStackingContext function as well, with a more
+      // detailed comment explaining things better.
+      if (aBuilder->IsRetainingDisplayList()) {
+        if (aBuilder->IsPartialUpdate()) {
+          aBuilder->SetPartialBuildFailed(true);
+        } else {
+          aBuilder->SetDisablePartialUpdates(true);
+        }
+      }
+    }
 
     mozilla::layers::FrameMetrics::ViewID viewID =
         nsLayoutUtils::FindOrCreateIDFor(mScrolledFrame->GetContent());
@@ -4136,8 +4206,9 @@ bool ScrollFrameHelper::DecideScrollableLayer(
   // the compositor can find the scrollable layer for async scrolling.
   // If the element is marked 'scrollgrab', also force building of a layer
   // so that APZ can implement scroll grabbing.
-  mWillBuildScrollableLayer =
-      usingDisplayPort || nsContentUtils::HasScrollgrab(content);
+  mWillBuildScrollableLayer = usingDisplayPort ||
+                              nsContentUtils::HasScrollgrab(content) ||
+                              mZoomableByAPZ;
 
   // The cached animated geometry root for the display builder is out of
   // date if we just introduced a new animated geometry root.
@@ -4745,7 +4816,7 @@ void ScrollFrameHelper::ScrollToRestoredPosition() {
     if (mRestorePos != mLastPos /* GetLogicalVisualViewportOffset() */ ||
         layoutRestorePos != logicalLayoutScrollPos) {
       LoadingState state = GetPageLoadingState();
-      if (state == LoadingState::Stopped && !NS_SUBTREE_DIRTY(mOuter)) {
+      if (state == LoadingState::Stopped && !mOuter->IsSubtreeDirty()) {
         return;
       }
       nsPoint visualScrollToPos = visualRestorePos;
@@ -4769,7 +4840,7 @@ void ScrollFrameHelper::ScrollToRestoredPosition() {
         mOuter->PresShell()->ScrollToVisual(
             visualScrollToPos, FrameMetrics::eRestore, ScrollMode::Instant);
       }
-      if (state == LoadingState::Loading || NS_SUBTREE_DIRTY(mOuter)) {
+      if (state == LoadingState::Loading || mOuter->IsSubtreeDirty()) {
         // If we're trying to do a history scroll restore, then we want to
         // keep trying this until we succeed, because the page can be loading
         // incrementally. So re-get the scroll position for the next iteration,
@@ -6046,7 +6117,7 @@ bool ScrollFrameHelper::ReflowFinished() {
   }
 
   bool doScroll = true;
-  if (NS_SUBTREE_DIRTY(mOuter)) {
+  if (mOuter->IsSubtreeDirty()) {
     // We will get another call after the next reflow and scrolling
     // later is less janky.
     doScroll = false;
@@ -7310,6 +7381,16 @@ void ScrollFrameHelper::ApzSmoothScrollTo(const nsPoint& aDestination,
     // APZC instance for it and so there won't be anything to process
     // this smooth scroll request. We should set a displayport on this
     // frame to force an APZC which can handle the request.
+    if (MOZ_LOG_TEST(sDisplayportLog, LogLevel::Debug)) {
+      mozilla::layers::ScrollableLayerGuid::ViewID viewID =
+          mozilla::layers::ScrollableLayerGuid::NULL_SCROLL_ID;
+      nsLayoutUtils::FindIDFor(mOuter->GetContent(), &viewID);
+      MOZ_LOG(
+          sDisplayportLog, LogLevel::Debug,
+          ("ApzSmoothScrollTo setting displayport on scrollId=%" PRIu64 "\n",
+           viewID));
+    }
+
     nsLayoutUtils::CalculateAndSetDisplayPortMargins(
         mOuter->GetScrollTargetFrame(), nsLayoutUtils::RepaintMode::Repaint);
     nsIFrame* frame = do_QueryFrame(mOuter->GetScrollTargetFrame());

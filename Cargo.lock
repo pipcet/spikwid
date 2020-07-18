@@ -111,9 +111,9 @@ dependencies = [
 
 [[package]]
 name = "audio_thread_priority"
-version = "0.22.1"
+version = "0.23.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8fba1500e466a39dd3faa5aed20a50dfe0aa1b905264a453bbe9f49508994cc"
+checksum = "cec7141c59547709f640219f15512026d416c0ca8ce7a5ac1524923ee65be2cb"
 dependencies = [
  "cfg-if",
  "dbus",
@@ -733,22 +733,22 @@ dependencies = [
 
 [[package]]
 name = "cranelift-bforest"
-version = "0.65.0"
-source = "git+https://github.com/bytecodealliance/wasmtime?rev=47a218f908e6bdeb7a0fb65ed74e58a0b608080d#47a218f908e6bdeb7a0fb65ed74e58a0b608080d"
+version = "0.66.0"
+source = "git+https://github.com/bytecodealliance/wasmtime?rev=5e0268a542f612fee36d0256ed1f6a0e18dc02b3#5e0268a542f612fee36d0256ed1f6a0e18dc02b3"
 dependencies = [
- "cranelift-entity 0.65.0",
+ "cranelift-entity 0.66.0",
 ]
 
 [[package]]
 name = "cranelift-codegen"
-version = "0.65.0"
-source = "git+https://github.com/bytecodealliance/wasmtime?rev=47a218f908e6bdeb7a0fb65ed74e58a0b608080d#47a218f908e6bdeb7a0fb65ed74e58a0b608080d"
+version = "0.66.0"
+source = "git+https://github.com/bytecodealliance/wasmtime?rev=5e0268a542f612fee36d0256ed1f6a0e18dc02b3#5e0268a542f612fee36d0256ed1f6a0e18dc02b3"
 dependencies = [
  "byteorder",
  "cranelift-bforest",
  "cranelift-codegen-meta",
  "cranelift-codegen-shared",
- "cranelift-entity 0.65.0",
+ "cranelift-entity 0.66.0",
  "log",
  "regalloc",
  "smallvec",
@@ -758,17 +758,17 @@ dependencies = [
 
 [[package]]
 name = "cranelift-codegen-meta"
-version = "0.65.0"
-source = "git+https://github.com/bytecodealliance/wasmtime?rev=47a218f908e6bdeb7a0fb65ed74e58a0b608080d#47a218f908e6bdeb7a0fb65ed74e58a0b608080d"
+version = "0.66.0"
+source = "git+https://github.com/bytecodealliance/wasmtime?rev=5e0268a542f612fee36d0256ed1f6a0e18dc02b3#5e0268a542f612fee36d0256ed1f6a0e18dc02b3"
 dependencies = [
  "cranelift-codegen-shared",
- "cranelift-entity 0.65.0",
+ "cranelift-entity 0.66.0",
 ]
 
 [[package]]
 name = "cranelift-codegen-shared"
-version = "0.65.0"
-source = "git+https://github.com/bytecodealliance/wasmtime?rev=47a218f908e6bdeb7a0fb65ed74e58a0b608080d#47a218f908e6bdeb7a0fb65ed74e58a0b608080d"
+version = "0.66.0"
+source = "git+https://github.com/bytecodealliance/wasmtime?rev=5e0268a542f612fee36d0256ed1f6a0e18dc02b3#5e0268a542f612fee36d0256ed1f6a0e18dc02b3"
 
 [[package]]
 name = "cranelift-entity"
@@ -777,13 +777,13 @@ source = "git+https://github.com/PLSysSec/lucet_sandbox_compiler?rev=5e870faf6f9
 
 [[package]]
 name = "cranelift-entity"
-version = "0.65.0"
-source = "git+https://github.com/bytecodealliance/wasmtime?rev=47a218f908e6bdeb7a0fb65ed74e58a0b608080d#47a218f908e6bdeb7a0fb65ed74e58a0b608080d"
+version = "0.66.0"
+source = "git+https://github.com/bytecodealliance/wasmtime?rev=5e0268a542f612fee36d0256ed1f6a0e18dc02b3#5e0268a542f612fee36d0256ed1f6a0e18dc02b3"
 
 [[package]]
 name = "cranelift-frontend"
-version = "0.65.0"
-source = "git+https://github.com/bytecodealliance/wasmtime?rev=47a218f908e6bdeb7a0fb65ed74e58a0b608080d#47a218f908e6bdeb7a0fb65ed74e58a0b608080d"
+version = "0.66.0"
+source = "git+https://github.com/bytecodealliance/wasmtime?rev=5e0268a542f612fee36d0256ed1f6a0e18dc02b3#5e0268a542f612fee36d0256ed1f6a0e18dc02b3"
 dependencies = [
  "cranelift-codegen",
  "log",
@@ -793,15 +793,15 @@ dependencies = [
 
 [[package]]
 name = "cranelift-wasm"
-version = "0.65.0"
-source = "git+https://github.com/bytecodealliance/wasmtime?rev=47a218f908e6bdeb7a0fb65ed74e58a0b608080d#47a218f908e6bdeb7a0fb65ed74e58a0b608080d"
+version = "0.66.0"
+source = "git+https://github.com/bytecodealliance/wasmtime?rev=5e0268a542f612fee36d0256ed1f6a0e18dc02b3#5e0268a542f612fee36d0256ed1f6a0e18dc02b3"
 dependencies = [
  "cranelift-codegen",
- "cranelift-entity 0.65.0",
+ "cranelift-entity 0.66.0",
  "cranelift-frontend",
  "log",
  "thiserror",
- "wasmparser 0.58.0",
+ "wasmparser 0.59.0",
 ]
 
 [[package]]
@@ -1251,9 +1251,9 @@ dependencies = [
 
 [[package]]
 name = "euclid"
-version = "0.20.8"
+version = "0.20.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57d9ae79e19d69ffb5b47b0a744c4215c115dfed4039314c9ca1b8ddc6c333be"
+checksum = "2bb7ef65b3777a325d1eeefefab5b6d4959da54747e33bd6258e789640f307ad"
 dependencies = [
  "num-traits",
  "serde",
@@ -1943,9 +1943,9 @@ dependencies = [
 
 [[package]]
 name = "gleam"
-version = "0.12.0"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8d023b0b00c16960f0f82816f2f546dabe937e75b25c7d6ce09a63e6a52d71e"
+checksum = "3fdef5b9df6d3a261b80a5ac55e13bf93945725df2463c1b0a2e5a527dce0d37"
 dependencies = [
  "gl_generator",
 ]
@@ -2356,7 +2356,7 @@ dependencies = [
 [[package]]
 name = "jsparagus"
 version = "0.1.0"
-source = "git+https://github.com/mozilla-spidermonkey/jsparagus?rev=90744b6c7bf9936174ab5fe62d1e17dde65bf64f#90744b6c7bf9936174ab5fe62d1e17dde65bf64f"
+source = "git+https://github.com/mozilla-spidermonkey/jsparagus?rev=e75748bec6ff2ebc9c0a7e66a2e824441b6787dd#e75748bec6ff2ebc9c0a7e66a2e824441b6787dd"
 dependencies = [
  "jsparagus-ast",
  "jsparagus-emitter",
@@ -2370,7 +2370,7 @@ dependencies = [
 [[package]]
 name = "jsparagus-ast"
 version = "0.1.0"
-source = "git+https://github.com/mozilla-spidermonkey/jsparagus?rev=90744b6c7bf9936174ab5fe62d1e17dde65bf64f#90744b6c7bf9936174ab5fe62d1e17dde65bf64f"
+source = "git+https://github.com/mozilla-spidermonkey/jsparagus?rev=e75748bec6ff2ebc9c0a7e66a2e824441b6787dd#e75748bec6ff2ebc9c0a7e66a2e824441b6787dd"
 dependencies = [
  "bumpalo",
  "indexmap",
@@ -2379,7 +2379,7 @@ dependencies = [
 [[package]]
 name = "jsparagus-emitter"
 version = "0.1.0"
-source = "git+https://github.com/mozilla-spidermonkey/jsparagus?rev=90744b6c7bf9936174ab5fe62d1e17dde65bf64f#90744b6c7bf9936174ab5fe62d1e17dde65bf64f"
+source = "git+https://github.com/mozilla-spidermonkey/jsparagus?rev=e75748bec6ff2ebc9c0a7e66a2e824441b6787dd#e75748bec6ff2ebc9c0a7e66a2e824441b6787dd"
 dependencies = [
  "bumpalo",
  "byteorder",
@@ -2392,7 +2392,7 @@ dependencies = [
 [[package]]
 name = "jsparagus-generated-parser"
 version = "0.1.0"
-source = "git+https://github.com/mozilla-spidermonkey/jsparagus?rev=90744b6c7bf9936174ab5fe62d1e17dde65bf64f#90744b6c7bf9936174ab5fe62d1e17dde65bf64f"
+source = "git+https://github.com/mozilla-spidermonkey/jsparagus?rev=e75748bec6ff2ebc9c0a7e66a2e824441b6787dd#e75748bec6ff2ebc9c0a7e66a2e824441b6787dd"
 dependencies = [
  "bumpalo",
  "jsparagus-ast",
@@ -2402,13 +2402,14 @@ dependencies = [
 [[package]]
 name = "jsparagus-json-log"
 version = "0.1.0"
-source = "git+https://github.com/mozilla-spidermonkey/jsparagus?rev=90744b6c7bf9936174ab5fe62d1e17dde65bf64f#90744b6c7bf9936174ab5fe62d1e17dde65bf64f"
+source = "git+https://github.com/mozilla-spidermonkey/jsparagus?rev=e75748bec6ff2ebc9c0a7e66a2e824441b6787dd#e75748bec6ff2ebc9c0a7e66a2e824441b6787dd"
 
 [[package]]
 name = "jsparagus-parser"
 version = "0.1.0"
-source = "git+https://github.com/mozilla-spidermonkey/jsparagus?rev=90744b6c7bf9936174ab5fe62d1e17dde65bf64f#90744b6c7bf9936174ab5fe62d1e17dde65bf64f"
+source = "git+https://github.com/mozilla-spidermonkey/jsparagus?rev=e75748bec6ff2ebc9c0a7e66a2e824441b6787dd#e75748bec6ff2ebc9c0a7e66a2e824441b6787dd"
 dependencies = [
+ "arrayvec",
  "bumpalo",
  "jsparagus-ast",
  "jsparagus-generated-parser",
@@ -2418,7 +2419,7 @@ dependencies = [
 [[package]]
 name = "jsparagus-scope"
 version = "0.1.0"
-source = "git+https://github.com/mozilla-spidermonkey/jsparagus?rev=90744b6c7bf9936174ab5fe62d1e17dde65bf64f#90744b6c7bf9936174ab5fe62d1e17dde65bf64f"
+source = "git+https://github.com/mozilla-spidermonkey/jsparagus?rev=e75748bec6ff2ebc9c0a7e66a2e824441b6787dd#e75748bec6ff2ebc9c0a7e66a2e824441b6787dd"
 dependencies = [
  "indexmap",
  "jsparagus-ast",
@@ -2428,7 +2429,7 @@ dependencies = [
 [[package]]
 name = "jsparagus-stencil"
 version = "0.1.0"
-source = "git+https://github.com/mozilla-spidermonkey/jsparagus?rev=90744b6c7bf9936174ab5fe62d1e17dde65bf64f#90744b6c7bf9936174ab5fe62d1e17dde65bf64f"
+source = "git+https://github.com/mozilla-spidermonkey/jsparagus?rev=e75748bec6ff2ebc9c0a7e66a2e824441b6787dd#e75748bec6ff2ebc9c0a7e66a2e824441b6787dd"
 dependencies = [
  "jsparagus-ast",
 ]
@@ -3084,8 +3085,8 @@ dependencies = [
 
 [[package]]
 name = "neqo-common"
-version = "0.4.5"
-source = "git+https://github.com/mozilla/neqo?tag=v0.4.5#5161a451caefa2a99d9abad2cf93d83fb7e85a97"
+version = "0.4.8"
+source = "git+https://github.com/mozilla/neqo?tag=v0.4.8#a5abafdacb88e331913376943ad1768720caed9e"
 dependencies = [
  "chrono",
  "env_logger",
@@ -3097,8 +3098,8 @@ dependencies = [
 
 [[package]]
 name = "neqo-crypto"
-version = "0.4.5"
-source = "git+https://github.com/mozilla/neqo?tag=v0.4.5#5161a451caefa2a99d9abad2cf93d83fb7e85a97"
+version = "0.4.8"
+source = "git+https://github.com/mozilla/neqo?tag=v0.4.8#a5abafdacb88e331913376943ad1768720caed9e"
 dependencies = [
  "bindgen",
  "log",
@@ -3110,8 +3111,8 @@ dependencies = [
 
 [[package]]
 name = "neqo-http3"
-version = "0.4.5"
-source = "git+https://github.com/mozilla/neqo?tag=v0.4.5#5161a451caefa2a99d9abad2cf93d83fb7e85a97"
+version = "0.4.8"
+source = "git+https://github.com/mozilla/neqo?tag=v0.4.8#a5abafdacb88e331913376943ad1768720caed9e"
 dependencies = [
  "log",
  "neqo-common",
@@ -3125,8 +3126,8 @@ dependencies = [
 
 [[package]]
 name = "neqo-qpack"
-version = "0.4.5"
-source = "git+https://github.com/mozilla/neqo?tag=v0.4.5#5161a451caefa2a99d9abad2cf93d83fb7e85a97"
+version = "0.4.8"
+source = "git+https://github.com/mozilla/neqo?tag=v0.4.8#a5abafdacb88e331913376943ad1768720caed9e"
 dependencies = [
  "lazy_static",
  "log",
@@ -3140,8 +3141,8 @@ dependencies = [
 
 [[package]]
 name = "neqo-transport"
-version = "0.4.5"
-source = "git+https://github.com/mozilla/neqo?tag=v0.4.5#5161a451caefa2a99d9abad2cf93d83fb7e85a97"
+version = "0.4.8"
+source = "git+https://github.com/mozilla/neqo?tag=v0.4.8#a5abafdacb88e331913376943ad1768720caed9e"
 dependencies = [
  "lazy_static",
  "log",
@@ -3950,9 +3951,9 @@ dependencies = [
 
 [[package]]
 name = "regalloc"
-version = "0.0.26"
+version = "0.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c03092d79e0fd610932d89ed53895a38c0dd3bcd317a0046e69940de32f1d95"
+checksum = "3598bed0895fe0f72a9e0b00ef9e3a3c8af978a8401b2f2046dec5927de6364a"
 dependencies = [
  "log",
  "rustc-hash",
@@ -5381,9 +5382,9 @@ checksum = "073da89bf1c84db000dd68ce660c1b4a08e3a2d28fd1e3394ab9e7abdde4a0f8"
 
 [[package]]
 name = "wasmparser"
-version = "0.58.0"
+version = "0.59.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "721a8d79483738d7aef6397edcf8f04cd862640b1ad5973adf5bb50fc10e86db"
+checksum = "a950e6a618f62147fd514ff445b2a0b53120d382751960797f85f058c7eda9b9"
 
 [[package]]
 name = "wast"
@@ -5498,6 +5499,7 @@ dependencies = [
  "svg_fmt",
  "time",
  "tracy-rs",
+ "uuid",
  "webrender_api",
  "webrender_build",
  "wr_malloc_size_of",

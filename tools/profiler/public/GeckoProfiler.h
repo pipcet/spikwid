@@ -194,7 +194,10 @@ class Vector;
           "allocations, biasing towards collecting larger allocations")        \
                                                                                \
     MACRO(17, "ipcmessages", IPCMessages,                                      \
-          "Have the IPC layer track cross-process messages")
+          "Have the IPC layer track cross-process messages")                   \
+                                                                               \
+    MACRO(18, "audiocallbacktracing", AudioCallbackTracing,                    \
+          "Audio callback tracing")
 
 struct ProfilerFeature {
 #  define DECLARE(n_, str_, Name_, desc_)                     \
@@ -1041,8 +1044,10 @@ class MOZ_RAII AutoProfilerTextMarker {
 // Output profiles
 //---------------------------------------------------------------------------
 
-// Set a user-friendly process name, used in JSON stream.
-void profiler_set_process_name(const nsACString& aProcessName);
+// Set a user-friendly process name, used in JSON stream.  Allows an optional
+// detailed name which may include private info (eTLD+1 in fission)
+void profiler_set_process_name(const nsACString& aProcessName,
+                               const nsACString* aETLDplus1 = nullptr);
 
 // Get the profile encoded as a JSON string. A no-op (returning nullptr) if the
 // profiler is inactive.

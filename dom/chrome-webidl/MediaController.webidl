@@ -15,6 +15,8 @@ enum MediaControlKey {
   "nexttrack",
   "seekbackward",
   "seekforward",
+  "skipad",
+  "seekto",
   "stop",
 };
 
@@ -34,4 +36,5 @@ interface MediaController : EventTarget {
   // TODO : expose other media controller methods to webidl in order to support
   // the plan of controlling media directly from the chrome JS.
   // eg. play(), pause().
+  void seekTo(double seekTime, optional boolean fastSeek = false);
 };

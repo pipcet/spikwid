@@ -18,6 +18,8 @@
 #include "nsICookieService.h"
 #include "nsIEffectiveTLDService.h"
 #include "nsIRedirectHistoryEntry.h"
+#include "nsIWebProgressListener.h"
+#include "nsNetUtil.h"
 #include "nsScriptSecurityManager.h"
 
 constexpr auto CONSOLE_SCHEMEFUL_CATEGORY = "cookieSchemeful"_ns;

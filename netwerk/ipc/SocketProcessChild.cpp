@@ -187,6 +187,16 @@ void SocketProcessChild::CleanUp() {
   NS_ShutdownXPCOM(nullptr);
 }
 
+mozilla::ipc::IPCResult SocketProcessChild::RecvInit(
+    const SocketPorcessInitAttributes& aAttributes) {
+  Unused << RecvSetOffline(aAttributes.mOffline());
+  Unused << RecvSetConnectivity(aAttributes.mConnectivity());
+  if (aAttributes.mInitSandbox()) {
+    Unused << RecvInitLinuxSandbox(aAttributes.mSandboxBroker());
+  }
+  return IPC_OK();
+}
+
 IPCResult SocketProcessChild::RecvPreferenceUpdate(const Pref& aPref) {
   Preferences::SetPreference(aPref);
   return IPC_OK();
@@ -217,6 +227,17 @@ mozilla::ipc::IPCResult SocketProcessChild::RecvSetOffline(
   NS_ASSERTION(io, "IO Service can not be null");
 
   io->SetOffline(aOffline);
+
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult SocketProcessChild::RecvSetConnectivity(
+    const bool& aConnectivity) {
+  nsCOMPtr<nsIIOService> io(do_GetIOService());
+  nsCOMPtr<nsIIOServiceInternal> ioInternal(do_QueryInterface(io));
+  NS_ASSERTION(ioInternal, "IO Service can not be null");
+
+  ioInternal->SetConnectivity(aConnectivity);
 
   return IPC_OK();
 }

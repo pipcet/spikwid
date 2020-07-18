@@ -1566,8 +1566,14 @@ nsEventStatus AsyncPanZoomController::OnScaleBegin(
   if (!StaticPrefs::apz_allow_zooming()) {
     if (RefPtr<GeckoContentController> controller =
             GetGeckoContentController()) {
-      controller->NotifyPinchGesture(aEvent.mType, GetGuid(), 0,
-                                     aEvent.modifiers);
+      APZC_LOG("%p notifying controller of pinch gesture start\n", this);
+      controller->NotifyPinchGesture(
+          aEvent.mType, GetGuid(),
+          ViewAs<LayoutDevicePixel>(
+              aEvent.mFocusPoint,
+              PixelCastJustification::
+                  LayoutDeviceIsScreenForUntransformedEvent),
+          0, aEvent.modifiers);
     }
   }
 
@@ -1615,11 +1621,17 @@ nsEventStatus AsyncPanZoomController::OnScale(const PinchGestureInput& aEvent) {
   if (!StaticPrefs::apz_allow_zooming()) {
     if (RefPtr<GeckoContentController> controller =
             GetGeckoContentController()) {
+      APZC_LOG("%p notifying controller of pinch gesture\n", this);
       controller->NotifyPinchGesture(
           aEvent.mType, GetGuid(),
           ViewAs<LayoutDevicePixel>(
+              aEvent.mFocusPoint,
+              PixelCastJustification::
+                  LayoutDeviceIsScreenForUntransformedEvent),
+          ViewAs<LayoutDevicePixel>(
               aEvent.mCurrentSpan - aEvent.mPreviousSpan,
-              PixelCastJustification::LayoutDeviceIsParentLayerForRCDRSF),
+              PixelCastJustification::
+                  LayoutDeviceIsScreenForUntransformedEvent),
           aEvent.modifiers);
     }
   }
@@ -1749,8 +1761,13 @@ nsEventStatus AsyncPanZoomController::OnScaleEnd(
   if (!StaticPrefs::apz_allow_zooming()) {
     if (RefPtr<GeckoContentController> controller =
             GetGeckoContentController()) {
-      controller->NotifyPinchGesture(aEvent.mType, GetGuid(), 0,
-                                     aEvent.modifiers);
+      controller->NotifyPinchGesture(
+          aEvent.mType, GetGuid(),
+          ViewAs<LayoutDevicePixel>(
+              aEvent.mFocusPoint,
+              PixelCastJustification::
+                  LayoutDeviceIsScreenForUntransformedEvent),
+          0, aEvent.modifiers);
     }
   }
 
@@ -4539,8 +4556,7 @@ void AsyncPanZoomController::NotifyLayersUpdated(
   // visual scroll offset from the main thread to our scroll offset.
   // The main thread may also ask us to scroll the visual viewport to a
   // particular location. This is different from a layout viewport offset update
-  // in that the layout viewport offset is limited to the layout scroll range
-  // (this will be enforced by the main thread once bug 1516056 is fixed),
+  // in that the layout viewport offset is limited to the layout scroll range,
   // while the visual viewport offset is not.
   // The update type indicates the priority; an eMainThread layout update (or
   // a smooth scroll request which is similar) takes precedence over an eRestore

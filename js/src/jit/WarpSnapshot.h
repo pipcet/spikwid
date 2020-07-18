@@ -23,6 +23,8 @@ class ModuleEnvironmentObject;
 namespace jit {
 
 class CacheIRStubInfo;
+class CompileInfo;
+class WarpScriptSnapshot;
 
 #define WARP_OP_SNAPSHOT_LIST(_) \
   _(WarpArguments)               \
@@ -34,8 +36,10 @@ class CacheIRStubInfo;
   _(WarpRest)                    \
   _(WarpNewArray)                \
   _(WarpNewObject)               \
+  _(WarpBindGName)               \
   _(WarpBailout)                 \
-  _(WarpCacheIR)
+  _(WarpCacheIR)                 \
+  _(WarpInlinedCall)
 
 // Wrapper for GC things stored in WarpSnapshot. Asserts the GC pointer is not
 // nursery-allocated. These pointers must be traced using TraceWarpGCPtr.
@@ -337,6 +341,36 @@ class WarpObjectField {
   }
 };
 
+// Information for inlining a scripted call IC.
+class WarpInlinedCall : public WarpOpSnapshot {
+  // Used for generating the correct guards.
+  WarpCacheIR* cacheIRSnapshot_;
+
+  // Used for generating the inlined code.
+  WarpScriptSnapshot* scriptSnapshot_;
+  CompileInfo* info_;
+
+ public:
+  static constexpr Kind ThisKind = Kind::WarpInlinedCall;
+
+  WarpInlinedCall(uint32_t offset, WarpCacheIR* cacheIRSnapshot,
+                  WarpScriptSnapshot* scriptSnapshot, CompileInfo* info)
+      : WarpOpSnapshot(ThisKind, offset),
+        cacheIRSnapshot_(cacheIRSnapshot),
+        scriptSnapshot_(scriptSnapshot),
+        info_(info) {}
+
+  WarpCacheIR* cacheIRSnapshot() const { return cacheIRSnapshot_; }
+  WarpScriptSnapshot* scriptSnapshot() const { return scriptSnapshot_; }
+  CompileInfo* info() const { return info_; }
+
+  void traceData(JSTracer* trc);
+
+#ifdef JS_JITSPEW
+  void dumpData(GenericPrinter& out) const;
+#endif
+};
+
 // Template object for JSOp::Rest.
 class WarpRest : public WarpOpSnapshot {
   WarpGCPtr<ArrayObject*> templateObject_;
@@ -398,6 +432,25 @@ class WarpNewObject : public WarpOpSnapshot {
 #endif
 };
 
+// Global environment for BindGName
+class WarpBindGName : public WarpOpSnapshot {
+  WarpGCPtr<JSObject*> globalEnv_;
+
+ public:
+  static constexpr Kind ThisKind = Kind::WarpBindGName;
+
+  WarpBindGName(uint32_t offset, JSObject* globalEnv)
+      : WarpOpSnapshot(ThisKind, offset), globalEnv_(globalEnv) {}
+
+  JSObject* globalEnv() const { return globalEnv_; }
+
+  void traceData(JSTracer* trc);
+
+#ifdef JS_JITSPEW
+  void dumpData(GenericPrinter& out) const;
+#endif
+};
+
 struct NoEnvironment {};
 using ConstantObjectEnvironment = WarpGCPtr<JSObject*>;
 struct FunctionEnvironment {
@@ -428,7 +481,8 @@ using WarpEnvironment =
                      FunctionEnvironment>;
 
 // Snapshot data for a single JSScript.
-class WarpScriptSnapshot : public TempObject {
+class WarpScriptSnapshot : public TempObject,
+                           public mozilla::LinkedListElement<WarpScriptSnapshot> {
   WarpGCPtr<JSScript*> script_;
   WarpEnvironment environment_;
   WarpOpSnapshotList opSnapshots_;
@@ -495,11 +549,13 @@ class WarpBailoutInfo {
   void setFailedLexicalCheck() { failedLexicalCheck_ = true; }
 };
 
+using WarpScriptSnapshotList = mozilla::LinkedList<WarpScriptSnapshot>;
+
 // Data allocated by WarpOracle on the main thread that's used off-thread by
 // WarpBuilder to build the MIR graph.
 class WarpSnapshot : public TempObject {
-  // The script to compile.
-  WarpScriptSnapshot* script_;
+  // The scripts being compiled.
+  WarpScriptSnapshotList scriptSnapshots_;
 
   // The global lexical environment and its thisObject(). We don't inline
   // cross-realm calls so this can be stored once per snapshot.
@@ -515,10 +571,10 @@ class WarpSnapshot : public TempObject {
 
  public:
   explicit WarpSnapshot(JSContext* cx, TempAllocator& alloc,
-                        WarpScriptSnapshot* script,
+                        WarpScriptSnapshotList&& scriptSnapshots,
                         const WarpBailoutInfo& bailoutInfo);
 
-  WarpScriptSnapshot* script() const { return script_; }
+  WarpScriptSnapshot* rootScript() { return scriptSnapshots_.getFirst(); }
 
   LexicalEnvironmentObject* globalLexicalEnv() const {
     return globalLexicalEnv_;

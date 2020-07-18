@@ -4,8 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef MOZILLA_SVGTEXTFRAME_H
-#define MOZILLA_SVGTEXTFRAME_H
+#ifndef LAYOUT_SVG_SVGTEXTFRAME_H_
+#define LAYOUT_SVG_SVGTEXTFRAME_H_
 
 #include "mozilla/Attributes.h"
 #include "mozilla/PresShellForwards.h"
@@ -175,10 +175,10 @@ class SVGTextFrame final : public SVGDisplayContainerFrame {
   friend struct TextRenderedRun;
   friend class TextRenderedRunIterator;
 
-  typedef gfxTextRun::Range Range;
-  typedef gfx::DrawTarget DrawTarget;
-  typedef gfx::Path Path;
-  typedef gfx::Point Point;
+  using Range = gfxTextRun::Range;
+  using DrawTarget = gfx::DrawTarget;
+  using Path = gfx::Path;
+  using Point = gfx::Point;
 
  protected:
   explicit SVGTextFrame(ComputedStyle* aStyle, nsPresContext* aPresContext)
@@ -223,7 +223,7 @@ class SVGTextFrame final : public SVGDisplayContainerFrame {
   virtual void FindCloserFrameForSelection(
       const nsPoint& aPoint, FrameWithDistance* aCurrentBestFrame) override;
 
-  // nsSVGDisplayableFrame interface:
+  // ISVGDisplayableFrame interface:
   virtual void NotifySVGChanged(uint32_t aFlags) override;
   virtual void PaintSVG(gfxContext& aContext, const gfxMatrix& aTransform,
                         imgDrawingParams& aImgParams,
@@ -273,7 +273,7 @@ class SVGTextFrame final : public SVGDisplayContainerFrame {
 
   /**
    * Calls ScheduleReflowSVGNonDisplayText if this is a non-display frame,
-   * and nsSVGUtils::ScheduleReflowSVG otherwise.
+   * and SVGUtils::ScheduleReflowSVG otherwise.
    */
   void ScheduleReflowSVG();
 
@@ -291,7 +291,7 @@ class SVGTextFrame final : public SVGDisplayContainerFrame {
   void ReflowSVGNonDisplayText();
 
   /**
-   * This is a function that behaves similarly to nsSVGUtils::ScheduleReflowSVG,
+   * This is a function that behaves similarly to SVGUtils::ScheduleReflowSVG,
    * but which will skip over any ancestor non-display container frames on the
    * way to the SVGOuterSVGFrame.  It exists for the situation where a
    * non-display <text> element has changed and needs to ensure ReflowSVG will
@@ -574,4 +574,4 @@ class SVGTextFrame final : public SVGDisplayContainerFrame {
 
 }  // namespace mozilla
 
-#endif
+#endif  // LAYOUT_SVG_SVGTEXTFRAME_H_

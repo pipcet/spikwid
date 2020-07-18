@@ -1269,19 +1269,21 @@ void nsPresContext::RecordInteractionTime(InteractionType aType,
 
   // Record the interaction time if it occurs after the first paint
   // of the top level content document.
-  nsPresContext* topContentPresContext =
+  nsPresContext* inProcessRootPresContext =
       GetInProcessRootContentDocumentPresContext();
 
-  if (!topContentPresContext) {
-    // There is no top content pres context so we don't care
-    // about the interaction time. Record a value anyways to avoid
-    // trying to find the top content pres context in future interactions.
+  if (!inProcessRootPresContext ||
+      !inProcessRootPresContext->IsRootContentDocumentCrossProcess()) {
+    // There is no top content pres context, or we are in a cross process
+    // document so we don't care about the interaction time. Record a value
+    // anyways to avoid trying to find the top content pres context in future
+    // interactions.
     interactionTime = TimeStamp::Now();
     return;
   }
 
-  if (topContentPresContext->mFirstNonBlankPaintTime.IsNull() ||
-      topContentPresContext->mFirstNonBlankPaintTime > aTimeStamp) {
+  if (inProcessRootPresContext->mFirstNonBlankPaintTime.IsNull() ||
+      inProcessRootPresContext->mFirstNonBlankPaintTime > aTimeStamp) {
     // Top content pres context has not had a non-blank paint yet
     // or the event timestamp is before the first non-blank paint,
     // so don't record interaction time.
@@ -1301,7 +1303,7 @@ void nsPresContext::RecordInteractionTime(InteractionType aType,
   interactionTime = TimeStamp::Now();
   // Only the top level content pres context reports first interaction
   // time to telemetry (if it hasn't already done so).
-  if (this == topContentPresContext) {
+  if (this == inProcessRootPresContext) {
     if (Telemetry::CanRecordExtended()) {
       double millis =
           (interactionTime - mFirstNonBlankPaintTime).ToMilliseconds();
@@ -1312,7 +1314,7 @@ void nsPresContext::RecordInteractionTime(InteractionType aType,
       }
     }
   } else {
-    topContentPresContext->RecordInteractionTime(aType, aTimeStamp);
+    inProcessRootPresContext->RecordInteractionTime(aType, aTimeStamp);
   }
 }
 
@@ -1554,10 +1556,6 @@ void nsPresContext::FlushPendingMediaFeatureValuesChanged() {
     RebuildAllStyleData(change.mChangeHint, change.mRestyleHint);
   }
 
-  if (!mPresShell || !mPresShell->DidInitialize()) {
-    return;
-  }
-
   if (mDocument->IsBeingUsedAsImage()) {
     MOZ_ASSERT(mDocument->MediaQueryLists().isEmpty());
     return;
@@ -1565,11 +1563,14 @@ void nsPresContext::FlushPendingMediaFeatureValuesChanged() {
 
   mDocument->NotifyMediaFeatureValuesChanged();
 
-  MOZ_DIAGNOSTIC_ASSERT(nsContentUtils::IsSafeToRunScript());
-
+  // https://drafts.csswg.org/cssom-view/#evaluate-media-queries-and-report-changes
+  //
   // Media query list listeners should be notified from a queued task
   // (in HTML5 terms), although we also want to notify them on certain
   // flushes.  (We're already running off an event.)
+  //
+  // TODO: This should be better integrated into the "update the rendering"
+  // steps: https://html.spec.whatwg.org/#update-the-rendering
   //
   // Note that we do this after the new style from media queries in
   // style sheets has been computed.
@@ -1580,20 +1581,22 @@ void nsPresContext::FlushPendingMediaFeatureValuesChanged() {
 
   // We build a list of all the notifications we're going to send
   // before we send any of them.
-
-  // Copy pointers to all the lists into a new array, in case one of our
-  // notifications modifies the list.
-  nsTArray<RefPtr<mozilla::dom::MediaQueryList>> localMediaQueryLists;
+  nsTArray<RefPtr<mozilla::dom::MediaQueryList>> listsToNotify;
   for (MediaQueryList* mql = mDocument->MediaQueryLists().getFirst(); mql;
        mql = static_cast<LinkedListElement<MediaQueryList>*>(mql)->getNext()) {
-    localMediaQueryLists.AppendElement(mql);
+    if (mql->MediaFeatureValuesChanged()) {
+      listsToNotify.AppendElement(mql);
+    }
   }
 
-  // Now iterate our local array of the lists.
-  for (const auto& mql : localMediaQueryLists) {
-    nsAutoMicroTask mt;
-    mql->MaybeNotify();
-  }
+  nsContentUtils::AddScriptRunner(NS_NewRunnableFunction(
+      "nsPresContext::FlushPendingMediaFeatureValuesChanged",
+      [list = std::move(listsToNotify)] {
+        for (const auto& mql : list) {
+          nsAutoMicroTask mt;
+          mql->FireChangeEvent();
+        }
+      }));
 }
 
 void nsPresContext::SizeModeChanged(nsSizeMode aSizeMode) {

@@ -93,10 +93,30 @@ static LazyLogModule gBrowsingContextLog("BrowsingContext");
 
 typedef nsDataHashtable<nsUint64HashKey, BrowsingContext*> BrowsingContextMap;
 
+// All BrowsingContexts indexed by Id
 static StaticAutoPtr<BrowsingContextMap> sBrowsingContexts;
+// Top-level Content BrowsingContexts only, indexed by BrowserId instead of Id
+static StaticAutoPtr<BrowsingContextMap> sCurrentTopByBrowserId;
+
+static void UnregisterBrowserId(BrowsingContext* aBrowsingContext) {
+  if (!aBrowsingContext->IsTopContent() || !sCurrentTopByBrowserId) {
+    return;
+  }
+
+  // Avoids an extra lookup
+  auto browserIdEntry =
+      sCurrentTopByBrowserId->Lookup(aBrowsingContext->BrowserId());
+  if (browserIdEntry && browserIdEntry.Data() == aBrowsingContext) {
+    browserIdEntry.Remove();
+  }
+}
 
 static void Register(BrowsingContext* aBrowsingContext) {
   sBrowsingContexts->Put(aBrowsingContext->Id(), aBrowsingContext);
+  if (aBrowsingContext->IsTopContent()) {
+    sCurrentTopByBrowserId->Put(aBrowsingContext->BrowserId(),
+                                aBrowsingContext);
+  }
 
   aBrowsingContext->Group()->Register(aBrowsingContext);
 }
@@ -134,7 +154,9 @@ WindowContext* BrowsingContext::GetTopWindowContext() {
 void BrowsingContext::Init() {
   if (!sBrowsingContexts) {
     sBrowsingContexts = new BrowsingContextMap();
+    sCurrentTopByBrowserId = new BrowsingContextMap();
     ClearOnShutdown(&sBrowsingContexts);
+    ClearOnShutdown(&sCurrentTopByBrowserId);
   }
 }
 
@@ -144,6 +166,12 @@ LogModule* BrowsingContext::GetLog() { return gBrowsingContextLog; }
 /* static */
 already_AddRefed<BrowsingContext> BrowsingContext::Get(uint64_t aId) {
   return do_AddRef(sBrowsingContexts->Get(aId));
+}
+
+/* static */
+already_AddRefed<BrowsingContext> BrowsingContext::GetCurrentTopByBrowserId(
+    uint64_t aBrowserId) {
+  return do_AddRef(sCurrentTopByBrowserId->Get(aBrowserId));
 }
 
 /* static */
@@ -657,6 +685,7 @@ void BrowsingContext::Detach(bool aFromIPC) {
   }
 
   mGroup->Unregister(this);
+  UnregisterBrowserId(this);
   mIsDiscarded = true;
 
   if (XRE_IsParentProcess()) {
@@ -1061,6 +1090,7 @@ BrowsingContext::~BrowsingContext() {
   if (sBrowsingContexts) {
     sBrowsingContexts->Remove(Id());
   }
+  UnregisterBrowserId(this);
 }
 
 nsISupports* BrowsingContext::GetParentObject() const {
@@ -1483,6 +1513,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(BrowsingContext)
   if (sBrowsingContexts) {
     sBrowsingContexts->Remove(tmp->Id());
   }
+  UnregisterBrowserId(tmp);
 
   if (tmp->GetIsPopupSpam()) {
     PopupBlocker::UnregisterOpenPopupSpam();
@@ -2417,12 +2448,6 @@ void BrowsingContext::InitSessionHistory() {
 
   if (!GetHasSessionHistory()) {
     SetHasSessionHistory(true);
-
-    // If the top browsing context (this one) is loaded in this process then we
-    // also create the session history implementation for the child process.
-    // This can be removed once session history is stored exclusively in the
-    // parent process.
-    mChildSessionHistory->SetIsInProcess(IsInProcess());
   }
 }
 
@@ -2451,6 +2476,11 @@ void BrowsingContext::CreateChildSHistory() {
   // history. That is why we create the ChildSHistory object in every process
   // where we have access to this browsing context (which is the top one).
   mChildSessionHistory = new ChildSHistory(this);
+
+  // If the top browsing context (this one) is loaded in this process then we
+  // also create the session history implementation for the child process.
+  // This can be removed once session history is stored exclusively in the
+  // parent process.
   mChildSessionHistory->SetIsInProcess(IsInProcess());
 }
 
@@ -2469,6 +2499,35 @@ bool BrowsingContext::CanSet(FieldIndex<IDX_BrowserId>, const uint32_t& aValue,
   // We should only be able to set this for toplevel contexts which don't have
   // an ID yet.
   return GetBrowserId() == 0 && IsTop() && Children().IsEmpty();
+}
+
+void BrowsingContext::SessionHistoryChanged(int32_t aIndexDelta,
+                                            int32_t aLengthDelta) {
+  if (XRE_IsParentProcess() || StaticPrefs::fission_sessionHistoryInParent()) {
+    // This method is used to test index and length for the session history
+    // in child process only.
+    return;
+  }
+
+  if (!IsTop()) {
+    // Some tests have unexpected setup while Fission shistory is being
+    // implemented.
+    return;
+  }
+
+  RefPtr<ChildSHistory> shistory = GetChildSessionHistory();
+  if (!shistory || !shistory->AsyncHistoryLength()) {
+    return;
+  }
+
+  nsID changeID = shistory->AddPendingHistoryChange(aIndexDelta, aLengthDelta);
+  uint32_t index = shistory->Index();
+  uint32_t length = shistory->Count();
+
+  // Do artificial history update through parent process to test asynchronous
+  // history.length handling.
+  ContentChild::GetSingleton()->SendSessionHistoryUpdate(this, index, length,
+                                                         changeID);
 }
 
 }  // namespace dom

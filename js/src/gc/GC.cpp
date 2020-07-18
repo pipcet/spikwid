@@ -1591,11 +1591,11 @@ void GCRuntime::setHostCleanupFinalizationRegistryCallback(
 }
 
 void GCRuntime::callHostCleanupFinalizationRegistryCallback(
-    FinalizationRegistryObject* registry) {
+    JSFunction* doCleanup, GlobalObject* incumbentGlobal) {
   JS::AutoSuppressGCAnalysis nogc;
   const auto& callback = hostCleanupFinalizationRegistryCallback.ref();
   if (callback.op) {
-    callback.op(registry, callback.data);
+    callback.op(doCleanup, incumbentGlobal, callback.data);
   }
 }
 
@@ -2160,7 +2160,7 @@ void GCRuntime::sweepZoneAfterCompacting(MovingTracer* trc, Zone* zone) {
   MOZ_ASSERT(zone->isCollecting());
   sweepTypesAfterCompacting(zone);
   sweepFinalizationRegistries(zone);
-  zone->weakRefMap().sweep();
+  zone->weakRefMap().sweep(&storeBuffer());
 
   {
     zone->sweepWeakMaps();
@@ -3169,21 +3169,26 @@ void GCRuntime::triggerFullGCForAtoms(JSContext* cx) {
   MOZ_RELEASE_ASSERT(triggerGC(JS::GCReason::DELAYED_ATOMS_GC));
 }
 
-// Do all possible decommit immediately from the current thread without
-// releasing the GC lock or allocating any memory.
-void GCRuntime::decommitFreeArenasWithoutUnlocking(const AutoLockGC& lock) {
-  MOZ_ASSERT(emptyChunks(lock).count() == 0);
-  for (ChunkPool::Iter chunk(availableChunks(lock)); !chunk.done();
-       chunk.next()) {
-    chunk->decommitFreeArenasWithoutUnlocking(lock);
-  }
-  MOZ_ASSERT(availableChunks(lock).verify());
-}
-
 void GCRuntime::startDecommit() {
   gcstats::AutoPhase ap(stats(), gcstats::PhaseKind::DECOMMIT);
+
+#ifdef DEBUG
   MOZ_ASSERT(CurrentThreadCanAccessRuntime(rt));
   MOZ_ASSERT(decommitTask.isIdle());
+
+  {
+    AutoLockGC lock(this);
+    MOZ_ASSERT(fullChunks(lock).verify());
+    MOZ_ASSERT(availableChunks(lock).verify());
+    MOZ_ASSERT(emptyChunks(lock).verify());
+
+    // Verify that all entries in the empty chunks pool are already decommitted.
+    for (ChunkPool::Iter chunk(emptyChunks(lock)); !chunk.done();
+         chunk.next()) {
+      MOZ_ASSERT(chunk->info.numArenasFreeCommitted == 0);
+    }
+  }
+#endif
 
   // If we are allocating heavily enough to trigger "high frequency" GC, then
   // skip decommit so that we do not compete with the mutator. However if we're
@@ -3193,36 +3198,12 @@ void GCRuntime::startDecommit() {
     return;
   }
 
-  BackgroundDecommitTask::ChunkVector toDecommit;
   {
     AutoLockGC lock(this);
-
-    // Verify that all entries in the empty chunks pool are already decommitted.
-    for (ChunkPool::Iter chunk(emptyChunks(lock)); !chunk.done();
-         chunk.next()) {
-      MOZ_ASSERT(!chunk->info.numArenasFreeCommitted);
-    }
-
-    // Since we release the GC lock while doing the decommit syscall below,
-    // it is dangerous to iterate the available list directly, as the active
-    // thread could modify it concurrently. Instead, we build and pass an
-    // explicit Vector containing the Chunks we want to visit.
-    MOZ_ASSERT(availableChunks(lock).verify());
-    availableChunks(lock).sort();
-    for (ChunkPool::Iter chunk(availableChunks(lock)); !chunk.done();
-         chunk.next()) {
-      if (chunk->info.numArenasFreeCommitted && !toDecommit.append(chunk)) {
-        // The OOM handler does a full, immediate decommit.
-        return onOutOfMallocMemory(lock);
-      }
-    }
-
-    if (toDecommit.empty() && !tooManyEmptyChunks(lock)) {
-      return;
+    if (availableChunks(lock).empty() && !tooManyEmptyChunks(lock)) {
+      return;  // Nothing to do.
     }
   }
-
-  decommitTask.setChunksToScan(toDecommit);
 
 #ifdef DEBUG
   {
@@ -3239,41 +3220,67 @@ void GCRuntime::startDecommit() {
   decommitTask.runFromMainThread();
 }
 
-void js::gc::BackgroundDecommitTask::setChunksToScan(ChunkVector& chunks) {
-  MOZ_ASSERT(CurrentThreadCanAccessRuntime(gc->rt));
-  MOZ_ASSERT(isIdle());
-  MOZ_ASSERT(toDecommit.ref().empty());
-  std::swap(toDecommit.ref(), chunks);
-}
-
 void js::gc::BackgroundDecommitTask::run() {
-  ChunkPool toFree;
+  ChunkPool emptyChunksToFree;
 
   {
     AutoLockGC lock(gc);
 
-    for (Chunk* chunk : toDecommit.ref()) {
-      // The arena list is not doubly-linked, so we have to work in the free
-      // list order and not in the natural order.
+    // To help minimize the total number of chunks needed over time, sort the
+    // available chunks list so that we allocate into more-used chunks first.
+    gc->availableChunks(lock).sort();
 
-      while (chunk->info.numArenasFreeCommitted && !cancel_) {
-        if (!chunk->decommitOneFreeArena(gc, lock)) {
-          // If we are low enough on memory that we can't update the page
-          // tables, break out of the loop.
-          break;
-        }
-      }
-    }
+    gc->decommitFreeArenas(cancel_, lock);
 
-    toDecommit.ref().clearAndFree();
-    toFree = gc->expireEmptyChunkPool(lock);
+    emptyChunksToFree = gc->expireEmptyChunkPool(lock);
   }
 
-  FreeChunkPool(toFree);
+  FreeChunkPool(emptyChunksToFree);
 
   AutoLockHelperThreadState lock;
   setFinishing(lock);
   gc->maybeRequestGCAfterBackgroundTask(lock);
+}
+
+// Called from a background thread to decommit free arenas. Releases the GC
+// lock.
+void GCRuntime::decommitFreeArenas(const bool& cancel, AutoLockGC& lock) {
+  // Since we release the GC lock while doing the decommit syscall below,
+  // it is dangerous to iterate the available list directly, as the active
+  // thread could modify it concurrently. Instead, we build and pass an
+  // explicit Vector containing the Chunks we want to visit.
+  Vector<Chunk*, 0, SystemAllocPolicy> chunksToDecommit;
+  for (ChunkPool::Iter chunk(availableChunks(lock)); !chunk.done();
+       chunk.next()) {
+    if (chunk->info.numArenasFreeCommitted != 0 &&
+        !chunksToDecommit.append(chunk)) {
+      decommitFreeArenasWithoutUnlocking(lock);
+      return;
+    }
+  }
+
+  for (Chunk* chunk : chunksToDecommit) {
+    // The arena list is not doubly-linked, so we have to work in the free
+    // list order and not in the natural order.
+
+    while (chunk->info.numArenasFreeCommitted && !cancel) {
+      if (!chunk->decommitOneFreeArena(this, lock)) {
+        // If we are low enough on memory that we can't update the page
+        // tables, break out of the loop.
+        break;
+      }
+    }
+  }
+}
+
+// Do all possible decommit immediately from the current thread without
+// releasing the GC lock or allocating any memory.
+void GCRuntime::decommitFreeArenasWithoutUnlocking(const AutoLockGC& lock) {
+  for (ChunkPool::Iter chunk(availableChunks(lock)); !chunk.done();
+       chunk.next()) {
+    chunk->decommitFreeArenasWithoutUnlocking(lock);
+  }
+  MOZ_ASSERT(availableChunks(lock).verify());
 }
 
 void GCRuntime::maybeRequestGCAfterBackgroundTask(
@@ -5048,7 +5055,7 @@ void GCRuntime::sweepUniqueIds() {
 void GCRuntime::sweepWeakRefs() {
   for (SweepGroupZonesIter zone(this); !zone.done(); zone.next()) {
     AutoSetThreadIsSweeping threadIsSweeping(zone);
-    zone->weakRefMap().sweep();
+    zone->weakRefMap().sweep(&storeBuffer());
   }
 }
 
@@ -6707,22 +6714,11 @@ void GCRuntime::incrementalSlice(SliceBudget& budget,
       [[fallthrough]];
 
     case State::Finalize:
-      // In incremental collections, yield here until background finalization
-      // is done and request a slice to notify us when this happens.
-      if (!budget.isUnlimited()) {
-        AutoLockHelperThreadState lock;
-        if (sweepTask.wasStarted(lock)) {
-          requestSliceAfterBackgroundTask = true;
-          break;
-        }
+      if (waitForBackgroundTask(sweepTask, budget) == NotFinished) {
+        break;
       }
 
-      {
-        gcstats::AutoPhase ap(stats(),
-                              gcstats::PhaseKind::WAIT_BACKGROUND_THREAD);
-        waitBackgroundSweepEnd();
-        cancelRequestedGCAfterBackgroundTask();
-      }
+      assertBackgroundSweepingFinished();
 
       {
         // Sweep the zones list now that background finalization is finished to
@@ -6764,21 +6760,8 @@ void GCRuntime::incrementalSlice(SliceBudget& budget,
       [[fallthrough]];
 
     case State::Decommit:
-      // In incremental collections, yield until background decommit is done and
-      // request a slice to notify us when that happens.
-      if (!budget.isUnlimited()) {
-        AutoLockHelperThreadState lock;
-        if (decommitTask.wasStarted(lock)) {
-          requestSliceAfterBackgroundTask = true;
-          break;
-        }
-      }
-
-      {
-        gcstats::AutoPhase ap(stats(),
-                              gcstats::PhaseKind::WAIT_BACKGROUND_THREAD);
-        decommitTask.join();
-        cancelRequestedGCAfterBackgroundTask();
+      if (waitForBackgroundTask(decommitTask, budget) == NotFinished) {
+        break;
       }
 
       incrementalState = State::Finish;
@@ -6810,6 +6793,26 @@ bool GCRuntime::hasForegroundWork() const {
       // In all other states there is still work to do.
       return true;
   }
+}
+
+IncrementalProgress GCRuntime::waitForBackgroundTask(GCParallelTask& task,
+                                                     SliceBudget& budget) {
+  // In incremental collections, yield if the task has not finished and request
+  // a slice to notify us when this happens.
+  if (!budget.isUnlimited()) {
+    AutoLockHelperThreadState lock;
+    if (task.wasStarted(lock)) {
+      requestSliceAfterBackgroundTask = true;
+      return NotFinished;
+    }
+  }
+
+  // Otherwise in non-incremental collections, wait here.
+  gcstats::AutoPhase ap(stats(), gcstats::PhaseKind::WAIT_BACKGROUND_THREAD);
+  task.join();
+  cancelRequestedGCAfterBackgroundTask();
+
+  return Finished;
 }
 
 gc::AbortReason gc::IsIncrementalGCUnsafe(JSRuntime* rt) {
@@ -7071,7 +7074,8 @@ MOZ_NEVER_INLINE GCRuntime::IncrementalResult GCRuntime::gcCycle(
   }
 
   if (shouldCollectNurseryForSlice(nonincrementalByAPI, budget)) {
-    collectNursery(reason, gcstats::PhaseKind::EVICT_NURSERY_FOR_MAJOR_GC);
+    collectNursery(gckind.valueOr(GC_NORMAL), reason,
+                   gcstats::PhaseKind::EVICT_NURSERY_FOR_MAJOR_GC);
   } else {
     ++number;  // This otherwise happens in Nursery::collect().
   }
@@ -7531,7 +7535,7 @@ void GCRuntime::minorGC(JS::GCReason reason, gcstats::PhaseKind phase) {
     return;
   }
 
-  collectNursery(reason, phase);
+  collectNursery(GC_NORMAL, reason, phase);
 
   for (ZonesIter zone(this, WithAtoms); !zone.done(); zone.next()) {
     maybeAllocTriggerZoneGC(zone);
@@ -7539,7 +7543,8 @@ void GCRuntime::minorGC(JS::GCReason reason, gcstats::PhaseKind phase) {
   }
 }
 
-void GCRuntime::collectNursery(JS::GCReason reason, gcstats::PhaseKind phase) {
+void GCRuntime::collectNursery(JSGCInvocationKind kind, JS::GCReason reason,
+                               gcstats::PhaseKind phase) {
   AutoMaybeLeaveAtomsZone leaveAtomsZone(rt->mainContextFromOwnThread());
 
   // Note that we aren't collecting the updated alloc counts from any helper
@@ -7557,7 +7562,7 @@ void GCRuntime::collectNursery(JS::GCReason reason, gcstats::PhaseKind phase) {
   nursery().clearMinorGCRequest();
   TraceLoggerThread* logger = TraceLoggerForCurrentThread();
   AutoTraceLog logMinorGC(logger, TraceLogger_MinorGC);
-  nursery().collect(reason);
+  nursery().collect(kind, reason);
   MOZ_ASSERT(nursery().isEmpty());
 
   startBackgroundFreeAfterMinorGC();

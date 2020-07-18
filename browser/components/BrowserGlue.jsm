@@ -694,6 +694,7 @@ XPCOMUtils.defineLazyModuleGetters(this, {
     "resource://gre/modules/ContextualIdentityService.jsm",
   Corroborate: "resource://gre/modules/Corroborate.jsm",
   Discovery: "resource:///modules/Discovery.jsm",
+  DoHController: "resource:///modules/DoHController.jsm",
   ExtensionsUI: "resource:///modules/ExtensionsUI.jsm",
   FirefoxMonitor: "resource:///modules/FirefoxMonitor.jsm",
   FxAccounts: "resource://gre/modules/FxAccounts.jsm",
@@ -800,13 +801,6 @@ const listeners = {
     "plugin-crashed": ["PluginManager"],
   },
 
-  ppmm: {
-    // PLEASE KEEP THIS LIST IN SYNC WITH THE LISTENERS ADDED IN AsyncPrefs.init
-    "AsyncPrefs:SetPref": ["AsyncPrefs"],
-    "AsyncPrefs:ResetPref": ["AsyncPrefs"],
-    // PLEASE KEEP THIS LIST IN SYNC WITH THE LISTENERS ADDED IN AsyncPrefs.init
-  },
-
   observe(subject, topic, data) {
     for (let module of this.observers[topic]) {
       try {
@@ -817,26 +811,9 @@ const listeners = {
     }
   },
 
-  receiveMessage(modules, data) {
-    let val;
-    for (let module of modules[data.name]) {
-      try {
-        val = global[module].receiveMessage(data) || val;
-      } catch (e) {
-        Cu.reportError(e);
-      }
-    }
-    return val;
-  },
-
   init() {
     for (let observer of Object.keys(this.observers)) {
       Services.obs.addObserver(this, observer);
-    }
-
-    let receiveMessagePPMM = this.receiveMessage.bind(this, this.ppmm);
-    for (let message of Object.keys(this.ppmm)) {
-      Services.ppmm.addMessageListener(message, receiveMessagePPMM);
     }
   },
 };
@@ -2287,6 +2264,7 @@ BrowserGlue.prototype = {
       this._showNewInstallModal();
     }
 
+    DoHController.init();
     FirefoxMonitor.init();
   },
 
@@ -4191,8 +4169,8 @@ BrowserGlue.prototype = {
   },
 
   QueryInterface: ChromeUtils.generateQI([
-    Ci.nsIObserver,
-    Ci.nsISupportsWeakReference,
+    "nsIObserver",
+    "nsISupportsWeakReference",
   ]),
 };
 
@@ -4474,7 +4452,7 @@ function ContentPermissionPrompt() {}
 ContentPermissionPrompt.prototype = {
   classID: Components.ID("{d8903bf6-68d5-4e97-bcd1-e4d3012f721a}"),
 
-  QueryInterface: ChromeUtils.generateQI([Ci.nsIContentPermissionPrompt]),
+  QueryInterface: ChromeUtils.generateQI(["nsIContentPermissionPrompt"]),
 
   /**
    * This implementation of nsIContentPermissionPrompt.prompt ensures
@@ -4895,8 +4873,8 @@ var JawsScreenReaderVersionCheck = {
   },
 
   QueryInterface: ChromeUtils.generateQI([
-    Ci.nsIObserver,
-    Ci.nsISupportsWeakReference,
+    "nsIObserver",
+    "nsISupportsWeakReference",
   ]),
 
   observe(subject, topic, data) {
@@ -5744,8 +5722,8 @@ var AboutHomeStartupCache = {
   },
 
   QueryInterface: ChromeUtils.generateQI([
-    Ci.nsICacheEntryOpenallback,
-    Ci.nsIObserver,
+    "nsICacheEntryOpenallback",
+    "nsIObserver",
   ]),
 
   /** MessageListener **/

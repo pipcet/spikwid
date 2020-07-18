@@ -15,15 +15,11 @@ if CONFIG['ENABLE_TESTS']:
         'tests/chrome.ini',
 ]
 
-EXPORTS += [
-    'nsSVGDisplayableFrame.h',
-    'nsSVGIntegrationUtils.h',
-    'nsSVGUtils.h',
-]
-
 EXPORTS.mozilla += [
     'CSSClipPathInstance.h',
     'FilterInstance.h',
+    'ISVGDisplayableFrame.h',
+    'ISVGSVGFrame.h',
     'SVGClipPathFrame.h',
     'SVGContainerFrame.h',
     'SVGContextPaint.h',
@@ -32,19 +28,19 @@ EXPORTS.mozilla += [
     'SVGGeometryFrame.h',
     'SVGImageContext.h',
     'SVGImageFrame.h',
+    'SVGIntegrationUtils.h',
     'SVGMaskFrame.h',
     'SVGObserverUtils.h',
     'SVGOuterSVGFrame.h',
     'SVGTextFrame.h',
-    'SVGUseFrame.h'
+    'SVGUseFrame.h',
+    'SVGUtils.h'
 ]
 
 UNIFIED_SOURCES += [
     'CSSClipPathInstance.cpp',
     'CSSFilterInstance.cpp',
     'FilterInstance.cpp',
-    'nsSVGIntegrationUtils.cpp',
-    'nsSVGUtils.cpp',
     'SVGAFrame.cpp',
     'SVGClipPathFrame.cpp',
     'SVGContainerFrame.cpp',
@@ -56,13 +52,13 @@ UNIFIED_SOURCES += [
     'SVGFilterFrame.cpp',
     'SVGFilterInstance.cpp',
     'SVGForeignObjectFrame.cpp',
-    'SVGGenericContainerFrame.cpp',
     'SVGGeometryFrame.cpp',
     'SVGGFrame.cpp',
     'SVGGradientFrame.cpp',
     'SVGImageContext.cpp',
     'SVGImageFrame.cpp',
     'SVGInnerSVGFrame.cpp',
+    'SVGIntegrationUtils.cpp',
     'SVGMarkerFrame.cpp',
     'SVGMaskFrame.cpp',
     'SVGObserverUtils.cpp',
@@ -73,6 +69,7 @@ UNIFIED_SOURCES += [
     'SVGSymbolFrame.cpp',
     'SVGTextFrame.cpp',
     'SVGUseFrame.cpp',
+    'SVGUtils.cpp',
     'SVGViewFrame.cpp',
     'SVGViewportFrame.cpp',
 ]

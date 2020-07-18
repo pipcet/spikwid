@@ -109,8 +109,8 @@ NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 FontFaceSet::FontFaceSet(nsPIDOMWindowInner* aWindow, dom::Document* aDocument)
     : DOMEventTargetHelper(aWindow),
       mDocument(aDocument),
-      mStandardFontLoadPrincipal(
-          new gfxFontSrcPrincipal(mDocument->NodePrincipal())),
+      mStandardFontLoadPrincipal(new gfxFontSrcPrincipal(
+          mDocument->NodePrincipal(), mDocument->PartitionedPrincipal())),
       mResolveLazilyCreatedReadyPromise(false),
       mStatus(FontFaceSetLoadStatus::Loaded),
       mNonRuleFacesDirty(false),
@@ -120,9 +120,6 @@ FontFaceSet::FontFaceSet(nsPIDOMWindowInner* aWindow, dom::Document* aDocument)
       mBypassCache(false),
       mPrivateBrowsing(false) {
   MOZ_ASSERT(mDocument, "We should get a valid document from the caller!");
-
-  mStandardFontLoadPrincipal =
-      new gfxFontSrcPrincipal(mDocument->NodePrincipal());
 
   // Record the state of the "bypass cache" flags from the docshell now,
   // since we want to look at them from style worker threads, and we can
@@ -1057,8 +1054,8 @@ FontFaceSet::FindOrCreateUserFontEntryFromFontFace(
           face->mURI = uri ? new gfxFontSrcURI(uri) : nullptr;
           const URLExtraData& extraData = url->ExtraData();
           face->mReferrerInfo = extraData.ReferrerInfo();
-          face->mOriginPrincipal =
-              new gfxFontSrcPrincipal(extraData.Principal());
+          face->mOriginPrincipal = new gfxFontSrcPrincipal(
+              extraData.Principal(), extraData.Principal());
 
           // agent and user stylesheets are treated slightly differently,
           // the same-site origin check and access control headers are
@@ -1308,7 +1305,8 @@ bool FontFaceSet::IsFontLoadAllowed(const gfxFontFaceSrc& aSrc) {
                                           ? nullptr
                                           : aSrc.LoadPrincipal(*mUserFontSet);
 
-  nsIPrincipal* principal = gfxPrincipal ? gfxPrincipal->get() : nullptr;
+  nsIPrincipal* principal =
+      gfxPrincipal ? gfxPrincipal->NodePrincipal() : nullptr;
 
   nsCOMPtr<nsILoadInfo> secCheckLoadInfo = new net::LoadInfo(
       mDocument->NodePrincipal(),  // loading principal
@@ -1354,12 +1352,12 @@ nsresult FontFaceSet::SyncLoadFontData(gfxUserFontEntry* aFontToLoad,
   // being loaded might have a different origin from the principal of the
   // stylesheet that initiated the font load.
   // Further, we only get here for data: loads, so it doesn't really matter
-  // whether we use SEC_ALLOW_CROSS_ORIGIN_DATA_INHERITS or not, to be more
-  // restrictive we use SEC_REQUIRE_SAME_ORIGIN_DATA_INHERITS.
+  // whether we use SEC_ALLOW_CROSS_ORIGIN_INHERITS_SEC_CONTEXT or not, to be
+  // more restrictive we use SEC_REQUIRE_SAME_ORIGIN_INHERITS_SEC_CONTEXT.
   rv = NS_NewChannelWithTriggeringPrincipal(
       getter_AddRefs(channel), aFontFaceSrc->mURI->get(), mDocument,
-      principal ? principal->get() : nullptr,
-      nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_DATA_INHERITS,
+      principal ? principal->NodePrincipal() : nullptr,
+      nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_INHERITS_SEC_CONTEXT,
       nsIContentPolicy::TYPE_FONT);
 
   NS_ENSURE_SUCCESS(rv, rv);
@@ -1712,8 +1710,8 @@ nsPresContext* FontFaceSet::GetPresContext() {
 
 void FontFaceSet::RefreshStandardFontLoadPrincipal() {
   MOZ_ASSERT(NS_IsMainThread());
-  mStandardFontLoadPrincipal =
-      new gfxFontSrcPrincipal(mDocument->NodePrincipal());
+  mStandardFontLoadPrincipal = new gfxFontSrcPrincipal(
+      mDocument->NodePrincipal(), mDocument->PartitionedPrincipal());
   mAllowedFontLoads.Clear();
   if (mUserFontSet) {
     mUserFontSet->IncrementGeneration(false);

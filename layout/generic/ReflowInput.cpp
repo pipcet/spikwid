@@ -28,6 +28,7 @@
 #include "nsIFrameInlines.h"
 #include "CounterStyleManager.h"
 #include <algorithm>
+#include "mozilla/SVGUtils.h"
 #include "mozilla/dom/HTMLInputElement.h"
 #include "nsGridContainerFrame.h"
 
@@ -187,7 +188,7 @@ ReflowInput::ReflowInput(nsPresContext* aPresContext,
   MOZ_ASSERT(aPresContext, "no pres context");
   MOZ_ASSERT(aFrame, "no frame");
   MOZ_ASSERT(aPresContext == aFrame->PresContext(), "wrong pres context");
-  MOZ_ASSERT(!mFlags.mSpecialBSizeReflow || !NS_SUBTREE_DIRTY(aFrame),
+  MOZ_ASSERT(!mFlags.mSpecialBSizeReflow || !aFrame->IsSubtreeDirty(),
              "frame should be clean when getting special bsize reflow");
 
   AvailableISize() = aAvailableSpace.ISize(mWritingMode);
@@ -659,7 +660,7 @@ void ReflowInput::InitResizeFlags(nsPresContext* aPresContext,
     // XXX Is this problematic for relatively positioned inlines acting
     // as containing block for absolutely positioned elements?
     // Possibly; in that case we should at least be checking
-    // NS_SUBTREE_DIRTY, I'd think.
+    // IsSubtreeDirty(), I'd think.
     SetBResize(mCBReflowInput->IsBResizeForWM(wm));
     mFlags.mIsBResizeForPercentages =
         mCBReflowInput->IsBResizeForPercentagesForWM(wm);
@@ -672,7 +673,7 @@ void ReflowInput::InitResizeFlags(nsPresContext* aPresContext,
     } else {
       SetBResize(IsIResize());
     }
-    SetBResize(IsBResize() || NS_SUBTREE_DIRTY(mFrame));
+    SetBResize(IsBResize() || mFrame->IsSubtreeDirty());
   } else {
     // We have a non-'auto' block-size, i.e., a length.  Set the BResize
     // flag to whether the size is actually different.
@@ -2497,12 +2498,12 @@ void SizeComputationInput::InitOffsets(WritingMode aWM, nscoord aPercentBasis,
   bool needPaddingProp;
   LayoutDeviceIntMargin widgetPadding;
   if (isThemed && presContext->Theme()->GetWidgetPadding(
-                      presContext->DeviceContext(), mFrame, disp->mAppearance,
-                      &widgetPadding)) {
+                      presContext->DeviceContext(), mFrame,
+                      disp->EffectiveAppearance(), &widgetPadding)) {
     ComputedPhysicalPadding() = LayoutDevicePixel::ToAppUnits(
         widgetPadding, presContext->AppUnitsPerDevPixel());
     needPaddingProp = false;
-  } else if (nsSVGUtils::IsInSVGTextSubtree(mFrame)) {
+  } else if (SVGUtils::IsInSVGTextSubtree(mFrame)) {
     ComputedPhysicalPadding().SizeTo(0, 0, 0, 0);
     needPaddingProp = false;
   } else if (aPadding) {  // padding is an input arg
@@ -2548,10 +2549,10 @@ void SizeComputationInput::InitOffsets(WritingMode aWM, nscoord aPercentBasis,
 
   if (isThemed) {
     LayoutDeviceIntMargin border = presContext->Theme()->GetWidgetBorder(
-        presContext->DeviceContext(), mFrame, disp->mAppearance);
+        presContext->DeviceContext(), mFrame, disp->EffectiveAppearance());
     ComputedPhysicalBorderPadding() = LayoutDevicePixel::ToAppUnits(
         border, presContext->AppUnitsPerDevPixel());
-  } else if (nsSVGUtils::IsInSVGTextSubtree(mFrame)) {
+  } else if (SVGUtils::IsInSVGTextSubtree(mFrame)) {
     ComputedPhysicalBorderPadding().SizeTo(0, 0, 0, 0);
   } else if (aBorder) {  // border is an input arg
     ComputedPhysicalBorderPadding() = *aBorder;
@@ -2828,7 +2829,7 @@ nscoord ReflowInput::CalcLineHeight(nsIContent* aContent,
 bool SizeComputationInput::ComputeMargin(WritingMode aWM,
                                          nscoord aPercentBasis) {
   // SVG text frames have no margin.
-  if (nsSVGUtils::IsInSVGTextSubtree(mFrame)) {
+  if (SVGUtils::IsInSVGTextSubtree(mFrame)) {
     return false;
   }
 

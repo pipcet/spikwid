@@ -516,7 +516,7 @@ void nsContainerFrame::DisplaySelectionOverlay(nsDisplayListBuilder* aBuilder,
 
 /* virtual */
 void nsContainerFrame::ChildIsDirty(nsIFrame* aChild) {
-  NS_ASSERTION(NS_SUBTREE_DIRTY(aChild), "child isn't actually dirty");
+  NS_ASSERTION(aChild->IsSubtreeDirty(), "child isn't actually dirty");
 
   AddStateBits(NS_FRAME_HAS_DIRTY_CHILDREN);
 }
@@ -1303,7 +1303,7 @@ void nsContainerFrame::ReflowOverflowContainerChildren(
     }
     // If the available vertical height has changed, we need to reflow
     // even if the frame isn't dirty.
-    if (shouldReflowAllKids || NS_SUBTREE_DIRTY(frame)) {
+    if (shouldReflowAllKids || frame->IsSubtreeDirty()) {
       // Get prev-in-flow
       nsIFrame* prevInFlow = frame->GetPrevInFlow();
       NS_ASSERTION(prevInFlow,
@@ -2417,12 +2417,10 @@ LogicalSize nsContainerFrame::ComputeSizeWithIntrinsicDimensions(
   const auto* inlineStyleCoord = &stylePos->ISize(aWM);
   const auto* blockStyleCoord = &stylePos->BSize(aWM);
   auto* parentFrame = GetParent();
-  const bool isGridItem = parentFrame && parentFrame->IsGridContainerFrame() &&
-                          !HasAnyStateBits(NS_FRAME_OUT_OF_FLOW);
+  const bool isGridItem = IsGridItem();
   const bool isFlexItem =
-      parentFrame && parentFrame->IsFlexContainerFrame() &&
-      !parentFrame->HasAnyStateBits(NS_STATE_FLEX_IS_EMULATING_LEGACY_BOX) &&
-      !HasAnyStateBits(NS_FRAME_OUT_OF_FLOW);
+      IsFlexItem() &&
+      !parentFrame->HasAnyStateBits(NS_STATE_FLEX_IS_EMULATING_LEGACY_BOX);
   // This variable only gets set (and used) if isFlexItem is true.  It
   // indicates which axis (in this frame's own WM) corresponds to its
   // flex container's main axis.

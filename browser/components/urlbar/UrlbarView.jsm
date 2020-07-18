@@ -523,7 +523,9 @@ class UrlbarView {
       // character.
       let trimmedValue = queryContext.searchString.trim();
       this._enableOrDisableOneOffSearches(
-        trimmedValue &&
+        ((UrlbarPrefs.get("update2") &&
+          UrlbarPrefs.get("update2.oneOffsRefresh")) ||
+          trimmedValue) &&
           trimmedValue[0] != "@" &&
           (trimmedValue[0] != UrlbarTokenizer.RESTRICT.SEARCH ||
             trimmedValue.length != 1)
@@ -545,6 +547,15 @@ class UrlbarView {
         updateInput: false,
         setAccessibleFocus: this.controller._userSelectionBehavior == "arrow",
       });
+    }
+
+    // If we update the selected element, a new unique ID is generated for it.
+    // We need to ensure that aria-activedescendant reflects this new ID.
+    if (this.selectedElement && !this.oneOffSearchButtons.selectedButton) {
+      let aadID = this.input.inputField.getAttribute("aria-activedescendant");
+      if (aadID && !this.document.getElementById(aadID)) {
+        this._setAccessibleFocus(this.selectedElement);
+      }
     }
 
     this._openPanel();
@@ -1061,7 +1072,7 @@ class UrlbarView {
       result.titleHighlights
     );
 
-    if (result.payload.tail && result.payload.tailOffsetIndex >= 0) {
+    if (result.payload.tail && result.payload.tailOffsetIndex > 0) {
       this._fillTailSuggestionPrefix(item, result);
       title.setAttribute("aria-label", result.payload.suggestion);
       item.toggleAttribute("tail-suggestion", true);

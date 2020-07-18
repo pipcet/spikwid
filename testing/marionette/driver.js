@@ -97,6 +97,9 @@ const SUPPORTED_STRATEGIES = new Set([
   element.Strategy.ClassName,
   element.Strategy.Selector,
   element.Strategy.ID,
+  element.Strategy.Name,
+  element.Strategy.LinkText,
+  element.Strategy.PartialLinkText,
   element.Strategy.TagName,
   element.Strategy.XPath,
 ]);
@@ -296,8 +299,8 @@ Object.defineProperty(GeckoDriver.prototype, "chromeWindowHandles", {
 });
 
 GeckoDriver.prototype.QueryInterface = ChromeUtils.generateQI([
-  Ci.nsIObserver,
-  Ci.nsISupportsWeakReference,
+  "nsIObserver",
+  "nsISupportsWeakReference",
 ]);
 
 GeckoDriver.prototype.init = function() {
@@ -1571,35 +1574,27 @@ GeckoDriver.prototype.setWindowRect = async function(cmd) {
  * ID.  Searches for windows by name, then ID.  Content windows take
  * precedence.
  *
- * @param {string} name
- *     Target name or ID of the window to switch to.
+ * @param {string} handle
+ *     Handle of the window to switch to.
  * @param {boolean=} focus
- *      A boolean value which determines whether to focus
- *      the window. Defaults to true.
+ *     A boolean value which determines whether to focus
+ *     the window. Defaults to true.
  */
 GeckoDriver.prototype.switchToWindow = async function(cmd) {
-  let focus = true;
-  if (typeof cmd.parameters.focus != "undefined") {
-    focus = cmd.parameters.focus;
-  }
+  const { focus = true, handle } = cmd.parameters;
 
-  // Window IDs are internally handled as numbers, but here it could
-  // also be the name of the window.
-  let switchTo = parseInt(cmd.parameters.name);
-  if (isNaN(switchTo)) {
-    switchTo = cmd.parameters.name;
-  }
+  assert.string(
+    handle,
+    pprint`Expected "handle" to be a string, got ${handle}`
+  );
+  assert.boolean(focus, pprint`Expected "focus" to be a boolean, got ${focus}`);
 
-  let byNameOrId = function(win, windowId) {
-    return switchTo === win.name || switchTo === windowId;
-  };
-
-  let found = this.findWindow(this.windows, byNameOrId);
-
+  const id = parseInt(handle);
+  const found = this.findWindow(this.windows, (win, winId) => id == winId);
   if (found) {
     await this.setWindowHandle(found, focus);
   } else {
-    throw new NoSuchWindowError(`Unable to locate window: ${switchTo}`);
+    throw new NoSuchWindowError(`Unable to locate window: ${handle}`);
   }
 };
 
@@ -1741,11 +1736,13 @@ GeckoDriver.prototype.switchToParentFrame = async function() {
 /**
  * Switch to a given frame within the current window.
  *
- * @param {Object} element
- *     A web element reference to the element to switch to.
- * @param {(string|number)} id
- *     If element is not defined, then this holds either the id, name,
- *     or index of the frame to switch to.
+ * @param {boolean=} focus
+ *     Focus the frame if set to true. Defaults to false.
+ * @param {(string|Object)=} element
+ *     A web element reference of the frame or its element id.
+ * @param {number=} id
+ *     The index of the frame to switch to.
+ *     If both element and id are not defined, switch to top-level frame.
  *
  * @throws {NoSuchWindowError}
  *     Top-level browsing context has been discarded.
@@ -1753,153 +1750,78 @@ GeckoDriver.prototype.switchToParentFrame = async function() {
  *     A modal dialog is open, blocking this operation.
  */
 GeckoDriver.prototype.switchToFrame = async function(cmd) {
-  assert.open(this.getCurrentWindow());
-  await this._handleUserPrompts();
+  const { element, focus = false, id } = cmd.parameters;
 
-  let { id, focus } = cmd.parameters;
+  const curWindow = assert.open(this.getCurrentWindow());
+  await this._handleUserPrompts();
 
   if (typeof id == "number") {
     assert.unsignedShort(id, `Expected id to be unsigned short, got ${id}`);
   }
 
-  // TODO(ato): element can be either string (deprecated) or a web
-  // element JSON Object.  Can be removed with Firefox 60.
-  let byFrame;
-  if (typeof cmd.parameters.element == "string") {
-    byFrame = WebElement.fromUUID(cmd.parameters.element, Context.Chrome);
-  } else if (cmd.parameters.element) {
-    byFrame = WebElement.fromJSON(cmd.parameters.element);
-  }
+  const checkLoad = function(win) {
+    const otherErrorsExpr = /about:.+(error)|(blocked)\?/;
 
-  const otherErrorsExpr = /about:.+(error)|(blocked)\?/;
-  const checkTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
-
-  let curWindow = this.getCurrentWindow();
-
-  let checkLoad = function() {
-    let win = this.getCurrentWindow();
-    if (win.document.readyState == "complete") {
-      return;
-    } else if (win.document.readyState == "interactive") {
-      let documentURI = win.document.documentURI;
-      if (documentURI.startsWith("about:certerror")) {
-        throw new InsecureCertificateError();
-      } else if (otherErrorsExpr.exec(documentURI)) {
-        throw new UnknownError("Reached error page: " + documentURI);
+    return new PollPromise(resolve => {
+      if (win.document.readyState == "complete") {
+        resolve();
+      } else if (win.document.readyState == "interactive") {
+        let documentURI = win.document.documentURI;
+        if (documentURI.startsWith("about:certerror")) {
+          throw new InsecureCertificateError();
+        } else if (otherErrorsExpr.exec(documentURI)) {
+          throw new UnknownError("Reached error page: " + documentURI);
+        }
       }
-    }
-
-    checkTimer.initWithCallback(
-      checkLoad.bind(this),
-      100,
-      Ci.nsITimer.TYPE_ONE_SHOT
-    );
+    });
   };
 
   if (this.context == Context.Chrome) {
     let foundFrame = null;
 
-    // just focus
-    if (typeof id == "undefined" && !byFrame) {
-      this.curFrame = null;
-      if (focus) {
-        this.mainFrame.focus();
-      }
-      checkTimer.initWithCallback(
-        checkLoad.bind(this),
-        100,
-        Ci.nsITimer.TYPE_ONE_SHOT
-      );
-      return;
+    // Bug 1495063: Elements should be passed as WebElement reference
+    let byFrame;
+    if (typeof element == "string") {
+      byFrame = WebElement.fromUUID(element, Context.Chrome);
+    } else if (element) {
+      byFrame = WebElement.fromJSON(element);
     }
 
-    // by element (HTMLIFrameElement)
-    if (byFrame) {
-      let wantedFrame = this.curBrowser.seenEls.get(byFrame);
+    if (id == null && !byFrame) {
+      this.curFrame = null;
+    } else if (typeof id == "number") {
+      if (curWindow.frames[id]) {
+        const frameEl = curWindow.frames[id].frameElement;
+        this.curFrame = frameEl.contentWindow;
+      } else {
+        throw new NoSuchFrameError(`Unable to locate frame with index: ${id}`);
+      }
+    } else {
+      const wantedFrame = this.curBrowser.seenEls.get(byFrame);
 
       // Deal with an embedded xul:browser case
-      if (
-        wantedFrame.tagName == "xul:browser" ||
-        wantedFrame.tagName == "browser"
-      ) {
-        curWindow = wantedFrame.contentWindow;
-        this.curFrame = curWindow;
-        if (focus) {
-          this.curFrame.focus();
-        }
-        checkTimer.initWithCallback(
-          checkLoad.bind(this),
-          100,
-          Ci.nsITimer.TYPE_ONE_SHOT
-        );
-        return;
-      }
+      if (["browser", "xul:browser"].includes(wantedFrame.tagName)) {
+        this.curFrame = wantedFrame.contentWindow;
+      } else {
+        const frames = curWindow.document.getElementsByTagName("iframe");
+        const wrappedWanted = new XPCNativeWrapper(wantedFrame);
 
-      // else, assume iframe
-      let frames = curWindow.document.getElementsByTagName("iframe");
-      let numFrames = frames.length;
-      for (let i = 0; i < numFrames; i++) {
-        let wrappedEl = new XPCNativeWrapper(frames[i]);
-        let wrappedWanted = new XPCNativeWrapper(wantedFrame);
-        if (wrappedEl == wrappedWanted) {
-          curWindow = frames[i].contentWindow;
-          this.curFrame = curWindow;
-          if (focus) {
-            this.curFrame.focus();
-          }
-          checkTimer.initWithCallback(
-            checkLoad.bind(this),
-            100,
-            Ci.nsITimer.TYPE_ONE_SHOT
-          );
-          return;
+        foundFrame = Array.prototype.find.call(frames, frame => {
+          return new XPCNativeWrapper(frame) === wrappedWanted;
+        });
+        if (foundFrame) {
+          this.curFrame = foundFrame.contentWindow;
+        } else {
+          throw new NoSuchFrameError(`Unable to locate frame: ${byFrame}`);
         }
       }
     }
 
-    switch (typeof id) {
-      case "string":
-        let foundById = null;
-        let frames = curWindow.document.getElementsByTagName("iframe");
-        let numFrames = frames.length;
-        for (let i = 0; i < numFrames; i++) {
-          // give precedence to name
-          let frame = frames[i];
-          if (frame.getAttribute("name") == id) {
-            foundFrame = i;
-            curWindow = frame.contentWindow;
-            break;
-          } else if (foundById === null && frame.id == id) {
-            foundById = i;
-          }
-        }
-        if (foundFrame === null && foundById !== null) {
-          foundFrame = foundById;
-          curWindow = frames[foundById].contentWindow;
-        }
-        break;
+    const frameWindow = this.curFrame || this.mainFrame;
+    await checkLoad(frameWindow);
 
-      case "number":
-        if (typeof curWindow.frames[id] != "undefined") {
-          foundFrame = id;
-          let frameEl = curWindow.frames[foundFrame].frameElement;
-          curWindow = frameEl.contentWindow;
-        }
-        break;
-    }
-
-    if (foundFrame !== null) {
-      this.curFrame = curWindow;
-      if (focus) {
-        this.curFrame.focus();
-      }
-      checkTimer.initWithCallback(
-        checkLoad.bind(this),
-        100,
-        Ci.nsITimer.TYPE_ONE_SHOT
-      );
-    } else {
-      throw new NoSuchFrameError(`Unable to locate frame: ${id}`);
+    if (focus) {
+      frameWindow.focus();
     }
   } else if (this.context == Context.Content) {
     cmd.commandID = cmd.id;
@@ -2076,6 +1998,9 @@ GeckoDriver.prototype.findElement = async function(cmd) {
   await this._handleUserPrompts();
 
   let { using, value } = cmd.parameters;
+  if (!SUPPORTED_STRATEGIES.has(using)) {
+    throw new InvalidSelectorError(`Strategy not supported: ${using}`);
+  }
   let startNode;
   if (typeof cmd.parameters.element != "undefined") {
     startNode = WebElement.fromUUID(cmd.parameters.element, this.context);
@@ -2089,10 +2014,6 @@ GeckoDriver.prototype.findElement = async function(cmd) {
 
   switch (this.context) {
     case Context.Chrome:
-      if (!SUPPORTED_STRATEGIES.has(using)) {
-        throw new InvalidSelectorError(`Strategy not supported: ${using}`);
-      }
-
       let container = { frame: win };
       if (opts.startNode) {
         opts.startNode = this.curBrowser.seenEls.get(opts.startNode);
@@ -2121,6 +2042,9 @@ GeckoDriver.prototype.findElements = async function(cmd) {
   await this._handleUserPrompts();
 
   let { using, value } = cmd.parameters;
+  if (!SUPPORTED_STRATEGIES.has(using)) {
+    throw new InvalidSelectorError(`Strategy not supported: ${using}`);
+  }
   let startNode;
   if (typeof cmd.parameters.element != "undefined") {
     startNode = WebElement.fromUUID(cmd.parameters.element, this.context);
@@ -2134,10 +2058,6 @@ GeckoDriver.prototype.findElements = async function(cmd) {
 
   switch (this.context) {
     case Context.Chrome:
-      if (!SUPPORTED_STRATEGIES.has(using)) {
-        throw new InvalidSelectorError(`Strategy not supported: ${using}`);
-      }
-
       let container = { frame: win };
       if (startNode) {
         opts.startNode = this.curBrowser.seenEls.get(opts.startNode);

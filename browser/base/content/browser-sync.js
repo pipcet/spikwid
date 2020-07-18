@@ -183,7 +183,10 @@ var gSync = {
     // "setup sync" state, that function assumes we are already in it and
     // doesn't re-initialize the UI elements.
     document.getElementById("sync-setup").hidden = false;
-    document.getElementById("PanelUI-remotetabs-setupsync").hidden = false;
+    PanelMultiView.getViewNode(
+      document,
+      "PanelUI-remotetabs-setupsync"
+    ).hidden = false;
 
     for (let topic of this._obs) {
       Services.obs.addObserver(this, topic, true);
@@ -294,9 +297,10 @@ var gSync = {
       title = PluralForm.get(tabCount, string).replace("#1", tabCount);
     }
 
-    document
-      .getElementById("PanelUI-fxa-menu-sendtab-button")
-      .setAttribute("label", title);
+    PanelMultiView.getViewNode(
+      document,
+      "PanelUI-fxa-menu-sendtab-button"
+    ).setAttribute("label", title);
   },
 
   showSendToDeviceView(anchor) {
@@ -445,29 +449,38 @@ var gSync = {
     // custom profile image or a filled avatar.
     let stateValue = "not_configured";
 
-    const menuHeaderTitleEl = document.getElementById("fxa-menu-header-title");
-    const menuHeaderDescriptionEl = document.getElementById(
+    const menuHeaderTitleEl = PanelMultiView.getViewNode(
+      document,
+      "fxa-menu-header-title"
+    );
+    const menuHeaderDescriptionEl = PanelMultiView.getViewNode(
+      document,
       "fxa-menu-header-description"
     );
 
-    const cadButtonEl = document.getElementById(
+    const cadButtonEl = PanelMultiView.getViewNode(
+      document,
       "PanelUI-fxa-menu-connect-device-button"
     );
 
-    const syncPrefsButtonEl = document.getElementById(
-      "PanelUI-fxa-menu-sync-prefs-button"
-    );
-
-    const syncSetupButtonEl = document.getElementById(
+    const syncSetupButtonEl = PanelMultiView.getViewNode(
+      document,
       "PanelUI-fxa-menu-setup-sync-button"
     );
 
-    const syncNowButtonEl = document.getElementById(
+    const syncPrefsButtonEl = PanelMultiView.getViewNode(
+      document,
+      "PanelUI-fxa-menu-sync-prefs-button"
+    );
+
+    const syncNowButtonEl = PanelMultiView.getViewNode(
+      document,
       "PanelUI-fxa-menu-syncnow-button"
     );
-    const fxaMenuPanel = document.getElementById("PanelUI-fxa");
+    const fxaMenuPanel = PanelMultiView.getViewNode(document, "PanelUI-fxa");
 
-    const fxaMenuAccountButtonEl = document.getElementById(
+    const fxaMenuAccountButtonEl = PanelMultiView.getViewNode(
+      document,
       "fxa-manage-account-button"
     );
 
@@ -557,13 +570,15 @@ var gSync = {
     );
 
     if (canSendAllURIs) {
-      document
-        .getElementById("PanelUI-fxa-menu-sendtab-button")
-        .removeAttribute("disabled");
+      PanelMultiView.getViewNode(
+        document,
+        "PanelUI-fxa-menu-sendtab-button"
+      ).removeAttribute("disabled");
     } else {
-      document
-        .getElementById("PanelUI-fxa-menu-sendtab-button")
-        .setAttribute("disabled", true);
+      PanelMultiView.getViewNode(
+        document,
+        "PanelUI-fxa-menu-sendtab-button"
+      ).setAttribute("disabled", true);
     }
   },
 
@@ -672,14 +687,19 @@ var gSync = {
         "PanelUI-remotetabs-main",
       ],
     ]) {
-      document.getElementById(menuId).hidden = document.getElementById(
+      document.getElementById(menuId).hidden = PanelMultiView.getViewNode(
+        document,
         boxId
       ).hidden = !shown;
     }
   },
 
   updateSyncStatus(state) {
-    let syncNow = document.querySelector(".syncNowBtn");
+    let viewCacheTemplate = document.getElementById("appMenu-viewCache");
+
+    let syncNow =
+      viewCacheTemplate.content.querySelector(".syncNowBtn") ||
+      document.querySelector(".syncNowBtn");
     const syncingUI = syncNow.getAttribute("syncstatus") == "active";
     if (state.syncing != syncingUI) {
       // Do we need to update the UI?
@@ -838,7 +858,7 @@ var gSync = {
     if (fxaCommandsDevices.length) {
       this.log.info(
         `Sending a tab to ${fxaCommandsDevices
-          .map(d => d.name)
+          .map(d => d.id)
           .join(", ")} using FxA commands.`
       );
       const report = await fxAccounts.commands.sendTab.send(
@@ -847,7 +867,7 @@ var gSync = {
       );
       for (let { device, error } of report.failed) {
         this.log.error(
-          `Failed to send a tab with FxA commands for ${device.name}.`,
+          `Failed to send a tab with FxA commands for ${device.id}.`,
           error
         );
         numFailed++;
@@ -855,7 +875,7 @@ var gSync = {
     }
     for (let client of oldSendTabClients) {
       try {
-        this.log.info(`Sending a tab to ${client.name} using Sync.`);
+        this.log.info(`Sending a tab to ${client.id} using Sync.`);
         await Weave.Service.clientsEngine.sendURIToClientForDisplay(
           url,
           client.id,
@@ -1450,7 +1470,10 @@ var gSync = {
 
   onClientsSynced() {
     // Note that this element is only shown if Sync is enabled.
-    let element = document.getElementById("PanelUI-remotetabs-main");
+    let element = PanelMultiView.getViewNode(
+      document,
+      "PanelUI-remotetabs-main"
+    );
     if (element) {
       if (Weave.Service.clientsEngine.stats.numClients > 1) {
         element.setAttribute("devices-status", "multi");
@@ -1468,7 +1491,7 @@ var gSync = {
   },
 
   QueryInterface: ChromeUtils.generateQI([
-    Ci.nsIObserver,
-    Ci.nsISupportsWeakReference,
+    "nsIObserver",
+    "nsISupportsWeakReference",
   ]),
 };

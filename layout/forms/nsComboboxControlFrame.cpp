@@ -403,7 +403,7 @@ void nsComboboxControlFrame::ReflowDropdown(nsPresContext* aPresContext,
   // don't even need to cache mDropdownFrame's ascent or anything.  If we don't
   // need to reflow it, just bail out here.
   if (!aReflowInput.ShouldReflowAllKids() &&
-      !NS_SUBTREE_DIRTY(mDropdownFrame)) {
+      !mDropdownFrame->IsSubtreeDirty()) {
     return;
   }
 
@@ -570,7 +570,8 @@ void nsComboboxControlFrame::GetAvailableDropdownSpace(
   }
 
   nscoord minBCoord;
-  nsPresContext* pc = PresContext()->GetInProcessRootContentDocumentPresContext();
+  nsPresContext* pc =
+      PresContext()->GetInProcessRootContentDocumentPresContext();
   nsIFrame* root = pc ? pc->PresShell()->GetRootFrame() : nullptr;
   if (root) {
     minBCoord = LogicalRect(aWM, root->GetScreenRectInAppUnits(), containerSize)
@@ -702,7 +703,7 @@ bool nsComboboxControlFrame::HasDropDownButton() const {
   const nsStyleDisplay* disp = StyleDisplay();
   // FIXME(emilio): Blink also shows this for menulist-button and such... Seems
   // more similar to our mac / linux implementation.
-  return disp->mAppearance == StyleAppearance::Menulist &&
+  return disp->EffectiveAppearance() == StyleAppearance::Menulist &&
          (!IsThemed(disp) ||
           PresContext()->Theme()->ThemeNeedsComboboxDropmarker());
 }
@@ -1281,7 +1282,8 @@ void nsComboboxDisplayFrame::Reflow(nsPresContext* aPresContext,
   // clipping the display text, by enforcing the display text minimum size in
   // that situation.
   const bool shouldHonorMinISize =
-      mComboBox->StyleDisplay()->mAppearance == StyleAppearance::Menulist;
+      mComboBox->StyleDisplay()->EffectiveAppearance() ==
+      StyleAppearance::Menulist;
   if (shouldHonorMinISize) {
     computedISize = std::max(state.ComputedMinISize(), computedISize);
     // Don't let this size go over mMaxDisplayISize, since that'd be
@@ -1501,7 +1503,8 @@ void nsComboboxControlFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
     nsPresContext* pc = PresContext();
     const nsStyleDisplay* disp = StyleDisplay();
     if (IsThemed(disp) &&
-        pc->Theme()->ThemeWantsButtonInnerFocusRing(disp->mAppearance) &&
+        pc->Theme()->ThemeWantsButtonInnerFocusRing(
+            disp->EffectiveAppearance()) &&
         mDisplayFrame && IsVisibleForPainting()) {
       aLists.Content()->AppendNewToTop<nsDisplayComboboxFocus>(aBuilder, this);
     }

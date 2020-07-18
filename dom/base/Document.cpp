@@ -33,6 +33,7 @@
 #include "mozilla/PresShell.h"
 #include "mozilla/PresShellInlines.h"
 #include "mozilla/RestyleManager.h"
+#include "mozilla/StaticPrefs_apz.h"
 #include "mozilla/StaticPrefs_browser.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_full_screen_api.h"
@@ -59,6 +60,7 @@
 #include "mozilla/Sprintf.h"
 
 #include "mozilla/Telemetry.h"
+#include "nsIApplicationCache.h"
 #include "nsIInlineSpellChecker.h"
 #include "nsIInterfaceRequestor.h"
 #include "nsIInterfaceRequestorUtils.h"
@@ -114,7 +116,9 @@
 #include "mozilla/dom/CSPDictionariesBinding.h"
 #include "mozilla/dom/DOMIntersectionObserver.h"
 #include "mozilla/dom/Element.h"
+#include "mozilla/dom/ElementBinding.h"
 #include "mozilla/dom/Event.h"
+#include "mozilla/dom/FailedCertSecurityInfoBinding.h"
 #include "mozilla/dom/FeaturePolicy.h"
 #include "mozilla/dom/FeaturePolicyUtils.h"
 #include "mozilla/dom/HTMLAllCollection.h"
@@ -124,6 +128,7 @@
 #include "mozilla/dom/MediaStatusManager.h"
 #include "mozilla/dom/MutationObservers.h"
 #include "mozilla/dom/Navigator.h"
+#include "mozilla/dom/NetErrorInfoBinding.h"
 #include "mozilla/dom/Performance.h"
 #include "mozilla/dom/TreeOrderedArrayInlines.h"
 #include "mozilla/dom/ResizeObserver.h"
@@ -244,7 +249,6 @@
 
 #include "mozilla/SMILAnimationController.h"
 #include "imgIContainer.h"
-#include "nsSVGUtils.h"
 
 #include "nsRefreshDriver.h"
 
@@ -1045,7 +1049,7 @@ nsresult ExternalResourceMap::PendingLoad::StartLoad(
   nsresult rv = NS_OK;
   nsCOMPtr<nsIChannel> channel;
   rv = NS_NewChannel(getter_AddRefs(channel), aURI, aRequestingNode,
-                     nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_DATA_INHERITS,
+                     nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_INHERITS_SEC_CONTEXT,
                      nsIContentPolicy::TYPE_OTHER,
                      nullptr,  // aPerformanceStorage
                      loadGroup);
@@ -1195,6 +1199,19 @@ Document::FrameRequest::FrameRequest(FrameRequestCallback& aCallback,
                                      int32_t aHandle)
     : mCallback(&aCallback), mHandle(aHandle) {}
 
+Document::FrameRequest::~FrameRequest() = default;
+
+Document::PendingFrameStaticClone::~PendingFrameStaticClone() = default;
+
+struct Document::MetaViewportElementAndData {
+  RefPtr<HTMLMetaElement> mElement;
+  ViewportMetaData mData;
+
+  bool operator==(const MetaViewportElementAndData& aOther) const {
+    return mElement == aOther.mElement && mData == aOther.mData;
+  }
+};
+
 // ==================================================================
 // =
 // ==================================================================
@@ -1303,8 +1320,6 @@ Document::Document(const char* aContentType)
       mParserAborted(false),
       mReportedUseCounters(false),
       mHasReportedShadowDOMUsage(false),
-      mDocTreeHadAudibleMedia(false),
-      mDocTreeHadPlayRevoked(false),
       mHasDelayedRefreshEvent(false),
       mLoadEventFiring(false),
       mSkipLoadEventAfterClose(false),
@@ -1887,11 +1902,6 @@ Document::~Document() {
 
       if (MOZ_UNLIKELY(mMathMLEnabled)) {
         ScalarAdd(Telemetry::ScalarID::MATHML_DOC_COUNT, 1);
-      }
-
-      ScalarAdd(Telemetry::ScalarID::MEDIA_PAGE_COUNT, 1);
-      if (mDocTreeHadAudibleMedia) {
-        ScalarAdd(Telemetry::ScalarID::MEDIA_PAGE_HAD_MEDIA_COUNT, 1);
       }
 
       if (IsHTMLDocument()) {
@@ -6177,24 +6187,15 @@ already_AddRefed<PresShell> Document::CreatePresShell(
   // Note: we don't hold a ref to the shell (it holds a ref to us)
   mPresShell = presShell;
 
-  bool hadStyleSheets = mStyleSetFilled;
-  if (!hadStyleSheets) {
+  if (!mStyleSetFilled) {
     FillStyleSet();
   }
 
   presShell->Init(aContext, aViewManager);
 
-  if (hadStyleSheets) {
-    // Gaining a shell causes changes in how media queries are evaluated, so
-    // invalidate that.
-    aContext->MediaFeatureValuesChanged({MediaFeatureChange::kAllChanges});
-  } else {
-    // Otherwise, we need to at least recompute the initial style now that our
-    // resolution and such may have changed. This is done by
-    // MediaFeatureValuesChanged above otherwise, see
-    // kMediaFeaturesAffectingDefaultStyle.
-    mStyleSet->ClearCachedStyleData();
-  }
+  // Gaining a shell causes changes in how media queries are evaluated, so
+  // invalidate that.
+  aContext->MediaFeatureValuesChanged({MediaFeatureChange::kAllChanges});
 
   // Make sure to never paint if we belong to an invisible DocShell.
   nsCOMPtr<nsIDocShell> docShell(mDocumentContainer);
@@ -9778,10 +9779,25 @@ nsViewportInfo Document::GetViewportInfo(const ScreenIntSize& aDisplaySize) {
             // the layout of such pages. To keep text readable in that case, we
             // rely on font inflation instead.
 
+            BrowsingContext* bc = GetBrowsingContext();
+            nsIDocShell* docShell = GetDocShell();
+            if (docShell &&
+                docShell->GetTouchEventsOverride() ==
+                    nsIDocShell::TOUCHEVENTS_OVERRIDE_ENABLED &&
+                bc && bc->InRDMPane()) {
+              // If RDM and touch simulation are active, then use the simulated
+              // screen width to accomodate for cases where the screen width is
+              // larger than the desktop viewport default.
+              width = nsViewportInfo::Max(
+                  displaySize.width,
+                  StaticPrefs::browser_viewport_desktopWidth());
+            } else {
+              width = StaticPrefs::browser_viewport_desktopWidth();
+            }
             // Divide by fullZoom to stretch CSS pixel size of viewport in order
             // to keep device pixel size unchanged after full zoom applied.
             // See bug 974242.
-            width = StaticPrefs::browser_viewport_desktopWidth() / fullZoom;
+            width /= fullZoom;
           } else {
             // Some viewport information was provided; follow the spec.
             width = displaySize.width;
@@ -13512,10 +13528,12 @@ Element* Document::TopLayerPop(FunctionRef<bool(Element*)> aPredicateFunc) {
   // Pop from the stack null elements (references to elements which have
   // been GC'd since they were added to the stack) and elements which are
   // no longer in this document.
+  //
+  // FIXME(emilio): If this loop does something, it'd violate the assertions
+  // from GetTopLayerTop()... What gives?
   while (!mTopLayer.IsEmpty()) {
     Element* element = GetTopLayerTop();
-    if (!element || !element->IsInUncomposedDoc() ||
-        element->OwnerDoc() != this) {
+    if (!element || element->GetComposedDoc() != this) {
       mTopLayer.RemoveLastElement();
     } else {
       // The top element of the stack is now an in-doc element. Return here.
@@ -14528,6 +14546,11 @@ already_AddRefed<nsIAppWindow> Document::GetAppWindowIfToplevelChrome() const {
   return appWin.forget();
 }
 
+WindowContext* Document::GetTopLevelWindowContext() const {
+  WindowContext* windowContext = GetWindowContext();
+  return windowContext ? windowContext->TopWindowContext() : nullptr;
+}
+
 Document* Document::GetTopLevelContentDocument() {
   Document* parent;
 
@@ -15132,33 +15155,16 @@ void Document::ReportHasScrollLinkedEffect() {
 }
 
 void Document::SetSHEntryHasUserInteraction(bool aHasInteraction) {
-  nsPIDOMWindowInner* inner = GetInnerWindow();
-  if (NS_WARN_IF(!inner)) {
-    return;
+  if (RefPtr<WindowContext> topWc = GetTopLevelWindowContext()) {
+    topWc->SetSHEntryHasUserInteraction(aHasInteraction);
   }
-
-  WindowContext* wc = inner->GetWindowContext();
-  if (NS_WARN_IF(!wc)) {
-    return;
-  }
-
-  WindowContext* topWc = wc->TopWindowContext();
-  topWc->SetSHEntryHasUserInteraction(aHasInteraction);
 }
 
 bool Document::GetSHEntryHasUserInteraction() {
-  nsPIDOMWindowInner* inner = GetInnerWindow();
-  if (NS_WARN_IF(!inner)) {
-    return false;
+  if (RefPtr<WindowContext> topWc = GetTopLevelWindowContext()) {
+    return topWc->GetSHEntryHasUserInteraction();
   }
-
-  WindowContext* wc = inner->GetWindowContext();
-  if (NS_WARN_IF(!wc)) {
-    return false;
-  }
-
-  WindowContext* topWc = wc->TopWindowContext();
-  return topWc->GetSHEntryHasUserInteraction();
+  return false;
 }
 
 void Document::SetUserHasInteracted() {
@@ -15263,18 +15269,9 @@ bool Document::ConsumeTransientUserGestureActivation() {
 }
 
 void Document::SetDocTreeHadAudibleMedia() {
-  Document* topLevelDoc = GetTopLevelContentDocument();
-  if (!topLevelDoc) {
-    return;
-  }
-
-  topLevelDoc->mDocTreeHadAudibleMedia = true;
-}
-
-void Document::SetDocTreeHadPlayRevoked() {
-  Document* topLevelDoc = GetTopLevelContentDocument();
-  if (topLevelDoc) {
-    topLevelDoc->mDocTreeHadPlayRevoked = true;
+  RefPtr<WindowContext> topWc = GetTopLevelWindowContext();
+  if (topWc && !topWc->GetDocTreeHadAudibleMedia()) {
+    topWc->SetDocTreeHadAudibleMedia(true);
   }
 }
 
@@ -15886,6 +15883,10 @@ already_AddRefed<mozilla::dom::Promise> Document::RequestStorageAccess(
 
   // Step 2. If the document has a null origin, reject.
   if (NodePrincipal()->GetIsNullPrincipal()) {
+    nsContentUtils::ReportToConsole(nsIScriptError::errorFlag,
+                                    nsLiteralCString("requestStorageAccess"),
+                                    this, nsContentUtils::eDOM_PROPERTIES,
+                                    "RequestStorageAccessNullPrincipal");
     promise->MaybeRejectWithUndefined();
     return promise.forget();
   }
@@ -15935,6 +15936,9 @@ already_AddRefed<mozilla::dom::Promise> Document::RequestStorageAccess(
   // Step 6. If the sub frame doesn't have the token
   //         "allow-storage-access-by-user-activation", reject.
   if (StorageAccessSandboxed()) {
+    nsContentUtils::ReportToConsole(
+        nsIScriptError::errorFlag, nsLiteralCString("requestStorageAccess"),
+        this, nsContentUtils::eDOM_PROPERTIES, "RequestStorageAccessSandboxed");
     promise->MaybeRejectWithUndefined();
     return promise.forget();
   }
@@ -15942,12 +15946,19 @@ already_AddRefed<mozilla::dom::Promise> Document::RequestStorageAccess(
   // Step 7. If the sub frame's parent frame is not the top frame, reject.
   RefPtr<BrowsingContext> parentBC = bc->GetParent();
   if (parentBC && !parentBC->IsTopContent()) {
+    nsContentUtils::ReportToConsole(
+        nsIScriptError::errorFlag, nsLiteralCString("requestStorageAccess"),
+        this, nsContentUtils::eDOM_PROPERTIES, "RequestStorageAccessNested");
     promise->MaybeRejectWithUndefined();
     return promise.forget();
   }
 
   // Step 8. If the browser is not processing a user gesture, reject.
   if (!UserActivation::IsHandlingUserInput()) {
+    nsContentUtils::ReportToConsole(nsIScriptError::errorFlag,
+                                    nsLiteralCString("requestStorageAccess"),
+                                    this, nsContentUtils::eDOM_PROPERTIES,
+                                    "RequestStorageAccessUserGesture");
     promise->MaybeRejectWithUndefined();
     return promise.forget();
   }
@@ -16249,24 +16260,22 @@ bool Document::ModuleScriptsEnabled() {
 }
 
 void Document::ReportShadowDOMUsage() {
-  if (mHasReportedShadowDOMUsage) {
+  nsPIDOMWindowInner* inner = GetInnerWindow();
+  if (NS_WARN_IF(!inner)) {
     return;
   }
 
-  Document* topLevel = GetTopLevelContentDocument();
-  if (topLevel && !topLevel->mHasReportedShadowDOMUsage) {
-    topLevel->mHasReportedShadowDOMUsage = true;
-    nsString uri;
-    Unused << topLevel->GetDocumentURI(uri);
-    if (!uri.IsEmpty()) {
-      nsAutoString msg = u"Shadow DOM used in ["_ns + uri +
-                         u"] or in some of its subdocuments."_ns;
-      nsContentUtils::ReportToConsoleNonLocalized(msg, nsIScriptError::infoFlag,
-                                                  "DOM"_ns, topLevel);
-    }
+  WindowContext* wc = inner->GetWindowContext();
+  if (NS_WARN_IF(!wc)) {
+    return;
   }
 
-  mHasReportedShadowDOMUsage = true;
+  WindowContext* topWc = wc->TopWindowContext();
+  if (topWc->GetHasReportedShadowDOMUsage()) {
+    return;
+  }
+
+  topWc->SetHasReportedShadowDOMUsage(true);
 }
 
 // static

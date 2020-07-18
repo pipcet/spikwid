@@ -6478,7 +6478,7 @@ nsHttpChannel::AsyncOpen(nsIStreamListener* aListener) {
       mLoadInfo->GetSecurityMode() == 0 ||
           mLoadInfo->GetInitialSecurityCheckDone() ||
           (mLoadInfo->GetSecurityMode() ==
-               nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL &&
+               nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL &&
            mLoadInfo->GetLoadingPrincipal() &&
            mLoadInfo->GetLoadingPrincipal()->IsSystemPrincipal()),
       "security flags in loadInfo but doContentSecurityCheck() not called");
@@ -6784,6 +6784,8 @@ nsresult nsHttpChannel::BeginConnect() {
       host, port, EmptyCString(), mUsername, GetTopWindowOrigin(), proxyInfo,
       originAttributes, isHttps);
   mAllowAltSvc = (mAllowAltSvc && !gHttpHandler->IsSpdyBlacklisted(connInfo));
+  bool http3Allowed = !mUpgradeProtocolCallback && !mProxyInfo &&
+                      !(mCaps & NS_HTTP_BE_CONSERVATIVE) && !mBeConservative;
 
   RefPtr<AltSvcMapping> mapping;
   if (!mConnectionInfo && mAllowAltSvc &&  // per channel
@@ -6792,8 +6794,7 @@ nsresult nsHttpChannel::BeginConnect() {
       (scheme.EqualsLiteral("http") || scheme.EqualsLiteral("https")) &&
       (mapping = gHttpHandler->GetAltServiceMapping(
            scheme, host, port, mPrivateBrowsing, IsIsolated(),
-           GetTopWindowOrigin(), originAttributes,
-           !mUpgradeProtocolCallback && !mProxyInfo))) {
+           GetTopWindowOrigin(), originAttributes, http3Allowed))) {
     LOG(("nsHttpChannel %p Alt Service Mapping Found %s://%s:%d [%s]\n", this,
          scheme.get(), mapping->AlternateHost().get(), mapping->AlternatePort(),
          mapping->HashKey().get()));
@@ -7938,6 +7939,13 @@ nsresult nsHttpChannel::ContinueOnStopRequestAfterAuthRetry(
                         mResponseHead->Status() == 200;
 
   if (upgradeWebsocket || upgradeConnect) {
+    // TODO: Support connection upgrade for socket process in bug 1632809.
+    if (nsIOService::UseSocketProcess() && upgradeConnect) {
+      Unused << mUpgradeProtocolCallback->OnUpgradeFailed(
+          NS_ERROR_NOT_IMPLEMENTED);
+      return ContinueOnStopRequest(aStatus, aIsFromNet, aContentComplete);
+    }
+
     nsresult rv = gHttpHandler->CompleteUpgrade(aTransWithStickyConn,
                                                 mUpgradeProtocolCallback);
     if (NS_FAILED(rv)) {

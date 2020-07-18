@@ -22,6 +22,7 @@
 #include "nsCRT.h"
 #include "nsDirectoryServiceDefs.h"
 #include "nsILocalFileMac.h"
+#include "nsPaper.h"
 #include "nsPrinter.h"
 #include "nsPrintSettingsX.h"
 #include "nsQueryObject.h"
@@ -41,25 +42,90 @@ using mozilla::gfx::SurfaceFormat;
 
 static LazyLogModule sDeviceContextSpecXLog("DeviceContextSpecX");
 
+/**
+ * Retrieves the list of available paper options for a given printer name.
+ */
+static nsresult FillPaperListForPrinter(PMPrinter aPrinter,
+                                        nsTArray<RefPtr<nsIPaper>>& aPaperList) {
+  NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
+
+  CFArrayRef pmPaperList;
+  aPaperList.ClearAndRetainStorage();
+  OSStatus status = PMPrinterGetPaperList(aPrinter, &pmPaperList);
+  if (status != noErr || !pmPaperList) {
+    return NS_ERROR_UNEXPECTED;
+  }
+
+  CFIndex paperCount = CFArrayGetCount(pmPaperList);
+  aPaperList.SetCapacity(paperCount);
+
+  for (auto i = 0; i < paperCount; ++i) {
+    PMPaper pmPaper =
+        static_cast<PMPaper>(const_cast<void*>(CFArrayGetValueAtIndex(pmPaperList, i)));
+
+    // The units for width and height are points.
+    double width = 0.0;
+    double height = 0.0;
+    CFStringRef pmPaperName;
+    if (PMPaperGetWidth(pmPaper, &width) != noErr || PMPaperGetHeight(pmPaper, &height) != noErr ||
+        PMPaperCreateLocalizedName(pmPaper, aPrinter, &pmPaperName) != noErr) {
+      return NS_ERROR_UNEXPECTED;
+    }
+
+    nsAutoString name;
+    nsCocoaUtils::GetStringForNSString(static_cast<NSString*>(pmPaperName), name);
+
+    PMPaperMargins unwriteableMargins;
+    if (PMPaperGetMargins(pmPaper, &unwriteableMargins) != noErr) {
+      // If we can't get unwriteable margins, just default to none.
+      unwriteableMargins.top = 0.0;
+      unwriteableMargins.bottom = 0.0;
+      unwriteableMargins.left = 0.0;
+      unwriteableMargins.right = 0.0;
+    }
+
+    aPaperList.AppendElement(new nsPaper(name, width, height, unwriteableMargins.top,
+                                         unwriteableMargins.bottom, unwriteableMargins.left,
+                                         unwriteableMargins.right));
+  }
+
+  return NS_OK;
+
+  NS_OBJC_END_TRY_ABORT_BLOCK_NSRESULT;
+}
+
+nsresult CreatePrinter(PMPrinter aPMPrinter, nsIPrinter** aPrinter) {
+  NS_ENSURE_ARG_POINTER(aPrinter);
+  *aPrinter = nullptr;
+
+  nsAutoString printerName;
+  NSString* name = static_cast<NSString*>(PMPrinterGetName(aPMPrinter));
+  nsCocoaUtils::GetStringForNSString(name, printerName);
+
+  nsTArray<RefPtr<nsIPaper>> paperList;
+  nsresult rv = FillPaperListForPrinter(aPMPrinter, paperList);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  *aPrinter = new nsPrinter(printerName, paperList);
+  NS_ADDREF(*aPrinter);
+
+  return NS_OK;
+}
+
 //----------------------------------------------------------------------
 // nsPrinterListX
 
 NS_IMPL_ISUPPORTS(nsPrinterListX, nsIPrinterList);
 
 NS_IMETHODIMP
-nsPrinterListX::GetSystemDefaultPrinter(nsIPrinter** aDefaultPrinter) {
+nsPrinterListX::GetSystemDefaultPrinterName(nsAString& aName) {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
 
-  NS_ENSURE_ARG_POINTER(aDefaultPrinter);
-  *aDefaultPrinter = nullptr;
-
+  aName.Truncate();
   NSArray<NSString*>* printerNames = [NSPrinter printerNames];
   if ([printerNames count] > 0) {
     NSString* name = [printerNames objectAtIndex:0];
-    nsAutoString printerName;
-    nsCocoaUtils::GetStringForNSString(name, printerName);
-    *aDefaultPrinter = new nsPrinter(printerName);
-    NS_ADDREF(*aDefaultPrinter);
+    nsCocoaUtils::GetStringForNSString(name, aName);
     return NS_OK;
   }
 
@@ -73,13 +139,17 @@ nsPrinterListX::GetPrinters(nsTArray<RefPtr<nsIPrinter>>& aPrinters) {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
 
   aPrinters.Clear();
-  NSArray<NSString*>* printerNames = [NSPrinter printerNames];
-  size_t printerCount = [printerNames count];
-  for (size_t i = 0; i < printerCount; ++i) {
-    NSString* name = [printerNames objectAtIndex:i];
-    nsAutoString printerName;
-    nsCocoaUtils::GetStringForNSString(name, printerName);
-    RefPtr<nsIPrinter> printer = new nsPrinter(printerName);
+  CFArrayRef pmPrinterList;
+  OSStatus status = PMServerCreatePrinterList(kPMServerLocal, &pmPrinterList);
+  NS_ENSURE_TRUE(status == noErr && pmPrinterList, NS_ERROR_GFX_PRINTER_NO_PRINTER_AVAILABLE);
+
+  const CFIndex printerCount = CFArrayGetCount(pmPrinterList);
+  for (auto i = 0; i < printerCount; ++i) {
+    PMPrinter pmPrinter =
+        static_cast<PMPrinter>(const_cast<void*>(CFArrayGetValueAtIndex(pmPrinterList, i)));
+    RefPtr<nsIPrinter> printer;
+    nsresult rv = CreatePrinter(pmPrinter, getter_AddRefs(printer));
+    NS_ENSURE_SUCCESS(rv, rv);
     aPrinters.AppendElement(std::move(printer));
   }
 

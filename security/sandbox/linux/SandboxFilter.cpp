@@ -70,6 +70,9 @@ using namespace sandbox::bpf_dsl;
 // actual value because it shows up in file flags.
 #define O_LARGEFILE_REAL 00100000
 
+// Not part of UAPI, but userspace sees it in F_GETFL; see bug 1650751.
+#define FMODE_NONOTIFY 0x4000000
+
 #ifndef F_LINUX_SPECIFIC_BASE
 #  define F_LINUX_SPECIFIC_BASE 1024
 #else
@@ -541,7 +544,7 @@ class SandboxPolicyCommon : public SandboxPolicyBase {
         // new SETFL-able flags are added.  (In particular we want to
         // forbid O_ASYNC; see bug 1328896, but also see bug 1408438.)
         static const int ignored_flags =
-            O_ACCMODE | O_LARGEFILE_REAL | O_CLOEXEC;
+            O_ACCMODE | O_LARGEFILE_REAL | O_CLOEXEC | FMODE_NONOTIFY;
         static const int allowed_flags = ignored_flags | O_APPEND | O_NONBLOCK;
         return Switch(cmd)
             // Close-on-exec is meaningless when execve isn't allowed, but
@@ -710,6 +713,13 @@ class SandboxPolicyCommon : public SandboxPolicyBase {
       case __NR_sysinfo:
         return Error(EPERM);
 #endif
+
+        // Bug 1651701: an API for restartable atomic sequences and
+        // per-CPU data; exposing information about CPU numbers and
+        // when threads are migrated or preempted isn't great but the
+        // risk should be relatively low.
+      case __NR_rseq:
+        return Allow();
 
 #ifdef MOZ_ASAN
         // ASAN's error reporter wants to know if stderr is a tty.

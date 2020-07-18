@@ -42,20 +42,20 @@ nsresult FontPreloader::BuildChannel(
     nsIInterfaceRequestor* aCallbacks, bool aIsPreload) {
   nsresult rv;
 
-  nsIPrincipal* principal = aUserFontEntry
-                                ? (aUserFontEntry->GetPrincipal()
-                                       ? aUserFontEntry->GetPrincipal()->get()
-                                       : nullptr)
-                                : aDocument->NodePrincipal();
+  nsIPrincipal* principal =
+      aUserFontEntry ? (aUserFontEntry->GetPrincipal()
+                            ? aUserFontEntry->GetPrincipal()->NodePrincipal()
+                            : nullptr)
+                     : aDocument->NodePrincipal();
 
   // aCORSMode is ignored.  We always load as crossorigin=anonymous, but a
   // preload started with anything other then "anonymous" will never be found.
 
   uint32_t securityFlags = 0;
   if (aURI->SchemeIs("file")) {
-    securityFlags = nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_INHERITS;
+    securityFlags = nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_INHERITS_SEC_CONTEXT;
   } else {
-    securityFlags = nsILoadInfo::SEC_REQUIRE_CORS_DATA_INHERITS;
+    securityFlags = nsILoadInfo::SEC_REQUIRE_CORS_INHERITS_SEC_CONTEXT;
   }
 
   nsContentPolicyType contentPolicyType =

@@ -146,7 +146,7 @@ var MediaRuleActor = protocol.ActorClassWithSpec(mediaRuleSpec, {
   },
 });
 
-function getSheetText(sheet, consoleActor) {
+function getSheetText(sheet) {
   const cssText = modifiedStyleSheets.get(sheet);
   if (cssText !== undefined) {
     return Promise.resolve(cssText);
@@ -158,7 +158,7 @@ function getSheetText(sheet, consoleActor) {
     return Promise.resolve(content);
   }
 
-  return fetchStylesheet(sheet, consoleActor).then(({ content }) => content);
+  return fetchStylesheet(sheet).then(({ content }) => content);
 }
 
 exports.getSheetText = getSheetText;
@@ -195,16 +195,8 @@ function getCSSCharset(sheet) {
  *           - contentType: the content type of the document
  *         If an error occurs, the promise is rejected with that error.
  */
-async function fetchStylesheet(sheet, consoleActor) {
+async function fetchStylesheet(sheet) {
   const href = sheet.href;
-
-  let result;
-  if (consoleActor) {
-    result = await consoleActor.getRequestContentForURL(href);
-    if (result) {
-      return result;
-    }
-  }
 
   const options = {
     loadFromCache: true,
@@ -227,6 +219,8 @@ async function fetchStylesheet(sheet, consoleActor) {
       options.principal = sheet.ownerNode.ownerDocument.nodePrincipal;
     }
   }
+
+  let result;
 
   try {
     result = await fetch(href, options);
@@ -504,23 +498,10 @@ var StyleSheetActor = protocol.ActorClassWithSpec(styleSheetSpec, {
       return Promise.resolve(this.text);
     }
 
-    return getSheetText(this.rawSheet, this._consoleActor).then(text => {
+    return getSheetText(this.rawSheet).then(text => {
       this.text = text;
       return text;
     });
-  },
-
-  /**
-   * Try to locate the console actor if it exists via our parent actor (the tab).
-   *
-   * Keep this in sync with the BrowsingContextTargetActor version.
-   */
-  get _consoleActor() {
-    if (this.parentActor.exited) {
-      return null;
-    }
-    const form = this.parentActor.form();
-    return this.conn._getOrCreateActor(form.consoleActor);
   },
 
   /**

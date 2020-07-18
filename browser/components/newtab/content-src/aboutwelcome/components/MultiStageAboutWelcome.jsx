@@ -17,6 +17,7 @@ const DEFAULT_SITES = [
   "twitter-com",
 ].map(site => ({
   icon: `resource://activity-stream/data/content/tippytop/images/${site}@2x.png`,
+  title: site.split("-")[0],
 }));
 
 export const MultiStageAboutWelcome = props => {
@@ -84,7 +85,7 @@ export const MultiStageAboutWelcome = props => {
 
   return (
     <React.Fragment>
-      <div className={`multistageContainer`}>
+      <div className={`outer-wrapper multistageContainer`}>
         {props.screens.map(screen => {
           return index === screen.order ? (
             <WelcomeScreen
@@ -212,24 +213,31 @@ export class WelcomeScreen extends React.PureComponent {
               title={this.props.content.tiles.tooltip}
             >
               <div className="tiles-topsites-section">
-                {this.props.topSites.slice(0, 5).map(({ icon, label }) => (
-                  <div className="site" key={icon + label}>
+                {this.props.topSites
+                  .slice(0, 5)
+                  .map(({ icon, label, title }) => (
                     <div
-                      className="icon"
-                      style={
-                        icon
-                          ? {
-                              backgroundColor: "transparent",
-                              backgroundImage: `url(${icon})`,
-                            }
-                          : {}
-                      }
+                      className="site"
+                      key={icon + label}
+                      aria-label={title ? title : label}
+                      role="img"
                     >
-                      {icon ? "" : label[0].toUpperCase()}
+                      <div
+                        className="icon"
+                        style={
+                          icon
+                            ? {
+                                backgroundColor: "transparent",
+                                backgroundImage: `url(${icon})`,
+                              }
+                            : {}
+                        }
+                      >
+                        {icon ? "" : label[0].toUpperCase()}
+                      </div>
+                      {label && <div className="host">{label}</div>}
                     </div>
-                    {label && <div className="host">{label}</div>}
-                  </div>
-                ))}
+                  ))}
               </div>
             </div>
           </Localized>
@@ -296,7 +304,14 @@ export class WelcomeScreen extends React.PureComponent {
         {content.secondary_button && content.secondary_button.position !== "top"
           ? this.renderSecondaryCTA()
           : null}
-        <div className="steps">{this.renderStepsIndicator()}</div>
+        <nav
+          className="steps"
+          data-l10n-id={"onboarding-welcome-steps-indicator"}
+          data-l10n-args={`{"current": ${parseInt(this.props.order, 10) +
+            1}, "total": ${this.props.totalNumberOfScreens}}`}
+        >
+          {this.renderStepsIndicator()}
+        </nav>
       </main>
     );
   }

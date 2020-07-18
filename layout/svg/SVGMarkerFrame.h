@@ -4,8 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef __NS_SVGMARKERFRAME_H__
-#define __NS_SVGMARKERFRAME_H__
+#ifndef LAYOUT_SVG_SVGMARKERFRAME_H_
+#define LAYOUT_SVG_SVGMARKERFRAME_H_
 
 #include "mozilla/Attributes.h"
 #include "mozilla/SVGContainerFrame.h"
@@ -14,7 +14,6 @@
 #include "nsIFrame.h"
 #include "nsLiteralString.h"
 #include "nsQueryFrame.h"
-#include "nsSVGUtils.h"
 
 class gfxContext;
 
@@ -38,7 +37,7 @@ nsContainerFrame* NS_NewSVGMarkerAnonChildFrame(mozilla::PresShell* aPresShell,
 namespace mozilla {
 
 class SVGMarkerFrame final : public SVGContainerFrame {
-  typedef image::imgDrawingParams imgDrawingParams;
+  using imgDrawingParams = image::imgDrawingParams;
 
   friend class SVGMarkerAnonChildFrame;
   friend nsContainerFrame* ::NS_NewSVGMarkerFrame(
@@ -163,4 +162,5 @@ class SVGMarkerAnonChildFrame final : public SVGDisplayContainerFrame {
 };
 
 }  // namespace mozilla
-#endif
+
+#endif  // LAYOUT_SVG_SVGMARKERFRAME_H_

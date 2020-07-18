@@ -23,14 +23,16 @@
 using namespace js;
 using namespace js::jit;
 
-WarpBuilder::WarpBuilder(WarpSnapshot& snapshot, MIRGenerator& mirGen)
+WarpBuilder::WarpBuilder(WarpSnapshot& snapshot, MIRGenerator& mirGen,
+                         WarpCompilation* warpCompilation)
     : WarpBuilderShared(snapshot, mirGen, nullptr),
+      warpCompilation_(warpCompilation),
       graph_(mirGen.graph()),
       info_(mirGen.outerInfo()),
-      script_(snapshot.script()->script()),
-      loopStack_(mirGen.alloc()),
-      iterators_(mirGen.alloc()) {
-  opSnapshotIter_ = snapshot.script()->opSnapshots().getFirst();
+      scriptSnapshot_(snapshot.rootScript()),
+      script_(snapshot.rootScript()->script()),
+      loopStack_(mirGen.alloc()) {
+  opSnapshotIter_ = scriptSnapshot_->opSnapshots().getFirst();
 }
 
 BytecodeSite* WarpBuilder::newBytecodeSite(BytecodeLocation loc) {
@@ -61,7 +63,7 @@ void WarpBuilder::initBlock(MBasicBlock* block) {
   graph().addBlock(block);
 
   // TODO: set block hit count (for branch pruning pass)
-  block->setLoopDepth(loopDepth_);
+  block->setLoopDepth(loopDepth());
 
   current = block;
 }
@@ -282,13 +284,13 @@ bool WarpBuilder::build() {
     return false;
   }
 
-  if (!MPhi::markIteratorPhis(iterators_)) {
+  if (!MPhi::markIteratorPhis(*iterators())) {
     return false;
   }
 
   MOZ_ASSERT_IF(info().osrPc(), graph().osrBlock());
   MOZ_ASSERT(loopStack_.empty());
-  MOZ_ASSERT(loopDepth_ == 0);
+  MOZ_ASSERT(loopDepth() == 0);
 
   return true;
 }
@@ -365,7 +367,7 @@ MInstruction* WarpBuilder::buildCallObject(MDefinition* callee,
 }
 
 bool WarpBuilder::buildEnvironmentChain() {
-  const WarpEnvironment& env = snapshot().script()->environment();
+  const WarpEnvironment& env = scriptSnapshot()->environment();
 
   if (env.is<NoEnvironment>()) {
     return true;
@@ -551,8 +553,7 @@ bool WarpBuilder::buildBody() {
       if (loc.isBackedge() && !loopStack_.empty()) {
         BytecodeLocation loopHead(script_, loopStack_.back().header()->pc());
         if (loc.isBackedgeForLoophead(loopHead)) {
-          MOZ_ASSERT(loopDepth_ > 0);
-          loopDepth_--;
+          decLoopDepth();
           loopStack_.popBack();
         }
       }
@@ -1158,13 +1159,13 @@ bool WarpBuilder::addIteratorLoopPhis(BytecodeLocation loopHead) {
     switch (tn.kind()) {
       case TryNoteKind::Destructuring:
       case TryNoteKind::ForIn: {
-        // For for-in loops we add the iterator object to iterators_. For
+        // For for-in loops we add the iterator object to iterators(). For
         // destructuring loops we add the "done" value that's on top of the
         // stack and used in the exception handler.
         MOZ_ASSERT(tn.stackDepth >= 1);
         uint32_t slot = info().stackSlot(tn.stackDepth - 1);
         MPhi* phi = current->getSlot(slot)->toPhi();
-        if (!iterators_.append(phi)) {
+        if (!iterators()->append(phi)) {
           return false;
         }
         break;
@@ -1201,7 +1202,7 @@ bool WarpBuilder::build_LoopHead(BytecodeLocation loc) {
     }
   }
 
-  loopDepth_++;
+  incLoopDepth();
 
   MBasicBlock* pred = current;
   if (!startNewLoopHeaderBlock(loc)) {
@@ -1267,7 +1268,7 @@ bool WarpBuilder::buildTestOp(BytecodeLocation loc) {
 bool WarpBuilder::buildTestBackedge(BytecodeLocation loc) {
   JSOp op = loc.getOp();
   MOZ_ASSERT(op == JSOp::IfNe);
-  MOZ_ASSERT(loopDepth_ > 0);
+  MOZ_ASSERT(loopDepth() > 0);
 
   MDefinition* value = current->pop();
 
@@ -1336,8 +1337,7 @@ bool WarpBuilder::build_Coalesce(BytecodeLocation loc) {
 }
 
 bool WarpBuilder::buildBackedge() {
-  MOZ_ASSERT(loopDepth_ > 0);
-  loopDepth_--;
+  decLoopDepth();
 
   MBasicBlock* header = loopStack_.popCopy().header();
   current->end(MGoto::New(alloc(), header));
@@ -1807,6 +1807,13 @@ bool WarpBuilder::build_BindName(BytecodeLocation loc) {
 }
 
 bool WarpBuilder::build_BindGName(BytecodeLocation loc) {
+  if (const auto* snapshot = getOpSnapshot<WarpBindGName>(loc)) {
+    MOZ_ASSERT(!script_->hasNonSyntacticScope());
+    JSObject* globalEnv = snapshot->globalEnv();
+    pushConstant(ObjectValue(*globalEnv));
+    return true;
+  }
+
   if (script_->hasNonSyntacticScope()) {
     return build_BindName(loc);
   }
@@ -2113,7 +2120,7 @@ bool WarpBuilder::build_GetIntrinsic(BytecodeLocation loc) {
 }
 
 bool WarpBuilder::build_ImportMeta(BytecodeLocation loc) {
-  ModuleObject* moduleObj = snapshot().script()->moduleObject();
+  ModuleObject* moduleObj = scriptSnapshot()->moduleObject();
   MOZ_ASSERT(moduleObj);
 
   MModuleMetadata* ins = MModuleMetadata::New(alloc(), moduleObj);
@@ -2295,7 +2302,7 @@ bool WarpBuilder::build_NewTarget(BytecodeLocation loc) {
   MOZ_ASSERT(script_->isFunction());
   MOZ_ASSERT(info().funMaybeLazy());
 
-  if (snapshot().script()->isArrowFunction()) {
+  if (scriptSnapshot()->isArrowFunction()) {
     MDefinition* callee = getCallee();
     MArrowNewTarget* ins = MArrowNewTarget::New(alloc(), callee);
     current->add(ins);
@@ -2420,11 +2427,16 @@ bool WarpBuilder::build_InitElemArray(BytecodeLocation loc) {
   auto* elements = MElements::New(alloc(), obj);
   current->add(elements);
 
-  current->add(MPostWriteBarrier::New(alloc(), obj, val));
-
-  auto* store = MStoreElement::New(alloc(), elements, indexConst, val,
-                                   /* needsHoleCheck = */ false);
-  current->add(store);
+  if (val->type() == MIRType::MagicHole) {
+    val->setImplicitlyUsedUnchecked();
+    auto* store = MStoreHoleValueElement::New(alloc(), elements, indexConst);
+    current->add(store);
+  } else {
+    current->add(MPostWriteBarrier::New(alloc(), obj, val));
+    auto* store = MStoreElement::New(alloc(), elements, indexConst, val,
+                                     /* needsHoleCheck = */ false);
+    current->add(store);
+  }
 
   auto* setLength = MSetInitializedLength::New(alloc(), elements, indexConst);
   current->add(setLength);
@@ -2575,19 +2587,19 @@ bool WarpBuilder::build_Debugger(BytecodeLocation loc) {
 }
 
 bool WarpBuilder::build_InstrumentationActive(BytecodeLocation) {
-  bool active = snapshot().script()->instrumentationActive();
+  bool active = scriptSnapshot()->instrumentationActive();
   pushConstant(BooleanValue(active));
   return true;
 }
 
 bool WarpBuilder::build_InstrumentationCallback(BytecodeLocation) {
-  JSObject* callback = snapshot().script()->instrumentationCallback();
+  JSObject* callback = scriptSnapshot()->instrumentationCallback();
   pushConstant(ObjectValue(*callback));
   return true;
 }
 
 bool WarpBuilder::build_InstrumentationScriptId(BytecodeLocation) {
-  int32_t scriptId = snapshot().script()->instrumentationScriptId();
+  int32_t scriptId = scriptSnapshot()->instrumentationScriptId();
   pushConstant(Int32Value(scriptId));
   return true;
 }

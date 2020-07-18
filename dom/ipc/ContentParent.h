@@ -238,6 +238,16 @@ class ContentParent final
       const nsACString& aRemoteType, BrowsingContext* aBrowsingContext,
       ContentParent* aOpenerContentParent);
 
+  /**
+   * Get all content parents.
+   *
+   * # Lifetime
+   *
+   * These pointers are ONLY valid for synchronous use from the main thread.
+   *
+   * Do NOT attempt to use them after the main thread has had a chance to handle
+   * messages or you could end up with dangling pointers.
+   */
   static void GetAll(nsTArray<ContentParent*>& aArray);
 
   static void GetAllEvenIfDead(nsTArray<ContentParent*>& aArray);
@@ -1309,11 +1319,15 @@ class ContentParent final
 
   mozilla::ipc::IPCResult RecvHistoryCommit(
       const MaybeDiscarded<BrowsingContext>& aContext,
-      uint64_t aSessionHistoryEntryID);
+      const uint64_t& aSessionHistoryEntryID, const nsID& aChangeID);
 
   mozilla::ipc::IPCResult RecvHistoryGo(
       const MaybeDiscarded<BrowsingContext>& aContext, int32_t aOffset,
       HistoryGoResolver&& aResolveRequestedIndex);
+
+  mozilla::ipc::IPCResult RecvSessionHistoryUpdate(
+      const MaybeDiscarded<BrowsingContext>& aContext, const int32_t& aIndex,
+      const int32_t& aLength, const nsID& aChangeID);
 
   // Notify the ContentChild to enable the input event prioritization when
   // initializing.

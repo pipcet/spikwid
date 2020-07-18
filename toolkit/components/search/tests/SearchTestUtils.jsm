@@ -44,7 +44,7 @@ var SearchTestUtils = Object.freeze({
    *                    or rejected if it fails.
    */
   async promiseNewSearchEngine(url) {
-    let engine = await Services.search.addEngine(url, "", false);
+    let engine = await Services.search.addOpenSearchEngine(url, "");
     gTestGlobals.registerCleanupFunction(async () =>
       Services.search.removeEngine(engine)
     );
@@ -266,7 +266,7 @@ var SearchTestUtils = Object.freeze({
       }
     },
 
-    QueryInterface: ChromeUtils.generateQI([Ci.nsIIdleService]),
+    QueryInterface: ChromeUtils.generateQI(["nsIIdleService"]),
     idleTime: 19999,
 
     addIdleObserver(observer, time) {

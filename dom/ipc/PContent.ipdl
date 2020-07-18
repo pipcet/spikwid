@@ -79,7 +79,7 @@ using base::ProcessId from "base/process.h";
 using struct IPC::Permission from "mozilla/net/NeckoMessageUtils.h";
 using class IPC::Principal from "mozilla/dom/PermissionMessageUtils.h";
 using mozilla::a11y::IHandlerControlHolder from "mozilla/a11y/IPCTypes.h";
-using mozilla::dom::NativeThreadId from "mozilla/dom/TabMessageUtils.h";
+using mozilla::dom::NativeThreadId from "mozilla/dom/NativeThreadId.h";
 using mozilla::hal::ProcessPriority from "mozilla/HalTypes.h";
 using mozilla::gfx::IntSize from "mozilla/gfx/2D.h";
 using mozilla::dom::TabId from "mozilla/dom/ipc/IdType.h";
@@ -113,7 +113,7 @@ using mozilla::ipc::SharedMemoryBasic::Handle from "mozilla/ipc/SharedMemoryBasi
 using mozilla::fontlist::Pointer from "SharedFontList.h";
 using gfxSparseBitSet from "gfxFontUtils.h";
 using FontVisibility from "gfxFontEntry.h";
-using mozilla::dom::MediaControlKey from "ipc/MediaControlIPC.h";
+using mozilla::dom::MediaControlAction from "ipc/MediaControlIPC.h";
 using mozilla::dom::MediaPlaybackState from "ipc/MediaControlIPC.h";
 using mozilla::dom::MediaAudibleState from "ipc/MediaControlIPC.h";
 using mozilla::dom::MaybeMediaMetadataBase from "mozilla/dom/MediaSessionIPCUtils.h";
@@ -866,11 +866,11 @@ child:
     async StartDelayedAutoplayMediaComponents(MaybeDiscardedBrowsingContext aContext);
 
     /**
-     * This method is used to dispatch MediaControlKey to content process in
+     * This method is used to dispatch MediaControlAction to content process in
      * order to control media within a specific browsing context tree.
      */
-    async UpdateMediaControlKey(MaybeDiscardedBrowsingContext aContext,
-                                MediaControlKey aKey);
+    async UpdateMediaControlAction(MaybeDiscardedBrowsingContext aContext,
+                                   MediaControlAction aAction);
 
     // Begin subscribing to a new BrowsingContextGroup, sending down the current
     // value for every individual BrowsingContext.
@@ -909,10 +909,17 @@ child:
      */
     async AbortOrientationPendingPromises(MaybeDiscardedBrowsingContext aContext);
 
-    async HistoryCommitLength(MaybeDiscardedBrowsingContext aContext,
-                              uint32_t aLength);
-
+    async HistoryCommitIndexAndLength(MaybeDiscardedBrowsingContext aContext,
+                                      uint32_t aIndex, uint32_t aLength,
+                                      nsID aChangeID);
 parent:
+    /**
+     * This is a temporary way to pass index and length through parent process.
+     * Used for testing.
+     */
+    async SessionHistoryUpdate(MaybeDiscardedBrowsingContext aTopContext,
+                               int32_t aIndex, int32_t aLength, nsID aChangeID);
+
     async InitBackground(Endpoint<PBackgroundParent> aEndpoint);
 
     async CreateGMPService();
@@ -1635,7 +1642,8 @@ parent:
                      bool? reloadActiveEntry);
 
     async HistoryCommit(MaybeDiscardedBrowsingContext aContext,
-                        uint64_t aSessionHistoryEntryID);
+                        uint64_t aSessionHistoryEntryID,
+                        nsID aChangeID);
 
     async HistoryGo(MaybeDiscardedBrowsingContext aContext,
                     int32_t aOffset) returns(int32_t requestedIndex);

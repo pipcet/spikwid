@@ -26,6 +26,11 @@ ChromeUtils.defineModuleGetter(
 );
 ChromeUtils.defineModuleGetter(
   this,
+  "ComponentUtils",
+  "resource://gre/modules/ComponentUtils.jsm"
+);
+ChromeUtils.defineModuleGetter(
+  this,
   "CreditCardResult",
   "resource://formautofill/ProfileAutoCompleteResult.jsm"
 );
@@ -101,7 +106,7 @@ AutocompleteFactory.prototype = {
     let proto = targetConstructor.prototype;
     this._classID = proto.classID;
 
-    let factory = XPCOMUtils._getFactory(targetConstructor);
+    let factory = ComponentUtils._getFactory(targetConstructor);
     this._factory = factory;
 
     let registrar = Cm.QueryInterface(Ci.nsIComponentRegistrar);
@@ -145,7 +150,7 @@ AutofillProfileAutoCompleteSearch.prototype = {
   classID: Components.ID("4f9f1e4c-7f2c-439e-9c9e-566b68bc187d"),
   contractID: "@mozilla.org/autocomplete/search;1?name=autofill-profiles",
   classDescription: "AutofillProfileAutoCompleteSearch",
-  QueryInterface: ChromeUtils.generateQI([Ci.nsIAutoCompleteSearch]),
+  QueryInterface: ChromeUtils.generateQI(["nsIAutoCompleteSearch"]),
 
   // Begin nsIAutoCompleteSearch implementation
 
@@ -310,7 +315,7 @@ AutofillProfileAutoCompleteSearch.prototype = {
 };
 
 let ProfileAutocomplete = {
-  QueryInterface: ChromeUtils.generateQI([Ci.nsIObserver]),
+  QueryInterface: ChromeUtils.generateQI(["nsIObserver"]),
 
   lastProfileAutoCompleteResult: null,
   lastProfileAutoCompleteFocusedInput: null,
@@ -514,9 +519,15 @@ var FormAutofillContent = {
    * 3. Number of filled fields is less than autofill threshold
    *
    * @param {HTMLElement} formElement Root element which receives submit event.
-   * @param {Window} domWin Content window only passed for unit tests
+   * @param {Window} domWin Content window; passed for unit tests and when
+   *                 invoked by the FormAutofillSection
+   * @param {Object} handler FormAutofillHander, if known by caller
    */
-  formSubmitted(formElement, domWin = formElement.ownerGlobal) {
+  formSubmitted(
+    formElement,
+    domWin = formElement.ownerGlobal,
+    handler = undefined
+  ) {
     this.debug("Handling form submission");
 
     if (!FormAutofill.isAutofillEnabled) {
@@ -530,7 +541,7 @@ var FormAutofillContent = {
       return;
     }
 
-    let handler = this._formsDetails.get(formElement);
+    handler = handler ?? this._formsDetails.get(formElement);
     if (!handler) {
       this.debug("Form element could not map to an existing handler");
       return;
@@ -719,7 +730,10 @@ var FormAutofillContent = {
     let formHandler = this._getFormHandler(element);
     if (!formHandler) {
       let formLike = FormLikeFactory.createFromField(element);
-      formHandler = new FormAutofillHandler(formLike);
+      formHandler = new FormAutofillHandler(
+        formLike,
+        this.formSubmitted.bind(this)
+      );
     } else if (!formHandler.updateFormIfNeeded(element)) {
       this.debug("No control is removed or inserted since last collection.");
       return;
