@@ -655,41 +655,6 @@ DevToolsStartup.prototype = {
    * is a mechanism that is used to communicate between the browser, and front-end code.
    */
   initializeProfilerWebChannel() {
-    let channel;
-
-    // Register a channel for the URL in preferences. Also update the WebChannel if
-    // the URL changes.
-    const urlPref = "devtools.performance.recording.ui-base-url";
-
-    // This method is only run once per Firefox instance, so it should not be
-    // strictly necessary to remove observers here.
-    // eslint-disable-next-line mozilla/balanced-observers
-    Services.prefs.addObserver(urlPref, registerWebChannel);
-
-    registerWebChannel();
-
-    function registerWebChannel() {
-      if (channel) {
-        channel.stopListening();
-      }
-
-      const urlForWebChannel = Services.io.newURI(
-        validateProfilerWebChannelUrl(Services.prefs.getStringPref(urlPref))
-      );
-
-      channel = new WebChannel("", urlForWebChannel);
-
-      channel.listen((id, message, target) => {
-        // Defer loading the ProfilerPopupBackground script until it's absolutely needed,
-        // as this code path gets loaded at startup.
-        ProfilerPopupBackground.handleWebChannelMessage(
-          channel,
-          id,
-          message,
-          target
-        );
-      });
-    }
   },
 
   /*
