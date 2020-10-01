@@ -27,8 +27,8 @@ var EXPORTED_SYMBOLS = [
  * (set as the current default value of the "dom.ipc.processCount.extension"
  * preference), if we switch to use more than one extension process, we have to
  * be sure that all the browser's frameLoader are associated to the same process,
- * e.g. by using the `sameProcessAsFrameLoader` property.
- * (http://searchfox.org/mozilla-central/source/dom/interfaces/base/nsIBrowser.idl)
+ * e.g. by enabling the `maychangeremoteness` attribute, and/or setting
+ * `initialBrowsingContextGroupId` attribute to the correct value.
  *
  * At that point we are going to keep track of the existing browsers associated to
  * a webextension to ensure that they are all running in the same process (and we
@@ -501,6 +501,14 @@ class ExtensionData {
 
   _logMessage(message, severity) {
     this.logger[severity](`Loading extension '${this.id}': ${message}`);
+  }
+
+  ensureNoErrors() {
+    if (this.errors.length) {
+      // startup() repeatedly checks whether there are errors after parsing the
+      // extension/manifest before proceeding with starting up.
+      throw new Error(this.errors.join("\n"));
+    }
   }
 
   /**
@@ -1948,6 +1956,10 @@ class Extension extends ExtensionData {
     return new BootstrapScope();
   }
 
+  get browsingContextGroupId() {
+    return this.policy.browsingContextGroupId;
+  }
+
   get groupFrameLoader() {
     let frameLoader = this._backgroundPageFrameLoader;
     for (let view of this.views) {
@@ -2079,9 +2091,7 @@ class Extension extends ExtensionData {
   async loadManifest() {
     let manifest = await super.loadManifest();
 
-    if (this.errors.length) {
-      return Promise.reject({ errors: this.errors });
-    }
+    this.ensureNoErrors();
 
     return manifest;
   }
@@ -2390,6 +2400,8 @@ class Extension extends ExtensionData {
   async startup() {
     this.state = "Startup";
 
+    // readyPromise is resolved with the policy upon success,
+    // and with null if startup was interrupted.
     let resolveReadyPromise;
     let readyPromise = new Promise(resolve => {
       resolveReadyPromise = resolve;
@@ -2431,11 +2443,11 @@ class Extension extends ExtensionData {
         this.state = "Startup: Initted locale";
       }
 
-      if (this.errors.length) {
-        return Promise.reject({ errors: this.errors });
-      }
+      this.ensureNoErrors();
 
       if (this.hasShutdown) {
+        // Startup was interrupted and shutdown() has taken care of unloading
+        // the extension and running cleanup logic.
         return;
       }
 
@@ -2540,17 +2552,10 @@ class Extension extends ExtensionData {
       this.emit("ready");
 
       this.state = "Startup: Complete";
-    } catch (errors) {
-      this.state = `Startup: Error: ${errors}`;
+    } catch (e) {
+      this.state = `Startup: Error: ${e}`;
 
-      for (let e of [].concat(errors)) {
-        dump(
-          `Extension error: ${e.message || e} ${e.filename || e.fileName}:${
-            e.lineNumber
-          } :: ${e.stack || new Error().stack}\n`
-        );
-        Cu.reportError(e);
-      }
+      Cu.reportError(e);
 
       if (this.policy) {
         this.policy.active = false;
@@ -2558,9 +2563,12 @@ class Extension extends ExtensionData {
 
       this.cleanupGeneratedFile();
 
-      throw errors;
+      throw e;
     } finally {
       ExtensionTelemetry.extensionStartup.stopwatchFinish(this);
+      // Mark readyPromise as resolved in case it has not happened before,
+      // e.g. due to an early return or an error.
+      resolveReadyPromise(null);
     }
   }
 

@@ -2,21 +2,21 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-top_sites:
-  search_override_exp:
+partner_link:
+  interaction:
     objects: ["click", "attribution"]
     release_channel_collection: opt-out
     products:
       - "firefox"
     record_in_processes: ["main"]
     description: >
-      This is recorded when using a search top site that has been overridden to a URL as part of an experiment.
-    bug_numbers: [1637217, 1644442]
+      This is recorded when clicking a partner link.
+    bug_numbers: [1637217, 1644442, 1643426]
     notification_emails:
       - "dao@mozilla.com"
-    expiry_version: "80"
+    expiry_version: never
     extra_keys:
-      searchProvider: Name of the search provider, e.g. "amazon" or "google".
+      partner: Name of the partner, e.g. "amazon" or "google".
       source: Which part of the UI request came from, i.e. "newtab" or "urlbar".
 
 activity_stream:
@@ -103,30 +103,11 @@ activity_stream:
       session_id: The ID of the Activity Stream session in which the event occurred
       page: about:home or about_newtab - the page where the event occurred
       user_prefs: An integer representaing a user's A-S settings.
-  enroll:
-    objects: ["preference_study"]
-    release_channel_collection: opt-out
-    description: >
-      Sent when a user gets enrolled in a preference study.
-    bug_numbers: [1549784]
-    notification_emails:
-      - "najiang@mozilla.com"
-      - "edilee@mozilla.com"
-    products:
-      - "firefox"
-      - "fennec"
-    record_in_processes: ["main"]
-    expiry_version: never
-    extra_keys:
-      experimentType: >
-        For preference_study recipes, the type of experiment this is ("exp" or "exp-highpop").
-      branch: >
-        For preference_study recipes, the slug of the branch that was chosen for this client.
 
 addonsManager:
   install:
     description: >
-      This events are recorded during the install and update flow for extensions and themes,
+      These events are recorded during the install and update flow for extensions and themes,
       the value of the event is an install_id shared by the events related to the same install
       or update flow.
     objects: ["extension", "theme", "locale", "dictionary", "other", "unknown"]
@@ -160,6 +141,32 @@ addonsManager:
       - "thunderbird"
     record_in_processes: ["main"]
     bug_numbers: [1433335, 1515697, 1523641, 1549770, 1590736, 1630596]
+    release_channel_collection: opt-out
+  install_stats:
+    description: >
+      These events are recorded at the end of the install flow, but only when
+      the source that originally triggered the add-on installation is "amo" or
+      "disco". The value of an event is the SHA256 hash of the addon_id.
+    objects: ["extension", "theme", "locale", "dictionary", "other", "unknown"]
+    extra_keys:
+      addon_id: >
+        A string which identifies the add-on. This value might be trimmed.
+      utm_campaign: >
+        The specific product promotion or strategic campaign that drives
+        traffic to the install page.
+      utm_content: >
+        The specific item that a person clicks on to access the install page
+        (such as an A/B test, a website banner, or a specific ad).
+      utm_medium: The channel used to share the install page.
+      utm_source: >
+        The name of the product, domain of the website that drives traffic to
+        the install page.
+    notification_emails: ["addons-dev-internal@mozilla.com"]
+    expiry_version: never
+    products:
+      - "firefox"
+    record_in_processes: ["main"]
+    bug_numbers: [1653020]
     release_channel_collection: opt-out
   manage:
     description: >
@@ -291,6 +298,8 @@ exp_import:
     description: >
       Experimental import logins interface user interactions. Value is the browser suggested.
     expiry_version: "87"
+    extra_keys:
+      profilesCount: Count of profiles found for the selected browser
     notification_emails: ["edilee@mozilla.com"]
     products: ["firefox"]
     record_in_processes: ["main", "content"]
@@ -349,6 +358,77 @@ form_autocomplete:
     record_in_processes: ["main"]
     release_channel_collection: opt-out
 
+creditcard:
+  doorhanger:
+    description: >-
+      User interactions for the browser credit card autofill doorhanger.
+    objects:
+      - "capture_doorhanger"
+      - "update_doorhanger"
+    methods:
+      - "show"
+      - "save"
+      - "update"
+      - "cancel"
+      - "disable"
+    bug_numbers: [1653073, 1653083]
+    notification_emails: ["jmathies@mozilla.com", "chsiang@mozilla.com"]
+    expiry_version: "93"
+    products:
+      - "firefox"
+    record_in_processes: ["main"]
+    release_channel_collection: opt-out
+  manage:
+    description: >-
+      User interactions for credit card autofill preferences management UI.
+    objects:
+      - "manage"
+    methods:
+      - "show"
+      - "add"
+      - "delete"
+      - "show_entry"
+      - "edit"
+    bug_numbers: [1653073, 1654167]
+    notification_emails: ["jmathies@mozilla.com", "chsiang@mozilla.com"]
+    expiry_version: "93"
+    products:
+      - "firefox"
+    record_in_processes: ["main"]
+    release_channel_collection: opt-out
+  cc_form:
+    description: >-
+      User interactions for credit card autofill forms
+    objects:
+      - "cc_form"
+    methods:
+      - "detected"
+      - "popup_shown"
+      - "filled"
+      - "filled_modified"
+      - "submitted"
+    bug_numbers: [1653073, 1653162]
+    notification_emails: ["jmathies@mozilla.com", "chsiang@mozilla.com"]
+    expiry_version: "93"
+    products:
+      - "firefox"
+    record_in_processes: ["content"]
+    release_channel_collection: opt-out
+    extra_keys:
+      cc_name_found: Whether the cardholder name field was identified
+      cc_number_found: Whether the credit card number field was identified
+      cc_exp_found: Whether the expiration date was identified
+      cc_name: Whether the name was autofilled (autofilled / not_filled / user_filled / unavailable)
+      cc_number: Whether the credit card number field was autofilled (autofilled / not_filled / user_filled / unavailable)
+      cc_exp: Whether the expiration date was autofilled (autofilled / not_filled / user_filled / unavailable)
+      field_name: Name of the field being affected by the method
+      fields_not_auto: >-
+        Number of fields in a `submitted` event that were not autofilled.
+        Note that this number counts all fields in a form, even if some of those fields might have been identified as password and/or address fields.
+        Additionally, it may include input elements that are not rendered as user-modifiable, such as hidden fields as well as <button> elements.
+      fields_auto: Number of fields in the `submitted` event that were autofilled
+      fields_modified: Number of fields in a `submitted` event that were autofilled and later modified
+
 extensions.data:
   migrateResult:
     objects: ["storageLocal"]
@@ -375,9 +455,9 @@ extensions.data:
       the value of this event is the addon id.
   storageLocalError:
     objects: ["get", "set", "remove", "clear"]
-    bug_numbers: [1606903]
+    bug_numbers: [1606903, 1649948]
     notification_emails: ["addons-dev-internal@mozilla.com"]
-    expiry_version: "81"
+    expiry_version: "88"
     products:
       - "firefox"
     record_in_processes: ["main", "content"]
@@ -419,7 +499,7 @@ navigation:
   search:
     objects: ["about_home", "about_newtab", "contextmenu", "oneoff",
               "suggestion", "alias", "enter", "searchbar", "urlbar",
-              "webextension"]
+              "urlbar_searchmode", "webextension"]
     release_channel_collection: opt-out
     products:
       - "firefox"
@@ -463,7 +543,8 @@ urlbar:
         type of the selected result in the urlbar panel. One of:
           "autofill", "visit", "bookmark", "history", "keyword", "search",
           "searchsuggestion", "switchtab", "remotetab", "extension", "oneoff",
-          "keywordoffer", "canonized", "tip", "tiphelp", "formhistory", "none"
+          "keywordoffer", "canonized", "tip", "tiphelp", "formhistory",
+          "tabtosearch", "none"
   abandonment:
     objects: ["blur"]
     release_channel_collection: opt-out
@@ -783,13 +864,15 @@ pwmgr:
   doorhanger_submitted:
     description: >
       A login is saved or updated via the capture doorhanger. Carries information about whether 
-      or not the username and password were modified by the user. 
+      the username and password _that were saved/updated by the user_ were modified in the 
+      doorhanger, selected from the suggestion autocomplete, or neither. `did_edit_X` and 
+      `did_select_X` will never both be true in the same event.
       
       The `object` describes the type of doorhanger when it was originally created. Note that user 
       updates to the doorhanger may change whether a login is actually saved or updated, but will 
       not impact the sent object.
     objects: ["save", "update"]
-    bug_numbers: [1650929]
+    bug_numbers: [1650929, 1650941]
     expiry_version: "86"
     release_channel_collection: opt-out
     products: ["firefox"]
@@ -797,11 +880,17 @@ pwmgr:
     notification_emails: ["srudie@mozilla.com", "passwords-dev@mozilla.org"]
     extra_keys:
       did_edit_un: >
-        Whether or not the username field of the doorhanger was modified by the user.  
-        This does not count selecting an autocompleted value.
+        Whether or not the saved/updated username was modified by the user typing into the 
+        username field.
+      did_select_un: >
+        Whether or not the saved/updated username was selected by the user choosing a suggested 
+        value from the autocomplete popup.
       did_edit_pw: >
-        Whether or not the password field of the doorhanger was modified by the user.  
-        This does not count selecting an autocompleted value.
+        Whether or not the saved/updated password was modified by the user typing into the 
+        password field.
+      did_select_pw: >
+        Whether or not the saved/updated password was selected by the user choosing a suggested 
+        value from the autocomplete popup.
 
 jsonfile:
   load:
@@ -922,6 +1011,26 @@ messaging_experiments:
       branches: >
         A semicolon separated string for all the qualified branch ID(s).
         e.g. "control;variant_01;treatment_02".
+  targeting:
+    objects:
+      - attribute_error
+      - attribute_timeout
+    methods:
+      - targeting
+    release_channel_collection: opt-out
+    products:
+      - firefox
+    record_in_processes:
+      - main
+    description: >
+      Record generic JEXL errors that result from issues with experiment or
+      message targeting expressions. The value field contains the namespace and
+      attribute name that caused the error.
+    bug_numbers:
+      - 1644743
+    notification_emails:
+      - ujet@mozilla.com
+    expiry_version: never
 
 # This category contains event entries used for Telemetry tests.
 # They will not be sent out with any pings.
@@ -1138,6 +1247,19 @@ devtools.main:
     extra_keys:
       width: Toolbox width rounded up to the nearest 50px.
       session_id: The start time of the session in milliseconds since epoch (Unix Timestamp) e.g. 1396381378123.
+  close_source_tab:
+    objects: ["debugger"]
+    bug_numbers: [1647346]
+    notification_emails: ["dev-developer-tools@lists.mozilla.org", "hkirschner@mozilla.com", "dwalsh@mozilla.com"]
+    products:
+      - "firefox"
+    record_in_processes: ["main"]
+    description: The method by which users close source tabs within the debugger
+    release_channel_collection: opt-out
+    expiry_version: "82"
+    extra_keys:
+      reason: The method that the tab was closed ("click" or "shortcut")
+      num_tabs: The number of open tabs at the time the tab was closed
   connection_attempt:
     objects: ["aboutdebugging"]
     bug_numbers: [1549970]
@@ -1716,13 +1838,16 @@ security.ui.protections:
   show:
     objects: [
       "protection_report",
+      "vpn_banner",
     ]
     bug_numbers:
       - 1557050
       - 1610897
       - 1643428
+      - 1650468
+      - 1661756
     description: >
-      User arrived on the protection report.
+      User arrived on the protection report. This also includes a 'value' attribute which defaults to 'direct' or will be the value that a referring website addds to the url. This also indicates if the vpn banner has been seen.
     expiry_version: "86"
     record_in_processes: ["content"]
     release_channel_collection: opt-out
@@ -1765,6 +1890,7 @@ security.ui.protections:
       - 1612091
       - 1637615
       - 1643428
+      - 1661756
     description: >
       User interaction by click events on the protection report.
     objects: [
@@ -1777,6 +1903,11 @@ security.ui.protections:
       "trackers_about_link",
       "mobile_app_link",
       "settings_link",
+      "vpn_banner_link",
+      "vpn_banner_close",
+      "vpn_card_link",
+      "vpn_app_link_android",
+      "vpn_app_link_ios",
     ]
     expiry_version: "86"
     record_in_processes: ["content"]
@@ -2095,6 +2226,36 @@ pictureinpicture:
     release_channel_collection: opt-out
 
 doh:
+  evaluate_v2:
+    methods: ["evaluate_v2"]
+    objects: ["heuristics"]
+    bug_numbers:
+      - 1573840
+      - 1631609
+      - 1603779
+      - 1654714
+    description: >
+      Results of DoH heuristics at startup and after network changes.
+    expiry_version: never
+    record_in_processes:
+      - main
+    release_channel_collection: opt-out
+    notification_emails:
+      - nhnt11@mozilla.com
+      - ddamjanovic@mozilla.com
+      - seceng-telemetry@mozilla.com
+      - necko@mozilla.com
+    products:
+      - firefox
+    extra_keys:
+      canaries: Comma-separated list of canaries that were detected (canary,zscalerCanary)
+      filtering: Comma-separated list of detected parental controls/content filtering (browserParent,google,youtube)
+      enterprise: Comma-separated list of detected enterprise config (policy,modifiedRoots,thirdPartyRoots)
+      steeredProvider: Whether we detected a steering provider
+      evaluateReason: The reason for running heuristics - startup or netchange
+      networkID: An ID representing the network on which heuristics were run, unique to this client
+      captiveState: The Captive Portal Service state - unknown, not_captive, locked, or unlocked
+      platform: Comma-separated list of platform attributes that would cause split-horizon issues (vpn, proxy, nrpt)
   evaluate:
     methods: ["evaluate"]
     objects: ["heuristics"]
@@ -2103,7 +2264,7 @@ doh:
       - 1631609
       - 1603779
     description: >
-      Results of DoH heuristics at startup and after network changes.
+      Results of DoH heuristics at startup and after network changes. OLD FORMAT: here for documentation
     expiry_version: never
     record_in_processes:
       - main
@@ -2258,7 +2419,50 @@ security.ui.certerror:
       has_sts: If the error page is for a site with HSTS headers or with a pinned key.
       panel_open: If the advanced panel was open at the time of the interaction.
 
+slow_script_warning:
+  shown:
+    bug_numbers:
+      - 1652613
+    description: >
+      Recorded when a slow script hang is resolved.
+    products:
+      - "firefox"
+    record_in_processes: ["main"]
+    release_channel_collection: opt-out
+    expiry_version: "85"
+    notification_emails:
+      - esmyth@mozilla.com
+      - gkruitbosch@mozilla.com
+    # Whether the hung script was for a content or browser process.
+    objects: [
+      "browser",
+      "content",
+    ]
+    extra_keys:
+      end_reason: Why the warning was hidden (user action, the process becoming responsive again, the browser quitting, etc.)
+      wait_count: How many times the user elected to wait.
+      hang_duration: How long we believe the hang continued (ms).
+      n_tab_deselect: How many times the user switched away from a tab affected by this hang.
+      uri_type: The kind of script URL that hung.
+      uptime: How long the notification was up (ms).
+
 webrtc.ui:
+  show_indicator:
+    objects: ["show_indicator"]
+    description: >
+      Recorded when the user shares a microphone, camera or display, which causes
+      a WebRTC sharing indicator to appear.
+    notification_emails:
+      - mconley@mozilla.com
+      - vchin@mozilla.com
+    products:
+      - "firefox"
+    record_in_processes:
+      - main
+    bug_numbers:
+      - 1656274
+    expiry_version: "87"
+    release_channel_collection: opt-out
   share_display:
     objects:
       - screen
@@ -2280,42 +2484,30 @@ webrtc.ui:
       - main
     bug_numbers:
       - 1639283
-    expiry_version: "82"
+    expiry_version: "88"
     release_channel_collection: opt-out
-  tab_switch_warning:
-    objects: ["tab_switch_warning"]
-    description: >
-      Recorded when the tab switch warning is displayed. The value for this
-      event is a unique ID that differentiates different sharing sessions. A
-      new sharing session is created when the user transitions from not
-      sharing a display to sharing at least one display.
-    notification_emails:
-      - mconley@mozilla.com
-      - vchin@mozilla.com
+
+ysod:
+  shown:
+    bug_numbers:
+      - 1657242
+    description: >-
+      This event is recorded only for Firefox UI documents (chrome).
+      Recorded when a Yellow Screen of Death is shown. The `value` is a url on which the error happened.
+      Yellow Screen of Death happens when XML or XHTML document encounters a parsing error. It is commonly a result
+      of the document being malformed or missing DTD entity.
+      Mozilla has a number of documents that rely on DTD entities for localization, and in some error scenarios those
+      entities may be missing or malformed themselves, in which case the user will see a broken UI.
     products:
       - "firefox"
-    record_in_processes:
-      - main
-    bug_numbers:
-      - 1639283
-    expiry_version: "82"
+    record_in_processes: ["main"]
     release_channel_collection: opt-out
-  allow_all_tabs:
-    objects: ["allow_all_tabs"]
-    description: >
-      Recorded when the user chooses to allow all tab switches and suppress the
-      warning for a sharing session. The value for this event is a unique ID
-      that differentiates different sharing sessions. A new sharing session is
-      created when the user transitions from not sharing a display to sharing
-      at least one display.
+    expiry_version: "never"
     notification_emails:
-      - mconley@mozilla.com
+      - zbraniecki@mozilla.com
       - vchin@mozilla.com
-    products:
-      - "firefox"
-    record_in_processes:
-      - main
-    bug_numbers:
-      - 1639283
-    expiry_version: "82"
-    release_channel_collection: opt-out
+    objects:
+      - "ysod"
+    extra_keys:
+      error_code: Code of the XML Error (See `XML_Error` enum in expat.h for the list of errors where XML_ERROR_NONE is 0).
+      location: Location as Row:Column of where the error happened.

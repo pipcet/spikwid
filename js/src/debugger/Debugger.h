@@ -395,13 +395,8 @@ class DebuggerWeakMap : private WeakMap<HeapPtr<Referent*>, HeapPtr<Wrapper*>> {
  public:
   void traceCrossCompartmentEdges(JSTracer* tracer) {
     for (Enum e(*this); !e.empty(); e.popFront()) {
+      TraceEdge(tracer, &e.front().mutableKey(), "Debugger WeakMap key");
       e.front().value()->trace(tracer);
-      Key key = e.front().key();
-      TraceEdge(tracer, &key, "Debugger WeakMap key");
-      if (key != e.front().key()) {
-        e.rekeyFront(key);
-      }
-      key.unsafeSet(nullptr);
     }
   }
 
@@ -587,12 +582,10 @@ class Debugger : private mozilla::LinkedListElement<Debugger> {
 
   struct AllocationsLogEntry {
     AllocationsLogEntry(HandleObject frame, mozilla::TimeStamp when,
-                        const char* className, HandleAtom ctorName, size_t size,
-                        bool inNursery)
+                        const char* className, size_t size, bool inNursery)
         : frame(frame),
           when(when),
           className(className),
-          ctorName(ctorName),
           size(size),
           inNursery(inNursery) {
       MOZ_ASSERT_IF(frame, UncheckedUnwrap(frame)->is<SavedFrame>() ||
@@ -602,25 +595,13 @@ class Debugger : private mozilla::LinkedListElement<Debugger> {
     HeapPtr<JSObject*> frame;
     mozilla::TimeStamp when;
     const char* className;
-    HeapPtr<JSAtom*> ctorName;
     size_t size;
     bool inNursery;
 
     void trace(JSTracer* trc) {
       TraceNullableEdge(trc, &frame, "Debugger::AllocationsLogEntry::frame");
-      TraceNullableEdge(trc, &ctorName,
-                        "Debugger::AllocationsLogEntry::ctorName");
     }
   };
-
-  // Barrier methods so we can have WeakHeapPtr<Debugger*>.
-  static void readBarrier(Debugger* dbg) {
-    InternalBarrierMethods<JSObject*>::readBarrier(dbg->object);
-  }
-  static void writeBarrierPost(Debugger** vp, Debugger* prev, Debugger* next) {}
-#ifdef DEBUG
-  static void assertThingIsNotGray(Debugger* dbg) { return; }
-#endif
 
  private:
   GCPtrNativeObject object; /* The Debugger object. Strong reference. */
@@ -1276,6 +1257,22 @@ class Debugger : private mozilla::LinkedListElement<Debugger> {
   Debugger& operator=(const Debugger&) = delete;
 };
 
+// Specialize InternalBarrierMethods so we can have WeakHeapPtr<Debugger*>.
+template <>
+struct InternalBarrierMethods<Debugger*> {
+  static bool isMarkable(Debugger* dbg) { return dbg->toJSObject(); }
+
+  static void postBarrier(Debugger** vp, Debugger* prev, Debugger* next) {}
+
+  static void readBarrier(Debugger* dbg) {
+    InternalBarrierMethods<JSObject*>::readBarrier(dbg->toJSObject());
+  }
+
+#ifdef DEBUG
+  static void assertThingIsNotGray(Debugger* dbg) {}
+#endif
+};
+
 /**
  * This class exists for one specific reason. If a given Debugger object is in
  * a state where:
@@ -1594,6 +1591,7 @@ MOZ_MUST_USE bool ReportObjectRequired(JSContext* cx);
 JSObject* IdVectorToArray(JSContext* cx, Handle<IdVector> ids);
 bool IsInterpretedNonSelfHostedFunction(JSFunction* fun);
 JSScript* GetOrCreateFunctionScript(JSContext* cx, HandleFunction fun);
+ArrayObject* GetFunctionParameterNamesArray(JSContext* cx, HandleFunction fun);
 bool ValueToIdentifier(JSContext* cx, HandleValue v, MutableHandleId id);
 bool ValueToStableChars(JSContext* cx, const char* fnname, HandleValue value,
                         JS::AutoStableStringChars& stableChars);

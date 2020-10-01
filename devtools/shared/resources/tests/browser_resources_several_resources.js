@@ -32,9 +32,11 @@ add_task(async function() {
   // We are only interested in console messages as a resource, the ROOT_NODE one
   // is here to test the ResourceWatcher::unwatchResources API with several resources.
   const receivedMessages = [];
-  const onAvailable = ({ resource, resourceType }) => {
-    if (resourceType === CONSOLE_MESSAGE) {
-      receivedMessages.push(resource);
+  const onAvailable = resources => {
+    for (const resource of resources) {
+      if (resource.resourceType === CONSOLE_MESSAGE) {
+        receivedMessages.push(resource);
+      }
     }
   };
 
@@ -102,12 +104,12 @@ add_task(async function() {
     receivedMessages.find(
       resource => resource.message.arguments[0] === "test-again"
     ),
-    null,
+    undefined,
     "The resource watcher should not watch CONSOLE_MESSAGE anymore"
   );
 
   // Cleanup
-  targetList.stopListening();
+  targetList.destroy();
   await client.close();
 });
 

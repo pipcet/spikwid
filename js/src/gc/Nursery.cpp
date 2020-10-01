@@ -27,9 +27,6 @@
 #include "jit/JitRealm.h"
 #include "util/Poison.h"
 #include "vm/ArrayObject.h"
-#if defined(DEBUG)
-#  include "vm/EnvironmentObject.h"
-#endif
 #include "vm/JSONPrinter.h"
 #include "vm/Realm.h"
 #include "vm/Time.h"
@@ -93,7 +90,7 @@ inline void js::NurseryChunk::poisonRange(size_t from, size_t size,
   MOZ_ASSERT(from <= js::Nursery::NurseryChunkUsableSize);
   MOZ_ASSERT(from + size <= ChunkSize);
 
-  uint8_t* start = reinterpret_cast<uint8_t*>(this) + from;
+  auto* start = reinterpret_cast<uint8_t*>(this) + from;
 
   // We can poison the same chunk more than once, so first make sure memory
   // sanitizers will let us poison it.
@@ -123,7 +120,7 @@ inline js::NurseryChunk* js::NurseryChunk::fromChunk(Chunk* chunk) {
 }
 
 inline Chunk* js::NurseryChunk::toChunk(GCRuntime* gc) {
-  auto chunk = reinterpret_cast<Chunk*>(this);
+  auto* chunk = reinterpret_cast<Chunk*>(this);
   chunk->init(gc);
   return chunk;
 }
@@ -168,26 +165,19 @@ Chunk* js::NurseryDecommitTask::popChunk(
   return chunk;
 }
 
-void js::NurseryDecommitTask::run() {
+void js::NurseryDecommitTask::run(AutoLockHelperThreadState& lock) {
   Chunk* chunk;
-
-  {
-    AutoLockHelperThreadState lock;
-
-    while ((chunk = popChunk(lock)) || partialChunk) {
-      if (chunk) {
-        AutoUnlockHelperThreadState unlock(lock);
-        decommitChunk(chunk);
-        continue;
-      }
-
-      if (partialChunk) {
-        decommitRange(lock);
-        continue;
-      }
+  while ((chunk = popChunk(lock)) || partialChunk) {
+    if (chunk) {
+      AutoUnlockHelperThreadState unlock(lock);
+      decommitChunk(chunk);
+      continue;
     }
 
-    setFinishing(lock);
+    if (partialChunk) {
+      decommitRange(lock);
+      continue;
+    }
   }
 }
 
@@ -435,30 +425,31 @@ JSObject* js::Nursery::allocateObject(JSContext* cx, size_t size,
   MOZ_ASSERT_IF(clasp->hasFinalize(),
                 CanNurseryAllocateFinalizedClass(clasp) || clasp->isProxy());
 
-  auto obj = reinterpret_cast<JSObject*>(
+  auto* obj = reinterpret_cast<JSObject*>(
       allocateCell(cx->zone(), size, JS::TraceKind::Object));
   if (!obj) {
     return nullptr;
   }
 
   // If we want external slots, add them.
-  HeapSlot* slots = nullptr;
+  ObjectSlots* slotsHeader = nullptr;
   if (nDynamicSlots) {
     MOZ_ASSERT(clasp->isNative());
-    slots = static_cast<HeapSlot*>(
-        allocateBuffer(cx->zone(), nDynamicSlots * sizeof(HeapSlot)));
-    if (!slots) {
+    void* allocation =
+        allocateBuffer(cx->zone(), ObjectSlots::allocSize(nDynamicSlots));
+    if (!allocation) {
       // It is safe to leave the allocated object uninitialized, since we
       // do not visit unallocated things in the nursery.
       return nullptr;
     }
+    slotsHeader = new (allocation) ObjectSlots(nDynamicSlots, 0);
   }
 
   // Store slots pointer directly in new object. If no dynamic slots were
   // requested, caller must initialize slots_ field itself as needed. We
   // don't know if the caller was a native object or not.
   if (nDynamicSlots) {
-    static_cast<NativeObject*>(obj)->initSlots(slots);
+    static_cast<NativeObject*>(obj)->initSlots(slotsHeader->slots());
   }
 
   gcprobes::NurseryAlloc(obj, size);
@@ -710,7 +701,7 @@ void Nursery::setIndirectForwardingPointer(void* oldData, void* newData) {
 
 #ifdef DEBUG
 static bool IsWriteableAddress(void* ptr) {
-  volatile uint64_t* vPtr = reinterpret_cast<volatile uint64_t*>(ptr);
+  auto* vPtr = reinterpret_cast<volatile uint64_t*>(ptr);
   *vPtr = *vPtr;
   return true;
 }
@@ -724,7 +715,7 @@ void js::Nursery::forwardBufferPointer(uintptr_t* pSlotsElems) {
   //
   // Note: The buffer has already be relocated. We are just patching stale
   //       pointers now.
-  void* buffer = reinterpret_cast<void*>(*pSlotsElems);
+  auto* buffer = reinterpret_cast<void*>(*pSlotsElems);
 
   if (!isInside(buffer)) {
     return;
@@ -1210,6 +1201,12 @@ js::Nursery::CollectionResult js::Nursery::doCollection(
   gc->storeBuffer().clear();
   endProfile(ProfileKey::ClearStoreBuffer);
 
+  // Purge the StringToAtomCache. This has to happen at the end because the
+  // cache is used when tenuring strings.
+  startProfile(ProfileKey::PurgeStringToAtomCache);
+  runtime()->caches().stringToAtomCache.purge();
+  endProfile(ProfileKey::PurgeStringToAtomCache);
+
   // Make sure hashtables have been updated after the collection.
   startProfile(ProfileKey::CheckHashTables);
 #ifdef JS_GC_ZEAL
@@ -1343,7 +1340,7 @@ void js::Nursery::sweep(JSTracer* trc) {
   // Sweep unique IDs first before we sweep any tables that may be keyed based
   // on them.
   for (Cell* cell : cellsWithUid_) {
-    JSObject* obj = static_cast<JSObject*>(cell);
+    auto* obj = static_cast<JSObject*>(cell);
     if (!IsForwarded(obj)) {
       obj->nurseryZone()->removeUniqueId(obj);
     } else {

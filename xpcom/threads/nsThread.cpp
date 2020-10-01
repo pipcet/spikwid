@@ -94,14 +94,6 @@ using GetCurrentThreadStackLimitsFn = void(WINAPI*)(PULONG_PTR LowLimit,
 #  include "nsXULAppAPI.h"
 #endif
 
-#if defined(NS_FUNCTION_TIMER) && defined(_MSC_VER)
-#  include "nsTimerImpl.h"
-#  include "mozilla/StackWalk.h"
-#endif
-#ifdef NS_FUNCTION_TIMER
-#  include "nsCRT.h"
-#endif
-
 #ifdef MOZ_TASK_TRACER
 #  include "GeckoTaskTracer.h"
 #  include "TracedTaskCommon.h"
@@ -423,12 +415,15 @@ void nsThread::ThreadFunc(void* aArg) {
 
   mozilla::IOInterposer::RegisterCurrentThread();
 
+#ifdef MOZ_GECKO_PROFILER
   // This must come after the call to nsThreadManager::RegisterCurrentThread(),
   // because that call is needed to properly set up this thread as an nsThread,
   // which profiler_register_thread() requires. See bug 1347007.
-  if (!initData->name.IsEmpty()) {
+  const bool registerWithProfiler = !initData->name.IsEmpty();
+  if (registerWithProfiler) {
     PROFILER_REGISTER_THREAD(initData->name.BeginReading());
   }
+#endif  // MOZ_GECKO_PROFILER
 
   // Wait for and process startup event
   nsCOMPtr<nsIRunnable> event = self->mEvents->GetEvent(true, nullptr);
@@ -473,7 +468,12 @@ void nsThread::ThreadFunc(void* aArg) {
   // Inform the threadmanager that this thread is going away
   nsThreadManager::get().UnregisterCurrentThread(*self);
 
-  PROFILER_UNREGISTER_THREAD();
+#ifdef MOZ_GECKO_PROFILER
+  // The thread should only unregister itself if it was registered above.
+  if (registerWithProfiler) {
+    PROFILER_UNREGISTER_THREAD();
+  }
+#endif  // MOZ_GECKO_PROFILER
 
   // Dispatch shutdown ACK
   NotNull<nsThreadShutdownContext*> context =

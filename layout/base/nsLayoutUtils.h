@@ -15,6 +15,7 @@
 #include "mozilla/ReflowOutput.h"
 #include "mozilla/RelativeTo.h"
 #include "mozilla/StaticPrefs_nglayout.h"
+#include "mozilla/SurfaceFromElementResult.h"
 #include "mozilla/SVGImageContext.h"
 #include "mozilla/ToString.h"
 #include "mozilla/TypedEnumBits.h"
@@ -140,6 +141,17 @@ enum class DrawStringFlags {
   ForceHorizontal = 0x1  // Forces the text to be drawn horizontally.
 };
 MOZ_MAKE_ENUM_CLASS_BITWISE_OPERATORS(DrawStringFlags)
+
+enum class ScrollableDirection { Horizontal, Vertical, Either };
+
+namespace mozilla {
+
+class RectCallback {
+ public:
+  virtual void AddRect(const nsRect& aRect) = 0;
+};
+
+}  // namespace mozilla
 
 /**
  * nsLayoutUtils is a namespace class used for various helper
@@ -673,9 +685,8 @@ class nsLayoutUtils {
    * @param  aDirection Whether it's for horizontal or vertical scrolling.
    * @return the nearest scrollable frame or nullptr if not found
    */
-  enum Direction { eHorizontal, eVertical };
   static nsIScrollableFrame* GetNearestScrollableFrameForDirection(
-      nsIFrame* aFrame, Direction aDirection);
+      nsIFrame* aFrame, ScrollableDirection aDirection);
 
   enum {
     /**
@@ -1310,12 +1321,7 @@ class nsLayoutUtils {
    */
   static nsIFrame* GetFirstNonAnonymousFrame(nsIFrame* aFrame);
 
-  class RectCallback {
-   public:
-    virtual void AddRect(const nsRect& aRect) = 0;
-  };
-
-  struct RectAccumulator : public RectCallback {
+  struct RectAccumulator : public mozilla::RectCallback {
     nsRect mResultRect;
     nsRect mFirstRect;
     bool mSeenFirstRect;
@@ -1325,7 +1331,7 @@ class nsLayoutUtils {
     virtual void AddRect(const nsRect& aRect) override;
   };
 
-  struct RectListBuilder : public RectCallback {
+  struct RectListBuilder : public mozilla::RectCallback {
     DOMRectList* mRectList;
 
     explicit RectListBuilder(DOMRectList* aList);
@@ -1359,10 +1365,12 @@ class nsLayoutUtils {
    * Otherwise (by default), the border box is used.
    */
   static void GetAllInFlowRects(nsIFrame* aFrame, const nsIFrame* aRelativeTo,
-                                RectCallback* aCallback, uint32_t aFlags = 0);
+                                mozilla::RectCallback* aCallback,
+                                uint32_t aFlags = 0);
 
   static void GetAllInFlowRectsAndTexts(
-      nsIFrame* aFrame, const nsIFrame* aRelativeTo, RectCallback* aCallback,
+      nsIFrame* aFrame, const nsIFrame* aRelativeTo,
+      mozilla::RectCallback* aCallback,
       mozilla::dom::Sequence<nsString>* aTextList, uint32_t aFlags = 0);
 
   /**
@@ -1554,9 +1562,8 @@ class nsLayoutUtils {
    * size by reducing the *content size* (flooring at zero).  This is used for:
    * https://drafts.csswg.org/css-grid/#min-size-auto
    */
-  enum class IntrinsicISizeType { MinISize, PrefISize };
-  static const auto MIN_ISIZE = IntrinsicISizeType::MinISize;
-  static const auto PREF_ISIZE = IntrinsicISizeType::PrefISize;
+  static const auto MIN_ISIZE = mozilla::IntrinsicISizeType::MinISize;
+  static const auto PREF_ISIZE = mozilla::IntrinsicISizeType::PrefISize;
   enum {
     IGNORE_PADDING = 0x01,
     BAIL_IF_REFLOW_NEEDED = 0x02,  // returns NS_INTRINSIC_ISIZE_UNKNOWN if so
@@ -1564,7 +1571,7 @@ class nsLayoutUtils {
   };
   static nscoord IntrinsicForAxis(
       mozilla::PhysicalAxis aAxis, gfxContext* aRenderingContext,
-      nsIFrame* aFrame, IntrinsicISizeType aType,
+      nsIFrame* aFrame, mozilla::IntrinsicISizeType aType,
       const mozilla::Maybe<LogicalSize>& aPercentageBasis = mozilla::Nothing(),
       uint32_t aFlags = 0, nscoord aMarginBoxMinSizeClamp = NS_MAXSIZE);
   /**
@@ -1572,7 +1579,7 @@ class nsLayoutUtils {
    */
   static nscoord IntrinsicForContainer(gfxContext* aRenderingContext,
                                        nsIFrame* aFrame,
-                                       IntrinsicISizeType aType,
+                                       mozilla::IntrinsicISizeType aType,
                                        uint32_t aFlags = 0);
 
   /**
@@ -1596,7 +1603,7 @@ class nsLayoutUtils {
    */
   static nscoord MinSizeContributionForAxis(mozilla::PhysicalAxis aAxis,
                                             gfxContext* aRC, nsIFrame* aFrame,
-                                            IntrinsicISizeType aType,
+                                            mozilla::IntrinsicISizeType aType,
                                             const LogicalSize& aPercentageBasis,
                                             uint32_t aFlags = 0);
 
@@ -2119,6 +2126,7 @@ class nsLayoutUtils {
    * popup frame or the root prescontext's root frame.
    */
   static nsIFrame* GetDisplayRootFrame(nsIFrame* aFrame);
+  static const nsIFrame* GetDisplayRootFrame(const nsIFrame* aFrame);
 
   /**
    * Get the reference frame that would be used when constructing a
@@ -2228,87 +2236,21 @@ class nsLayoutUtils {
     SFE_USE_ELEMENT_SIZE_IF_VECTOR = 1 << 5
   };
 
-  struct DirectDrawInfo {
-    /* imgIContainer to directly draw to a context */
-    nsCOMPtr<imgIContainer> mImgContainer;
-    /* which frame to draw */
-    uint32_t mWhichFrame;
-    /* imgIContainer flags to use when drawing */
-    uint32_t mDrawingFlags;
-  };
-
-  struct SurfaceFromElementResult {
-    friend class mozilla::dom::CanvasRenderingContext2D;
-    friend class nsLayoutUtils;
-
-    /* If SFEResult contains a valid surface, it either mLayersImage or
-     * mSourceSurface will be non-null, and GetSourceSurface() will not be null.
-     *
-     * For valid surfaces, mSourceSurface may be null if mLayersImage is
-     * non-null, but GetSourceSurface() will create mSourceSurface from
-     * mLayersImage when called.
-     */
-
-    /* Video elements (at least) often are already decoded as layers::Images. */
-    RefPtr<mozilla::layers::Image> mLayersImage;
-
-   protected:
-    /* GetSourceSurface() fills this and returns its non-null value if this
-     * SFEResult was successful. */
-    RefPtr<mozilla::gfx::SourceSurface> mSourceSurface;
-
-   public:
-    /* Contains info for drawing when there is no mSourceSurface. */
-    DirectDrawInfo mDrawInfo;
-
-    /* The size of the surface */
-    mozilla::gfx::IntSize mSize;
-    /* The size the surface is intended to be rendered at */
-    mozilla::gfx::IntSize mIntrinsicSize;
-    /* The principal associated with the element whose surface was returned.
-       If there is a surface, this will never be null. */
-    nsCOMPtr<nsIPrincipal> mPrincipal;
-    /* The image request, if the element is an nsIImageLoadingContent */
-    nsCOMPtr<imgIRequest> mImageRequest;
-    /* True if cross-origins redirects have been done in order to load this
-     * resource */
-    bool mHadCrossOriginRedirects;
-    /* Whether the element was "write only", that is, the bits should not be
-     * exposed to content */
-    bool mIsWriteOnly;
-    /* Whether the element was still loading.  Some consumers need to handle
-       this case specially. */
-    bool mIsStillLoading;
-    /* Whether the element has a valid size. */
-    bool mHasSize;
-    /* Whether the element used CORS when loading. */
-    bool mCORSUsed;
-
-    gfxAlphaType mAlphaType;
-
-    // Methods:
-
-    SurfaceFromElementResult();
-
-    // Gets mSourceSurface, or makes a SourceSurface from mLayersImage.
-    const RefPtr<mozilla::gfx::SourceSurface>& GetSourceSurface();
-  };
-
   // This function can be called on any thread.
-  static SurfaceFromElementResult SurfaceFromOffscreenCanvas(
+  static mozilla::SurfaceFromElementResult SurfaceFromOffscreenCanvas(
       mozilla::dom::OffscreenCanvas* aOffscreenCanvas, uint32_t aSurfaceFlags,
       RefPtr<DrawTarget>& aTarget);
-  static SurfaceFromElementResult SurfaceFromOffscreenCanvas(
+  static mozilla::SurfaceFromElementResult SurfaceFromOffscreenCanvas(
       mozilla::dom::OffscreenCanvas* aOffscreenCanvas,
       uint32_t aSurfaceFlags = 0) {
     RefPtr<DrawTarget> target = nullptr;
     return SurfaceFromOffscreenCanvas(aOffscreenCanvas, aSurfaceFlags, target);
   }
 
-  static SurfaceFromElementResult SurfaceFromElement(
+  static mozilla::SurfaceFromElementResult SurfaceFromElement(
       mozilla::dom::Element* aElement, uint32_t aSurfaceFlags,
       RefPtr<DrawTarget>& aTarget);
-  static SurfaceFromElementResult SurfaceFromElement(
+  static mozilla::SurfaceFromElementResult SurfaceFromElement(
       mozilla::dom::Element* aElement, uint32_t aSurfaceFlags = 0) {
     RefPtr<DrawTarget> target = nullptr;
     return SurfaceFromElement(aElement, aSurfaceFlags, target);
@@ -2316,19 +2258,19 @@ class nsLayoutUtils {
 
   // There are a bunch of callers of SurfaceFromElement.  Just mark it as
   MOZ_CAN_RUN_SCRIPT_BOUNDARY
-  static SurfaceFromElementResult SurfaceFromElement(
+  static mozilla::SurfaceFromElementResult SurfaceFromElement(
       nsIImageLoadingContent* aElement, uint32_t aSurfaceFlags,
       RefPtr<DrawTarget>& aTarget);
   // Need an HTMLImageElement overload, because otherwise the
   // nsIImageLoadingContent and mozilla::dom::Element overloads are ambiguous
   // for HTMLImageElement.
-  static SurfaceFromElementResult SurfaceFromElement(
+  static mozilla::SurfaceFromElementResult SurfaceFromElement(
       mozilla::dom::HTMLImageElement* aElement, uint32_t aSurfaceFlags,
       RefPtr<DrawTarget>& aTarget);
-  static SurfaceFromElementResult SurfaceFromElement(
+  static mozilla::SurfaceFromElementResult SurfaceFromElement(
       mozilla::dom::HTMLCanvasElement* aElement, uint32_t aSurfaceFlags,
       RefPtr<DrawTarget>& aTarget);
-  static SurfaceFromElementResult SurfaceFromElement(
+  static mozilla::SurfaceFromElementResult SurfaceFromElement(
       mozilla::dom::HTMLVideoElement* aElement, uint32_t aSurfaceFlags,
       RefPtr<DrawTarget>& aTarget);
 
@@ -2763,7 +2705,7 @@ class nsLayoutUtils {
    * Returns true if the widget owning the given frame has builtin APZ support
    * enabled.
    */
-  static bool AsyncPanZoomEnabled(nsIFrame* aFrame);
+  static bool AsyncPanZoomEnabled(const nsIFrame* aFrame);
 
   /**
    * Returns the current APZ Resolution Scale. When Java Pan/Zoom is
@@ -2903,7 +2845,7 @@ class nsLayoutUtils {
       nsIFrame* aForFrame, nsIFrame* aScrollFrame, nsIContent* aContent,
       const nsIFrame* aReferenceFrame,
       mozilla::layers::LayerManager* aLayerManager, ViewID aScrollParentId,
-      const nsRect& aViewport, const mozilla::Maybe<nsRect>& aClipRect,
+      const nsSize& aScrollPortSize, const mozilla::Maybe<nsRect>& aClipRect,
       bool aIsRoot,
       const mozilla::Maybe<ContainerLayerParameters>& aContainerParameters);
 
@@ -3064,7 +3006,8 @@ class nsLayoutUtils {
 
   static void ComputeSystemFont(nsFont* aSystemFont,
                                 mozilla::LookAndFeel::FontID aFontID,
-                                const nsFont* aDefaultVariableFont);
+                                const nsFont* aDefaultVariableFont,
+                                const mozilla::dom::Document* aDocument);
 
   static uint32_t ParseFontLanguageOverride(const nsAString& aLangTag);
 
@@ -3134,6 +3077,12 @@ class nsLayoutUtils {
                                                const CSSSize& aSize);
   static nsSize ExpandHeightForDynamicToolbar(nsPresContext* aPresContext,
                                               const nsSize& aSize);
+
+  /**
+   * Returns the nsIFrame which clips overflow regions of the given |aFrame|.
+   * Note CSS clip or clip-path isn't accounted for.
+   **/
+  static nsIFrame* GetNearestOverflowClipFrame(nsIFrame* aFrame);
 
  private:
   /**

@@ -89,15 +89,8 @@ ActorManagerParent.flush();
 
 const { promiseDocumentLoaded, promiseEvent, promiseObserved } = ExtensionUtils;
 
-var REMOTE_CONTENT_SCRIPTS = Services.prefs.getBoolPref(
-  "browser.tabs.remote.autostart",
-  false
-);
-
-const REMOTE_CONTENT_SUBFRAMES = Services.prefs.getBoolPref(
-  "fission.autostart",
-  false
-);
+var REMOTE_CONTENT_SCRIPTS = Services.appinfo.browserTabsRemoteAutostart;
+const REMOTE_CONTENT_SUBFRAMES = Services.appinfo.fissionAutostart;
 
 let BASE_MANIFEST = Object.freeze({
   applications: Object.freeze({
@@ -258,7 +251,15 @@ class ContentPage {
     if (this.extension?.remote) {
       browser.setAttribute("remote", "true");
       browser.setAttribute("remoteType", "extension");
-      browser.sameProcessAsFrameLoader = this.extension.groupFrameLoader;
+    }
+
+    // Ensure that the extension is loaded into the correct
+    // BrowsingContextGroupID by default.
+    if (this.extension) {
+      browser.setAttribute(
+        "initialBrowsingContextGroupId",
+        this.extension.browsingContextGroupId
+      );
     }
 
     let awaitFrameLoader = Promise.resolve();

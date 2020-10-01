@@ -52,10 +52,11 @@ jobs:
                 - linux64-clang
                 - linux64-rust
                 - linux64-cbindgen
+                - linux64-dump-syms
                 - linux64-sccache
                 - linux64-nasm
                 - linux64-node
                 - linux64-lucetc
                 - wasi-sysroot
         optimization:
-            push-interval-10: null
+            skip-unless-expanded: null

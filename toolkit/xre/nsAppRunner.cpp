@@ -101,6 +101,7 @@
 #  include <intrin.h>
 #  include <math.h>
 #  include "cairo/cairo-features.h"
+#  include "mozilla/PreXULSkeletonUI.h"
 #  include "mozilla/DllPrefetchExperimentRegistryInfo.h"
 #  include "mozilla/WindowsDllBlocklist.h"
 #  include "mozilla/WindowsProcessMitigations.h"
@@ -262,7 +263,18 @@ static const char kPrefHealthReportUploadEnabled[] =
         // || defined(MOZ_DEFAULT_BROWSER_AGENT)
 #if defined(MOZ_DEFAULT_BROWSER_AGENT)
 static const char kPrefDefaultAgentEnabled[] = "default-browser-agent.enabled";
+
+static const char kPrefServicesSettingsServer[] = "services.settings.server";
+static const char kPrefSecurityContentSignatureRootHash[] =
+    "security.content.signature.root_hash";
 #endif  // defined(MOZ_DEFAULT_BROWSER_AGENT)
+
+#if defined(XP_WIN)
+static const char kPrefThemeId[] = "extensions.activeThemeID";
+static const char kPrefBrowserStartupBlankWindow[] =
+    "browser.startup.blankWindow";
+static const char kPrefPreXulSkeletonUI[] = "browser.startup.preXulSkeletonUI";
+#endif  // defined(XP_WIN)
 
 int gArgc;
 char** gArgv;
@@ -294,6 +306,7 @@ nsString gAbsoluteArgv0Path;
 #  include <gtk/gtk.h>
 #  ifdef MOZ_WAYLAND
 #    include <gdk/gdkwayland.h>
+#    include "mozilla/widget/nsWaylandDisplay.h"
 #  endif
 #  ifdef MOZ_X11
 #    include <gdk/gdkx.h>
@@ -330,6 +343,7 @@ bool RunningGTest() { return RunGTest; }
 }  // namespace mozilla
 
 using namespace mozilla;
+using namespace mozilla::widget;
 using namespace mozilla::startup;
 using mozilla::Unused;
 using mozilla::dom::ContentChild;
@@ -441,6 +455,92 @@ static ArgResult CheckArgExists(const char* aArg) {
 
 bool gSafeMode = false;
 bool gFxREmbedded = false;
+
+// Fission enablement for the current session is determined once, at startup,
+// and then remains the same for the duration of the session.
+//
+// The following factors determine whether or not Fission is enabled for a
+// session, in order of precedence:
+//
+// - Safe mode: In safe mode, Fission is never enabled.
+//
+// - The MOZ_FORCE_ENABLE_FISSION environment variable: If set to any value,
+//   Fission will be enabled.
+//
+// - The following preferences:
+//
+// The current enrollment status as controlled by Normandy. This value is only
+// stored in the default preference branch, and is not persisted across
+// sessions by the preference service. It therefore isn't available early
+// enough at startup, and needs to be synced to a preference in the user
+// branch which is persisted across sessions.
+static const char kPrefFissionExperimentEnrollmentStatus[] =
+    "fission.experiment.enrollmentStatus";
+//
+// The enrollment status to be used at browser startup. This automatically
+// synced from the above enrollmentStatus preference whenever the latter is
+// changed. It can have any of the values defined in the
+// `nsIXULRuntime_ExperimentStatus` enum. Meanings are documented in
+// the declaration of `nsIXULRuntime.fissionExperimentStatus`
+static const char kPrefFissionExperimentStartupEnrollmentStatus[] =
+    "fission.experiment.startupEnrollmentStatus";
+//
+// The "fission.autostart" preference: If none of the above conditions apply,
+// and the experiment enrollment status is unknown, then the value of the
+// "fisison.autostart" preference is used.
+
+static nsIXULRuntime::ExperimentStatus FissionExperimentStatus() {
+  static nsIXULRuntime::ExperimentStatus sExperimentStatus = ([]() {
+    uint32_t value =
+        Preferences::GetUint(kPrefFissionExperimentStartupEnrollmentStatus);
+    if (value >
+        uint32_t(nsIXULRuntime::ExperimentStatus::eExperimentStatusMax)) {
+      return nsIXULRuntime::ExperimentStatus::eUnknown;
+    }
+    return nsIXULRuntime::ExperimentStatus(value);
+  })();
+
+  return sExperimentStatus;
+}
+
+static void OnFissionEnrollmentStatusChanged(const char* aPref, void* aData) {
+  Preferences::SetUint(
+      kPrefFissionExperimentStartupEnrollmentStatus,
+      Preferences::GetUint(kPrefFissionExperimentEnrollmentStatus));
+}
+
+namespace mozilla {
+
+bool FissionAutostart() {
+  static bool sFissionAutostart = ([]() {
+    if (gSafeMode) {
+      return false;
+    }
+
+    if (EnvHasValue("MOZ_FORCE_ENABLE_FISSION")) {
+      return true;
+    }
+
+    switch (FissionExperimentStatus()) {
+      case nsIXULRuntime::ExperimentStatus::eEnrolledControl:
+        return false;
+      case nsIXULRuntime::ExperimentStatus::eEnrolledTreatment:
+        return true;
+      default:
+        return StaticPrefs::fission_autostart_AtStartup_DoNotUseDirectly();
+    }
+  })();
+
+  return sFissionAutostart;
+}
+
+bool SessionHistoryInParent() {
+  // Fission check will be enabled later.
+  return /*FissionAutostart() ||*/
+      StaticPrefs::fission_sessionHistoryInParent_AtStartup_DoNotUseDirectly();
+}
+
+}  // namespace mozilla
 
 /**
  * The nsXULAppInfo object implements nsIFactory so that it can be its own
@@ -762,6 +862,24 @@ nsXULAppInfo::Observe(nsISupports* aSubject, const char* aTopic,
 }
 
 NS_IMETHODIMP
+nsXULAppInfo::GetFissionAutostart(bool* aResult) {
+  *aResult = FissionAutostart();
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsXULAppInfo::GetFissionExperimentStatus(ExperimentStatus* aResult) {
+  *aResult = FissionExperimentStatus();
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsXULAppInfo::GetSessionHistoryInParent(bool* aResult) {
+  *aResult = SessionHistoryInParent();
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 nsXULAppInfo::GetBrowserTabsRemoteAutostart(bool* aResult) {
   *aResult = BrowserTabsRemoteAutostart();
   return NS_OK;
@@ -798,7 +916,7 @@ NS_IMETHODIMP
 nsXULAppInfo::GetAccessibilityInstantiator(nsAString& aInstantiator) {
 #if defined(ACCESSIBILITY) && defined(XP_WIN)
   if (!GetAccService()) {
-    aInstantiator = u""_ns;
+    aInstantiator.Truncate();
     return NS_OK;
   }
   nsAutoString ipClientInfo;
@@ -814,7 +932,7 @@ nsXULAppInfo::GetAccessibilityInstantiator(nsAString& aInstantiator) {
     }
   }
 #else
-  aInstantiator = u""_ns;
+  aInstantiator.Truncate();
 #endif
   return NS_OK;
 }
@@ -843,7 +961,7 @@ nsXULAppInfo::EnsureContentProcess() {
   if (!XRE_IsParentProcess()) return NS_ERROR_NOT_AVAILABLE;
 
   RefPtr<ContentParent> unused =
-      ContentParent::GetNewOrUsedBrowserProcess(nullptr, DEFAULT_REMOTE_TYPE);
+      ContentParent::GetNewOrUsedBrowserProcess(DEFAULT_REMOTE_TYPE);
   return NS_OK;
 }
 
@@ -1201,8 +1319,8 @@ nsXULAppInfo::SaveMemoryReport() {
     return NS_ERROR_UNEXPECTED;
   }
 
-  rv = dumper->DumpMemoryReportsToNamedFile(path, this, file,
-                                            true /* anonymize */);
+  rv = dumper->DumpMemoryReportsToNamedFile(
+      path, this, file, true /* anonymize */, false /* minimizeMemoryUsage */);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
@@ -1278,7 +1396,7 @@ ScopedXPCOMStartup::~ScopedXPCOMStartup() {
     if (appStartup) appStartup->DestroyHiddenWindow();
 
     gDirServiceProvider->DoShutdown();
-    PROFILER_ADD_MARKER("Shutdown early", OTHER);
+    PROFILER_MARKER_UNTYPED("Shutdown early", OTHER);
 
     WriteConsoleLog();
 
@@ -1446,7 +1564,6 @@ static void DumpHelp() {
       "  --new-instance     Open new instance, not a new window in running "
       "instance.\n"
 #endif
-      "  --UILocale <locale> Start with <locale> resources as UI Locale.\n"
       "  --safe-mode        Disables extensions and themes for this session.\n"
 #ifdef MOZ_BLOCK_PROFILE_DOWNGRADE
       "  --allow-downgrade  Allows downgrading a profile.\n"
@@ -1586,6 +1703,33 @@ static void SetupAlteredPrefetchPref() {
                                 PREF_WIN_ALTERED_DLL_PREFETCH);
 }
 
+static void ReflectSkeletonUIPrefToRegistry(const char* aPref, void* aData) {
+  Unused << aPref;
+  Unused << aData;
+
+  bool shouldBeEnabled =
+      Preferences::GetBool(kPrefPreXulSkeletonUI, false) &&
+      Preferences::GetBool(kPrefBrowserStartupBlankWindow, false);
+  if (shouldBeEnabled && Preferences::HasUserValue(kPrefThemeId)) {
+    nsCString themeId;
+    Preferences::GetCString(kPrefThemeId, themeId);
+    shouldBeEnabled = themeId.EqualsLiteral("default-theme@mozilla.org");
+  }
+
+  if (GetPreXULSkeletonUIEnabled() != shouldBeEnabled) {
+    SetPreXULSkeletonUIEnabled(shouldBeEnabled);
+  }
+}
+
+static void SetupSkeletonUIPrefs() {
+  ReflectSkeletonUIPrefToRegistry(nullptr, nullptr);
+  Preferences::RegisterCallback(&ReflectSkeletonUIPrefToRegistry,
+                                kPrefPreXulSkeletonUI);
+  Preferences::RegisterCallback(&ReflectSkeletonUIPrefToRegistry,
+                                kPrefBrowserStartupBlankWindow);
+  Preferences::RegisterCallback(&ReflectSkeletonUIPrefToRegistry, kPrefThemeId);
+}
+
 #  if defined(MOZ_LAUNCHER_PROCESS)
 
 static void OnLauncherPrefChanged(const char* aPref, void* aData) {
@@ -1645,44 +1789,94 @@ static void SetupLauncherProcessPref() {
 #  endif  // defined(MOZ_LAUNCHER_PROCESS)
 
 #  if defined(MOZ_DEFAULT_BROWSER_AGENT)
-static void OnDefaultAgentTelemetryPrefChanged(const char* aPref, void* aData) {
-  bool prefVal = Preferences::GetBool(aPref, true);
 
+#    define DEFAULT_BROWSER_AGENT_KEY_NAME \
+      "SOFTWARE\\" MOZ_APP_VENDOR "\\" MOZ_APP_NAME "\\Default Browser Agent"
+
+static nsresult PrependRegistryValueName(nsAutoString& aValueName) {
   nsresult rv;
+
+  nsCOMPtr<nsIFile> binaryPath;
+  rv = XRE_GetBinaryPath(getter_AddRefs(binaryPath));
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  nsCOMPtr<nsIFile> binaryDir;
+  rv = binaryPath->GetParent(getter_AddRefs(binaryDir));
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  nsAutoString prefix;
+  rv = binaryDir->GetPath(prefix);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  prefix.AppendLiteral("|");
+  aValueName.Insert(prefix, 0);
+
+  return NS_OK;
+}
+
+static void OnDefaultAgentTelemetryPrefChanged(const char* aPref, void* aData) {
+  nsresult rv;
+  nsAutoString valueName;
+  if (strcmp(aPref, kPrefHealthReportUploadEnabled) == 0) {
+    valueName.AssignLiteral("DisableTelemetry");
+  } else if (strcmp(aPref, kPrefDefaultAgentEnabled) == 0) {
+    valueName.AssignLiteral("DisableDefaultBrowserAgent");
+  } else {
+    return;
+  }
+  rv = PrependRegistryValueName(valueName);
+  NS_ENSURE_SUCCESS_VOID(rv);
+
   nsCOMPtr<nsIWindowsRegKey> regKey =
       do_CreateInstance("@mozilla.org/windows-registry-key;1", &rv);
   NS_ENSURE_SUCCESS_VOID(rv);
 
   nsAutoString keyName;
-  keyName.AppendLiteral("SOFTWARE\\" MOZ_APP_VENDOR "\\" MOZ_APP_NAME
-                        "\\Default Browser Agent");
-
-  nsCOMPtr<nsIFile> binaryPath;
-  rv = XRE_GetBinaryPath(getter_AddRefs(binaryPath));
-  NS_ENSURE_SUCCESS_VOID(rv);
-
-  nsCOMPtr<nsIFile> binaryDir;
-  rv = binaryPath->GetParent(getter_AddRefs(binaryDir));
-  NS_ENSURE_SUCCESS_VOID(rv);
-
-  nsAutoString valueName;
-  rv = binaryDir->GetPath(valueName);
-  NS_ENSURE_SUCCESS_VOID(rv);
-
-  if (strcmp(aPref, kPrefHealthReportUploadEnabled) == 0) {
-    valueName.AppendLiteral("|DisableTelemetry");
-  } else if (strcmp(aPref, kPrefDefaultAgentEnabled) == 0) {
-    valueName.AppendLiteral("|DisableDefaultBrowserAgent");
-  } else {
-    return;
-  }
-
+  keyName.AppendLiteral(DEFAULT_BROWSER_AGENT_KEY_NAME);
   rv = regKey->Create(nsIWindowsRegKey::ROOT_KEY_CURRENT_USER, keyName,
                       nsIWindowsRegKey::ACCESS_WRITE);
-  NS_ENSURE_SUCCESS_VOID(rv);
+
+  bool prefVal = Preferences::GetBool(aPref, true);
 
   // We're recording whether the pref is *disabled*, so invert the value.
   rv = regKey->WriteIntValue(valueName, prefVal ? 0 : 1);
+  NS_ENSURE_SUCCESS_VOID(rv);
+}
+
+static void OnDefaultAgentRemoteSettingsPrefChanged(const char* aPref,
+                                                    void* aData) {
+  nsresult rv;
+  nsAutoString valueName;
+  if (strcmp(aPref, kPrefServicesSettingsServer) == 0) {
+    valueName.AssignLiteral("ServicesSettingsServer");
+  } else if (strcmp(aPref, kPrefSecurityContentSignatureRootHash) == 0) {
+    valueName.AssignLiteral("SecurityContentSignatureRootHash");
+  } else {
+    return;
+  }
+  rv = PrependRegistryValueName(valueName);
+  NS_ENSURE_SUCCESS_VOID(rv);
+
+  nsCOMPtr<nsIWindowsRegKey> regKey =
+      do_CreateInstance("@mozilla.org/windows-registry-key;1", &rv);
+  NS_ENSURE_SUCCESS_VOID(rv);
+
+  nsAutoString keyName;
+  keyName.AppendLiteral(DEFAULT_BROWSER_AGENT_KEY_NAME);
+  rv = regKey->Create(nsIWindowsRegKey::ROOT_KEY_CURRENT_USER, keyName,
+                      nsIWindowsRegKey::ACCESS_WRITE);
+
+  NS_ENSURE_SUCCESS_VOID(rv);
+
+  nsAutoString prefVal;
+  rv = Preferences::GetString(aPref, prefVal);
+  NS_ENSURE_SUCCESS_VOID(rv);
+
+  if (prefVal.IsEmpty()) {
+    rv = regKey->RemoveValue(valueName);
+  } else {
+    rv = regKey->WriteStringValue(valueName, prefVal);
+  }
   NS_ENSURE_SUCCESS_VOID(rv);
 }
 
@@ -1982,9 +2176,10 @@ static ReturnAbortOnError ShowProfileManager(
       NS_ENSURE_TRUE(appStartup, NS_ERROR_FAILURE);
 
       nsCOMPtr<mozIDOMWindowProxy> newWindow;
-      rv = windowWatcher->OpenWindow(nullptr, kProfileManagerURL, "_blank",
-                                     "centerscreen,chrome,modal,titlebar",
-                                     ioParamBlock, getter_AddRefs(newWindow));
+      rv = windowWatcher->OpenWindow(
+          nullptr, nsDependentCString(kProfileManagerURL), "_blank"_ns,
+          "centerscreen,chrome,modal,titlebar"_ns, ioParamBlock,
+          getter_AddRefs(newWindow));
 
       NS_ENSURE_SUCCESS_LOG(rv, rv);
 
@@ -2167,9 +2362,8 @@ struct FileWriteFunc : public JSONWriteFunc {
   FILE* mFile;
   explicit FileWriteFunc(FILE* aFile) : mFile(aFile) {}
 
-  void Write(const char* aStr) override { fprintf(mFile, "%s", aStr); }
-  void Write(const char* aStr, size_t aLen) override {
-    fprintf(mFile, "%s", aStr);
+  void Write(const Span<const char>& aStr) override {
+    fprintf(mFile, "%.*s", int(aStr.size()), aStr.data());
   }
 };
 
@@ -2282,33 +2476,40 @@ static void SubmitDowngradeTelemetry(const nsCString& aLastVersion,
   JSONWriter w(MakeUnique<FileWriteFunc>(file));
   w.Start();
   {
-    w.StringProperty("type", pingType.get());
-    w.StringProperty("id", PromiseFlatCString(pingId).get());
-    w.StringProperty("creationDate", date);
+    w.StringProperty("type",
+                     Span<const char>(pingType.Data(), pingType.Length()));
+    w.StringProperty("id", PromiseFlatCString(pingId));
+    w.StringProperty("creationDate", MakeStringSpan(date));
     w.IntProperty("version", TELEMETRY_PING_FORMAT_VERSION);
-    w.StringProperty("clientId", clientId.get());
+    w.StringProperty("clientId", clientId);
     w.StartObjectProperty("application");
     {
-      w.StringProperty("architecture", arch.get());
-      w.StringProperty("buildId", gAppData->buildID);
-      w.StringProperty("name", gAppData->name);
-      w.StringProperty("version", gAppData->version);
+      w.StringProperty("architecture", arch);
+      w.StringProperty(
+          "buildId",
+          MakeStringSpan(static_cast<const char*>(gAppData->buildID)));
+      w.StringProperty(
+          "name", MakeStringSpan(static_cast<const char*>(gAppData->name)));
+      w.StringProperty(
+          "version",
+          MakeStringSpan(static_cast<const char*>(gAppData->version)));
       w.StringProperty("displayVersion",
                        MOZ_STRINGIFY(MOZ_APP_VERSION_DISPLAY));
-      w.StringProperty("vendor", gAppData->vendor);
+      w.StringProperty(
+          "vendor", MakeStringSpan(static_cast<const char*>(gAppData->vendor)));
       w.StringProperty("platformVersion", gToolkitVersion);
 #  ifdef TARGET_XPCOM_ABI
       w.StringProperty("xpcomAbi", TARGET_XPCOM_ABI);
 #  else
       w.StringProperty("xpcomAbi", "unknown");
 #  endif
-      w.StringProperty("channel", channel.get());
+      w.StringProperty("channel", channel);
     }
     w.EndObject();
     w.StartObjectProperty("payload");
     {
-      w.StringProperty("lastVersion", PromiseFlatCString(lastVersion).get());
-      w.StringProperty("lastBuildId", PromiseFlatCString(lastBuildId).get());
+      w.StringProperty("lastVersion", PromiseFlatCString(lastVersion));
+      w.StringProperty("lastBuildId", PromiseFlatCString(lastBuildId));
       w.BoolProperty("hasSync", aHasSync);
       w.IntProperty("button", aButton);
     }
@@ -2409,9 +2610,10 @@ static ReturnAbortOnError CheckDowngrade(nsIFile* aProfileDir,
       paramBlock->SetInt(0, flags);
 
       nsCOMPtr<mozIDOMWindowProxy> newWindow;
-      rv = windowWatcher->OpenWindow(nullptr, kProfileDowngradeURL, "_blank",
-                                     "centerscreen,chrome,modal,titlebar",
-                                     paramBlock, getter_AddRefs(newWindow));
+      rv = windowWatcher->OpenWindow(
+          nullptr, nsDependentCString(kProfileDowngradeURL), "_blank"_ns,
+          "centerscreen,chrome,modal,titlebar"_ns, paramBlock,
+          getter_AddRefs(newWindow));
       NS_ENSURE_SUCCESS(rv, rv);
 
       paramBlock->GetInt(1, &result);
@@ -2568,7 +2770,7 @@ static bool CheckCompatibility(nsIFile* aProfileDir, const nsCString& aVersion,
   if (NS_FAILED(rv)) return false;
 
   nsCOMPtr<nsIFile> lf;
-  rv = NS_NewNativeLocalFile(EmptyCString(), false, getter_AddRefs(lf));
+  rv = NS_NewNativeLocalFile(""_ns, false, getter_AddRefs(lf));
   if (NS_FAILED(rv)) return false;
 
   rv = lf->SetPersistentDescriptor(buf);
@@ -2582,7 +2784,7 @@ static bool CheckCompatibility(nsIFile* aProfileDir, const nsCString& aVersion,
     rv = parser.GetString("Compatibility", "LastAppDir", buf);
     if (NS_FAILED(rv)) return false;
 
-    rv = NS_NewNativeLocalFile(EmptyCString(), false, getter_AddRefs(lf));
+    rv = NS_NewNativeLocalFile(""_ns, false, getter_AddRefs(lf));
     if (NS_FAILED(rv)) return false;
 
     rv = lf->SetPersistentDescriptor(buf);
@@ -2751,9 +2953,6 @@ static void MOZ_gdk_display_close(GdkDisplay* display) {
     if (skip_display_close) NS_WARNING("wallpaper bug 417163 for Qt theme");
     g_free(theme_name);
   }
-
-  // A workaround for https://bugzilla.gnome.org/show_bug.cgi?id=703257
-  if (gtk_check_version(3, 9, 8) != NULL) skip_display_close = true;
 
   bool buggyCairoShutdown = cairo_version() < CAIRO_VERSION_ENCODE(1, 4, 0);
 
@@ -3047,16 +3246,6 @@ int XREMain::XRE_mainInit(bool* aExitFlag) {
     }
     ChaosMode::SetChaosFeature(feature);
   }
-
-#ifdef MOZ_ASAN_REPORTER
-  // In ASan Reporter builds, we enable certain chaos features by default unless
-  // the user explicitly requests a particular set of features.
-  if (!PR_GetEnv("MOZ_CHAOSMODE")) {
-    ChaosMode::SetChaosFeature(static_cast<ChaosFeature>(
-        ChaosFeature::ThreadScheduling | ChaosFeature::NetworkScheduling |
-        ChaosFeature::TimerScheduling));
-  }
-#endif
 
   if (CheckArgExists("fxr")) {
     gFxREmbedded = true;
@@ -3677,14 +3866,16 @@ static void PR_CALLBACK ReadAheadDlls_ThreadStart(void* arg) {
 
 #if defined(MOZ_WAYLAND)
 bool IsWaylandDisabled() {
+  const char* backendPref = PR_GetEnv("GDK_BACKEND");
+  if (backendPref && strcmp(backendPref, "wayland") == 0) {
+    return false;
+  }
   // Enable Wayland on Gtk+ >= 3.22 where we can expect recent enough
   // compositor & libwayland interface.
   bool disableWayland = (gtk_check_version(3, 22, 0) != nullptr);
   if (!disableWayland) {
-    // Make X11 backend the default one unless MOZ_ENABLE_WAYLAND or
-    // GDK_BACKEND are specified.
-    disableWayland = (PR_GetEnv("GDK_BACKEND") == nullptr) &&
-                     (PR_GetEnv("MOZ_ENABLE_WAYLAND") == nullptr);
+    // Make X11 backend the default one unless MOZ_ENABLE_WAYLAND is set.
+    disableWayland = (PR_GetEnv("MOZ_ENABLE_WAYLAND") == nullptr);
   }
   return disableWayland;
 }
@@ -3987,7 +4178,7 @@ int XREMain::XRE_mainStartup(bool* aExitFlag) {
       nsString leafName;
       rv = mProfD->GetLeafName(leafName);
       if (NS_SUCCEEDED(rv)) {
-        profileName = NS_ConvertUTF16toUTF8(leafName);
+        CopyUTF16toUTF8(leafName, profileName);
       }
     }
 
@@ -4233,10 +4424,7 @@ int XREMain::XRE_mainStartup(bool* aExitFlag) {
                  mAppData->directory, gSafeMode || !startupCacheValid);
   }
 
-  if (!startupCacheValid) {
-    StartupCache::IgnoreDiskCache();
-  }
-  StartupCache::PartialInitSingleton(mProfLD);
+  if (!startupCacheValid) StartupCache::IgnoreDiskCache();
 
   if (flagFile) {
     flagFile->Remove(true);
@@ -4295,27 +4483,6 @@ nsresult XREMain::XRE_mainRun() {
   mozilla::mscom::InitProfilerMarkers();
 #  endif  // defined(MOZ_GECKO_PROFILER)
 #endif    // defined(XP_WIN)
-
-#ifdef NS_FUNCTION_TIMER
-  // initialize some common services, so we don't pay the cost for these at odd
-  // times later on; SetWindowCreator -> ChromeRegistry -> IOService ->
-  // SocketTransportService -> (nspr wspm init), Prefs
-  {
-    nsCOMPtr<nsISupports> comp;
-
-    comp = do_GetService("@mozilla.org/preferences-service;1");
-
-    comp = do_GetService("@mozilla.org/network/socket-transport-service;1");
-
-    comp = do_GetService("@mozilla.org/network/dns-service;1");
-
-    comp = do_GetService("@mozilla.org/network/io-service;1");
-
-    comp = do_GetService("@mozilla.org/chrome/chrome-registry;1");
-
-    comp = do_GetService("@mozilla.org/focus-event-suppressor-service;1");
-  }
-#endif
 
   rv = mScopedXPCOM->SetWindowCreator(mNativeApp);
   NS_ENSURE_SUCCESS(rv, NS_ERROR_FAILURE);
@@ -4597,6 +4764,7 @@ nsresult XREMain::XRE_mainRun() {
     Preferences::RegisterCallbackAndCall(RegisterApplicationRestartChanged,
                                          PREF_WIN_REGISTER_APPLICATION_RESTART);
     SetupAlteredPrefetchPref();
+    SetupSkeletonUIPrefs();
 #  if defined(MOZ_LAUNCHER_PROCESS)
     SetupLauncherProcessPref();
 #  endif  // defined(MOZ_LAUNCHER_PROCESS)
@@ -4605,8 +4773,17 @@ nsresult XREMain::XRE_mainRun() {
                                          kPrefHealthReportUploadEnabled);
     Preferences::RegisterCallbackAndCall(&OnDefaultAgentTelemetryPrefChanged,
                                          kPrefDefaultAgentEnabled);
+
+    Preferences::RegisterCallbackAndCall(
+        &OnDefaultAgentRemoteSettingsPrefChanged, kPrefServicesSettingsServer);
+    Preferences::RegisterCallbackAndCall(
+        &OnDefaultAgentRemoteSettingsPrefChanged,
+        kPrefSecurityContentSignatureRootHash);
 #  endif  // defined(MOZ_DEFAULT_BROWSER_AGENT)
 #endif
+
+    Preferences::RegisterCallback(&OnFissionEnrollmentStatusChanged,
+                                  kPrefFissionExperimentEnrollmentStatus);
 
 #if defined(HAVE_DESKTOP_STARTUP_ID) && defined(MOZ_WIDGET_GTK)
     // Clear the environment variable so it won't be inherited by
@@ -4764,15 +4941,17 @@ int XREMain::XRE_main(int argc, char* argv[], const BootstrapConfig& aConfig) {
 
   mozilla::LogModule::Init(gArgc, gArgv);
 
-#ifdef MOZ_CODE_COVERAGE
-  CodeCoverageHandler::Init();
-#endif
-
+#ifndef XP_LINUX
   NS_SetCurrentThreadName("MainThread");
+#endif
 
   AUTO_BASE_PROFILER_LABEL("XREMain::XRE_main (around Gecko Profiler)", OTHER);
   AUTO_PROFILER_INIT;
   AUTO_PROFILER_LABEL("XREMain::XRE_main", OTHER);
+
+#ifdef MOZ_CODE_COVERAGE
+  CodeCoverageHandler::Init();
+#endif
 
   nsresult rv = NS_OK;
 
@@ -4943,6 +5122,9 @@ int XREMain::XRE_main(int argc, char* argv[], const BootstrapConfig& aConfig) {
   // gdk_display_close also calls gdk_display_manager_set_default_display
   // appropriately when necessary.
   if (!gfxPlatform::IsHeadless()) {
+#  ifdef MOZ_WAYLAND
+    WaylandDisplayRelease();
+#  endif
     MOZ_gdk_display_close(mGdkDisplay);
   }
 #endif
@@ -5078,8 +5260,8 @@ bool BrowserTabsRemoteAutostart() {
   }
   gBrowserTabsRemoteAutostartInitialized = true;
 
-  // If we're in the content process, we are running E10S.
-  if (XRE_IsContentProcess()) {
+  // If we're not in the parent process, we are running E10s.
+  if (!XRE_IsParentProcess()) {
     gBrowserTabsRemoteAutostart = true;
     return gBrowserTabsRemoteAutostart;
   }
@@ -5112,20 +5294,18 @@ bool BrowserTabsRemoteAutostart() {
   }
 
   // Uber override pref for emergency blocking
-  if (gBrowserTabsRemoteAutostart && EnvHasValue("MOZ_FORCE_DISABLE_E10S")) {
-    gBrowserTabsRemoteAutostart = false;
-    status = kE10sForceDisabled;
+  if (gBrowserTabsRemoteAutostart) {
+    const char* forceDisable = PR_GetEnv("MOZ_FORCE_DISABLE_E10S");
+    // The environment variable must match the application version to apply.
+    if (forceDisable && gAppData && !strcmp(forceDisable, gAppData->version)) {
+      gBrowserTabsRemoteAutostart = false;
+      status = kE10sForceDisabled;
+    }
   }
 
   gBrowserTabsRemoteStatus = status;
 
   return gBrowserTabsRemoteAutostart;
-}
-
-bool FissionAutostart() {
-  return !gSafeMode &&
-         (StaticPrefs::fission_autostart_AtStartup_DoNotUseDirectly() ||
-          EnvHasValue("MOZ_FORCE_ENABLE_FISSION"));
 }
 
 uint32_t GetMaxWebProcessCount() {

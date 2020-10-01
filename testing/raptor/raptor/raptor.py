@@ -52,7 +52,6 @@ def main(args=sys.argv[1:]):
             {
                 "fission.autostart": True,
                 "dom.serviceWorkers.parent_intercept": True,
-                "browser.tabs.documentchannel": True,
             }
         )
 
@@ -96,8 +95,7 @@ def main(args=sys.argv[1:]):
             # peel off arguments that are specific to browsertime
             for key in outer_kwargs.keys():
                 if key.startswith("browsertime_"):
-                    value = outer_kwargs.pop(key)
-                    inner_kwargs[key] = value
+                    inner_kwargs[key] = outer_kwargs.get(key)
 
             if args.app == "firefox" or args.app in CHROMIUM_DISTROS:
                 klass = BrowsertimeDesktop
@@ -136,6 +134,7 @@ def main(args=sys.argv[1:]):
             no_conditioned_profile=args.no_conditioned_profile,
             disable_perf_tuning=args.disable_perf_tuning,
             conditioned_profile_scenario=args.conditioned_profile_scenario,
+            chimera=args.chimera,
             project=args.project,
             verbose=args.verbose
         )

@@ -13,7 +13,6 @@
 #include "mozilla/gfx/Types.h"
 #include "nsWaylandDisplay.h"
 #include "nsWindow.h"
-#include "DMABufSurface.h"
 #include "WindowSurface.h"
 
 #define BACK_BUFFER_NUM 3
@@ -26,7 +25,7 @@ class WindowSurfaceWayland;
 // Allocates and owns shared memory for Wayland drawing surface
 class WaylandShmPool {
  public:
-  WaylandShmPool(nsWaylandDisplay* aDisplay, int aSize);
+  WaylandShmPool(RefPtr<nsWaylandDisplay> aDisplay, int aSize);
   ~WaylandShmPool();
 
   bool Resize(int aSize);
@@ -45,8 +44,6 @@ class WaylandShmPool {
 // Holds actual graphics data for wl_surface
 class WindowBackBuffer {
  public:
-  virtual bool IsDMABufBuffer() { return false; };
-
   virtual already_AddRefed<gfx::DrawTarget> Lock() = 0;
   virtual void Unlock() = 0;
   virtual bool IsLocked() = 0;
@@ -75,7 +72,7 @@ class WindowBackBuffer {
 
   static gfx::SurfaceFormat GetSurfaceFormat() { return mFormat; }
 
-  nsWaylandDisplay* GetWaylandDisplay();
+  RefPtr<nsWaylandDisplay> GetWaylandDisplay();
 
   WindowBackBuffer(WindowSurfaceWayland* aWindowSurfaceWayland)
       : mWindowSurfaceWayland(aWindowSurfaceWayland){};
@@ -125,35 +122,6 @@ class WindowBackBufferShm : public WindowBackBuffer {
   int mHeight;
   bool mAttached;
   bool mIsLocked;
-};
-
-class WindowBackBufferDMABuf : public WindowBackBuffer {
- public:
-  WindowBackBufferDMABuf(WindowSurfaceWayland* aWindowSurfaceWayland,
-                         int aWidth, int aHeight);
-  ~WindowBackBufferDMABuf();
-
-  bool IsDMABufBuffer() { return true; };
-
-  bool IsAttached();
-  void SetAttached();
-
-  int GetWidth();
-  int GetHeight();
-  wl_buffer* GetWlBuffer();
-
-  bool SetImageDataFromBuffer(class WindowBackBuffer* aSourceBuffer);
-
-  already_AddRefed<gfx::DrawTarget> Lock();
-  bool IsLocked();
-  void Unlock();
-
-  void Clear();
-  void Detach(wl_buffer* aBuffer);
-  bool Resize(int aWidth, int aHeight);
-
- private:
-  RefPtr<DMABufSurfaceRGBA> mDMAbufSurface;
 };
 
 class WindowImageSurface {
@@ -215,7 +183,7 @@ class WindowSurfaceWayland : public WindowSurface {
   // (see WindowBackBufferShm::Detach() for instance).
   void CommitWaylandBuffer();
 
-  nsWaylandDisplay* GetWaylandDisplay() { return mWaylandDisplay; };
+  RefPtr<nsWaylandDisplay> GetWaylandDisplay() { return mWaylandDisplay; };
 
   // Image cache mode can be set by widget.wayland_cache_mode
   typedef enum {
@@ -227,21 +195,15 @@ class WindowSurfaceWayland : public WindowSurface {
     // is rendered.
     CACHE_MISSING = 1,
     // Don't cache anything, draw only when back buffer is available.
-    // Suitable for fullscreen content only like fullscreen video playback and
-    // may work well with dmabuf backend.
     CACHE_NONE = 2
   } RenderingCacheMode;
 
  private:
   WindowBackBuffer* GetWaylandBufferWithSwitch();
   WindowBackBuffer* GetWaylandBufferRecent();
-  WindowBackBuffer* SetNewWaylandBuffer(bool aAllowDMABufBackend);
-  WindowBackBuffer* CreateWaylandBuffer(int aWidth, int aHeight,
-                                        bool aUseDMABufBackend);
-  WindowBackBuffer* CreateWaylandBufferInternal(int aWidth, int aHeight,
-                                                bool aUseDMABufBackend);
-  WindowBackBuffer* WaylandBufferFindAvailable(int aWidth, int aHeight,
-                                               bool aUseDMABufBackend);
+  WindowBackBuffer* SetNewWaylandBuffer();
+  WindowBackBuffer* CreateWaylandBuffer(int aWidth, int aHeight);
+  WindowBackBuffer* WaylandBufferFindAvailable(int aWidth, int aHeight);
 
   already_AddRefed<gfx::DrawTarget> LockWaylandBuffer();
   void UnlockWaylandBuffer();
@@ -267,7 +229,7 @@ class WindowSurfaceWayland : public WindowSurface {
   // during resize when mBounds are updated immediately but actual
   // GtkWidget size is updated asynchronously (see Bug 1489463).
   LayoutDeviceIntRect mWLBufferRect;
-  nsWaylandDisplay* mWaylandDisplay;
+  RefPtr<nsWaylandDisplay> mWaylandDisplay;
 
   // Actual buffer (backed by wl_buffer) where all drawings go into.
   // Drawn areas are stored at mWaylandBufferDamage and if there's
@@ -275,7 +237,6 @@ class WindowSurfaceWayland : public WindowSurface {
   // the mBufferPendingCommit is set.
   WindowBackBuffer* mWaylandBuffer;
   WindowBackBuffer* mShmBackupBuffer[BACK_BUFFER_NUM];
-  WindowBackBuffer* mDMABackupBuffer[BACK_BUFFER_NUM];
 
   // When mWaylandFullscreenDamage we invalidate whole surface,
   // otherwise partial screen updates (mWaylandBufferDamage) are used.
@@ -334,10 +295,6 @@ class WindowSurfaceWayland : public WindowSurface {
   bool mSmoothRendering;
 
   bool mIsMainThread;
-
-  static bool UseDMABufBackend();
-  static bool mUseDMABufInitialized;
-  static bool mUseDMABuf;
 };
 
 }  // namespace widget

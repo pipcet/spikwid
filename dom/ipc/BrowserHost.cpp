@@ -56,11 +56,9 @@ a11y::DocAccessibleParent* BrowserHost::GetTopLevelDocAccessible() const {
   return mRoot->GetTopLevelDocAccessible();
 }
 
-void BrowserHost::LoadURL(nsIURI* aURI, nsIPrincipal* aTriggeringPrincipal) {
-  MOZ_ASSERT(aURI);
-  MOZ_ASSERT(aTriggeringPrincipal);
-
-  mRoot->LoadURL(aURI, aTriggeringPrincipal);
+void BrowserHost::LoadURL(nsDocShellLoadState* aLoadState) {
+  MOZ_ASSERT(aLoadState);
+  mRoot->LoadURL(aLoadState);
 }
 
 void BrowserHost::ResumeLoad(uint64_t aPendingSwitchId) {
@@ -259,30 +257,6 @@ BrowserHost::TransmitPermissionsForPrincipal(nsIPrincipal* aPrincipal) {
     return NS_OK;
   }
   return GetContentParent()->TransmitPermissionsForPrincipal(aPrincipal);
-}
-
-/* readonly attribute boolean hasBeforeUnload; */
-NS_IMETHODIMP
-BrowserHost::GetHasBeforeUnload(bool* aHasBeforeUnload) {
-  if (!mRoot || !GetBrowsingContext()) {
-    *aHasBeforeUnload = false;
-    return NS_OK;
-  }
-
-  bool result = false;
-
-  GetBrowsingContext()->PreOrderWalk(
-      [&result](BrowsingContext* aBrowsingContext) {
-        WindowGlobalParent* windowGlobal =
-            aBrowsingContext->Canonical()->GetCurrentWindowGlobal();
-
-        if (windowGlobal) {
-          result |= windowGlobal->HasBeforeUnload();
-        }
-      });
-
-  *aHasBeforeUnload = result;
-  return NS_OK;
 }
 
 /* boolean startApzAutoscroll (in float aAnchorX, in float aAnchorY, in nsViewID

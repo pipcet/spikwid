@@ -248,8 +248,6 @@ registerCleanupFunction(() => {
   Services.obs.removeObserver(ConsoleObserver, "console-api-log-event");
 });
 
-var waitForTime = DevToolsUtils.waitForTime;
-
 function loadFrameScriptUtils(browser = gBrowser.selectedBrowser) {
   let mm = browser.messageManager;
   const frameURL =
@@ -290,7 +288,18 @@ registerCleanupFunction(() => {
   );
 });
 
+var {
+  BrowserConsoleManager,
+} = require("devtools/client/webconsole/browser-console-manager");
+
 registerCleanupFunction(async function cleanup() {
+  // Closing the browser console if there's one
+  const browserConsole = BrowserConsoleManager.getBrowserConsole();
+  if (browserConsole) {
+    browserConsole.targetList.destroy();
+    await safeCloseBrowserConsole({ clearOutput: true });
+  }
+
   // Close any tab opened by the test.
   // There should be only one tab opened by default when firefox starts the test.
   while (gBrowser.tabs.length > 1) {
@@ -315,7 +324,54 @@ registerCleanupFunction(async function cleanup() {
       conn.close();
     }
   }
+
+  // Clear the cached value for the fission content toolbox preference.
+  gDevTools.clearIsFissionContentToolboxEnabledReferenceForTest();
 });
+
+async function safeCloseBrowserConsole({ clearOutput = false } = {}) {
+  const hud = BrowserConsoleManager.getBrowserConsole();
+  if (!hud) {
+    return;
+  }
+
+  if (clearOutput) {
+    info("Clear the browser console output");
+    const { ui } = hud;
+    const promises = [ui.once("messages-cleared")];
+    // If there's an object inspector, we need to wait for the actors to be released.
+    if (ui.outputNode.querySelector(".object-inspector")) {
+      promises.push(ui.once("fronts-released"));
+    }
+    ui.clearOutput(true);
+    await Promise.all(promises);
+    info("Browser console cleared");
+  }
+
+  info("Wait for all Browser Console targets to be attached");
+  // It might happen that waitForAllTargetsToBeAttached does not resolve, so we set a
+  // timeout of 1s before closing
+  await Promise.race([
+    waitForAllTargetsToBeAttached(hud.targetList),
+    wait(1000),
+  ]);
+  info("Close the Browser Console");
+  await BrowserConsoleManager.closeBrowserConsole();
+  info("Browser Console closed");
+}
+
+/**
+ * Returns a Promise that resolves when all the targets are fully attached.
+ *
+ * @param {TargetList} targetList
+ */
+function waitForAllTargetsToBeAttached(targetList) {
+  return Promise.allSettled(
+    targetList
+      .getAllTargets(targetList.ALL_TYPES)
+      .map(target => target._onThreadInitialized)
+  );
+}
 
 /**
  * Add a new test tab in the browser and load the given url.
@@ -408,7 +464,7 @@ async function navigateTo(uri, { isErrorPage = false } = {}) {
   // event to make sure everything is ready.
   // Navigating from/to pages loaded in the parent process, like about:robots,
   // also spawn new targets.
-  // (If target-switching pref is false, the toolbox will reboot)
+  // (If target switching is disabled, the toolbox will reboot)
   const onTargetSwitched = toolbox.targetList.once("switched-target");
   // Otherwise, if we don't switch target, it is safe to wait for navigate event.
   const onNavigate = target.once("navigate");
@@ -444,13 +500,10 @@ async function navigateTo(uri, { isErrorPage = false } = {}) {
   // If we switched to another process and the target switching pref is false,
   // the toolbox will close and reopen.
   // For now, this helper doesn't support this case
-  if (
-    switchedToAnotherProcess &&
-    !Services.prefs.getBoolPref("devtools.target-switching.enabled", false)
-  ) {
+  if (switchedToAnotherProcess && !isTargetSwitchingEnabled()) {
     ok(
       false,
-      `navigateTo(${uri}) navigated to another process, but the target-switching preference is false`
+      `navigateTo(${uri}) navigated to another process, but the target switching is disabled`
     );
     return;
   }
@@ -514,10 +567,7 @@ function isFissionEnabled() {
 }
 
 function isTargetSwitchingEnabled() {
-  return (
-    isFissionEnabled() &&
-    Services.prefs.getBoolPref("devtools.target-switching.enabled", false)
-  );
+  return Services.prefs.getBoolPref("devtools.target-switching.enabled", false);
 }
 
 /**
@@ -593,6 +643,66 @@ function synthesizeKeyShortcut(key, target) {
 
   info("Synthesizing key shortcut: " + key);
   EventUtils.synthesizeKey(shortcut.key || "", keyEvent, target);
+}
+
+var waitForTime = DevToolsUtils.waitForTime;
+
+/**
+ * Wait for a tick.
+ * @return {Promise}
+ */
+function waitForTick() {
+  return new Promise(resolve => DevToolsUtils.executeSoon(resolve));
+}
+
+/**
+ * This shouldn't be used in the tests, but is useful when writing new tests or
+ * debugging existing tests in order to introduce delays in the test steps
+ *
+ * @param {Number} ms
+ *        The time to wait
+ * @return A promise that resolves when the time is passed
+ */
+function wait(ms) {
+  return new Promise(resolve => {
+    setTimeout(resolve, ms);
+    info("Waiting " + ms / 1000 + " seconds.");
+  });
+}
+
+/**
+ * Wait for a predicate to return a result.
+ *
+ * @param function condition
+ *        Invoked once in a while until it returns a truthy value. This should be an
+ *        idempotent function, since we have to run it a second time after it returns
+ *        true in order to return the value.
+ * @param string message [optional]
+ *        A message to output if the condition fails.
+ * @param number interval [optional]
+ *        How often the predicate is invoked, in milliseconds.
+ * @return object
+ *         A promise that is resolved with the result of the condition.
+ */
+async function waitFor(condition, message = "", interval = 10, maxTries = 500) {
+  try {
+    const value = await BrowserTestUtils.waitForCondition(
+      condition,
+      message,
+      interval,
+      maxTries
+    );
+    return value;
+  } catch (e) {
+    const errorMessage =
+      "Failed waitFor(): " +
+      message +
+      "\n" +
+      "Failed condition: " +
+      condition +
+      "\n";
+    throw new Error(errorMessage);
+  }
 }
 
 /**
@@ -704,29 +814,6 @@ function once(target, eventName, useCapture = false) {
 function loadHelperScript(filePath) {
   const testDir = gTestPath.substr(0, gTestPath.lastIndexOf("/"));
   Services.scriptloader.loadSubScript(testDir + "/" + filePath, this);
-}
-
-/**
- * Wait for a tick.
- * @return {Promise}
- */
-function waitForTick() {
-  return new Promise(resolve => DevToolsUtils.executeSoon(resolve));
-}
-
-/**
- * This shouldn't be used in the tests, but is useful when writing new tests or
- * debugging existing tests in order to introduce delays in the test steps
- *
- * @param {Number} ms
- *        The time to wait
- * @return A promise that resolves when the time is passed
- */
-function wait(ms) {
-  return new Promise(resolve => {
-    setTimeout(resolve, ms);
-    info("Waiting " + ms / 1000 + " seconds.");
-  });
 }
 
 /**
@@ -1088,19 +1175,59 @@ function getCurrentTestFilePath() {
  *        The ResourceWatcher instance that should emit the expected resource.
  * @param {String} resourceType
  *        One of ResourceWatcher.TYPES, type of the expected resource.
+ * @param {Object} additional options
+ *        - {Boolean} ignoreExistingResources: ignore existing resources or not.
+ *        - {Function} predicate: if provided, will wait until a resource makes
+ *          predicate(resource) return true.
  * @return {Object}
  *         - resource {Object} the resource itself
  *         - targetFront {TargetFront} the target which owns the resource
  */
-function waitForResourceOnce(resourceWatcher, resourceType) {
+function waitForNextResource(
+  resourceWatcher,
+  resourceType,
+  { ignoreExistingResources = false, predicate } = {}
+) {
+  // If no predicate was provided, convert to boolean to avoid resolving for
+  // empty `resources` arrays.
+  predicate = predicate || (resource => !!resource);
+
   return new Promise(resolve => {
-    const onAvailable = ({ targetFront, resource }) => {
-      resolve({ targetFront, resource });
-      resourceWatcher.unwatchResources([resourceType], { onAvailable });
+    const onAvailable = resources => {
+      const matchingResource = resources.find(resource => predicate(resource));
+      if (matchingResource) {
+        resolve(matchingResource);
+        resourceWatcher.unwatchResources([resourceType], { onAvailable });
+      }
     };
+
     resourceWatcher.watchResources([resourceType], {
-      ignoreExistingResources: true,
+      ignoreExistingResources,
       onAvailable,
     });
   });
+}
+
+/**
+ * Unregister all registered service workers.
+ *
+ * @param {DevToolsClient} client
+ */
+async function unregisterAllServiceWorkers(client) {
+  info("Wait until all workers have a valid registrationFront");
+  let workers;
+  await asyncWaitUntil(async function() {
+    workers = await client.mainRoot.listAllWorkers();
+    const allWorkersRegistered = workers.service.every(
+      worker => !!worker.registrationFront
+    );
+    return allWorkersRegistered;
+  });
+
+  info("Unregister all service workers");
+  const promises = [];
+  for (const worker of workers.service) {
+    promises.push(worker.registrationFront.unregister());
+  }
+  await Promise.all(promises);
 }

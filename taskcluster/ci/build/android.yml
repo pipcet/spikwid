@@ -39,6 +39,7 @@ job-defaults:
             - linux64-rust-android
             - linux64-rust-size
             - linux64-cbindgen
+            - linux64-dump-syms
             - linux64-nasm
             - linux64-node
 
@@ -75,7 +76,7 @@ android-x86/opt:
     treeherder:
         platform: android-4-2-x86/opt
         symbol: B
-    run-on-projects: ['mozilla-central']
+    run-on-projects: ['integration']
     worker-type: b-linux
     worker:
         env:
@@ -126,6 +127,7 @@ android-x86-shippable/opt:
     treeherder:
         platform: android-4-2-x86-shippable/opt
         symbol: B
+    run-on-projects: ['release']
     worker-type: b-linux
     worker:
         env:
@@ -150,7 +152,7 @@ android-api-16/opt:
     treeherder:
         platform: android-4-0-armv7-api16/opt
         symbol: B
-    run-on-projects: ['mozilla-central']
+    run-on-projects: ['integration']
     worker-type: b-linux
     worker:
         env:
@@ -180,6 +182,7 @@ android-api-16-shippable/opt:
     treeherder:
         platform: android-4-0-armv7-api16-shippable/opt
         symbol: Bpgo(B)
+    run-on-projects: ['release']
     worker-type: b-linux
     worker:
         env:
@@ -204,7 +207,7 @@ android-aarch64/opt:
     treeherder:
         platform: android-5-0-aarch64/opt
         symbol: B
-    run-on-projects: ['mozilla-central']
+    run-on-projects: ['integration']
     worker-type: b-linux
     worker:
         env:
@@ -258,6 +261,7 @@ android-aarch64-shippable/opt:
     treeherder:
         platform: android-5-0-aarch64-shippable/opt
         symbol: Bpgo(B)
+    run-on-projects: ['release']
     worker-type: b-linux
     worker:
         env:
@@ -282,7 +286,7 @@ android-x86_64/opt:
     treeherder:
         platform: android-5-0-x86_64/opt
         symbol: B
-    run-on-projects: ['mozilla-central']
+    run-on-projects: ['integration']
     worker-type: b-linux
     worker:
         env:
@@ -311,6 +315,7 @@ android-x86_64-shippable/opt:
     treeherder:
         platform: android-5-0-x86_64-shippable/opt
         symbol: B
+    run-on-projects: ['release']
     worker-type: b-linux
     worker:
         env:
@@ -376,7 +381,7 @@ android-api-16-gcp/debug:
             - linux64-clang
             - linux64-sccache
     optimization:
-        push-interval-25: null
+        skip-unless-backstop: null
 
 
 android-x86-gcp/opt:
@@ -404,7 +409,7 @@ android-x86-gcp/opt:
             - linux64-clang
             - linux64-sccache
     optimization:
-        push-interval-25: null
+        skip-unless-backstop: null
 
 android-api-16-gcp/opt:
     description: "Android 4.0 api-16+ Opt - built on GCP"
@@ -431,7 +436,7 @@ android-api-16-gcp/opt:
             - linux64-clang
             - linux64-sccache
     optimization:
-        push-interval-25: null
+        skip-unless-backstop: null
 
 android-aarch64-gcp/opt:
     description: "Android 5.0 AArch64 Opt - built on GCP"
@@ -458,7 +463,7 @@ android-aarch64-gcp/opt:
             - linux64-clang
             - linux64-sccache
     optimization:
-        push-interval-25: null
+        skip-unless-backstop: null
 
 android-aarch64-gcp/debug:
     description: "Android 5.0 AArch64 Debug - built on GCP"
@@ -485,7 +490,7 @@ android-aarch64-gcp/debug:
             - linux64-clang
             - linux64-sccache
     optimization:
-        push-interval-25: null
+        skip-unless-backstop: null
 
 android-x86_64-gcp/opt:
     description: "Android 5.0 x86-64 Opt - built on GCP"
@@ -512,7 +517,7 @@ android-x86_64-gcp/opt:
             - linux64-clang
             - linux64-sccache
     optimization:
-        push-interval-25: null
+        skip-unless-backstop: null
 
 android-x86_64-gcp/debug:
     description: "Android 5.0 x86-64 Debug - built on GCP"
@@ -537,7 +542,7 @@ android-x86_64-gcp/debug:
         toolchain:
             - linux64-clang
     optimization:
-        push-interval-25: null
+        skip-unless-backstop: null
 
 android-x86_64-asan-fuzzing/opt:
     description: "Android 5.0 x86-64 Fuzzing Opt ASAN"

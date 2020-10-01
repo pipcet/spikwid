@@ -9,6 +9,7 @@
 
 #include "mozilla/MozPromise.h"
 #include "mozilla/Variant.h"
+#include "mozilla/WeakPtr.h"
 #include "mozilla/ipc/ProtocolUtils.h"
 #include "mozilla/dom/SessionHistoryEntry.h"
 #include "mozilla/net/NeckoCommon.h"
@@ -94,8 +95,10 @@ class DocumentLoadListener : public nsIInterfaceRequestor,
                              public nsIMultiPartChannelListener,
                              public nsIProgressEventSink {
  public:
-  explicit DocumentLoadListener(
-      dom::CanonicalBrowsingContext* aBrowsingContext);
+  // See the comment on GetLoadingBrowsingContext for explanation of
+  // aLoadingBrowsingContext.
+  DocumentLoadListener(dom::CanonicalBrowsingContext* aLoadingBrowsingContext,
+                       bool aIsDocumentLoad);
 
   struct OpenPromiseSucceededType {
     nsTArray<ipc::Endpoint<extensions::PStreamFilterParent>>
@@ -117,6 +120,22 @@ class DocumentLoadListener : public nsIInterfaceRequestor,
                      true /* isExclusive */>
       OpenPromise;
 
+  // Interface which may be provided when performing an <object> or <embed> load
+  // with `DocumentLoadListener`, to allow upgrading the Object load to a proper
+  // Document load.
+  struct ObjectUpgradeHandler : public SupportsWeakPtr {
+    using ObjectUpgradePromise =
+        MozPromise<RefPtr<dom::CanonicalBrowsingContext>, nsresult,
+                   true /* isExclusive */>;
+
+    // Upgrade an object load to be a potentially remote document.
+    //
+    // The returned promise will resolve with the BrowsingContext which has been
+    // created in the <object> or <embed> element to finish the load with.
+    virtual RefPtr<ObjectUpgradePromise> UpgradeObjectLoad() = 0;
+  };
+
+ private:
   // Creates the channel, and then calls AsyncOpen on it.
   // The DocumentLoadListener will require additional process from the consumer
   // in order to complete the redirect to the end channel. This is done by
@@ -125,14 +144,30 @@ class DocumentLoadListener : public nsIInterfaceRequestor,
   // Once that promise is resolved; the consumer no longer needs to hold a
   // reference to the DocumentLoadListener nor will the consumer required to be
   // used again.
-  RefPtr<OpenPromise> Open(nsDocShellLoadState* aLoadState, uint32_t aCacheKey,
+  RefPtr<OpenPromise> Open(nsDocShellLoadState* aLoadState, LoadInfo* aLoadInfo,
+                           nsLoadFlags aLoadFlags, uint32_t aCacheKey,
                            const Maybe<uint64_t>& aChannelId,
                            const TimeStamp& aAsyncOpenTime,
                            nsDOMNavigationTiming* aTiming,
-                           Maybe<dom::ClientInfo>&& aInfo,
-                           uint64_t aOuterWindowId, bool aHasGesture,
-                           Maybe<bool> aUriModified, Maybe<bool> aIsXFOError,
+                           Maybe<dom::ClientInfo>&& aInfo, bool aUrgentStart,
                            base::ProcessId aPid, nsresult* aRv);
+
+ public:
+  RefPtr<OpenPromise> OpenDocument(
+      nsDocShellLoadState* aLoadState, uint32_t aCacheKey,
+      const Maybe<uint64_t>& aChannelId, const TimeStamp& aAsyncOpenTime,
+      nsDOMNavigationTiming* aTiming, Maybe<dom::ClientInfo>&& aInfo,
+      Maybe<bool> aUriModified, Maybe<bool> aIsXFOError, base::ProcessId aPid,
+      nsresult* aRv);
+
+  RefPtr<OpenPromise> OpenObject(
+      nsDocShellLoadState* aLoadState, uint32_t aCacheKey,
+      const Maybe<uint64_t>& aChannelId, const TimeStamp& aAsyncOpenTime,
+      nsDOMNavigationTiming* aTiming, Maybe<dom::ClientInfo>&& aInfo,
+      uint64_t aInnerWindowId, nsLoadFlags aLoadFlags,
+      nsContentPolicyType aContentPolicyType, bool aUrgentStart,
+      base::ProcessId aPid, ObjectUpgradeHandler* aUpgradeHandler,
+      nsresult* aRv);
 
   // Creates a DocumentLoadListener entirely in the parent process and opens it,
   // and never needs a DocumentChannel to connect to an existing docshell.
@@ -140,7 +175,7 @@ class DocumentLoadListener : public nsIInterfaceRequestor,
   // process and docshell, and delivers the response there directly.
   static bool LoadInParent(dom::CanonicalBrowsingContext* aBrowsingContext,
                            nsDocShellLoadState* aLoadState,
-                           uint64_t aOuterWindowId, bool aSetNavigating);
+                           bool aSetNavigating);
 
   // Creates a DocumentLoadListener directly in the parent process and opens it,
   // without needing an existing DocumentChannel.
@@ -149,7 +184,7 @@ class DocumentLoadListener : public nsIInterfaceRequestor,
   // and clean up.
   static bool SpeculativeLoadInParent(
       dom::CanonicalBrowsingContext* aBrowsingContext,
-      nsDocShellLoadState* aLoadState, uint64_t aOuterWindowId);
+      nsDocShellLoadState* aLoadState);
 
   // Ensures that a load identifier allocated by OpenFromParent has
   // been deregistered if it hasn't already been claimed.
@@ -185,7 +220,7 @@ class DocumentLoadListener : public nsIInterfaceRequestor,
   NS_DECLARE_STATIC_IID_ACCESSOR(DOCUMENT_LOAD_LISTENER_IID)
 
   // Called by the DocumentChannel if cancelled.
-  void Cancel(const nsresult& status);
+  void Cancel(const nsresult& aStatusCode);
 
   nsIChannel* GetChannel() const { return mChannel; }
 
@@ -237,16 +272,19 @@ class DocumentLoadListener : public nsIInterfaceRequestor,
                              dom::ContentParent* aParent) const;
 
   uint64_t GetLoadIdentifier() const { return mLoadIdentifier; }
-  dom::CanonicalBrowsingContext* GetBrowsingContext() const;
-
   uint32_t GetLoadType() const { return mLoadStateLoadType; }
+
+  mozilla::dom::LoadingSessionHistoryInfo* GetLoadingSessionHistoryInfo() {
+    return mLoadingSessionHistoryInfo.get();
+  }
+
+  bool IsDocumentLoad() const { return mIsDocumentLoad; }
 
  protected:
   virtual ~DocumentLoadListener();
 
  private:
   RefPtr<OpenPromise> OpenInParent(nsDocShellLoadState* aLoadState,
-                                   uint64_t aOuterWindowId,
                                    bool aSupportsRedirectToRealChannel);
 
   friend class ParentProcessDocumentOpenInfo;
@@ -280,6 +318,10 @@ class DocumentLoadListener : public nsIInterfaceRequestor,
   // aWillSwitchToRemote is set to true if we initiate a process switch,
   // and that the new remote type will be something other than NOT_REMOTE
   bool MaybeTriggerProcessSwitch(bool* aWillSwitchToRemote);
+  void TriggerProcessSwitch(dom::CanonicalBrowsingContext* aContext,
+                            const nsCString& aRemoteType,
+                            bool aReplaceBrowsingContext,
+                            uint64_t aSpecificGroupId);
 
   // A helper for TriggerRedirectToRealChannel that abstracts over
   // the same-process and cross-process switch cases and returns
@@ -295,10 +337,19 @@ class DocumentLoadListener : public nsIInterfaceRequestor,
   RefPtr<PDocumentChannelParent::RedirectToRealChannelPromise>
   RedirectToParentProcess(uint32_t aRedirectFlags, uint32_t aLoadFlags);
 
-  // Construct a LoadInfo object to use for the internal channel.
-  already_AddRefed<LoadInfo> CreateLoadInfo(
-      dom::CanonicalBrowsingContext* aBrowsingContext,
-      nsDocShellLoadState* aLoadState);
+  // Return the Browsing Context that is performing the load.
+  // For document loads, the BC is the one that the (sub)doc
+  // will load into. For <object>/<embed>, it's the embedder document's BC.
+  dom::CanonicalBrowsingContext* GetLoadingBrowsingContext() const;
+
+  // Return the Browsing Context that document is being loaded into. For
+  // non-document loads, this will return nullptr.
+  dom::CanonicalBrowsingContext* GetDocumentBrowsingContext() const;
+  dom::CanonicalBrowsingContext* GetTopBrowsingContext() const;
+
+  // Return the Window Context which which contains the element which the load
+  // is being performed in. For toplevel loads, this will return `nullptr`.
+  dom::WindowGlobalParent* GetParentWindowContext() const;
 
   void AddURIVisit(nsIChannel* aChannel, uint32_t aLoadFlags);
   bool HasCrossOriginOpenerPolicyMismatch() const;
@@ -313,6 +364,8 @@ class DocumentLoadListener : public nsIInterfaceRequestor,
   // attempt a uri fixup and new load, or an error page).
   // Returns false if the docshell will ignore the load entirely.
   bool DocShellWillDisplayContent(nsresult aStatus);
+
+  void FireStateChange(uint32_t aStateFlags, nsresult aStatus);
 
   // Returns true if this is a failed load, where we have successfully
   // created a fixed URI to attempt loading instead.
@@ -430,6 +483,13 @@ class DocumentLoadListener : public nsIInterfaceRequestor,
   // switch occurs.
   RefPtr<nsDOMNavigationTiming> mTiming;
 
+  // An optional ObjectUpgradeHandler which can be used to upgrade an <object>
+  // or <embed> element to contain a nsFrameLoader, allowing us to switch them
+  // into a different process.
+  //
+  // A weak pointer is held in order to avoid reference cycles.
+  WeakPtr<ObjectUpgradeHandler> mObjectUpgradeHandler;
+
   // Used to identify an internal redirect in redirect chain.
   // True when we have seen at least one non-interal redirect.
   bool mHaveVisibleRedirect = false;
@@ -439,7 +499,10 @@ class DocumentLoadListener : public nsIInterfaceRequestor,
   nsString mSrcdocData;
   nsCOMPtr<nsIURI> mBaseURI;
 
-  mozilla::UniquePtr<mozilla::dom::SessionHistoryInfo> mSessionHistoryInfo;
+  mozilla::UniquePtr<mozilla::dom::LoadingSessionHistoryInfo>
+      mLoadingSessionHistoryInfo;
+
+  RefPtr<dom::WindowGlobalParent> mParentWindowContext;
 
   // Flags from nsDocShellLoadState::LoadFlags/Type that we want to make
   // available to the new docshell if we switch processes.
@@ -495,6 +558,8 @@ class DocumentLoadListener : public nsIInterfaceRequestor,
   }
   RefPtr<OpenPromise::Private> mOpenPromise;
   bool mOpenPromiseResolved = false;
+
+  const bool mIsDocumentLoad;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(DocumentLoadListener, DOCUMENT_LOAD_LISTENER_IID)

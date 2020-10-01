@@ -62,7 +62,8 @@ endforeach
 
 # ASM option
 is_asm_enabled = (get_option('enable_asm') == true and
-    (host_machine.cpu_family().startswith('x86') or
+    (host_machine.cpu_family() == 'x86' or
+     (host_machine.cpu_family() == 'x86_64' and cc.get_define('__ILP32__') == '') or
      host_machine.cpu_family() == 'aarch64'      or
      host_machine.cpu_family().startswith('arm') or
      host_machine.cpu() == 'ppc64le'))
@@ -313,8 +314,8 @@ if host_machine.cpu_family().startswith('x86')
     cdata.set('STACK_ALIGNMENT', stack_alignment)
 endif
 
-cdata.set10('ARCH_AARCH64', host_machine.cpu_family() == 'aarch64')
-cdata.set10('ARCH_ARM',     host_machine.cpu_family().startswith('arm'))
+cdata.set10('ARCH_AARCH64', host_machine.cpu_family() == 'aarch64' or host_machine.cpu() == 'arm64')
+cdata.set10('ARCH_ARM',     host_machine.cpu_family().startswith('arm') and host_machine.cpu() != 'arm64')
 if (is_asm_enabled and
     (host_machine.cpu_family() == 'aarch64' or
      host_machine.cpu_family().startswith('arm')))
@@ -350,6 +351,7 @@ cdata.set10('ARCH_X86_64', host_machine.cpu_family() == 'x86_64')
 cdata.set10('ARCH_X86_32', host_machine.cpu_family() == 'x86')
 
 if host_machine.cpu_family().startswith('x86')
+    cdata_asm.set('private_prefix', 'dav1d')
     cdata_asm.set10('ARCH_X86_64', host_machine.cpu_family() == 'x86_64')
     cdata_asm.set10('ARCH_X86_32', host_machine.cpu_family() == 'x86')
     cdata_asm.set10('PIC', true)

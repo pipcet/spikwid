@@ -39,8 +39,6 @@ static_assert(eAuthorSheetFeatures == 0 && eUserSheetFeatures == 1 &&
               "in SheetLoadData::mParsingMode");
 
 class SheetLoadData final : public PreloaderBase,
-                            // FIXME(bug 1653011): This is a bit unfortunate.
-                            public SupportsWeakPtr<SheetLoadData>,
                             public nsIRunnable,
                             public nsIThreadObserver {
   using MediaMatched = dom::LinkStyle::MediaMatched;
@@ -250,7 +248,17 @@ class SheetLoadData final : public PreloaderBase,
 
   bool IsLinkPreload() const { return mIsPreload == IsPreload::FromLink; }
 
+  bool BlocksLoadEvent() const { return !RootLoadData().IsLinkPreload(); }
+
  private:
+  const SheetLoadData& RootLoadData() const {
+    auto* top = this;
+    while (top->mParentData) {
+      top = top->mParentData;
+    }
+    return *top;
+  }
+
   void FireLoadEvent(nsIThreadInternal* aThread);
 };
 

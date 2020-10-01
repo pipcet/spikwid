@@ -1,5 +1,4 @@
 
 1 Added function:
 
-  [A] 'function CK_OBJECT_HANDLE PK11_FindEncodedCertInSlot(PK11SlotInfo*, SECItem*, void*)'    {PK11_FindEncodedCertInSlot@@NSS_3.55}
-
+  [A] 'function PK11SymKey* PK11_ImportDataKey(PK11SlotInfo*, CK_MECHANISM_TYPE, PK11Origin, CK_ATTRIBUTE_TYPE, SECItem*, void*)'    {PK11_ImportDataKey@@NSS_3.58}

@@ -135,18 +135,6 @@ option(env='OLD_CONFIGURE', nargs=1, help='Path to the old configure script')
 
 option(env='MOZCONFIG', nargs=1, help='Mozconfig location')
 
-option('--with-external-source-dir', env='EXTERNAL_SOURCE_DIR', nargs=1,
-       help='External directory containing additional build files')
-
-
-@depends('--with-external-source-dir')
-def external_source_dir(value):
-    if value:
-        return value[0]
-
-
-set_config('EXTERNAL_SOURCE_DIR', external_source_dir)
-add_old_configure_assignment('EXTERNAL_SOURCE_DIR', external_source_dir)
 
 # Read user mozconfig
 # ==============================================================
@@ -155,13 +143,11 @@ add_old_configure_assignment('EXTERNAL_SOURCE_DIR', external_source_dir)
 # be called when --help is passed, and the mozconfig wouldn't be read.
 
 
-@depends('MOZCONFIG', 'OLD_CONFIGURE',
-         check_build_environment, '--with-external-source-dir',
+@depends('MOZCONFIG', 'OLD_CONFIGURE', check_build_environment,
          '--help')
 @imports(_from='mozbuild.mozconfig', _import='MozconfigLoader')
 @imports(_from='mozboot.mozconfig', _import='find_mozconfig')
-def mozconfig(mozconfig, old_configure, build_env,
-              external_source_dir, help):
+def mozconfig(mozconfig, old_configure, build_env, help):
     if not old_configure and not help:
         die('The OLD_CONFIGURE environment variable must be set')
 
@@ -185,8 +171,6 @@ def mozconfig(mozconfig, old_configure, build_env,
         return {'path': None}
 
     topsrcdir = build_env.topsrcdir
-    if external_source_dir:
-        topsrcdir = external_source_dir[0]
     loader = MozconfigLoader(topsrcdir)
     mozconfig = mozconfig[0] if mozconfig else None
     mozconfig = find_mozconfig(topsrcdir, env={'MOZCONFIG': mozconfig})
@@ -239,8 +223,12 @@ shell = help_shell | shell
 
 option(env='PYTHON3', nargs=1, help='Python 3 interpreter (3.6 or later)')
 
+option(env='VIRTUALENV_NAME', nargs=1, default='init_py3',
+       help='Name of the in-objdir virtualenv')
 
-@depends('PYTHON3', check_build_environment, mozconfig, '--help')
+
+@depends('PYTHON3', 'VIRTUALENV_NAME', check_build_environment, mozconfig,
+         '--help')
 @imports(_from='__builtin__', _import='Exception')
 @imports('os')
 @imports('sys')
@@ -252,7 +240,7 @@ option(env='PYTHON3', nargs=1, help='Python 3 interpreter (3.6 or later)')
 @imports(_from='mozbuild.pythonutil', _import='find_python3_executable')
 @imports(_from='mozbuild.pythonutil', _import='python_executable_version')
 @imports(_from='six', _import='ensure_text')
-def virtualenv_python3(env_python, build_env, mozconfig, help):
+def virtualenv_python3(env_python, virtualenv_name, build_env, mozconfig, help):
     # Avoid re-executing python when running configure --help.
     if help:
         return
@@ -270,6 +258,7 @@ def virtualenv_python3(env_python, build_env, mozconfig, help):
     log.debug("python3: sys.executable: %r" % sys.executable)
 
     python = env_python[0] if env_python else None
+    virtualenv_name = virtualenv_name[0]
 
     # Did our python come from mozconfig? Overrides environment setting.
     # Ideally we'd rely on the mozconfig injection from mozconfig_options,
@@ -304,19 +293,22 @@ def virtualenv_python3(env_python, build_env, mozconfig, help):
     virtualenvs_root = os.path.join(topobjdir, '_virtualenvs')
     with LineIO(lambda l: log.info(l), 'replace') as out:
         manager = VirtualenvManager(
-            topsrcdir, topobjdir,
-            os.path.join(virtualenvs_root, 'init_py3'), out,
-            os.path.join(topsrcdir, 'build', 'virtualenv_packages.txt'))
+            topsrcdir,
+            os.path.join(virtualenvs_root, virtualenv_name), out,
+            os.path.join(topsrcdir, 'build', 'build_virtualenv_packages.txt'))
 
     # If we're not in the virtualenv, we need to update the path to include some
     # necessary modules for find_program.
-    if normsep(sys.executable) != normsep(manager.python_path):
+    try:
+        import mozfile
+    except ImportError:
         sys.path.insert(
             0, os.path.join(topsrcdir, 'testing', 'mozbase', 'mozfile'))
         sys.path.insert(
             0, os.path.join(topsrcdir, 'third_party', 'python', 'backports'))
     else:
-        python = sys.executable
+        if 'MOZBUILD_VIRTUALENV' in os.environ or not python:
+            python = sys.executable
 
     # If we know the Python executable the caller is asking for then verify its
     # version. If the caller did not ask for a specific executable then find
@@ -821,7 +813,15 @@ def real_host(value, shell):
     if not value:
         config_guess = os.path.join(os.path.dirname(__file__), '..',
                                     'autoconf', 'config.guess')
-        host = check_cmd_output(shell, config_guess).strip()
+
+        # Ensure that config.guess is determining the host triplet, not the target
+        # triplet
+        env = os.environ.copy()
+        env.pop('CC_FOR_BUILD', None)
+        env.pop('HOST_CC', None)
+        env.pop('CC', None)
+
+        host = check_cmd_output(shell, config_guess, env=env).strip()
         try:
             return split_triplet(host)
         except ValueError:
@@ -1084,17 +1084,13 @@ def target_is_sparc(target):
 set_define('SPARC64', target_is_sparc)
 
 
-@depends('--enable-project', '--with-external-source-dir',
-         check_build_environment, '--help')
+@depends('--enable-project', check_build_environment, '--help')
 @imports(_from='os.path', _import='exists')
-def include_project_configure(project, external_source_dir, build_env, help):
+def include_project_configure(project, build_env, help):
     if not project:
         die('--enable-project is required.')
 
     base_dir = build_env.topsrcdir
-    if external_source_dir:
-        base_dir = os.path.join(base_dir, external_source_dir[0])
-
     path = os.path.join(base_dir, project[0], 'moz.configure')
     if not exists(path):
         die('Cannot find project %s', project[0])
@@ -1341,7 +1337,27 @@ def project_flag(env=None, set_for_old_configure=False,
 
 # milestone.is_nightly corresponds to cases NIGHTLY_BUILD is set.
 
-
 @depends(milestone)
 def enabled_in_nightly(milestone):
     return milestone.is_nightly
+
+# Branding
+# ==============================================================
+option('--with-app-basename', env='MOZ_APP_BASENAME', nargs=1,
+       help='Typically stays consistent for multiple branded versions of a '
+       'given application (e.g. Aurora and Firefox both use "Firefox"), but '
+       'may vary for full rebrandings (e.g. Iceweasel). Used for '
+       'application.ini\'s "Name" field, which controls profile location in '
+       'the absence of a "Profile" field (see below), and various system '
+       'integration hooks (Unix remoting, Windows MessageWindow name, etc.')
+
+@depends('--with-app-basename', target_is_android)
+def moz_app_basename(value, target_is_android):
+    if value:
+        return value[0]
+    if target_is_android:
+        return 'Fennec'
+    return 'Firefox'
+
+set_config('MOZ_APP_BASENAME', moz_app_basename,
+           when=depends(build_project)(lambda p: p != 'js'))

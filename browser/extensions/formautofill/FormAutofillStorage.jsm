@@ -307,6 +307,7 @@ class AutofillRecords {
       if (dataHasChanges) {
         this._store.saveSoon();
       }
+      this._onDataLoaded();
     });
   }
 
@@ -427,6 +428,8 @@ class AutofillRecords {
 
     this._data.push(recordToSave);
 
+    this.updateUseCountTelemetry();
+
     this._store.saveSoon();
 
     Services.obs.notifyObservers(
@@ -541,6 +544,8 @@ class AutofillRecords {
    *
    * @param  {string} guid
    *         Indicates which record to be notified.
+   * @returns {Object}
+   *         Record corresponding to the guid that was used
    */
   notifyUsed(guid) {
     this.log.debug("notifyUsed:", guid);
@@ -553,6 +558,8 @@ class AutofillRecords {
     recordFound.timesUsed++;
     recordFound.timeLastUsed = Date.now();
 
+    this.updateUseCountTelemetry();
+
     this._store.saveSoon();
     Services.obs.notifyObservers(
       {
@@ -564,7 +571,10 @@ class AutofillRecords {
       "formautofill-storage-changed",
       "notifyUsed"
     );
+    return recordFound;
   }
+
+  updateUseCountTelemetry() {}
 
   /**
    * Removes the specified record. No error occurs if the record isn't found.
@@ -606,6 +616,8 @@ class AutofillRecords {
         this._data.splice(index, 1);
       }
     }
+
+    this.updateUseCountTelemetry();
 
     this._store.saveSoon();
     Services.obs.notifyObservers(
@@ -1431,6 +1443,9 @@ class AutofillRecords {
 
   // An interface to be inherited.
   async mergeIfPossible(guid, record, strict) {}
+
+  // Called once initalization has completed
+  _onDataLoaded() {}
 }
 
 class Addresses extends AutofillRecords {
@@ -1442,6 +1457,15 @@ class Addresses extends AutofillRecords {
       VALID_ADDRESS_COMPUTED_FIELDS,
       ADDRESS_SCHEMA_VERSION
     );
+    Services.obs.addObserver(this, "formautofill-storage-changed");
+  }
+
+  observe(subject, topic, data) {
+    switch (topic) {
+      case "formautofill-storage-changed":
+        this._recordEntryPresent();
+        break;
+    }
   }
 
   _recordReadProcessor(address) {
@@ -1748,6 +1772,31 @@ class Addresses extends AutofillRecords {
     await this.update(guid, addressToMerge, true);
     return true;
   }
+
+  _onDataLoaded() {
+    this._recordEntryPresent();
+  }
+
+  // Record in prefs whether the user has any address entries stored.
+  // This information is not uploaded as telemetry, and is used to target
+  // user surveys. See Bug 1654388 for details.
+  _recordEntryPresent() {
+    const records = this._data.filter(entry => !entry.deleted);
+    this.log.debug("Address records:", records);
+    Services.prefs.setBoolPref(
+      "extensions.formautofill.addresses.usage.hasEntry",
+      !!records.length
+    );
+  }
+
+  notifyUsed(guid) {
+    const record = super.notifyUsed(guid);
+    Services.prefs.setIntPref(
+      "extensions.formautofill.addresses.usage.lastUsed",
+      Math.floor(record.timeLastUsed / 1000)
+    );
+    return record;
+  }
 }
 
 class CreditCards extends AutofillRecords {
@@ -1759,6 +1808,19 @@ class CreditCards extends AutofillRecords {
       VALID_CREDIT_CARD_COMPUTED_FIELDS,
       CREDIT_CARD_SCHEMA_VERSION
     );
+    Services.obs.addObserver(this, "formautofill-storage-changed");
+  }
+
+  observe(subject, topic, data) {
+    switch (topic) {
+      case "formautofill-storage-changed":
+        let count = this._data.filter(entry => !entry.deleted).length;
+        Services.telemetry.scalarSet(
+          "formautofill.creditCards.autofill_profiles_count",
+          count
+        );
+        break;
+    }
   }
 
   async computeFields(creditCard) {
@@ -2079,6 +2141,17 @@ class CreditCards extends AutofillRecords {
 
     await this.update(guid, creditCardToMerge, true);
     return true;
+  }
+
+  updateUseCountTelemetry() {
+    let histogram = Services.telemetry.getHistogramById("CREDITCARD_NUM_USES");
+    histogram.clear();
+
+    let records = this._data.filter(r => !r.deleted);
+
+    for (let record of records) {
+      histogram.add(record.timesUsed);
+    }
   }
 }
 

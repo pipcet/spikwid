@@ -16,6 +16,8 @@ class FakeDevice:
         self._logger = mock.MagicMock()
         self._have_su = True
         self._have_android_su = True
+        self._have_root_shell = True
+        self.is_rooted = True
 
     def clear_logcat(self, *args, **kwargs):
         return True
@@ -60,6 +62,8 @@ def test_android_perf_tuning_rooted(device):
     # on rooted devices correctly
     device._have_su = True
     device._have_android_su = True
+    device._have_root_shell = True
+    device.is_rooted = True
     with mock.patch(
         "mozperftest.system.android_perf_tuner.PerformanceTuner.set_kernel_performance_parameters"
     ) as mockfunc:
@@ -74,12 +78,47 @@ def test_android_perf_tuning_nonrooted(device):
     # on non-rooted devices correctly
     device._have_su = False
     device._have_android_su = False
+    device._have_root_shell = False
+    device.is_rooted = False
     with mock.patch(
         "mozperftest.system.android_perf_tuner.PerformanceTuner.set_kernel_performance_parameters"
     ) as mockfunc:
         tuner = PerformanceTuner(device)
         tuner.tune_performance()
         mockfunc.assert_not_called()
+
+
+class Device:
+    def __init__(self, name, rooted=True):
+        self.device_name = name
+        self.is_rooted = rooted
+        self.call_counts = 0
+
+    @property
+    def _logger(self):
+        return self
+
+    def noop(self, *args, **kw):
+        pass
+
+    debug = error = info = clear_logcat = noop
+
+    def shell_bool(self, *args, **kw):
+        self.call_counts += 1
+        return True
+
+    def shell_output(self, *args, **kw):
+        self.call_counts += 1
+        return self.device_name
+
+
+def test_android_perf_tuning_all_calls():
+    # Check without mocking PerformanceTuner functions
+    for name in ("Moto G (5)", "Pixel 2", "?"):
+        device = Device(name)
+        tuner = PerformanceTuner(device)
+        tuner.tune_performance()
+        assert device.call_counts > 1
 
 
 @mock.patch("mozperftest.system.android_perf_tuner.PerformanceTuner")
@@ -127,9 +166,9 @@ def test_android_failure():
 def test_android_apk_alias(device):
     args = {
         "flavor": "mobile-browser",
-        "android-install-apk": ["fenix_fennec_nightly_armeabi_v7a"],
+        "android-install-apk": ["fenix_nightly_armeabi_v7a"],
         "android": True,
-        "android-app-name": "org.mozilla.fennec_aurora",
+        "android-app-name": "org.mozilla.fenix",
         "android-capture-adb": "stdout",
     }
 
@@ -138,7 +177,7 @@ def test_android_apk_alias(device):
     with system as android, silence(system):
         android(metadata)
     # XXX really ?
-    assert device.mock_calls[1][1][0] == "org.mozilla.fennec_aurora"
+    assert device.mock_calls[1][1][0] == "org.mozilla.fenix"
     assert device.mock_calls[2][1][0].endswith("target.apk")
 
 

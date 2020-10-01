@@ -17,7 +17,6 @@ class OpenSUSEBootstrapper(
         'nodejs',
         'npm',
         'which',
-        'python3-devel',
         'rpmconf',
         'libcurl-devel',
         'libpulse-devel',
@@ -26,7 +25,6 @@ class OpenSUSEBootstrapper(
     BROWSER_PACKAGES = [
         'alsa-devel',
         'gcc-c++',
-        'python3-wheel',
         'gtk3-devel',
         'dbus-1-glib-devel',
         'gconf2-devel',
@@ -58,19 +56,19 @@ class OpenSUSEBootstrapper(
     def install_system_packages(self):
         self.zypper_install(*self.SYSTEM_PACKAGES)
 
-    def install_browser_packages(self):
+    def install_browser_packages(self, mozconfig_builder):
         self.ensure_browser_packages()
 
     def install_browser_group_packages(self):
         self.ensure_browser_group_packages()
 
-    def install_browser_artifact_mode_packages(self):
+    def install_browser_artifact_mode_packages(self, mozconfig_builder):
         self.ensure_browser_packages(artifact_mode=True)
 
-    def install_mobile_android_packages(self):
+    def install_mobile_android_packages(self, mozconfig_builder):
         self.ensure_mobile_android_packages()
 
-    def install_mobile_android_artifact_mode_packages(self):
+    def install_mobile_android_artifact_mode_packages(self, mozconfig_builder):
         self.ensure_mobile_android_packages(artifact_mode=True)
 
     def install_mercurial(self):
@@ -127,9 +125,6 @@ class OpenSUSEBootstrapper(
 
     def ensure_nasm_packages(self, state_dir, checkout_root):
         self.zypper_install('nasm')
-
-    def upgrade_python(self, current):
-        self.zypper_install('python3')
 
     def zypper_install(self, *packages):
         command = ['zypper', 'install']

@@ -32,8 +32,7 @@ class WebSocketConnectionChild final : public PWebSocketConnectionChild,
 
   WebSocketConnectionChild();
 
-  mozilla::ipc::IPCResult RecvEnqueueOutgoingData(nsTArray<uint8_t>&& aHeader,
-                                                  nsTArray<uint8_t>&& aPayload);
+  mozilla::ipc::IPCResult RecvEnqueueOutgoingData(nsTArray<uint8_t>&& aData);
   mozilla::ipc::IPCResult RecvStartReading();
   mozilla::ipc::IPCResult RecvDrainSocketData();
   mozilla::ipc::IPCResult Recv__delete__() override;

@@ -16,7 +16,7 @@
 #include "mozilla/layers/IpcResourceUpdateQueue.h"
 #include "mozilla/layers/ScrollableLayerGuid.h"
 #include "mozilla/layers/SyncObject.h"
-#include "mozilla/layers/WebRenderCompositionRecorder.h"
+#include "mozilla/layers/CompositionRecorder.h"
 #include "mozilla/Range.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/webrender/webrender_ffi.h"
@@ -103,7 +103,6 @@ class TransactionBuilder final {
   void SetDisplayList(const gfx::DeviceColor& aBgColor, Epoch aEpoch,
                       const wr::LayoutSize& aViewportSize,
                       wr::WrPipelineId pipeline_id,
-                      const wr::LayoutSize& content_size,
                       wr::BuiltDisplayListDescriptor dl_descriptor,
                       wr::Vec<uint8_t>& dl_data);
 
@@ -232,7 +231,8 @@ class WebRenderAPI final {
   static already_AddRefed<WebRenderAPI> Create(
       layers::CompositorBridgeParent* aBridge,
       RefPtr<widget::CompositorWidget>&& aWidget,
-      const wr::WrWindowId& aWindowId, LayoutDeviceIntSize aSize);
+      const wr::WrWindowId& aWindowId, LayoutDeviceIntSize aSize,
+      nsACString& aError);
 
   already_AddRefed<WebRenderAPI> Clone();
 
@@ -250,12 +250,14 @@ class WebRenderAPI final {
 
   void Readback(const TimeStamp& aStartTime, gfx::IntSize aSize,
                 const gfx::SurfaceFormat& aFormat,
-                const Range<uint8_t>& aBuffer);
+                const Range<uint8_t>& aBuffer, bool* aNeedsYFlip);
 
   void ClearAllCaches();
   void EnableNativeCompositor(bool aEnable);
   void EnableMultithreading(bool aEnable);
   void SetBatchingLookback(uint32_t aCount);
+
+  void SetClearColor(const gfx::DeviceColor& aColor);
 
   void Pause();
   bool Resume();
@@ -277,22 +279,22 @@ class WebRenderAPI final {
 
   void ToggleCaptureSequence();
 
-  void SetCompositionRecorder(
-      UniquePtr<layers::WebRenderCompositionRecorder> aRecorder);
+  void BeginRecording(const TimeStamp& aRecordingStart,
+                      wr::PipelineId aRootPipelineId);
 
   typedef MozPromise<bool, nsresult, true> WriteCollectedFramesPromise;
   typedef MozPromise<layers::CollectedFrames, nsresult, true>
       GetCollectedFramesPromise;
 
   /**
-   * Write the frames collected by the |WebRenderCompositionRecorder| to disk.
+   * Write the frames collected since the call to BeginRecording() to disk.
    *
    * If there is not currently a recorder, this is a no-op.
    */
   RefPtr<WriteCollectedFramesPromise> WriteCollectedFrames();
 
   /**
-   * Return the frames collected by the |WebRenderCompositionRecorder| encoded
+   * Return the frames collected since the call to BeginRecording() encoded
    * as data URIs.
    *
    * If there is not currently a recorder, this is a no-op and the promise will
@@ -397,9 +399,8 @@ struct MOZ_STACK_CLASS StackingContextParams : public WrStackingContextParams {
 /// WebRenderFrameBuilder instead, so the interface may change a bit.
 class DisplayListBuilder final {
  public:
-  DisplayListBuilder(wr::PipelineId aId, const wr::LayoutSize& aContentSize,
-                     size_t aCapacity = 0,
-                     layers::DisplayItemCache* aCache = nullptr);
+  explicit DisplayListBuilder(wr::PipelineId aId, size_t aCapacity = 0,
+                              layers::DisplayItemCache* aCache = nullptr);
   DisplayListBuilder(DisplayListBuilder&&) = default;
 
   ~DisplayListBuilder();
@@ -412,8 +413,7 @@ class DisplayListBuilder final {
              const Maybe<usize>& aEnd);
   void DumpSerializedDisplayList();
 
-  void Finalize(wr::LayoutSize& aOutContentSizes,
-                wr::BuiltDisplayList& aOutDisplayList);
+  void Finalize(wr::BuiltDisplayList& aOutDisplayList);
   void Finalize(layers::DisplayListData& aOutTransaction);
 
   Maybe<wr::WrSpatialId> PushStackingContext(
@@ -459,7 +459,9 @@ class DisplayListBuilder final {
                        const wr::LayoutRect& aClip, bool aIsBackfaceVisible,
                        const wr::ColorF& aColor);
   void PushHitTest(const wr::LayoutRect& aBounds, const wr::LayoutRect& aClip,
-                   bool aIsBackfaceVisible);
+                   bool aIsBackfaceVisible,
+                   const layers::ScrollableLayerGuid::ViewID& aScrollId,
+                   gfx::CompositorHitTestInfo aHitInfo, SideBits aSideBits);
   void PushClearRect(const wr::LayoutRect& aBounds);
   void PushClearRectWithComplexRegion(const wr::LayoutRect& aBounds,
                                       const wr::ComplexClipRegion& aRegion);
@@ -500,7 +502,8 @@ class DisplayListBuilder final {
                  bool aIsBackfaceVisible, wr::ImageRendering aFilter,
                  wr::ImageKey aImage, bool aPremultipliedAlpha = true,
                  const wr::ColorF& aColor = wr::ColorF{1.0f, 1.0f, 1.0f, 1.0f},
-                 bool aPreferCompositorSurface = false);
+                 bool aPreferCompositorSurface = false,
+                 bool aSupportsExternalCompositing = false);
 
   void PushRepeatingImage(
       const wr::LayoutRect& aBounds, const wr::LayoutRect& aClip,
@@ -515,21 +518,24 @@ class DisplayListBuilder final {
       wr::ImageKey aImageChannel1, wr::ImageKey aImageChannel2,
       wr::WrColorDepth aColorDepth, wr::WrYuvColorSpace aColorSpace,
       wr::WrColorRange aColorRange, wr::ImageRendering aFilter,
-      bool aPreferCompositorSurface = false);
+      bool aPreferCompositorSurface = false,
+      bool aSupportsExternalCompositing = false);
 
   void PushNV12Image(const wr::LayoutRect& aBounds, const wr::LayoutRect& aClip,
                      bool aIsBackfaceVisible, wr::ImageKey aImageChannel0,
                      wr::ImageKey aImageChannel1, wr::WrColorDepth aColorDepth,
                      wr::WrYuvColorSpace aColorSpace,
                      wr::WrColorRange aColorRange, wr::ImageRendering aFilter,
-                     bool aPreferCompositorSurface = false);
+                     bool aPreferCompositorSurface = false,
+                     bool aSupportsExternalCompositing = false);
 
   void PushYCbCrInterleavedImage(
       const wr::LayoutRect& aBounds, const wr::LayoutRect& aClip,
       bool aIsBackfaceVisible, wr::ImageKey aImageChannel0,
       wr::WrColorDepth aColorDepth, wr::WrYuvColorSpace aColorSpace,
       wr::WrColorRange aColorRange, wr::ImageRendering aFilter,
-      bool aPreferCompositorSurface = false);
+      bool aPreferCompositorSurface = false,
+      bool aSupportsExternalCompositing = false);
 
   void PushIFrame(const wr::LayoutRect& aBounds, bool aIsBackfaceVisible,
                   wr::PipelineId aPipeline, bool aIgnoreMissingPipeline);
@@ -637,13 +643,6 @@ class DisplayListBuilder final {
 
   Maybe<SideBits> GetContainingFixedPosSideBits(const ActiveScrolledRoot* aAsr);
 
-  // Set the hit-test info to be used for all display items until the next call
-  // to SetHitTestInfo or ClearHitTestInfo.
-  void SetHitTestInfo(const layers::ScrollableLayerGuid::ViewID& aScrollId,
-                      gfx::CompositorHitTestInfo aHitInfo, SideBits aSideBits);
-  // Clears the hit-test info so that subsequent display items will not have it.
-  void ClearHitTestInfo();
-
   already_AddRefed<gfxContext> GetTextContext(
       wr::IpcResourceUpdateQueue& aResources,
       const layers::StackingContextHelper& aSc,
@@ -733,28 +732,22 @@ class DisplayListBuilder final {
 class MOZ_RAII SpaceAndClipChainHelper final {
  public:
   SpaceAndClipChainHelper(DisplayListBuilder& aBuilder,
-                          wr::WrSpaceAndClipChain aSpaceAndClipChain
-                              MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
+                          wr::WrSpaceAndClipChain aSpaceAndClipChain)
       : mBuilder(aBuilder),
         mOldSpaceAndClipChain(aBuilder.mCurrentSpaceAndClipChain) {
     aBuilder.mCurrentSpaceAndClipChain = aSpaceAndClipChain;
-    MOZ_GUARD_OBJECT_NOTIFIER_INIT;
   }
   SpaceAndClipChainHelper(DisplayListBuilder& aBuilder,
-                          wr::WrSpatialId aSpatialId
-                              MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
+                          wr::WrSpatialId aSpatialId)
       : mBuilder(aBuilder),
         mOldSpaceAndClipChain(aBuilder.mCurrentSpaceAndClipChain) {
     aBuilder.mCurrentSpaceAndClipChain.space = aSpatialId;
-    MOZ_GUARD_OBJECT_NOTIFIER_INIT;
   }
   SpaceAndClipChainHelper(DisplayListBuilder& aBuilder,
-                          wr::WrClipChainId aClipChainId
-                              MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
+                          wr::WrClipChainId aClipChainId)
       : mBuilder(aBuilder),
         mOldSpaceAndClipChain(aBuilder.mCurrentSpaceAndClipChain) {
     aBuilder.mCurrentSpaceAndClipChain.clip_chain = aClipChainId.id;
-    MOZ_GUARD_OBJECT_NOTIFIER_INIT;
   }
 
   ~SpaceAndClipChainHelper() {
@@ -766,7 +759,6 @@ class MOZ_RAII SpaceAndClipChainHelper final {
 
   DisplayListBuilder& mBuilder;
   wr::WrSpaceAndClipChain mOldSpaceAndClipChain;
-  MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
 };
 
 Maybe<wr::ImageFormat> SurfaceFormatToImageFormat(gfx::SurfaceFormat aFormat);

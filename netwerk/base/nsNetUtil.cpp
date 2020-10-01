@@ -102,6 +102,7 @@
 #include "nsResProtocolHandler.h"
 #include "mozilla/net/ExtensionProtocolHandler.h"
 #include "mozilla/net/PageThumbProtocolHandler.h"
+#include "mozilla/net/SFVService.h"
 #include <limits>
 
 #if defined(MOZ_THUNDERBIRD) || defined(MOZ_SUITE)
@@ -223,7 +224,7 @@ nsresult NS_GetURIWithNewRef(nsIURI* aInput, const nsACString& aRef,
 }
 
 nsresult NS_GetURIWithoutRef(nsIURI* aInput, nsIURI** aOutput) {
-  return NS_GetURIWithNewRef(aInput, EmptyCString(), aOutput);
+  return NS_GetURIWithNewRef(aInput, ""_ns, aOutput);
 }
 
 nsresult NS_NewChannelInternal(
@@ -739,8 +740,8 @@ nsresult NS_NewInputStreamChannel(
     nsIChannel** outChannel, nsIURI* aUri,
     already_AddRefed<nsIInputStream> aStream, nsIPrincipal* aLoadingPrincipal,
     nsSecurityFlags aSecurityFlags, nsContentPolicyType aContentPolicyType,
-    const nsACString& aContentType /* = EmptyCString() */,
-    const nsACString& aContentCharset /* = EmptyCString() */) {
+    const nsACString& aContentType /* = ""_ns */,
+    const nsACString& aContentCharset /* = ""_ns */) {
   nsCOMPtr<nsIInputStream> stream = aStream;
   return NS_NewInputStreamChannelInternal(outChannel, aUri, stream.forget(),
                                           aContentType, aContentCharset,
@@ -1087,8 +1088,8 @@ nsresult NS_NewProxyInfo(const nsACString& type, const nsACString& host,
   nsCOMPtr<nsIProtocolProxyService> pps =
       do_GetService(NS_PROTOCOLPROXYSERVICE_CONTRACTID, &rv);
   if (NS_SUCCEEDED(rv))
-    rv = pps->NewProxyInfo(type, host, port, EmptyCString(), EmptyCString(),
-                           flags, UINT32_MAX, nullptr, result);
+    rv = pps->NewProxyInfo(type, host, port, ""_ns, ""_ns, flags, UINT32_MAX,
+                           nullptr, result);
   return rv;
 }
 
@@ -2549,6 +2550,38 @@ nsresult NS_MaybeOpenChannelUsingAsyncOpen(nsIChannel* aChannel,
   return aChannel->AsyncOpen(aListener);
 }
 
+nsILoadInfo::CrossOriginEmbedderPolicy
+NS_GetCrossOriginEmbedderPolicyFromHeader(const nsACString& aHeader) {
+  nsCOMPtr<nsISFVService> sfv = GetSFVService();
+
+  nsCOMPtr<nsISFVItem> item;
+  nsresult rv = sfv->ParseItem(aHeader, getter_AddRefs(item));
+  if (NS_FAILED(rv)) {
+    return nsILoadInfo::EMBEDDER_POLICY_NULL;
+  }
+
+  nsCOMPtr<nsISFVBareItem> value;
+  rv = item->GetValue(getter_AddRefs(value));
+  if (NS_FAILED(rv)) {
+    return nsILoadInfo::EMBEDDER_POLICY_NULL;
+  }
+
+  nsCOMPtr<nsISFVToken> token = do_QueryInterface(value);
+  if (!token) {
+    return nsILoadInfo::EMBEDDER_POLICY_NULL;
+  }
+
+  nsAutoCString embedderPolicy;
+  rv = token->GetValue(embedderPolicy);
+  if (NS_FAILED(rv)) {
+    return nsILoadInfo::EMBEDDER_POLICY_NULL;
+  }
+
+  return embedderPolicy.EqualsLiteral("require-corp")
+             ? nsILoadInfo::EMBEDDER_POLICY_REQUIRE_CORP
+             : nsILoadInfo::EMBEDDER_POLICY_NULL;
+}
+
 /** Given the first (disposition) token from a Content-Disposition header,
  * tell whether it indicates the content is inline or attachment
  * @param aDispToken the disposition token from the content-disposition header
@@ -2576,7 +2609,7 @@ uint32_t NS_GetContentDispositionFromHeader(const nsACString& aHeader,
   if (NS_FAILED(rv)) return nsIChannel::DISPOSITION_ATTACHMENT;
 
   nsAutoString dispToken;
-  rv = mimehdrpar->GetParameterHTTP(aHeader, "", EmptyCString(), true, nullptr,
+  rv = mimehdrpar->GetParameterHTTP(aHeader, "", ""_ns, true, nullptr,
                                     dispToken);
 
   if (NS_FAILED(rv)) {
@@ -2599,8 +2632,8 @@ nsresult NS_GetFilenameFromDisposition(nsAString& aFilename,
   if (NS_FAILED(rv)) return rv;
 
   // Get the value of 'filename' parameter
-  rv = mimehdrpar->GetParameterHTTP(aDisposition, "filename", EmptyCString(),
-                                    true, nullptr, aFilename);
+  rv = mimehdrpar->GetParameterHTTP(aDisposition, "filename", ""_ns, true,
+                                    nullptr, aFilename);
 
   if (NS_FAILED(rv)) {
     aFilename.Truncate();
@@ -2791,10 +2824,10 @@ nsresult NS_ShouldSecureUpgrade(
           uint32_t innerWindowId = aLoadInfo->GetInnerWindowID();
           CSP_LogLocalizedStr(
               "upgradeInsecureRequest", params,
-              EmptyString(),  // aSourceFile
-              EmptyString(),  // aScriptSample
-              0,              // aLineNumber
-              0,              // aColumnNumber
+              u""_ns,  // aSourceFile
+              u""_ns,  // aScriptSample
+              0,       // aLineNumber
+              0,       // aColumnNumber
               nsIScriptError::warningFlag, "upgradeInsecureRequest"_ns,
               innerWindowId,
               !!aLoadInfo->GetOriginAttributes().mPrivateBrowsingId);

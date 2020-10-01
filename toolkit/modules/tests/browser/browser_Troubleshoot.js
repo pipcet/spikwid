@@ -36,19 +36,6 @@ registerCleanupFunction(function() {
 });
 
 var tests = [
-  function setup(done) {
-    SpecialPowers.pushPrefEnv(
-      {
-        set: [
-          ["network.cookie.sameSite.laxByDefault", false],
-          ["network.cookie.sameSite.noneRequiresSecure", false],
-          ["network.cookie.sameSite.schemeful", false],
-        ],
-      },
-      done
-    );
-  },
-
   function snapshotSchema(done) {
     Troubleshoot.snapshot(function(snapshot) {
       try {
@@ -64,12 +51,6 @@ var tests = [
   async function experimentalFeatures(done) {
     let featureGates = await FeatureGate.all();
     ok(featureGates.length, "Should be at least one FeatureGate");
-    for (let gate of featureGates) {
-      ok(
-        !Services.prefs.getBoolPref(gate.preference),
-        "Features should be disabled by default"
-      );
-    }
 
     Troubleshoot.snapshot(snapshot => {
       for (let i = 0; i < snapshot.experimentalFeatures.length; i++) {
@@ -340,6 +321,10 @@ const SNAPSHOT_SCHEMA = {
       required: true,
       type: "array",
     },
+    environmentVariables: {
+      required: true,
+      type: "object",
+    },
     modifiedPreferences: {
       required: true,
       type: "object",
@@ -351,10 +336,6 @@ const SNAPSHOT_SCHEMA = {
         "fission.autostart": {
           required: false,
           type: "boolean",
-        },
-        "dom.ipc.processCount.webIsolated": {
-          required: false,
-          type: "number",
         },
       },
     },

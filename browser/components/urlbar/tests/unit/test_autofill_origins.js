@@ -176,6 +176,7 @@ add_task(async function portNoMatch1() {
     context,
     matches: [
       makeVisitResult(context, {
+        source: UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
         uri: `http://${origin}:89/`,
         title: `http://${origin}:89/`,
         iconUri: "",
@@ -199,6 +200,7 @@ add_task(async function portNoMatch2() {
     context,
     matches: [
       makeVisitResult(context, {
+        source: UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
         uri: `http://${origin}:9/`,
         title: `http://${origin}:9/`,
         iconUri: "",
@@ -211,7 +213,7 @@ add_task(async function portNoMatch2() {
 });
 
 // "example/" should *not* match http://example.com/.
-add_task(async function trailingSlash() {
+add_task(async function trailingSlash_2() {
   await PlacesTestUtils.addVisits([
     {
       uri: "http://example.com/",
@@ -222,8 +224,10 @@ add_task(async function trailingSlash() {
     context,
     matches: [
       makeVisitResult(context, {
+        source: UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
         uri: "http://example/",
         title: "http://example/",
+        iconUri: "page-icon:http://example/",
         heuristic: true,
         providerName: HEURISTIC_FALLBACK_PROVIDERNAME,
       }),
@@ -562,6 +566,7 @@ add_task(async function suggestHistoryFalse_bookmark_prefix_multiple() {
     context,
     matches: [
       makeVisitResult(context, {
+        source: UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
         uri: `${search}/`,
         title: `${search}/`,
         iconUri: "",
@@ -581,6 +586,7 @@ add_task(async function suggestHistoryFalse_bookmark_prefix_multiple() {
     context,
     matches: [
       makeVisitResult(context, {
+        source: UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
         uri: `${search}/`,
         title: `${search}/`,
         iconUri: "",
@@ -600,6 +606,7 @@ add_task(async function suggestHistoryFalse_bookmark_prefix_multiple() {
     context,
     matches: [
       makeVisitResult(context, {
+        source: UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
         uri: `${search}/`,
         title: `${search}/`,
         iconUri: "",
@@ -633,44 +640,3 @@ add_task(async function suggestHistoryFalse_bookmark_prefix_multiple() {
 
   await cleanup();
 });
-
-/**
- * Returns the origin frecency stats.
- *
- * @returns {object}
- *          An object { count, sum, squares }.
- */
-async function getOriginFrecencyStats() {
-  let db = await PlacesUtils.promiseDBConnection();
-  let rows = await db.execute(`
-    SELECT
-      IFNULL((SELECT value FROM moz_meta WHERE key = 'origin_frecency_count'), 0),
-      IFNULL((SELECT value FROM moz_meta WHERE key = 'origin_frecency_sum'), 0),
-      IFNULL((SELECT value FROM moz_meta WHERE key = 'origin_frecency_sum_of_squares'), 0)
-  `);
-  let count = rows[0].getResultByIndex(0);
-  let sum = rows[0].getResultByIndex(1);
-  let squares = rows[0].getResultByIndex(2);
-  return { count, sum, squares };
-}
-
-/**
- * Returns the origin autofill frecency threshold.
- *
- * @returns {number}
- *          The threshold.
- */
-async function getOriginAutofillThreshold() {
-  let { count, sum, squares } = await getOriginFrecencyStats();
-  if (!count) {
-    return 0;
-  }
-  if (count == 1) {
-    return sum;
-  }
-  let stddevMultiplier = UrlbarPrefs.get("autoFill.stddevMultiplier");
-  return (
-    sum / count +
-    stddevMultiplier * Math.sqrt((squares - (sum * sum) / count) / count)
-  );
-}

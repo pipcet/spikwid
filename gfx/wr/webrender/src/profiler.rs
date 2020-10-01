@@ -4,7 +4,7 @@
 
 use api::{ColorF, ColorU};
 use crate::debug_render::DebugRenderer;
-use crate::device::query::{GpuSampler, GpuTimer, NamedTag};
+use crate::device::query::{GpuSampler, GpuTimer};
 use euclid::{Point2D, Rect, Size2D, vec2, default};
 use crate::internal_types::FastHashMap;
 use crate::renderer::{MAX_VERTEX_TEXTURE_WIDTH, wr_has_been_initialized};
@@ -69,6 +69,7 @@ pub enum ProfileStyle {
     Full,
     Compact,
     Smart,
+    NoDraw,
 }
 
 /// Defines the interface for hooking up an external profiler to WR.
@@ -178,12 +179,6 @@ macro_rules! profile_marker {
 pub struct GpuProfileTag {
     pub label: &'static str,
     pub color: ColorF,
-}
-
-impl NamedTag for GpuProfileTag {
-    fn get_label(&self) -> &str {
-        self.label
-    }
 }
 
 trait ProfileCounter {
@@ -709,7 +704,7 @@ pub struct ResourceProfileCounters {
     pub image_templates: ResourceProfileCounter,
     pub texture_cache: TextureCacheProfileCounters,
     pub gpu_cache: GpuCacheProfileCounters,
-    pub content_slices: IntProfileCounter,
+    pub picture_cache_slices: IntProfileCounter,
 }
 
 #[derive(Clone)]
@@ -757,7 +752,7 @@ macro_rules! declare_intern_profile_counters {
     }
 }
 
-enumerate_interners!(declare_intern_profile_counters);
+crate::enumerate_interners!(declare_intern_profile_counters);
 
 impl TransactionProfileCounters {
     pub fn set(
@@ -807,8 +802,8 @@ impl BackendProfileCounters {
                     Some(expected::NUM_IMAGE_TEMPLATES),
                     Some(expected::IMAGE_TEMPLATES_MB),
                 ),
-                content_slices: IntProfileCounter::new(
-                    "Content Slices",
+                picture_cache_slices: IntProfileCounter::new(
+                    "Picture Cache Slices",
                     None,
                 ),
                 texture_cache: TextureCacheProfileCounters::new(),
@@ -884,7 +879,7 @@ pub struct RendererProfileCounters {
 pub struct RendererProfileTimers {
     pub cpu_time: TimeProfileCounter,
     pub gpu_graph: TimeProfileCounter,
-    pub gpu_samples: Vec<GpuTimer<GpuProfileTag>>,
+    pub gpu_samples: Vec<GpuTimer>,
 }
 
 impl RendererProfileCounters {
@@ -951,10 +946,12 @@ impl RendererProfileTimers {
     }
 }
 
+#[derive(Debug)]
 struct GraphStats {
     min_value: f32,
     mean_value: f32,
     max_value: f32,
+    sum: f32,
 }
 
 struct ProfileGraph {
@@ -994,16 +991,17 @@ impl ProfileGraph {
             min_value: f32::MAX,
             mean_value: 0.0,
             max_value: -f32::MAX,
+            sum: 0.0,
         };
 
         for value in &self.values {
             stats.min_value = stats.min_value.min(*value);
-            stats.mean_value += *value;
             stats.max_value = stats.max_value.max(*value);
+            stats.sum += *value;
         }
 
         if !self.values.is_empty() {
-            stats.mean_value /= self.values.len() as f32;
+            stats.mean_value = stats.sum / self.values.len() as f32;
         }
 
         stats
@@ -1116,7 +1114,7 @@ impl ProfileCounter for ProfileGraph {
 
 struct GpuFrame {
     total_time: u64,
-    samples: Vec<GpuTimer<GpuProfileTag>>,
+    samples: Vec<GpuTimer>,
 }
 
 struct GpuFrameCollection {
@@ -1130,7 +1128,7 @@ impl GpuFrameCollection {
         }
     }
 
-    fn push(&mut self, total_time: u64, samples: Vec<GpuTimer<GpuProfileTag>>) {
+    fn push(&mut self, total_time: u64, samples: Vec<GpuTimer>) {
         if self.frames.len() == 20 {
             self.frames.pop_back();
         }
@@ -1536,7 +1534,7 @@ impl Profiler {
                 &renderer_profile.vertices,
                 &renderer_profile.rendered_picture_cache_tiles,
                 &renderer_profile.texture_data_uploaded,
-                &backend_profile.resources.content_slices,
+                &backend_profile.resources.picture_cache_slices,
                 &self.ipc_time,
                 &self.backend_time,
                 &self.renderer_time,
@@ -1555,7 +1553,7 @@ impl Profiler {
         backend_profile: &BackendProfileCounters,
         renderer_profile: &RendererProfileCounters,
         renderer_timers: &mut RendererProfileTimers,
-        gpu_samplers: &[GpuSampler<GpuProfileTag>],
+        gpu_samplers: &[GpuSampler],
         screen_fraction: f32,
         debug_renderer: &mut DebugRenderer,
     ) {
@@ -1568,7 +1566,7 @@ impl Profiler {
                 &renderer_profile.rendered_picture_cache_tiles,
                 &renderer_profile.total_picture_cache_tiles,
                 &renderer_profile.texture_data_uploaded,
-                &backend_profile.resources.content_slices,
+                &backend_profile.resources.picture_cache_slices,
                 &backend_profile.resources.texture_cache.shared_bytes,
                 &backend_profile.resources.texture_cache.standalone_bytes,
             ],
@@ -1788,7 +1786,7 @@ impl Profiler {
         backend_profile: &BackendProfileCounters,
         renderer_profile: &RendererProfileCounters,
         renderer_timers: &mut RendererProfileTimers,
-        gpu_samplers: &[GpuSampler<GpuProfileTag>],
+        gpu_samplers: &[GpuSampler],
         screen_fraction: f32,
         debug_renderer: &mut DebugRenderer,
         style: ProfileStyle,
@@ -1850,7 +1848,22 @@ impl Profiler {
                     debug_renderer,
                 );
             }
+            ProfileStyle::NoDraw => {
+                // Don't draw anything. We just care about collecting samples.
+            }
         }
+    }
+
+    #[cfg(feature = "capture")]
+    pub fn dump_stats(&self, sink: &mut dyn std::io::Write) -> std::io::Result<()> {
+        writeln!(sink, "Backend (ms) {:?}", self.backend_graph.stats())?;
+        writeln!(sink, "Renderer (ms) {:?}", self.renderer_graph.stats())?;
+        writeln!(sink, "GPU (ms) {:?}", self.gpu_graph.stats())?;
+        writeln!(sink, "IPC (ms) {:?}", self.ipc_graph.stats())?;
+        writeln!(sink, "DisplayList builder (ms) {:?}", self.display_list_build_graph.stats())?;
+        writeln!(sink, "Scene build (ms) {:?}", self.scene_build_graph.stats())?;
+        writeln!(sink, "Rasterized blob (px) {:?}", self.blob_raster_graph.stats())?;
+        Ok(())
     }
 }
 

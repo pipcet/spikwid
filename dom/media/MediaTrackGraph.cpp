@@ -8,7 +8,7 @@
 #include "mozilla/Unused.h"
 
 #include "AudioSegment.h"
-#include "CrossGraphTrack.h"
+#include "CrossGraphPort.h"
 #include "VideoSegment.h"
 #include "nsContentUtils.h"
 #include "nsPrintfCString.h"
@@ -31,7 +31,7 @@
 #include "mozilla/AbstractThread.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/Unused.h"
-#include "mtransport/runnable_utils.h"
+#include "transport/runnable_utils.h"
 #include "VideoUtils.h"
 #include "GraphRunner.h"
 #include "Tracing.h"
@@ -414,10 +414,10 @@ void MediaTrackGraphImpl::UpdateTrackOrder() {
       // Not-visited input tracks should be processed first.
       // SourceMediaTracks have already been ordered.
       for (uint32_t i = inputs.Length(); i--;) {
-        if (inputs[i]->mSource->IsSuspended()) {
+        if (inputs[i]->GetSource()->IsSuspended()) {
           continue;
         }
-        auto input = inputs[i]->mSource->AsProcessedTrack();
+        auto input = inputs[i]->GetSource()->AsProcessedTrack();
         if (input && input->mCycleMarker == NOT_VISITED) {
           // It can be that this track has an input which is from a suspended
           // AudioContext.
@@ -440,10 +440,10 @@ void MediaTrackGraphImpl::UpdateTrackOrder() {
     // unless it is part of the cycle.
     uint32_t cycleStackMarker = 0;
     for (uint32_t i = inputs.Length(); i--;) {
-      if (inputs[i]->mSource->IsSuspended()) {
+      if (inputs[i]->GetSource()->IsSuspended()) {
         continue;
       }
-      auto input = inputs[i]->mSource->AsProcessedTrack();
+      auto input = inputs[i]->GetSource()->AsProcessedTrack();
       if (input) {
         cycleStackMarker = std::max(cycleStackMarker, input->mCycleMarker);
       }
@@ -850,12 +850,27 @@ void MediaTrackGraphImpl::NotifyInputData(const AudioDataValue* aBuffer,
     return;
   }
 #endif
+  mInputData = aBuffer;
+  mInputFrames = aFrames;
+  mInputChannelCount = aChannels;
+}
+
+void MediaTrackGraphImpl::ProcessInputData() {
+  if (!mInputData) {
+    return;
+  }
+
   nsTArray<RefPtr<AudioDataListener>>* listeners =
       mInputDeviceUsers.GetValue(mInputDeviceID);
   MOZ_ASSERT(listeners);
   for (auto& listener : *listeners) {
-    listener->NotifyInputData(this, aBuffer, aFrames, aRate, aChannels);
+    listener->NotifyInputData(this, mInputData, mInputFrames, GraphRate(),
+                              mInputChannelCount);
   }
+
+  mInputData = nullptr;
+  mInputFrames = 0;
+  mInputChannelCount = 0;
 }
 
 void MediaTrackGraphImpl::DeviceChangedImpl() {
@@ -1381,6 +1396,8 @@ auto MediaTrackGraphImpl::OneIterationImpl(GraphTime aStateEnd,
     DemoteThreadFromRealTime();
   }
 
+  ProcessInputData();
+
   // Changes to LIFECYCLE_RUNNING occur before starting or reviving the graph
   // thread, and so the monitor need not be held to check mLifecycleState.
   // LIFECYCLE_THREAD_NOT_STARTED is possible when shutting down offline
@@ -1701,7 +1718,7 @@ void MediaTrackGraphImpl::RunInStableState(bool aSourceIsMTG) {
            LifecycleState_str[LifecycleStateRef()]));
     }
 
-    runnables.SwapElements(mUpdateRunnables);
+    runnables = std::move(mUpdateRunnables);
     for (uint32_t i = 0; i < mTrackUpdates.Length(); ++i) {
       TrackUpdate* update = &mTrackUpdates[i];
       if (update->mTrack) {
@@ -1729,7 +1746,7 @@ void MediaTrackGraphImpl::RunInStableState(bool aSourceIsMTG) {
     } else {
       if (LifecycleStateRef() <= LIFECYCLE_WAITING_FOR_MAIN_THREAD_CLEANUP) {
         MessageBlock* block = mBackMessageQueue.AppendElement();
-        block->mMessages.SwapElements(mCurrentTaskMessageQueue);
+        block->mMessages = std::move(mCurrentTaskMessageQueue);
         EnsureNextIteration();
       }
 
@@ -2062,6 +2079,9 @@ void MediaTrack::AddAudioOutput(void* aKey) {
     void Run() override { mTrack->AddAudioOutputImpl(mKey); }
     void* mKey;
   };
+  if (mMainThreadDestroyed) {
+    return;
+  }
   GraphImpl()->AppendMessage(MakeUnique<Message>(this, aKey));
 }
 
@@ -2090,6 +2110,9 @@ void MediaTrack::SetAudioOutputVolume(void* aKey, float aVolume) {
     void* mKey;
     float mVolume;
   };
+  if (mMainThreadDestroyed) {
+    return;
+  }
   GraphImpl()->AppendMessage(MakeUnique<Message>(this, aKey, aVolume));
 }
 
@@ -2111,6 +2134,9 @@ void MediaTrack::RemoveAudioOutput(void* aKey) {
     void Run() override { mTrack->RemoveAudioOutputImpl(mKey); }
     void* mKey;
   };
+  if (mMainThreadDestroyed) {
+    return;
+  }
   GraphImpl()->AppendMessage(MakeUnique<Message>(this, aKey));
 }
 
@@ -2155,7 +2181,7 @@ void MediaTrack::AddListenerImpl(
   if (mNotifiedEnded) {
     mTrackListeners.LastElement()->NotifyEnded(Graph());
   }
-  if (mDisabledMode == DisabledTrackMode::SILENCE_BLACK) {
+  if (CombinedDisabledMode() == DisabledTrackMode::SILENCE_BLACK) {
     mTrackListeners.LastElement()->NotifyEnabledStateChanged(Graph(), false);
   }
 }
@@ -2169,6 +2195,9 @@ void MediaTrack::AddListener(MediaTrackListener* aListener) {
     RefPtr<MediaTrackListener> mListener;
   };
   MOZ_ASSERT(mSegment, "Segment-less tracks do not support listeners");
+  if (mMainThreadDestroyed) {
+    return;
+  }
   GraphImpl()->AppendMessage(MakeUnique<Message>(this, aListener));
 }
 
@@ -2203,6 +2232,10 @@ RefPtr<GenericPromise> MediaTrack::RemoveListener(
 
   UniquePtr<Message> message = MakeUnique<Message>(this, aListener);
   RefPtr<GenericPromise> p = message->mRemovedPromise.Ensure(__func__);
+  if (mMainThreadDestroyed) {
+    message->mRemovedPromise.Reject(NS_ERROR_FAILURE, __func__);
+    return p;
+  }
   GraphImpl()->AppendMessage(move(message));
   return p;
 }
@@ -2223,6 +2256,9 @@ void MediaTrack::AddDirectListener(DirectMediaTrackListener* aListener) {
     void Run() override { mTrack->AddDirectListenerImpl(mListener.forget()); }
     RefPtr<DirectMediaTrackListener> mListener;
   };
+  if (mMainThreadDestroyed) {
+    return;
+  }
   GraphImpl()->AppendMessage(MakeUnique<Message>(this, aListener));
 }
 
@@ -2244,6 +2280,9 @@ void MediaTrack::RemoveDirectListener(DirectMediaTrackListener* aListener) {
     }
     RefPtr<DirectMediaTrackListener> mListener;
   };
+  if (mMainThreadDestroyed) {
+    return;
+  }
   GraphImpl()->AppendMessage(MakeUnique<Message>(this, aListener));
 }
 
@@ -2271,36 +2310,33 @@ void MediaTrack::RunAfterPendingUpdates(
     nsCOMPtr<nsIRunnable> mRunnable;
   };
 
+  if (mMainThreadDestroyed) {
+    return;
+  }
   graph->AppendMessage(MakeUnique<Message>(this, runnable.forget()));
 }
 
-void MediaTrack::SetEnabledImpl(DisabledTrackMode aMode) {
-  if (aMode == DisabledTrackMode::ENABLED) {
-    mDisabledMode = DisabledTrackMode::ENABLED;
-    for (const auto& l : mTrackListeners) {
-      l->NotifyEnabledStateChanged(Graph(), true);
-    }
-  } else {
-    MOZ_DIAGNOSTIC_ASSERT(
-        mDisabledMode == DisabledTrackMode::ENABLED,
-        "Changing disabled track mode for a track is not allowed");
-    mDisabledMode = aMode;
-    if (aMode == DisabledTrackMode::SILENCE_BLACK) {
-      for (const auto& l : mTrackListeners) {
-        l->NotifyEnabledStateChanged(Graph(), false);
-      }
-    }
-  }
+void MediaTrack::SetDisabledTrackModeImpl(DisabledTrackMode aMode) {
+  MOZ_DIAGNOSTIC_ASSERT(
+      aMode == DisabledTrackMode::ENABLED ||
+          mDisabledMode == DisabledTrackMode::ENABLED,
+      "Changing disabled track mode for a track is not allowed");
+  DisabledTrackMode oldMode = CombinedDisabledMode();
+  mDisabledMode = aMode;
+  NotifyIfDisabledModeChangedFrom(oldMode);
 }
 
-void MediaTrack::SetEnabled(DisabledTrackMode aMode) {
+void MediaTrack::SetDisabledTrackMode(DisabledTrackMode aMode) {
   class Message : public ControlMessage {
    public:
     Message(MediaTrack* aTrack, DisabledTrackMode aMode)
         : ControlMessage(aTrack), mMode(aMode) {}
-    void Run() override { mTrack->SetEnabledImpl(mMode); }
+    void Run() override { mTrack->SetDisabledTrackModeImpl(mMode); }
     DisabledTrackMode mMode;
   };
+  if (mMainThreadDestroyed) {
+    return;
+  }
   GraphImpl()->AppendMessage(MakeUnique<Message>(this, aMode));
 }
 
@@ -2368,15 +2404,33 @@ void MediaTrack::AdvanceTimeVaryingValuesToCurrentTime(GraphTime aCurrentTime,
   }
 
   TrackTime time = aCurrentTime - mStartTime;
-  // Only prune if there is a reasonable chunk (50ms @ 48kHz) to forget, so we
-  // don't spend too much time pruning segments.
-  const TrackTime minChunkSize = 2400;
+  // Only prune if there is a reasonable chunk (50ms) to forget, so we don't
+  // spend too much time pruning segments.
+  const TrackTime minChunkSize = mSampleRate * 50 / 1000;
   if (time < mForgottenTime + minChunkSize) {
     return;
   }
 
   mForgottenTime = std::min(GetEnd() - 1, time);
   mSegment->ForgetUpTo(mForgottenTime);
+}
+
+void MediaTrack::NotifyIfDisabledModeChangedFrom(DisabledTrackMode aOldMode) {
+  DisabledTrackMode mode = CombinedDisabledMode();
+  if (aOldMode == mode) {
+    return;
+  }
+
+  for (const auto& listener : mTrackListeners) {
+    listener->NotifyEnabledStateChanged(
+        Graph(), mode != DisabledTrackMode::SILENCE_BLACK);
+  }
+
+  for (const auto& c : mConsumers) {
+    if (c->GetDestination()) {
+      c->GetDestination()->OnInputDisabledModeChanged(mode);
+    }
+  }
 }
 
 SourceMediaTrack::SourceMediaTrack(MediaSegment::Type aType,
@@ -2392,6 +2446,7 @@ SourceMediaTrack::SourceMediaTrack(MediaSegment::Type aType,
   mUpdateTrack->mData = UniquePtr<MediaSegment>(mSegment->CreateEmptyClone());
   mUpdateTrack->mEnded = false;
   mUpdateTrack->mPullingEnabled = false;
+  mUpdateTrack->mInForcedShutdown = false;
 }
 
 nsresult SourceMediaTrack::OpenAudioInput(CubebUtils::AudioDeviceID aID,
@@ -2633,7 +2688,8 @@ TrackTime SourceMediaTrack::AppendData(MediaSegment* aSegment,
   MOZ_DIAGNOSTIC_ASSERT(aSegment->GetType() == mType);
   TrackTime appended = 0;
   auto graph = GraphImpl();
-  if (!mUpdateTrack || mUpdateTrack->mEnded || !graph) {
+  if (!mUpdateTrack || mUpdateTrack->mEnded ||
+      mUpdateTrack->mInForcedShutdown || !graph) {
     aSegment->Clear();
     return appended;
   }
@@ -2712,6 +2768,10 @@ void SourceMediaTrack::AddDirectListenerImpl(
   listener->NotifyDirectListenerInstalled(
       DirectMediaTrackListener::InstallationResult::SUCCESS);
 
+  if (mDisabledMode != DisabledTrackMode::ENABLED) {
+    listener->IncreaseDisabled(mDisabledMode);
+  }
+
   if (mEnded) {
     return;
   }
@@ -2758,6 +2818,9 @@ void SourceMediaTrack::RemoveDirectListenerImpl(
   for (int32_t i = mDirectTrackListeners.Length() - 1; i >= 0; --i) {
     const RefPtr<DirectMediaTrackListener>& l = mDirectTrackListeners[i];
     if (l == aListener) {
+      if (mDisabledMode != DisabledTrackMode::ENABLED) {
+        aListener->DecreaseDisabled(mDisabledMode);
+      }
       aListener->NotifyDirectListenerUninstalled();
       mDirectTrackListeners.RemoveElementAt(i);
     }
@@ -2779,7 +2842,7 @@ void SourceMediaTrack::End() {
   }
 }
 
-void SourceMediaTrack::SetEnabledImpl(DisabledTrackMode aMode) {
+void SourceMediaTrack::SetDisabledTrackModeImpl(DisabledTrackMode aMode) {
   {
     MutexAutoLock lock(mMutex);
     for (const auto& l : mDirectTrackListeners) {
@@ -2798,7 +2861,7 @@ void SourceMediaTrack::SetEnabledImpl(DisabledTrackMode aMode) {
       }
     }
   }
-  MediaTrack::SetEnabledImpl(aMode);
+  MediaTrack::SetDisabledTrackModeImpl(aMode);
 }
 
 void SourceMediaTrack::RemoveAllDirectListenersImpl() {
@@ -2824,6 +2887,7 @@ float SourceMediaTrack::GetVolumeLocked() {
 SourceMediaTrack::~SourceMediaTrack() = default;
 
 void MediaInputPort::Init() {
+  mGraph->AssertOnGraphThreadOrNotRunning();
   LOG(LogLevel::Debug, ("%p: Adding MediaInputPort %p (from %p to %p)",
                         mSource->GraphImpl(), this, mSource, mDest));
   // Only connect the port if it wasn't disconnected on allocation.
@@ -2836,17 +2900,20 @@ void MediaInputPort::Init() {
 }
 
 void MediaInputPort::Disconnect() {
-  GraphImpl()->AssertOnGraphThreadOrNotRunning();
+  mGraph->AssertOnGraphThreadOrNotRunning();
   NS_ASSERTION(!mSource == !mDest,
-               "mSource must either both be null or both non-null");
-  if (!mSource) return;
+               "mSource and mDest must either both be null or both non-null");
+
+  if (!mSource) {
+    return;
+  }
 
   mSource->RemoveConsumer(this);
   mDest->RemoveInput(this);
   mSource = nullptr;
   mDest = nullptr;
 
-  GraphImpl()->SetTrackOrderDirty();
+  mGraph->SetTrackOrderDirty();
 }
 
 MediaInputPort::InputInterval MediaInputPort::GetNextInputInterval(
@@ -2857,6 +2924,7 @@ MediaInputPort::InputInterval MediaInputPort::GetNextInputInterval(
     result.mInputIsBlocked = true;
     return result;
   }
+  aPort->mGraph->AssertOnGraphThreadOrNotRunning();
   if (aTime >= aPort->mDest->mStartBlocking) {
     return result;
   }
@@ -2869,9 +2937,15 @@ MediaInputPort::InputInterval MediaInputPort::GetNextInputInterval(
   return result;
 }
 
-void MediaInputPort::Suspended() { mDest->InputSuspended(this); }
+void MediaInputPort::Suspended() {
+  mGraph->AssertOnGraphThreadOrNotRunning();
+  mDest->InputSuspended(this);
+}
 
-void MediaInputPort::Resumed() { mDest->InputResumed(this); }
+void MediaInputPort::Resumed() {
+  mGraph->AssertOnGraphThreadOrNotRunning();
+  mDest->InputResumed(this);
+}
 
 void MediaInputPort::Destroy() {
   class Message : public ControlMessage {
@@ -2889,17 +2963,25 @@ void MediaInputPort::Destroy() {
   };
   // Keep a reference to the graph, since Message might RunDuringShutdown()
   // synchronously and make GraphImpl() invalid.
-  RefPtr<MediaTrackGraphImpl> graph = GraphImpl();
+  RefPtr<MediaTrackGraphImpl> graph = mGraph;
   graph->AppendMessage(MakeUnique<Message>(this));
   --graph->mMainThreadPortCount;
 }
 
-MediaTrackGraphImpl* MediaInputPort::GraphImpl() { return mGraph; }
+MediaTrackGraphImpl* MediaInputPort::GraphImpl() const {
+  mGraph->AssertOnGraphThreadOrNotRunning();
+  return mGraph;
+}
 
-MediaTrackGraph* MediaInputPort::Graph() { return mGraph; }
+MediaTrackGraph* MediaInputPort::Graph() const {
+  mGraph->AssertOnGraphThreadOrNotRunning();
+  return mGraph;
+}
 
 void MediaInputPort::SetGraphImpl(MediaTrackGraphImpl* aGraph) {
   MOZ_ASSERT(!mGraph || !aGraph, "Should only be set once");
+  DebugOnly<MediaTrackGraphImpl*> graph = mGraph ? mGraph : aGraph;
+  MOZ_ASSERT(graph->OnGraphThreadOrNotRunning());
   mGraph = aGraph;
 }
 
@@ -2927,12 +3009,13 @@ already_AddRefed<MediaInputPort> ProcessedMediaTrack::AllocateInputPort(
     // Create a port that's disconnected, which is what it'd be after its source
     // track is Destroy()ed normally. Disconnect() is idempotent so destroying
     // this later is fine.
-    port = new MediaInputPort(nullptr, nullptr, aInputNumber, aOutputNumber);
+    port = new MediaInputPort(GraphImpl(), nullptr, nullptr, aInputNumber,
+                              aOutputNumber);
   } else {
     MOZ_ASSERT(aTrack->GraphImpl() == GraphImpl());
-    port = new MediaInputPort(aTrack, this, aInputNumber, aOutputNumber);
+    port = new MediaInputPort(GraphImpl(), aTrack, this, aInputNumber,
+                              aOutputNumber);
   }
-  port->SetGraphImpl(GraphImpl());
   ++GraphImpl()->mMainThreadPortCount;
   GraphImpl()->AppendMessage(MakeUnique<Message>(port));
   return port.forget();
@@ -2948,6 +3031,9 @@ void ProcessedMediaTrack::QueueSetAutoend(bool aAutoend) {
     }
     bool mAutoend;
   };
+  if (mMainThreadDestroyed) {
+    return;
+  }
   GraphImpl()->AppendMessage(MakeUnique<Message>(this, aAutoend));
 }
 
@@ -2982,6 +3068,9 @@ MediaTrackGraphImpl::MediaTrackGraphImpl(
       mPortCount(0),
       mInputDeviceID(nullptr),
       mOutputDeviceID(aOutputDeviceID),
+      mInputData(nullptr),
+      mInputChannelCount(0),
+      mInputFrames(0),
       mMonitor("MediaTrackGraphImpl"),
       mLifecycleState(LIFECYCLE_THREAD_NOT_STARTED),
       mPostedRunInStableStateEvent(false),
@@ -3254,8 +3343,8 @@ void MediaTrackGraphImpl::FinishCollectReports(
   if (!manager) return;
 
 #define REPORT(_path, _amount, _desc)                                    \
-  aHandleReport->Callback(EmptyCString(), _path, KIND_HEAP, UNITS_BYTES, \
-                          _amount, nsLiteralCString(_desc), aData);
+  aHandleReport->Callback(""_ns, _path, KIND_HEAP, UNITS_BYTES, _amount, \
+                          nsLiteralCString(_desc), aData);
 
   for (size_t i = 0; i < aAudioTrackSizes.Length(); i++) {
     const AudioNodeSizes& usage = aAudioTrackSizes[i];

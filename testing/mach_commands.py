@@ -513,7 +513,8 @@ class SpiderMonkeyTests(MachCommandBase):
         return subprocess.call(jstest_cmd)
 
     @Command('jit-test', category='testing',
-             description='Run SpiderMonkey jit-tests in the JS shell.')
+             description='Run SpiderMonkey jit-tests in the JS shell.',
+             ok_if_tests_disabled=True)
     @CommandArgument('--shell', help='The shell to be used')
     @CommandArgument('params', nargs=argparse.REMAINDER,
                      help="Extra arguments to pass down to the test harness.")
@@ -601,7 +602,7 @@ class JsShellTests(MachCommandBase):
              parser=get_jsshell_parser,
              description="Run benchmarks in the SpiderMonkey JS shell.")
     def run_jsshelltests(self, **kwargs):
-        self._activate_virtualenv()
+        self.activate_virtualenv()
         from jsshell import benchmark
         return benchmark.run(**kwargs)
 
@@ -617,7 +618,7 @@ class CramTest(MachCommandBase):
                      help="Extra arguments to pass down to the cram binary. See "
                           "'./mach python -m cram -- -h' for a list of available options.")
     def cramtest(self, cram_args=None, test_paths=None, test_objects=None):
-        self._activate_virtualenv()
+        self.activate_virtualenv()
         import mozinfo
         from manifestparser import TestManifest
 
@@ -780,7 +781,7 @@ class TestInfoCommand(MachCommandBase):
             self.config_environment
         except BuildEnvironmentNotFoundException:
             print("Looks like configure has not run yet, running it now...")
-            builder = Build(self._mach_context)
+            builder = Build(self._mach_context, None)
             builder.configure()
 
         ti = testinfo.TestInfoReport(verbose)
@@ -828,7 +829,7 @@ class TestFluentMigration(MachCommandBase):
     def run_migration_tests(self, test_paths=None, **kwargs):
         if not test_paths:
             test_paths = []
-        self._activate_virtualenv()
+        self.activate_virtualenv()
         from test_fluent_migrations import fmt
         rv = 0
         with_context = []

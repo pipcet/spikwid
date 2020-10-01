@@ -323,6 +323,7 @@ xul|menulist[disabled="true"] {
 
 html|button[autofocus],
 html|button[type="submit"],
+xul|button[default],
 button.primary {
   background-color: var(--in-content-primary-button-background);
   color: var(--in-content-selected-text) !important;
@@ -331,6 +332,7 @@ button.primary {
 html|button[autofocus]:enabled:hover,
 html|button[type="submit"]:enabled:hover,
 html|button.primary:enabled:hover,
+xul|button[default]:not([disabled="true"]):hover,
 xul|button.primary:not([disabled="true"]):hover {
   background-color: var(--in-content-primary-button-background-hover);
 }
@@ -338,6 +340,7 @@ xul|button.primary:not([disabled="true"]):hover {
 html|button[autofocus]:enabled:hover:active,
 html|button[type="submit"]:enabled:hover:active,
 html|button.primary:enabled:hover:active,
+xul|button[default]:not([disabled="true"]):hover:active,
 xul|button.primary:not([disabled="true"]):hover:active {
   background-color: var(--in-content-primary-button-background-active);
 }
@@ -735,7 +738,7 @@ html|*#categories[last-input-type="mouse"] > html|button.category:-moz-focusring
   line-height: 1.4em;
   padding-inline-start: 9px;
   margin: 0;
-  -moz-user-select: none;
+  user-select: none;
 }
 
 .category-icon {
@@ -800,7 +803,7 @@ html|*#categories[last-input-type="mouse"] > html|button.category:-moz-focusring
   font-weight: 300;
   line-height: 1.3em;
   margin: 0;
-  -moz-user-select: none;
+  user-select: none;
 }
 
 /* List boxes */
@@ -1126,7 +1129,7 @@ html|*.help-icon {
 .sidebar-footer-label {
   margin: 0 4px;
   font-size: .9em;
-  -moz-user-select: none;
+  user-select: none;
 }
 
 @media (max-width: 830px) {

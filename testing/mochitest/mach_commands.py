@@ -9,6 +9,7 @@ from collections import defaultdict
 import functools
 import logging
 import os
+import six
 import sys
 import warnings
 
@@ -290,7 +291,7 @@ class MachCommands(MachCommandBase):
 
         # TODO: This is only strictly necessary while mochitest is using Python
         # 2 and can be removed once the command is migrated to Python 3.
-        self._activate_virtualenv()
+        self.activate_virtualenv()
 
         buildapp = None
         for app in SUPPORTED_APPS:
@@ -300,14 +301,14 @@ class MachCommands(MachCommandBase):
 
         flavors = None
         if flavor:
-            for fname, fobj in ALL_FLAVORS.iteritems():
+            for fname, fobj in six.iteritems(ALL_FLAVORS):
                 if flavor in fobj['aliases']:
                     if buildapp not in fobj['enabled_apps']:
                         continue
                     flavors = [fname]
                     break
         else:
-            flavors = [f for f, v in ALL_FLAVORS.iteritems() if buildapp in v['enabled_apps']]
+            flavors = [f for f, v in six.iteritems(ALL_FLAVORS) if buildapp in v['enabled_apps']]
 
         from mozbuild.controller.building import BuildDriver
         self._ensure_state_subdir_exists('.')

@@ -180,16 +180,13 @@ WebSocketConnectionParent::EnqueueOutputData(const uint8_t* aHdrBuf,
   LOG(("WebSocketConnectionParent::EnqueueOutputData %p\n", this));
 
   RefPtr<WebSocketConnectionParent> self = this;
-  nsTArray<uint8_t> header;
-  header.AppendElements(aHdrBuf, aHdrBufLength);
-  nsTArray<uint8_t> payload;
-  payload.AppendElements(aPayloadBuf, aPayloadBufLength);
+  nsTArray<uint8_t> data;
+  data.AppendElements(aHdrBuf, aHdrBufLength);
+  data.AppendElements(aPayloadBuf, aPayloadBufLength);
   auto task = [self{std::move(self)},
-               header = CopyableTArray{std::move(header)},
-               payload = CopyableTArray{std::move(payload)}]() mutable {
+               data = CopyableTArray{std::move(data)}]() mutable {
     if (self->CanSend()) {
-      Unused << self->SendEnqueueOutgoingData(std::move(header),
-                                              std::move(payload));
+      Unused << self->SendEnqueueOutgoingData(std::move(data));
     }
   };
 

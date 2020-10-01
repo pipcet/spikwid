@@ -34,6 +34,8 @@
 #include "nsIScreenManager.h"
 #include "nsIWidgetListener.h"
 #include "VibrancyManager.h"
+#include "nsPresContext.h"
+#include "nsDocShell.h"
 
 #include "gfxPlatform.h"
 #include "qcms.h"
@@ -44,6 +46,7 @@
 #include "mozilla/StaticPrefs_gfx.h"
 #include "mozilla/StaticPrefs_widget.h"
 #include "mozilla/PresShell.h"
+#include "mozilla/layers/CompositorBridgeChild.h"
 #include <algorithm>
 
 namespace mozilla {
@@ -1848,6 +1851,7 @@ CGFloat nsCocoaWindow::BackingScaleFactor() {
 }
 
 void nsCocoaWindow::BackingScaleFactorChanged() {
+  CGFloat oldScale = mBackingScaleFactor;
   CGFloat newScale = GetBackingScaleFactor(mWindow);
 
   // ignore notification if it hasn't really changed (or maybe we have
@@ -1881,6 +1885,23 @@ void nsCocoaWindow::BackingScaleFactorChanged() {
     presShell->BackingScaleFactorChanged();
   }
   mWidgetListener->UIResolutionChanged();
+
+  if ((mWindowType == eWindowType_popup) && (mBackingScaleFactor == 2.0)) {
+    // Recalculate the size and y-origin for the popup now that the backing
+    // scale factor has changed. After creating the popup window NSWindow,
+    // setting the frame when the menu is moved into the correct location
+    // causes the backing scale factor to change if the window is not on the
+    // menu bar display. Update the dimensions and y-origin here so that the
+    // frame is correct for the following ::Show(). Only do this when the
+    // scale factor changes from 1.0 to 2.0. When the scale factor changes
+    // from 2.0 to 1.0, the view will resize the widget before it is shown.
+    NSRect frame = [mWindow frame];
+    CGFloat previousYOrigin = frame.origin.y + frame.size.height;
+    frame.size.width = mBounds.Width() * (oldScale / newScale);
+    frame.size.height = mBounds.Height() * (oldScale / newScale);
+    frame.origin.y = previousYOrigin - frame.size.height;
+    [mWindow setFrame:frame display:NO animate:NO];
+  }
 }
 
 int32_t nsCocoaWindow::RoundsWidgetCoordinatesTo() {
@@ -2021,6 +2042,13 @@ void nsCocoaWindow::ReportMoveEvent() {
 
   UpdateBounds();
 
+  // The zoomed state can change when we're moving, in which case we need to
+  // update our internal mSizeMode. This can happen either if we're maximized
+  // and then moved, or if we're not maximized and moved back to zoomed state.
+  if (mWindow && ((mSizeMode == nsSizeMode_Maximized) ^ [mWindow isZoomed])) {
+    DispatchSizeModeEvent();
+  }
+
   // Dispatch the move event to Gecko
   NotifyWindowMoved(mBounds.x, mBounds.y);
 
@@ -2046,6 +2074,14 @@ void nsCocoaWindow::DispatchSizeModeEvent() {
   mSizeMode = newMode;
   if (mWidgetListener) {
     mWidgetListener->SizeModeChanged(newMode);
+  }
+
+  if (StaticPrefs::widget_pause_compositor_when_minimized()) {
+    if (newMode == nsSizeMode_Minimized) {
+      PauseCompositor();
+    } else {
+      ResumeCompositor();
+    }
   }
 }
 
@@ -2078,6 +2114,72 @@ void nsCocoaWindow::ReportSizeEvent() {
   }
 
   NS_OBJC_END_TRY_ABORT_BLOCK;
+}
+
+void nsCocoaWindow::PauseCompositor() {
+  nsIWidget* mainChildView = static_cast<nsIWidget*>([[mWindow mainChildView] widget]);
+  if (!mainChildView) {
+    return;
+  }
+  CompositorBridgeChild* remoteRenderer = mainChildView->GetRemoteRenderer();
+  if (!remoteRenderer) {
+    return;
+  }
+  remoteRenderer->SendPause();
+
+  // Now that the compositor has paused, we also try to mark the browser window
+  // docshell inactive to stop any animations. This does not affect docshells
+  // for browsers in other processes, but browser UI code should be managing
+  // their active state appropriately.
+  if (!mWidgetListener) {
+    return;
+  }
+  PresShell* presShell = mWidgetListener->GetPresShell();
+  if (!presShell) {
+    return;
+  }
+  nsPresContext* presContext = presShell->GetPresContext();
+  if (!presContext) {
+    return;
+  }
+  nsDocShell* docShell = presContext->GetDocShell();
+  if (!docShell) {
+    return;
+  }
+  docShell->SetIsActive(false);
+}
+
+void nsCocoaWindow::ResumeCompositor() {
+  nsIWidget* mainChildView = static_cast<nsIWidget*>([[mWindow mainChildView] widget]);
+  if (!mainChildView) {
+    return;
+  }
+  CompositorBridgeChild* remoteRenderer = mainChildView->GetRemoteRenderer();
+  if (!remoteRenderer) {
+    return;
+  }
+  remoteRenderer->SendResume();
+
+  // Now that the compositor has resumed, we also try to mark the browser window
+  // docshell active to restart any animations. This does not affect docshells
+  // for browsers in other processes, but browser UI code should be managing
+  // their active state appropriately.
+  if (!mWidgetListener) {
+    return;
+  }
+  PresShell* presShell = mWidgetListener->GetPresShell();
+  if (!presShell) {
+    return;
+  }
+  nsPresContext* presContext = presShell->GetPresContext();
+  if (!presContext) {
+    return;
+  }
+  nsDocShell* docShell = presContext->GetDocShell();
+  if (!docShell) {
+    return;
+  }
+  docShell->SetIsActive(true);
 }
 
 void nsCocoaWindow::SetMenuBar(nsMenuBarX* aMenuBar) {

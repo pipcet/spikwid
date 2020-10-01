@@ -34,7 +34,7 @@ job-defaults:
 
 firefox-ci:
     description: taskcluster/taskgraph unit tests
-    python-version: [2]
+    python-version: [3]
     treeherder:
         symbol: ci
     run:
@@ -112,7 +112,7 @@ mochitest-harness:
             start_xvfb '1600x1200x24' 0 &&
             export GECKO_BINARY_PATH=$MOZ_FETCHES_DIR/firefox/firefox &&
             export TEST_HARNESS_ROOT=$MOZ_FETCHES_DIR/tests &&
-            ./mach python-test --python 2 --subsuite mochitest
+            python2 ./mach python-test --subsuite mochitest
     fetches:
         build:
             - target.tar.bz2
@@ -293,7 +293,7 @@ reftest-harness:
             start_xvfb '1600x1200x24' 0 &&
             export GECKO_BINARY_PATH=$MOZ_FETCHES_DIR/firefox/firefox &&
             export TEST_HARNESS_ROOT=$MOZ_FETCHES_DIR/tests &&
-            ./mach python-test --python 2 --subsuite reftest
+            python2 ./mach python-test --subsuite reftest
     fetches:
         build:
             - target.tar.bz2
@@ -369,6 +369,8 @@ mozbuild:
             - 'build/moz.configure/**'
             - 'config/tests/**'
             - 'dom/bindings/mozwebidlcodegen/**'
+            - 'modules/libpref/init/**'
+            - 'modules/libpref/test/**'
             - 'python/mach/**'
             - 'python/mozboot/**'
             - 'python/mozbuild/**'
@@ -472,6 +474,7 @@ telemetry-integration-tests:
     treeherder:
         symbol: tt(i)
         tier: 3
+    run-on-projects: []
     run:
         using: run-task
         cwd: '{checkout}'
@@ -479,7 +482,7 @@ telemetry-integration-tests:
             source /builds/worker/scripts/xvfb.sh &&
             start_xvfb '1600x1200x24' 0 &&
             export GECKO_BINARY_PATH=$MOZ_FETCHES_DIR/firefox/firefox &&
-            ./mach python-test --python 2 --subsuite telemetry-integration-tests
+            python2 ./mach python-test --subsuite telemetry-integration-tests
     fetches:
         build:
             - target.tar.bz2
@@ -487,6 +490,31 @@ telemetry-integration-tests:
               dest: tests
             - artifact: target.reftest.tests.tar.gz
               dest: tests
+    when:
+        files-changed:
+            - 'toolkit/components/telemetry/**'
+
+telemetry-python:
+    description: Python unit tests for Telemetry
+    platform:
+        - linux1804-64/opt
+        - macosx1014-64/opt
+        - windows10-64/opt
+    python-version: [2]
+    treeherder:
+        symbol: tp
+    run:
+        using: python-test
+        subsuite: telemetry-python
+    fetches:
+        toolchain:
+            by-platform:
+                linux1804-64/opt:
+                    - linux64-node-10
+                macosx1014-64/opt:
+                    - macosx64-node-10
+                windows10-64/opt:
+                    - win64-node-10
     when:
         files-changed:
             - 'toolkit/components/telemetry/**'
@@ -503,5 +531,7 @@ xpcom:
         subsuite: xpcom
     when:
         files-changed:
+            - 'third_party/python/ply/**'
             - 'xpcom/ds/tools/**'
             - 'xpcom/ds/test/**'
+            - 'xpcom/idl-parser/**'

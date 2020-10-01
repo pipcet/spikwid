@@ -523,7 +523,15 @@ IPCResult BackgroundParentImpl::RecvPRemoteWorkerServiceConstructor(
     PRemoteWorkerServiceParent* aActor) {
   mozilla::dom::RemoteWorkerServiceParent* actor =
       static_cast<mozilla::dom::RemoteWorkerServiceParent*>(aActor);
-  actor->Initialize();
+
+  RefPtr<ContentParent> parent = BackgroundParent::GetContentParent(this);
+  // If the ContentParent is null we are dealing with a same-process actor.
+  if (!parent) {
+    actor->Initialize(NOT_REMOTE_TYPE);
+  } else {
+    actor->Initialize(parent->GetRemoteType());
+    NS_ReleaseOnMainThread("ContentParent release", parent.forget());
+  }
   return IPC_OK();
 }
 
@@ -1100,6 +1108,16 @@ bool BackgroundParentImpl::DeallocPGamepadEventChannelParent(
   RefPtr<dom::GamepadEventChannelParent> parent =
       dont_AddRef(static_cast<dom::GamepadEventChannelParent*>(aActor));
   return true;
+}
+
+mozilla::ipc::IPCResult
+BackgroundParentImpl::RecvPGamepadEventChannelConstructor(
+    PGamepadEventChannelParent* aActor) {
+  MOZ_ASSERT(aActor);
+  if (!static_cast<dom::GamepadEventChannelParent*>(aActor)->Init()) {
+    return IPC_FAIL_NO_REASON(this);
+  }
+  return IPC_OK();
 }
 
 dom::PGamepadTestChannelParent*

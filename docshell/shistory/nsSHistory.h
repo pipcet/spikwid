@@ -70,7 +70,7 @@ class nsSHistory : public mozilla::LinkedListElement<nsSHistory>,
   NS_DECL_ISUPPORTS
   NS_DECL_NSISHISTORY
 
-  // One time initialization method called upon docshell module construction
+  // One time initialization method
   static nsresult Startup();
   static void Shutdown();
   static void UpdatePrefs();
@@ -127,11 +127,15 @@ class nsSHistory : public mozilla::LinkedListElement<nsSHistory>,
                                      WalkHistoryEntriesFunc aCallback,
                                      void* aData);
 
-  nsresult AddChildSHEntryHelper(nsISHEntry* aCloneRef, nsISHEntry* aNewEntry,
-                                 mozilla::dom::BrowsingContext* aBC,
-                                 bool aCloneChildren, nsISHEntry** aNextEntry);
+  // This function finds all entries that are contiguous and same-origin with
+  // the aEntry. And call the aCallback on them, including the aEntry. This only
+  // works for the root entries. It will do nothing for non-root entries.
+  static void WalkContiguousEntries(
+      nsISHEntry* aEntry, const std::function<void(nsISHEntry*)>& aCallback);
 
   nsTArray<nsCOMPtr<nsISHEntry>>& Entries() { return mEntries; }
+
+  void NotifyOnHistoryReplaceEntry();
 
   void RemoveEntries(nsTArray<nsID>& aIDs, int32_t aStartIndex,
                      bool* aDidRemove);
@@ -167,6 +171,21 @@ class nsSHistory : public mozilla::LinkedListElement<nsSHistory>,
   mozilla::dom::BrowsingContext* GetBrowsingContext() { return mRootBC; }
   bool HasOngoingUpdate() { return mHasOngoingUpdate; }
   void SetHasOngoingUpdate(bool aVal) { mHasOngoingUpdate = aVal; }
+
+  void SetBrowsingContext(mozilla::dom::BrowsingContext* aRootBC) {
+    mRootBC = aRootBC;
+  }
+
+  int32_t GetIndexForReplace() {
+    // Replace current entry in session history; If the requested index is
+    // valid, it indicates the loading was triggered by a history load, and
+    // we should replace the entry at requested index instead.
+    return mRequestedIndex == -1 ? mIndex : mRequestedIndex;
+  }
+
+  // Update the root browsing context state when adding, removing or
+  // replacing entries.
+  void UpdateRootBrowsingContextState();
 
  protected:
   virtual ~nsSHistory();
@@ -231,7 +250,6 @@ class nsSHistory : public mozilla::LinkedListElement<nsSHistory>,
                                             nsISHEntry* aNewEntry);
 
  protected:
-
   bool mHasOngoingUpdate;
   bool mIsRemote;
   nsTArray<nsCOMPtr<nsISHEntry>> mEntries;  // entries are never null

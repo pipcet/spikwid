@@ -148,11 +148,6 @@ class SVGPathData {
   /**
    * Returns true, except on OOM, in which case returns false.
    */
-  bool GetSegmentLengths(nsTArray<double>* aLengths) const;
-
-  /**
-   * Returns true, except on OOM, in which case returns false.
-   */
   bool GetDistancesFromOriginToEndsOfVisibleSegments(
       FallibleTArray<double>* aOutput) const;
 
@@ -192,7 +187,7 @@ class SVGPathData {
   // can take care of keeping DOM wrappers in sync.
 
  protected:
-  typedef float* iterator;
+  using iterator = float*;
 
   /**
    * This may fail on OOM if the internal capacity needs to be increased, in

@@ -105,6 +105,11 @@ function showCertificateErrorReporting() {
   document.getElementById("certificateErrorReporting").style.display = "block";
 }
 
+function showBlockingErrorReporting() {
+  // Display blocking error reporting UI for XFO error and CSP error.
+  document.getElementById("blockingErrorReporting").style.display = "block";
+}
+
 function showPrefChangeContainer() {
   const panel = document.getElementById("prefChangeContainer");
   panel.style.display = "block";
@@ -354,6 +359,8 @@ function initPage() {
     // Add a learn more link
     document.getElementById("learnMoreContainer").style.display = "block";
     learnMoreLink.setAttribute("href", baseURL + "xframe-neterror-page");
+
+    setupBlockingReportingUI();
   }
 
   setNetErrorMessageFromCode();
@@ -452,6 +459,75 @@ function setupErrorUI() {
   }
 }
 
+function setupBlockingReportingUI() {
+  let checkbox = document.getElementById("automaticallyReportBlockingInFuture");
+
+  let reportingAutomatic = RPMGetBoolPref(
+    "security.xfocsp.errorReporting.automatic"
+  );
+  checkbox.checked = !!reportingAutomatic;
+
+  checkbox.addEventListener("change", function({ target: { checked } }) {
+    onSetBlockingReportAutomatic(checked);
+  });
+
+  let reportingEnabled = RPMGetBoolPref(
+    "security.xfocsp.errorReporting.enabled"
+  );
+
+  if (!reportingEnabled) {
+    return;
+  }
+
+  showBlockingErrorReporting();
+
+  if (reportingAutomatic) {
+    reportBlockingError();
+  }
+}
+
+function reportBlockingError() {
+  // We only report if we are in a frame.
+  if (window === window.top) {
+    return;
+  }
+
+  let err = getErrorCode();
+  // Ensure we only deal with XFO and CSP here.
+  if (!["xfoBlocked", "cspBlocked"].includes(err)) {
+    return;
+  }
+
+  let xfo_header = RPMGetHttpResponseHeader("X-Frame-Options");
+  let csp_header = RPMGetHttpResponseHeader("Content-Security-Policy");
+
+  // Extract the 'CSP: frame-ancestors' from the CSP header.
+  let reg = /(?:^|\s)frame-ancestors\s([^;]*)[$]*/i;
+  let match = reg.exec(csp_header);
+  csp_header = match ? match[1] : "";
+
+  // If it's the csp error page without the CSP: frame-ancestors, this means
+  // this error page is not triggered by CSP: frame-ancestors. So, we bail out
+  // early.
+  if (err === "cspBlocked" && !csp_header) {
+    return;
+  }
+
+  let xfoAndCspInfo = {
+    error_type: err === "xfoBlocked" ? "xfo" : "csp",
+    xfo_header,
+    csp_header,
+  };
+
+  RPMSendAsyncMessage("ReportBlockingError", {
+    scheme: document.location.protocol,
+    host: document.location.host,
+    port: parseInt(document.location.port) || -1,
+    path: document.location.pathname,
+    xfoAndCspInfo,
+  });
+}
+
 function onSetAutomatic(checked) {
   let bin = TLS_ERROR_REPORT_TELEMETRY_AUTO_UNCHECKED;
   if (checked) {
@@ -466,6 +542,15 @@ function onSetAutomatic(checked) {
       host: document.location.host,
       port: parseInt(document.location.port) || -1,
     });
+  }
+}
+
+function onSetBlockingReportAutomatic(checked) {
+  RPMSetBoolPref("security.xfocsp.errorReporting.automatic", checked);
+
+  // If we're enabling reports, send a report for this failure.
+  if (checked) {
+    reportBlockingError();
   }
 }
 
@@ -969,7 +1054,10 @@ function setCertErrorDetails(event) {
   }
 }
 
-async function setTechnicalDetailsOnCertError() {
+// The optional argument is only here for testing purposes.
+async function setTechnicalDetailsOnCertError(
+  failedCertInfo = document.getFailedCertSecurityInfo()
+) {
   let technicalInfo = document.getElementById("badCertTechnicalInfo");
 
   function setL10NLabel(l10nId, args = {}, attrs = {}, rewrite = true) {
@@ -1010,7 +1098,6 @@ async function setTechnicalDetailsOnCertError() {
   let args = {
     hostname: hostString,
   };
-  let failedCertInfo = document.getFailedCertSecurityInfo();
   if (failedCertInfo.isUntrusted) {
     switch (failedCertInfo.errorCodeString) {
       case "MOZILLA_PKIX_ERROR_MITM_DETECTED":
@@ -1055,9 +1142,7 @@ async function setTechnicalDetailsOnCertError() {
         setL10NLabel("cert-error-intro", args);
         setL10NLabel("cert-error-untrusted-default", {}, {}, false);
     }
-  }
-
-  if (failedCertInfo.isDomainMismatch) {
+  } else if (failedCertInfo.isDomainMismatch) {
     let subjectAltNames = failedCertInfo.subjectAltNames.split(",");
     subjectAltNames = subjectAltNames.filter(name => !!name.length);
     let numSubjectAltNames = subjectAltNames.length;
@@ -1135,9 +1220,7 @@ async function setTechnicalDetailsOnCertError() {
     } else {
       setL10NLabel("cert-error-domain-mismatch", { hostname: hostString });
     }
-  }
-
-  if (failedCertInfo.isNotValidAtThisTime) {
+  } else if (failedCertInfo.isNotValidAtThisTime) {
     let notBefore = failedCertInfo.validNotBefore;
     let notAfter = failedCertInfo.validNotAfter;
     args = {

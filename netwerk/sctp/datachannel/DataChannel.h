@@ -31,8 +31,8 @@
 #include "DataChannelLog.h"
 
 #ifdef SCTP_DTLS_SUPPORTED
-#  include "mtransport/sigslot.h"
-#  include "mtransport/transportlayer.h"  // For TransportLayer::State
+#  include "transport/sigslot.h"
+#  include "transport/transportlayer.h"  // For TransportLayer::State
 #endif
 
 #ifndef EALREADY
@@ -130,11 +130,8 @@ class DataChannelConnection final : public net::NeckoTargetHolder
 
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(DataChannelConnection)
 
-  class DataConnectionListener
-      : public SupportsWeakPtr<DataConnectionListener> {
+  class DataConnectionListener : public SupportsWeakPtr {
    public:
-    MOZ_DECLARE_WEAKREFERENCE_TYPENAME(
-        DataChannelConnection::DataConnectionListener)
     virtual ~DataConnectionListener() = default;
 
     // Called when a new DataChannel has been opened by the other side.
@@ -360,7 +357,7 @@ class DataChannelConnection final : public net::NeckoTargetHolder
   Channels mChannels;
   // STS only
   uint32_t mCurrentStream = 0;
-  nsDeque<DataChannel> mPending;  // Holds addref'ed DataChannel's -- careful!
+  nsRefPtrDeque<DataChannel> mPending;
   // STS and main
   size_t mNegotiatedIdLimit = 0;  // GUARDED_BY(mConnection->mLock)
   uint8_t mPendingType = PENDING_NONE;

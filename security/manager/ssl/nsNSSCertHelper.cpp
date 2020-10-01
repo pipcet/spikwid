@@ -17,7 +17,6 @@
 #include "mozilla/net/DNS.h"
 #include "nsCOMPtr.h"
 #include "nsIStringBundle.h"
-#include "nsNSSCertValidity.h"
 #include "nsNSSCertificate.h"
 #include "nsReadableUtils.h"
 #include "nsServiceManagerUtils.h"
@@ -91,7 +90,7 @@ nsresult PIPBundleFormatStringFromName(const char* stringName,
 
 void LossyUTF8ToUTF16(const char* str, uint32_t len,
                       /*out*/ nsAString& result) {
-  auto span = MakeSpan(str, len);
+  auto span = Span(str, len);
   if (IsUtf8(span)) {
     CopyUTF8toUTF16(span, result);
   } else {

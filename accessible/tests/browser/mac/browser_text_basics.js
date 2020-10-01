@@ -4,46 +4,215 @@
 
 "use strict";
 
-/* import-globals-from ../../mochitest/role.js */
-/* import-globals-from ../../mochitest/states.js */
-loadScripts(
-  { name: "role.js", dir: MOCHITESTS_DIR },
-  { name: "states.js", dir: MOCHITESTS_DIR }
-);
+function testRangeAtMarker(macDoc, marker, attribute, expected, msg) {
+  let range = macDoc.getParameterizedAttributeValue(attribute, marker);
+  is(stringForRange(macDoc, range), expected, msg);
+}
 
-// Read-only tests
-addAccessibleTask(`<p id="p">Hello World</p>`, async (browser, accDoc) => {
+function testUIElement(macDoc, marker, msg, expectedRole, expectedValue) {
+  let elem = macDoc.getParameterizedAttributeValue(
+    "AXUIElementForTextMarker",
+    marker
+  );
+  is(
+    elem.getAttributeValue("AXRole"),
+    expectedRole,
+    `${msg}: element role matches`
+  );
+  is(elem.getAttributeValue("AXValue"), expectedValue, `${msg}: element value`);
+  let elemRange = macDoc.getParameterizedAttributeValue(
+    "AXTextMarkerRangeForUIElement",
+    elem
+  );
+  is(
+    stringForRange(macDoc, elemRange),
+    expectedValue,
+    `${msg}: element range matches element value`
+  );
+}
+
+function testStyleRun(macDoc, marker, msg, expectedStyleRun) {
+  testRangeAtMarker(
+    macDoc,
+    marker,
+    "AXStyleTextMarkerRangeForTextMarker",
+    expectedStyleRun,
+    `${msg}: style run matches`
+  );
+}
+
+function testParagraph(macDoc, marker, msg, expectedParagraph) {
+  testRangeAtMarker(
+    macDoc,
+    marker,
+    "AXParagraphTextMarkerRangeForTextMarker",
+    expectedParagraph,
+    `${msg}: paragraph matches`
+  );
+}
+
+function testWords(macDoc, marker, msg, expectedLeft, expectedRight) {
+  testRangeAtMarker(
+    macDoc,
+    marker,
+    "AXLeftWordTextMarkerRangeForTextMarker",
+    expectedLeft,
+    `${msg}: left word matches`
+  );
+
+  testRangeAtMarker(
+    macDoc,
+    marker,
+    "AXRightWordTextMarkerRangeForTextMarker",
+    expectedRight,
+    `${msg}: right word matches`
+  );
+}
+
+function testLines(
+  macDoc,
+  marker,
+  msg,
+  expectedLine,
+  expectedLeft,
+  expectedRight
+) {
+  testRangeAtMarker(
+    macDoc,
+    marker,
+    "AXLineTextMarkerRangeForTextMarker",
+    expectedLine,
+    `${msg}: line matches`
+  );
+
+  testRangeAtMarker(
+    macDoc,
+    marker,
+    "AXLeftLineTextMarkerRangeForTextMarker",
+    expectedLeft,
+    `${msg}: left line matches`
+  );
+
+  testRangeAtMarker(
+    macDoc,
+    marker,
+    "AXRightLineTextMarkerRangeForTextMarker",
+    expectedRight,
+    `${msg}: right line matches`
+  );
+}
+
+// Tests consistency in text markers between:
+// 1. "Linked list" forward navagation
+// 2. Getting markers by index
+// 3. "Linked list" reverse navagation
+// For each iteration method check that the returned index is consistent
+function testMarkerIntegrity(accDoc, expectedMarkerValues) {
   let macDoc = accDoc.nativeInterface.QueryInterface(
     Ci.nsIAccessibleMacInterface
   );
 
-  function stringForRange(r) {
-    return macDoc.getParameterizedAttributeValue(
-      "AXStringForTextMarkerRange",
-      r
+  let count = 0;
+
+  // Iterate forward with "AXNextTextMarkerForTextMarker"
+  let marker = macDoc.getAttributeValue("AXStartTextMarker");
+  while (marker) {
+    let index = macDoc.getParameterizedAttributeValue(
+      "AXIndexForTextMarker",
+      marker
+    );
+    is(
+      index,
+      count,
+      `Correct index in "AXNextTextMarkerForTextMarker": ${count}`
+    );
+
+    testWords(
+      macDoc,
+      marker,
+      `At index ${count}`,
+      ...expectedMarkerValues[count].words
+    );
+    testLines(
+      macDoc,
+      marker,
+      `At index ${count}`,
+      ...expectedMarkerValues[count].lines
+    );
+    testUIElement(
+      macDoc,
+      marker,
+      `At index ${count}`,
+      ...expectedMarkerValues[count].element
+    );
+    testParagraph(
+      macDoc,
+      marker,
+      `At index ${count}`,
+      expectedMarkerValues[count].paragraph
+    );
+    testStyleRun(
+      macDoc,
+      marker,
+      `At index ${count}`,
+      expectedMarkerValues[count].style
+    );
+
+    marker = macDoc.getParameterizedAttributeValue(
+      "AXNextTextMarkerForTextMarker",
+      marker
+    );
+    count++;
+  }
+
+  // Use "AXTextMarkerForIndex" to retrieve all text markers
+  for (let i = 0; i < count; i++) {
+    marker = macDoc.getParameterizedAttributeValue("AXTextMarkerForIndex", i);
+    let index = macDoc.getParameterizedAttributeValue(
+      "AXIndexForTextMarker",
+      marker
+    );
+    is(index, i, `Correct index in "AXTextMarkerForIndex": ${i}`);
+  }
+
+  ok(
+    !macDoc.getParameterizedAttributeValue(
+      "AXNextTextMarkerForTextMarker",
+      marker
+    ),
+    "Iterated through all markers"
+  );
+
+  // Iterate backward with "AXPreviousTextMarkerForTextMarker"
+  marker = macDoc.getAttributeValue("AXEndTextMarker");
+  while (marker) {
+    count--;
+    let index = macDoc.getParameterizedAttributeValue(
+      "AXIndexForTextMarker",
+      marker
+    );
+    is(
+      index,
+      count,
+      `Correct index in "AXPreviousTextMarkerForTextMarker": ${count}`
+    );
+    marker = macDoc.getParameterizedAttributeValue(
+      "AXPreviousTextMarkerForTextMarker",
+      marker
     );
   }
 
-  let startMarker = macDoc.getAttributeValue("AXStartTextMarker");
-  let endMarker = macDoc.getAttributeValue("AXEndTextMarker");
-  let range = macDoc.getParameterizedAttributeValue(
-    "AXTextMarkerRangeForUnorderedTextMarkers",
-    [startMarker, endMarker]
+  is(count, 0, "Iterated backward through all text markers");
+}
+
+addAccessibleTask("mac/doc_textmarker_test.html", async (browser, accDoc) => {
+  const expectedMarkerValues = await SpecialPowers.spawn(
+    browser,
+    [],
+    async () => {
+      return content.wrappedJSObject.EXPECTED;
+    }
   );
-  is(stringForRange(range), "Hello World");
 
-  let evt = waitForMacEvent("AXSelectedTextChanged");
-  await SpecialPowers.spawn(browser, [], () => {
-    let p = content.document.getElementById("p");
-    let r = new content.Range();
-    r.setStart(p.firstChild, 1);
-    r.setEnd(p.firstChild, 8);
-
-    let s = content.getSelection();
-    s.addRange(r);
-  });
-  await evt;
-
-  range = macDoc.getAttributeValue("AXSelectedTextMarkerRange");
-  is(stringForRange(range), "ello Wo");
+  testMarkerIntegrity(accDoc, expectedMarkerValues);
 });

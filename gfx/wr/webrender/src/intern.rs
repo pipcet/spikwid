@@ -110,7 +110,7 @@ impl ItemUid {
 
 #[cfg_attr(feature = "capture", derive(Serialize))]
 #[cfg_attr(feature = "replay", derive(Deserialize))]
-#[derive(Debug, MallocSizeOf)]
+#[derive(Debug, MallocSizeOf, PartialEq)]
 pub struct Handle<I> {
     index: u32,
     epoch: Epoch,
@@ -369,6 +369,68 @@ impl<I: Internable> ops::Index<Handle<I>> for Interner<I> {
     type Output = I::InternData;
     fn index(&self, handle: Handle<I>) -> &I::InternData {
         &self.local_data[handle.index as usize]
+    }
+}
+
+/// Meta-macro to enumerate the various interner identifiers and types.
+///
+/// IMPORTANT: Keep this synchronized with the list in mozilla-central located at
+/// gfx/webrender_bindings/webrender_ffi.h
+///
+/// Note that this could be a lot less verbose if concat_idents! were stable. :-(
+#[macro_export]
+macro_rules! enumerate_interners {
+    ($macro_name: ident) => {
+        $macro_name! {
+            clip: ClipIntern,
+            prim: PrimitiveKeyKind,
+            normal_border: NormalBorderPrim,
+            image_border: ImageBorder,
+            image: Image,
+            yuv_image: YuvImage,
+            line_decoration: LineDecoration,
+            linear_grad: LinearGradient,
+            radial_grad: RadialGradient,
+            conic_grad: ConicGradient,
+            picture: Picture,
+            text_run: TextRun,
+            filter_data: FilterDataIntern,
+            backdrop: Backdrop,
+        }
+    }
+}
+
+macro_rules! declare_interning_memory_report {
+    ( $( $name:ident: $ty:ident, )+ ) => {
+        ///
+        #[repr(C)]
+        #[derive(AddAssign, Clone, Debug, Default)]
+        pub struct InternerSubReport {
+            $(
+                ///
+                pub $name: usize,
+            )+
+        }
+    }
+}
+
+enumerate_interners!(declare_interning_memory_report);
+
+/// Memory report for interning-related data structures.
+/// cbindgen:derive-eq=false
+#[repr(C)]
+#[derive(Clone, Debug, Default)]
+pub struct InterningMemoryReport {
+    ///
+    pub interners: InternerSubReport,
+    ///
+    pub data_stores: InternerSubReport,
+}
+
+impl ::std::ops::AddAssign for InterningMemoryReport {
+    fn add_assign(&mut self, other: InterningMemoryReport) {
+        self.interners += other.interners;
+        self.data_stores += other.data_stores;
     }
 }
 

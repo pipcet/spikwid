@@ -286,6 +286,7 @@ static nscoord GetBaselinePosition(nsTextFrame* aFrame, gfxTextRun* aTextRun,
 
   switch (aDominantBaseline) {
     case StyleDominantBaseline::Hanging:
+      return metrics.mAscent * 0.2;
     case StyleDominantBaseline::TextBeforeEdge:
       return writingMode.IsVerticalRL() ? metrics.mAscent + metrics.mDescent
                                         : 0;
@@ -308,8 +309,9 @@ static nscoord GetBaselinePosition(nsTextFrame* aFrame, gfxTextRun* aTextRun,
                                         : metrics.mAscent + metrics.mDescent;
 
     case StyleDominantBaseline::Central:
-    case StyleDominantBaseline::Mathematical:
       return (metrics.mAscent + metrics.mDescent) / 2.0;
+    case StyleDominantBaseline::Mathematical:
+      return metrics.mAscent / 2.0;
   }
 
   MOZ_ASSERT_UNREACHABLE("unexpected dominant-baseline value");
@@ -382,7 +384,7 @@ static double GetContextScale(const gfxMatrix& aMatrix) {
  * whole SVGTextFrame.
  */
 struct TextRenderedRun {
-  typedef gfxTextRun::Range Range;
+  using Range = gfxTextRun::Range;
 
   /**
    * Constructs a TextRenderedRun that is uninitialized except for mFrame
@@ -804,11 +806,11 @@ SVGBBox TextRenderedRun::GetRunUserSpaceRect(nsPresContext* aContext,
 
   // Determine the amount of overflow above and below the frame's mRect.
   //
-  // We need to call GetVisualOverflowRectRelativeToSelf because this includes
+  // We need to call InkOverflowRectRelativeToSelf because this includes
   // overflowing decorations, which the MeasureText call below does not.  We
   // assume here the decorations only overflow above and below the frame, never
   // horizontally.
-  nsRect self = mFrame->GetVisualOverflowRectRelativeToSelf();
+  nsRect self = mFrame->InkOverflowRectRelativeToSelf();
   nsRect rect = mFrame->GetRect();
   bool vertical = IsVertical();
   nscoord above = vertical ? -self.x : -self.y;
@@ -1934,7 +1936,7 @@ TextRenderedRun TextRenderedRunIterator::First() {
  * Iterator for characters within an SVGTextFrame.
  */
 class CharIterator {
-  typedef gfxTextRun::Range Range;
+  using Range = gfxTextRun::Range;
 
  public:
   /**
@@ -2391,7 +2393,7 @@ bool CharIterator::MatchesFilter() const {
  * the text, etc.).
  */
 class SVGTextDrawPathCallbacks final : public nsTextFrame::DrawPathCallbacks {
-  typedef mozilla::image::imgDrawingParams imgDrawingParams;
+  using imgDrawingParams = image::imgDrawingParams;
 
  public:
   /**
@@ -3210,8 +3212,8 @@ void SVGTextFrame::PaintSVG(gfxContext& aContext, const gfxMatrix& aTransform,
       bool paintSVGGlyphs;
       nsTextFrame::PaintTextParams params(&aContext);
       params.framePt = Point();
-      params.dirtyRect = LayoutDevicePixel::FromAppUnits(
-          frame->GetVisualOverflowRect(), auPerDevPx);
+      params.dirtyRect =
+          LayoutDevicePixel::FromAppUnits(frame->InkOverflowRect(), auPerDevPx);
       params.contextPaint = contextPaint;
 
       const bool isSelected = frame->IsSelected();
@@ -3829,7 +3831,7 @@ int32_t SVGTextFrame::GetCharNumAtPosition(nsIContent* aContent,
  * Implements the SVG DOM GetStartPositionOfChar method for the specified
  * text content element.
  */
-already_AddRefed<nsISVGPoint> SVGTextFrame::GetStartPositionOfChar(
+already_AddRefed<DOMSVGPoint> SVGTextFrame::GetStartPositionOfChar(
     nsIContent* aContent, uint32_t aCharNum, ErrorResult& aRv) {
   nsIFrame* kid = PrincipalChildList().FirstChild();
   if (kid->IsSubtreeDirty()) {
@@ -3913,7 +3915,7 @@ static gfxFloat GetGlyphAdvance(SVGTextFrame* aFrame, nsIContent* aContent,
  * Implements the SVG DOM GetEndPositionOfChar method for the specified
  * text content element.
  */
-already_AddRefed<nsISVGPoint> SVGTextFrame::GetEndPositionOfChar(
+already_AddRefed<DOMSVGPoint> SVGTextFrame::GetEndPositionOfChar(
     nsIContent* aContent, uint32_t aCharNum, ErrorResult& aRv) {
   nsIFrame* kid = PrincipalChildList().FirstChild();
   if (kid->IsSubtreeDirty()) {

@@ -39,10 +39,8 @@ class Document;
  *
  * This class is designed to be used only on the main thread.
  */
-class PreloaderBase : public SupportsWeakPtr<PreloaderBase>,
-                      public nsISupports {
+class PreloaderBase : public SupportsWeakPtr, public nsISupports {
  public:
-  MOZ_DECLARE_WEAKREFERENCE_TYPENAME(PreloaderBase)
   PreloaderBase() = default;
 
   // Called by resource loaders to register this preload in the document's
@@ -144,31 +142,15 @@ class PreloaderBase : public SupportsWeakPtr<PreloaderBase>,
   void NotifyNodeEvent(nsINode* aNode);
   void CancelUsageTimer();
 
+  void ReportUsageTelemetry();
+
   // A helper class that will update the PreloaderBase.mChannel member when a
   // redirect happens, so that we can reprioritize or cancel when needed.
   // Having a separate class instead of implementing this on PreloaderBase
   // directly is to keep PreloaderBase as simple as possible so that derived
   // classes don't have to deal with calling super when implementing these
   // interfaces from some reason as well.
-  class RedirectSink final : public nsIInterfaceRequestor,
-                             public nsIChannelEventSink,
-                             public nsIRedirectResultListener {
-    RedirectSink() = delete;
-    virtual ~RedirectSink() = default;
-
-   public:
-    NS_DECL_THREADSAFE_ISUPPORTS
-    NS_DECL_NSIINTERFACEREQUESTOR
-    NS_DECL_NSICHANNELEVENTSINK
-    NS_DECL_NSIREDIRECTRESULTLISTENER
-
-    RedirectSink(PreloaderBase* aPreloader, nsIInterfaceRequestor* aCallbacks);
-
-   private:
-    nsMainThreadPtrHandle<PreloaderBase> mPreloader;
-    nsCOMPtr<nsIInterfaceRequestor> mCallbacks;
-    nsCOMPtr<nsIChannel> mRedirectChannel;
-  };
+  class RedirectSink;
 
   // A timer callback to trigger the unuse warning for this preload
   class UsageTimer final : public nsITimerCallback {
@@ -206,6 +188,9 @@ class PreloaderBase : public SupportsWeakPtr<PreloaderBase>,
 
   // True after call to NotifyUsage.
   bool mIsUsed = false;
+
+  // True after we have reported the usage telemetry.  Prevent duplicates.
+  bool mUsageTelementryReported = false;
 
   // Emplaced when the data delivery has finished, in NotifyStop, holds the
   // result of the load.

@@ -31,6 +31,13 @@ const ExperimentFakes = {
   store() {
     return new ExperimentStore("FakeStore", { path: PATH, isParent: true });
   },
+  waitForExperimentUpdate(ExperimentAPI, slug) {
+    if (!slug) {
+      throw new Error("Must specify an expected recipe update");
+    }
+
+    return new Promise(resolve => ExperimentAPI.on(`update:${slug}`, resolve));
+  },
   childStore() {
     return new ExperimentStore("FakeStore", { isParent: false });
   },
@@ -50,7 +57,15 @@ const ExperimentFakes = {
       slug,
       active: true,
       enrollmentId: NormandyUtils.generateUuid(),
-      branch: { slug: "treatment", value: { title: "hello" } },
+      branch: {
+        slug: "treatment",
+        feature: {
+          featureId: "aboutwelcome",
+          enabled: true,
+          value: { title: "hello" },
+        },
+        ...props,
+      },
       source: "test",
       isEnrollmentPaused: true,
       ...props,
@@ -60,9 +75,26 @@ const ExperimentFakes = {
     return {
       slug,
       branches: [
-        { slug: "control", value: null },
-        { slug: "treatment", value: { title: "hello" } },
+        {
+          slug: "control",
+          feature: { featureId: "aboutwelcome", enabled: true, value: null },
+        },
+        {
+          slug: "treatment",
+          feature: {
+            featureId: "aboutwelcome",
+            enabled: true,
+            value: { title: "hello" },
+          },
+        },
       ],
+      bucketConfig: {
+        namespace: "mstest-utils",
+        randomizationUnit: "normandy_id",
+        start: 0,
+        count: 100,
+        total: 1000,
+      },
       userFacingName: "Messaging System recipe",
       userFacingDescription: "Messaging System MSTestUtils recipe",
       ...props,

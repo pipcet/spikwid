@@ -92,7 +92,7 @@ WebSocketConnectionChild::OnUpgradeFailed(nsresult aReason) {
 }
 
 mozilla::ipc::IPCResult WebSocketConnectionChild::RecvEnqueueOutgoingData(
-    nsTArray<uint8_t>&& aHeader, nsTArray<uint8_t>&& aPayload) {
+    nsTArray<uint8_t>&& aData) {
   LOG(("WebSocketConnectionChild::RecvEnqueueOutgoingData %p\n", this));
 
   if (!mConnection) {
@@ -100,7 +100,7 @@ mozilla::ipc::IPCResult WebSocketConnectionChild::RecvEnqueueOutgoingData(
     return IPC_FAIL(this, "Connection is not available");
   }
 
-  mConnection->EnqueueOutputData(std::move(aHeader), std::move(aPayload));
+  mConnection->EnqueueOutputData(std::move(aData));
   return IPC_OK();
 }
 
@@ -171,6 +171,12 @@ WebSocketConnectionChild::OnDataReceived(uint8_t* aData, uint32_t aCount) {
     data.AppendElements(aData, aCount);
     Unused << SendOnDataReceived(std::move(data));
   }
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+WebSocketConnectionChild::OnReadyToSendData() {
+  // TODO: implement flow control between parent and socket process.
   return NS_OK;
 }
 

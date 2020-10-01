@@ -311,11 +311,6 @@ impl ::selectors::parser::NonTSPseudoClass for NonTSPseudoClass {
         )
     }
 
-    #[inline]
-    fn has_zero_specificity(&self) -> bool {
-        false
-    }
-
     fn visit<V>(&self, _: &mut V) -> bool
     where
         V: SelectorVisitor<Impl = Self::Impl>,
@@ -347,6 +342,7 @@ impl ToCss for NonTSPseudoClass {
             Fullscreen => ":fullscreen",
             Hover => ":hover",
             Indeterminate => ":indeterminate",
+            MozInert => ":-moz-inert",
             Link => ":link",
             PlaceholderShown => ":placeholder-shown",
             ReadWrite => ":read-write",
@@ -436,6 +432,7 @@ impl<'a, 'i> ::selectors::Parser<'i> for SelectorParser<'a> {
             "fullscreen" => Fullscreen,
             "hover" => Hover,
             "indeterminate" => Indeterminate,
+            "-moz-inert" => MozInert,
             "link" => Link,
             "placeholder-shown" => PlaceholderShown,
             "read-write" => ReadWrite,

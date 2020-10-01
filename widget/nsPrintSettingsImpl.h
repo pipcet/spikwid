@@ -10,6 +10,7 @@
 #include "nsIPrintSettings.h"
 #include "nsIWeakReferenceUtils.h"
 #include "nsMargin.h"
+#include "nsPaper.h"
 #include "nsString.h"
 
 #define NUM_HEAD_FOOT 3
@@ -18,15 +19,47 @@
 //***    nsPrintSettings
 //*****************************************************************************
 
+namespace mozilla {
+
+/**
+ * A struct that can be used off the main thread to collect printer-specific
+ * info that can be used to initialized a default nsIPrintSettings object.
+ */
+struct PrintSettingsInitializer {
+  nsString mPrinter;
+  PaperInfo mPaperInfo;
+  // If we fail to obtain printer capabilities, being given the option to print
+  // in color to your monochrome printer is a lot less annoying than not being
+  // given the option to print in color to your color printer.
+  bool mPrintInColor = true;
+  int mResolution = 0;
+#ifdef XP_WIN
+  CopyableTArray<uint8_t> mDevmodeWStorage;
+#endif
+};
+
+}  // namespace mozilla
+
 class nsPrintSettings : public nsIPrintSettings {
  public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSIPRINTSETTINGS
+  using PrintSettingsInitializer = mozilla::PrintSettingsInitializer;
 
   nsPrintSettings();
   nsPrintSettings(const nsPrintSettings& aPS);
 
+  /**
+   * Initialize relevant members from the PrintSettingsInitializer.
+   * This is specifically not a constructor so that we can ensure that the
+   * relevant setters are dynamically dispatched to derived classes.
+   */
+  virtual void InitWithInitializer(const PrintSettingsInitializer& aSettings);
+
   nsPrintSettings& operator=(const nsPrintSettings& rhs);
+
+  // Sets a default file name for the print settings.
+  void SetDefaultFileName();
 
  protected:
   virtual ~nsPrintSettings();
@@ -60,16 +93,15 @@ class nsPrintSettings : public nsIPrintSettings {
   bool mPrintSilent;
   bool mShrinkToFit;
   bool mShowPrintProgress;
+  bool mShowMarginGuides;
   int32_t mPrintPageDelay;
 
   nsString mTitle;
   nsString mURL;
-  nsString mPageNumberFormat;
   nsString mHeaderStrs[NUM_HEAD_FOOT];
   nsString mFooterStrs[NUM_HEAD_FOOT];
 
-  nsString mPaperName;
-  int16_t mPaperData;
+  nsString mPaperId;
   double mPaperWidth;
   double mPaperHeight;
   int16_t mPaperSizeUnit;

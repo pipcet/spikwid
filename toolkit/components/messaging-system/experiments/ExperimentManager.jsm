@@ -109,6 +109,8 @@ class _ExperimentManager {
       this.updateEnrollment(recipe);
     } else if (isEnrollmentPaused) {
       log.debug(`Enrollment is paused for "${slug}"`);
+    } else if (!(await this.isInBucketAllocation(recipe.bucketConfig))) {
+      log.debug("Client was not enrolled because of the bucket sampling");
     } else {
       await this.enroll(recipe, source);
     }
@@ -143,6 +145,35 @@ class _ExperimentManager {
   }
 
   /**
+   * Bucket configuration specifies a specific percentage of clients that can
+   * be enrolled.
+   * @param {BucketConfig} bucketConfig
+   * @returns {Promise<boolean>}
+   */
+  isInBucketAllocation(bucketConfig) {
+    if (!bucketConfig) {
+      log.debug("Cannot enroll if recipe bucketConfig is not set.");
+      return false;
+    }
+
+    let id;
+    if (bucketConfig.randomizationUnit === "normandy_id") {
+      id = ClientEnvironment.userId;
+    } else {
+      // Others not currently supported.
+      log.debug(`Invalid randomizationUnit: ${bucketConfig.randomizationUnit}`);
+      return false;
+    }
+
+    return Sampling.bucketSample(
+      [id, bucketConfig.namespace],
+      bucketConfig.start,
+      bucketConfig.count,
+      bucketConfig.total
+    );
+  }
+
+  /**
    * Start a new experiment by enrolling the users
    *
    * @param {RecipeArgs} recipe
@@ -169,12 +200,19 @@ class _ExperimentManager {
     const enrollmentId = NormandyUtils.generateUuid();
     const branch = await this.chooseBranch(slug, branches);
 
-    if (branch.groups && this.store.hasExperimentForGroups(branch.groups)) {
+    if (
+      this.store.hasExperimentForFeature(
+        // Extract out only the feature names from the branch
+        branch.feature?.featureId
+      )
+    ) {
       log.debug(
-        `Skipping enrollment for "${slug}" because there is an existing experiment for one of its groups.`
+        `Skipping enrollment for "${slug}" because there is an existing experiment for its feature.`
       );
-      this.sendFailureTelemetry("enrollFailed", slug, "group-conflict");
-      throw new Error(`An experiment with a conflicting group already exists.`);
+      this.sendFailureTelemetry("enrollFailed", slug, "feature-conflict");
+      throw new Error(
+        `An experiment with a conflicting feature already exists.`
+      );
     }
 
     /** @type {Enrollment} */
@@ -302,6 +340,68 @@ class _ExperimentManager {
   }
 
   /**
+   * Generate Normandy UserId respective to a branch
+   * for a given experiment.
+   *
+   * @param {string} slug
+   * @param {Array<{slug: string; ratio: number}>} branches
+   * @param {string} namespace
+   * @param {number} start
+   * @param {number} count
+   * @param {number} total
+   * @returns {Promise<{[branchName: string]: string}>} An object where
+   * the keys are branch names and the values are user IDs that will enroll
+   * a user for that particular branch. Also includes a `notInExperiment` value
+   * that will not enroll the user in the experiment
+   */
+  async generateTestIds({ slug, branches, namespace, start, count, total }) {
+    const branchValues = {};
+
+    if (!slug || !namespace) {
+      throw new Error(`slug, namespace not in expected format`);
+    }
+
+    if (!(start < total && count < total)) {
+      throw new Error("Must include start, count, and total as integers");
+    }
+
+    if (
+      !Array.isArray(branches) ||
+      branches.filter(branch => branch.slug && branch.ratio).length !==
+        branches.length
+    ) {
+      throw new Error("branches parameter not in expected format");
+    }
+
+    while (Object.keys(branchValues).length < branches.length + 1) {
+      const id = NormandyUtils.generateUuid();
+      const enrolls = await Sampling.bucketSample(
+        [id, namespace],
+        start,
+        count,
+        total
+      );
+      // Does this id enroll the user in the experiment
+      if (enrolls) {
+        // Choose a random branch
+        const { slug: pickedBranch } = await this.chooseBranch(
+          slug,
+          branches,
+          id
+        );
+
+        if (!Object.keys(branchValues).includes(pickedBranch)) {
+          branchValues[pickedBranch] = id;
+          log.debug(`Found a value for "${pickedBranch}"`);
+        }
+      } else if (!branchValues.notInExperiment) {
+        branchValues.notInExperiment = id;
+      }
+    }
+    return branchValues;
+  }
+
+  /**
    * Choose a branch randomly.
    *
    * @param {string} slug
@@ -309,9 +409,8 @@ class _ExperimentManager {
    * @returns {Promise<Branch>}
    * @memberof _ExperimentManager
    */
-  async chooseBranch(slug, branches) {
+  async chooseBranch(slug, branches, userId = ClientEnvironment.userId) {
     const ratios = branches.map(({ ratio = 1 }) => ratio);
-    const userId = ClientEnvironment.userId;
 
     // It's important that the input be:
     // - Unique per-user (no one is bucketed alike)

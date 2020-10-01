@@ -727,8 +727,8 @@ AndroidHardwareBufferTextureHost::Create(
     TextureFlags aFlags, const SurfaceDescriptorAndroidHardwareBuffer& aDesc) {
   RefPtr<AndroidHardwareBuffer> buffer =
       AndroidHardwareBuffer::FromFileDescriptor(
-          const_cast<ipc::FileDescriptor&>(aDesc.handle()), aDesc.size(),
-          aDesc.format());
+          const_cast<ipc::FileDescriptor&>(aDesc.handle()), aDesc.bufferId(),
+          aDesc.size(), aDesc.format());
   if (!buffer) {
     return nullptr;
   }
@@ -751,7 +751,7 @@ void AndroidHardwareBufferTextureHost::DestroyEGLImage() {
   if (mEGLImage && gl()) {
     const auto& gle = gl::GLContextEGL::Cast(gl());
     const auto& egl = gle->mEgl;
-    egl->fDestroyImage(egl->Display(), mEGLImage);
+    egl->fDestroyImage(mEGLImage);
     mEGLImage = EGL_NO_IMAGE;
   }
 }
@@ -790,11 +790,10 @@ void AndroidHardwareBufferTextureHost::PrepareTextureSource(
         LOCAL_EGL_NONE,
     };
 
-    EGLClientBuffer clientBuffer = egl->fGetNativeClientBufferANDROID(
+    EGLClientBuffer clientBuffer = egl->mLib->fGetNativeClientBufferANDROID(
         mAndroidHardwareBuffer->GetNativeBuffer());
-    mEGLImage =
-        egl->fCreateImage(egl->Display(), EGL_NO_CONTEXT,
-                          LOCAL_EGL_NATIVE_BUFFER_ANDROID, clientBuffer, attrs);
+    mEGLImage = egl->fCreateImage(
+        EGL_NO_CONTEXT, LOCAL_EGL_NATIVE_BUFFER_ANDROID, clientBuffer, attrs);
   }
 
   GLenum textureTarget = LOCAL_GL_TEXTURE_EXTERNAL;
@@ -853,6 +852,36 @@ gl::GLContext* AndroidHardwareBufferTextureHost::gl() const {
 }
 
 bool AndroidHardwareBufferTextureHost::Lock() {
+  if (!mAndroidHardwareBuffer) {
+    return false;
+  }
+
+  auto fenceFd = mAndroidHardwareBuffer->GetAndResetAcquireFence();
+  if (fenceFd.IsValid()) {
+    const auto& gle = gl::GLContextEGL::Cast(gl());
+    const auto& egl = gle->mEgl;
+
+    auto rawFD = fenceFd.TakePlatformHandle();
+    const EGLint attribs[] = {LOCAL_EGL_SYNC_NATIVE_FENCE_FD_ANDROID,
+                              rawFD.get(), LOCAL_EGL_NONE};
+
+    EGLSync sync =
+        egl->fCreateSync(LOCAL_EGL_SYNC_NATIVE_FENCE_ANDROID, attribs);
+    if (sync) {
+      // Release fd here, since it is owned by EGLSync
+      Unused << rawFD.release();
+
+      if (egl->IsExtensionSupported(gl::EGLExtension::KHR_wait_sync)) {
+        egl->fWaitSync(sync, 0);
+      } else {
+        egl->fClientWaitSync(sync, 0, LOCAL_EGL_FOREVER);
+      }
+      egl->fDestroySync(sync);
+    } else {
+      gfxCriticalNote << "Failed to create EGLSync from acquire fence fd";
+    }
+  }
+
   return mTextureSource && mTextureSource->IsValid();
 }
 
@@ -895,6 +924,30 @@ void AndroidHardwareBufferTextureHost::DeallocateDeviceData() {
     mTextureSource = nullptr;
   }
   DestroyEGLImage();
+}
+
+void AndroidHardwareBufferTextureHost::SetAcquireFence(
+    mozilla::ipc::FileDescriptor&& aFenceFd) {
+  if (!mAndroidHardwareBuffer) {
+    return;
+  }
+  mAndroidHardwareBuffer->SetAcquireFence(std::move(aFenceFd));
+}
+
+void AndroidHardwareBufferTextureHost::SetReleaseFence(
+    mozilla::ipc::FileDescriptor&& aFenceFd) {
+  if (!mAndroidHardwareBuffer) {
+    return;
+  }
+  mAndroidHardwareBuffer->SetReleaseFence(std::move(aFenceFd));
+}
+
+mozilla::ipc::FileDescriptor
+AndroidHardwareBufferTextureHost::GetAndResetReleaseFence() {
+  if (!mAndroidHardwareBuffer) {
+    return mozilla::ipc::FileDescriptor();
+  }
+  return mAndroidHardwareBuffer->GetAndResetReleaseFence();
 }
 
 void AndroidHardwareBufferTextureHost::CreateRenderTexture(
@@ -995,7 +1048,8 @@ void EGLImageTextureSource::BindTexture(GLenum aTextureUnit,
     const auto& gle = GLContextEGL::Cast(gl);
     const auto& egl = gle->mEgl;
 
-    return egl->HasKHRImageBase() && egl->HasKHRImageTexture2D() &&
+    return egl->HasKHRImageBase() &&
+           egl->IsExtensionSupported(EGLExtension::KHR_gl_texture_2D_image) &&
            gl->IsExtensionSupported(GLContext::OES_EGL_image);
   }();
   MOZ_ASSERT(supportsEglImage, "EGLImage not supported or disabled in runtime");
@@ -1058,13 +1112,15 @@ bool EGLImageTextureHost::Lock() {
   if (!gl || !gl->MakeCurrent()) {
     return false;
   }
+  const auto& gle = GLContextEGL::Cast(gl);
+  const auto& egl = gle->mEgl;
 
-  auto* egl = gl::GLLibraryEGL::Get();
   EGLint status = LOCAL_EGL_CONDITION_SATISFIED;
 
   if (mSync) {
-    MOZ_ASSERT(egl->IsExtensionSupported(GLLibraryEGL::KHR_fence_sync));
-    status = egl->fClientWaitSync(egl->Display(), mSync, 0, LOCAL_EGL_FOREVER);
+    MOZ_ASSERT(egl->IsExtensionSupported(EGLExtension::KHR_fence_sync));
+    // XXX eglWaitSyncKHR() is better api. Bug 1660434 is going to fix it.
+    status = egl->fClientWaitSync(mSync, 0, LOCAL_EGL_FOREVER);
   }
 
   if (status != LOCAL_EGL_CONDITION_SATISFIED) {

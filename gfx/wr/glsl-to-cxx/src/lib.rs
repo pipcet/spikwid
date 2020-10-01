@@ -626,7 +626,7 @@ fn write_read_inputs(state: &mut OutputState, inputs: &[hir::SymRef]) {
 
     write!(state,
         "static void read_interp_inputs(\
-            Self *self, const InterpInputs *init, const InterpInputs *step, float step_width) {{\n");
+            Self *self, const InterpInputs *init, const InterpInputs *step) {{\n");
     for i in inputs {
         let sym = state.hir.sym(*i);
         match &sym.decl {
@@ -640,7 +640,7 @@ fn write_read_inputs(state: &mut OutputState, inputs: &[hir::SymRef]) {
                     );
                     write!(
                         state,
-                        "  self->interp_step.{0} = step->{0} * step_width;\n",
+                        "  self->interp_step.{0} = step->{0} * 4.0f;\n",
                         name
                     );
                 }
@@ -657,7 +657,7 @@ fn write_read_inputs(state: &mut OutputState, inputs: &[hir::SymRef]) {
     if state.use_perspective {
         write!(state,
             "static void read_perspective_inputs(\
-                Self *self, const InterpInputs *init, const InterpInputs *step, float step_width) {{\n");
+                Self *self, const InterpInputs *init, const InterpInputs *step) {{\n");
         if has_varying {
             write!(state, "  Float w = 1.0f / self->gl_FragCoord.w;\n");
         }
@@ -675,7 +675,7 @@ fn write_read_inputs(state: &mut OutputState, inputs: &[hir::SymRef]) {
                         write!(state, "  self->{0} = self->interp_perspective.{0} * w;\n", name);
                         write!(
                             state,
-                            "  self->interp_step.{0} = step->{0} * step_width;\n",
+                            "  self->interp_step.{0} = step->{0} * 4.0f;\n",
                             name
                         );
                     }
@@ -686,9 +686,12 @@ fn write_read_inputs(state: &mut OutputState, inputs: &[hir::SymRef]) {
         write!(state, "}}\n");
     }
 
-    write!(state, "ALWAYS_INLINE void step_interp_inputs() {{\n");
+    write!(state, "ALWAYS_INLINE void step_interp_inputs(int steps = 4) {{\n");
     if (used_fragcoord & 1) != 0 {
-        write!(state, "  step_fragcoord();\n");
+        write!(state, "  step_fragcoord(steps);\n");
+    }
+    if !inputs.is_empty() {
+        write!(state, "  float chunks = steps * 0.25f;\n");
     }
     for i in inputs {
         let sym = state.hir.sym(*i);
@@ -696,7 +699,7 @@ fn write_read_inputs(state: &mut OutputState, inputs: &[hir::SymRef]) {
             hir::SymDecl::Global(_, _, _, run_class) => {
                 if *run_class != hir::RunClass::Scalar {
                     let name = sym.name.as_str();
-                    write!(state, "  {0} += interp_step.{0};\n", name);
+                    write!(state, "  {0} += interp_step.{0} * chunks;\n", name);
                 }
             }
             _ => panic!(),
@@ -705,11 +708,14 @@ fn write_read_inputs(state: &mut OutputState, inputs: &[hir::SymRef]) {
     write!(state, "}}\n");
 
     if state.use_perspective {
-        write!(state, "ALWAYS_INLINE void step_perspective_inputs() {{\n");
+        write!(state, "ALWAYS_INLINE void step_perspective_inputs(int steps = 4) {{\n");
         if (used_fragcoord & 1) != 0 {
-            write!(state, "  step_fragcoord();\n");
+            write!(state, "  step_fragcoord(steps);\n");
         }
-        write!(state, "  step_perspective();\n");
+        write!(state, "  step_perspective(steps);\n");
+        if !inputs.is_empty() {
+            write!(state, "  float chunks = steps * 0.25f;\n");
+        }
         if has_varying {
             write!(state, "  Float w = 1.0f / gl_FragCoord.w;\n");
         }
@@ -719,31 +725,8 @@ fn write_read_inputs(state: &mut OutputState, inputs: &[hir::SymRef]) {
                 hir::SymDecl::Global(_, _, _, run_class) => {
                     if *run_class != hir::RunClass::Scalar {
                         let name = sym.name.as_str();
-                        write!(state, "  interp_perspective.{0} += interp_step.{0};\n", name);
+                        write!(state, "  interp_perspective.{0} += interp_step.{0} * chunks;\n", name);
                         write!(state, "  {0} = w * interp_perspective.{0};\n", name);
-                    }
-                }
-                _ => panic!(),
-            }
-        }
-        write!(state, "}}\n");
-    }
-
-    if state.has_draw_span_rgba8 || state.has_draw_span_r8 {
-        write!(
-            state,
-            "ALWAYS_INLINE void step_interp_inputs(int chunks) {{\n"
-        );
-        if (used_fragcoord & 1) != 0 {
-            write!(state, "  step_fragcoord(chunks);\n");
-        }
-        for i in inputs {
-            let sym = state.hir.sym(*i);
-            match &sym.decl {
-                hir::SymDecl::Global(_, _, _, run_class) => {
-                    if *run_class != hir::RunClass::Scalar {
-                        let name = sym.name.as_str();
-                        write!(state, "  {0} += interp_step.{0} * chunks;\n", name);
                     }
                 }
                 _ => panic!(),
@@ -1896,33 +1879,21 @@ pub fn show_hir_expr_inner(state: &OutputState, expr: &hir::Expr, top_level: boo
                                         &state.hir, &args[0], &args[1], &args[3],
                                     ) {
                                         let base_sym = state.hir.sym(base);
-                                        if symbol_run_class(&base_sym.decl, state.vector_mask)
-                                            == hir::RunClass::Scalar
-                                        {
-                                            let sampler_sym = state.hir.sym(sampler);
-                                            add_used_global(state, &sampler);
-                                            if let hir::SymDecl::Global(..) = &base_sym.decl {
-                                                add_used_global(state, &base);
-                                            }
-                                            if y != 0 {
-                                                write!(
-                                                    state,
-                                                    "{}_{}_fetch[{}+{}*{}->stride]",
-                                                    sampler_sym.name,
-                                                    base_sym.name,
-                                                    x,
-                                                    y,
-                                                    sampler_sym.name
-                                                );
-                                            } else {
-                                                write!(
-                                                    state,
-                                                    "{}_{}_fetch[{}]",
-                                                    sampler_sym.name, base_sym.name, x
-                                                );
-                                            }
-                                            return;
+                                        let sampler_sym = state.hir.sym(sampler);
+                                        add_used_global(state, &sampler);
+                                        if let hir::SymDecl::Global(..) = &base_sym.decl {
+                                            add_used_global(state, &base);
                                         }
+                                        write!(
+                                            state,
+                                            "texelFetchUnchecked({}, {}_{}_fetch, {}, {})",
+                                            sampler_sym.name,
+                                            sampler_sym.name,
+                                            base_sym.name,
+                                            x,
+                                            y,
+                                        );
+                                        return;
                                     }
                                 }
                                 show_sym(state, name)
@@ -2358,15 +2329,12 @@ pub fn show_declaration(state: &mut OutputState, d: &hir::Declaration) {
                 let base = list.head.name;
                 let base_sym = state.hir.sym(base);
                 if let hir::SymDecl::Local(..) = &base_sym.decl {
-                    if symbol_run_class(&base_sym.decl, state.vector_mask) == hir::RunClass::Scalar
+                    let mut texel_fetches = state.texel_fetches.borrow_mut();
+                    while let Some(idx) = texel_fetches.iter().position(|&(_, b, _)| b == base)
                     {
-                        let mut texel_fetches = state.texel_fetches.borrow_mut();
-                        while let Some(idx) = texel_fetches.iter().position(|&(_, b, _)| b == base)
-                        {
-                            let (sampler, _, offsets) = texel_fetches.remove(idx);
-                            let sampler_sym = state.hir.sym(sampler);
-                            define_texel_fetch_ptr(state, &base_sym, &sampler_sym, &offsets);
-                        }
+                        let (sampler, _, offsets) = texel_fetches.remove(idx);
+                        let sampler_sym = state.hir.sym(sampler);
+                        define_texel_fetch_ptr(state, &base_sym, &sampler_sym, &offsets);
                     }
                 }
             }
@@ -2672,32 +2640,32 @@ fn define_texel_fetch_ptr(
     offsets: &hir::TexelFetchOffsets,
 ) {
     show_indent(state);
-    if let hir::SymDecl::Global(_, _, ty, _) = &sampler_sym.decl {
-        match ty.kind {
-            hir::TypeKind::Sampler2D
-            | hir::TypeKind::Sampler2DRect => {
-                write!(
-                    state,
-                    "vec4_scalar* {}_{}_fetch = ",
-                    sampler_sym.name, base_sym.name
-                );
+    let ptr_type = if let hir::SymDecl::Global(_, _, ty, _) = &sampler_sym.decl {
+        if symbol_run_class(&base_sym.decl, state.vector_mask) == hir::RunClass::Scalar {
+            match ty.kind {
+                hir::TypeKind::Sampler2D
+                | hir::TypeKind::Sampler2DRect => "vec4_scalar*",
+                hir::TypeKind::ISampler2D => "ivec4_scalar*",
+                _ => panic!(),
             }
-            hir::TypeKind::ISampler2D => {
-                write!(
-                    state,
-                    "ivec4_scalar* {}_{}_fetch = ",
-                    sampler_sym.name, base_sym.name
-                );
-            }
-            _ => panic!(),
+        } else {
+            "I32"
         }
     } else {
         panic!();
-    }
+    };
     write!(
         state,
-        "texelFetchPtr({}, {}, {}, {}, {}, {});\n",
-        sampler_sym.name, base_sym.name, offsets.min_x, offsets.max_x, offsets.min_y, offsets.max_y
+        "{} {}_{}_fetch = texelFetchPtr({}, {}, {}, {}, {}, {});\n",
+        ptr_type,
+        sampler_sym.name,
+        base_sym.name,
+        sampler_sym.name,
+        base_sym.name,
+        offsets.min_x,
+        offsets.max_x,
+        offsets.min_y,
+        offsets.max_y,
     );
 }
 
@@ -2753,24 +2721,22 @@ pub fn show_function_definition(
         let mut texel_fetches = state.texel_fetches.borrow_mut();
         texel_fetches.clear();
         for ((sampler, base), offsets) in fd.texel_fetches.iter() {
+            add_used_global(state, sampler);
+            let sampler_sym = state.hir.sym(*sampler);
             let base_sym = state.hir.sym(*base);
-            if symbol_run_class(&base_sym.decl, vector_mask) == hir::RunClass::Scalar {
-                add_used_global(state, sampler);
-                let sampler_sym = state.hir.sym(*sampler);
-                match &base_sym.decl {
-                    hir::SymDecl::Global(..) => {
-                        add_used_global(state, base);
-                        define_texel_fetch_ptr(state, &base_sym, &sampler_sym, &offsets);
-                    }
-                    hir::SymDecl::Local(..) => {
-                        if fd.prototype.has_parameter(*base) {
-                            define_texel_fetch_ptr(state, &base_sym, &sampler_sym, &offsets);
-                        } else {
-                            texel_fetches.push((*sampler, *base, offsets.clone()));
-                        }
-                    }
-                    _ => panic!(),
+            match &base_sym.decl {
+                hir::SymDecl::Global(..) => {
+                    add_used_global(state, base);
+                    define_texel_fetch_ptr(state, &base_sym, &sampler_sym, &offsets);
                 }
+                hir::SymDecl::Local(..) => {
+                    if fd.prototype.has_parameter(*base) {
+                        define_texel_fetch_ptr(state, &base_sym, &sampler_sym, &offsets);
+                    } else {
+                        texel_fetches.push((*sampler, *base, offsets.clone()));
+                    }
+                }
+                _ => panic!(),
             }
         }
     }
@@ -3596,9 +3562,8 @@ fn write_abi(state: &mut OutputState) {
             state.write(" self->main();\n");
             state.write(" self->step_interp_inputs();\n");
             state.write("}\n");
-            state.write("static void skip(Self* self, int chunks) {\n");
-            state.write(" self->step_interp_inputs();\n");
-            state.write(" while (--chunks > 0) self->step_interp_inputs();\n");
+            state.write("static void skip(Self* self, int steps) {\n");
+            state.write(" self->step_interp_inputs(steps);\n");
             state.write("}\n");
             if state.use_perspective {
                 state.write("static void run_perspective(Self *self) {\n");
@@ -3608,9 +3573,8 @@ fn write_abi(state: &mut OutputState) {
                 state.write(" self->main();\n");
                 state.write(" self->step_perspective_inputs();\n");
                 state.write("}\n");
-                state.write("static void skip_perspective(Self* self, int chunks) {\n");
-                state.write(" self->step_perspective_inputs();\n");
-                state.write(" while (--chunks > 0) self->step_perspective_inputs();\n");
+                state.write("static void skip_perspective(Self* self, int steps) {\n");
+                state.write(" self->step_perspective_inputs(steps);\n");
                 state.write("}\n");
             }
             if state.has_draw_span_rgba8 {

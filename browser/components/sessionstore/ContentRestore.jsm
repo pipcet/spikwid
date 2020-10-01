@@ -158,6 +158,7 @@ ContentRestoreInternal.prototype = {
 
     this._shistoryInParent = shistoryInParent;
 
+    this._tabDataForFinishRestoreHistory = tabData;
     if (this._shistoryInParent) {
       callbacks.requestRestoreSHistory();
     } else {
@@ -177,8 +178,6 @@ ContentRestoreInternal.prototype = {
 
       webNavigation.sessionHistory.legacySHistory.addSHistoryListener(listener);
       this._historyListener = listener;
-
-      this._tabDataForFinishRestoreHistory = tabData;
       this.finishRestoreHistory(callbacks);
     }
   },
@@ -239,7 +238,6 @@ ContentRestoreInternal.prototype = {
     this._tabData = null;
 
     let webNavigation = this.docShell.QueryInterface(Ci.nsIWebNavigation);
-    let history = webNavigation.sessionHistory.legacySHistory;
 
     // Listen for the tab to finish loading.
     this.restoreTabContentStarted(finishCallback, removeListenerCallback);
@@ -331,6 +329,7 @@ ContentRestoreInternal.prototype = {
         if (this._shistoryInParent) {
           reloadSHistoryCallback();
         } else {
+          let history = webNavigation.sessionHistory.legacySHistory;
           history.reloadCurrentEntry();
         }
       } else {

@@ -2126,9 +2126,11 @@ void MacroAssemblerMIPSShared::wasmLoadImpl(
       isSigned = false;
       break;
     case Scalar::Float64:
+      MOZ_ASSERT(!access.isZeroExtendSimd128Load());
       isFloat = true;
       break;
     case Scalar::Float32:
+      MOZ_ASSERT(!access.isZeroExtendSimd128Load());
       isFloat = true;
       break;
     default:
@@ -3324,6 +3326,16 @@ void MacroAssembler::truncDoubleToInt32(FloatRegister src, Register dest,
   bind(&notZero);
 
   branch32(Assembler::NotEqual, ScratchRegister, Imm32(0), fail);
+}
+
+void MacroAssembler::nearbyIntDouble(RoundingMode mode, FloatRegister src,
+                                     FloatRegister dest) {
+  MOZ_CRASH("not supported on this platform");
+}
+
+void MacroAssembler::nearbyIntFloat32(RoundingMode mode, FloatRegister src,
+                                      FloatRegister dest) {
+  MOZ_CRASH("not supported on this platform");
 }
 
 //}}} check_macroassembler_style

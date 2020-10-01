@@ -197,7 +197,8 @@ class gfxPlatformFontList : public gfxFontInfoLoader {
    */
   virtual void GetFacesInitDataForFamily(
       const mozilla::fontlist::Family* aFamily,
-      nsTArray<mozilla::fontlist::Face::InitData>& aFaces) const {}
+      nsTArray<mozilla::fontlist::Face::InitData>& aFaces,
+      bool aLoadCmaps) const {}
 
   virtual void GetFontList(nsAtom* aLangGroup, const nsACString& aGenericFamily,
                            nsTArray<nsString>& aListOfFonts);
@@ -208,11 +209,12 @@ class gfxPlatformFontList : public gfxFontInfoLoader {
 
   void GetFontFamilyList(nsTArray<RefPtr<gfxFontFamily>>& aFamilyArray);
 
-  gfxFontEntry* SystemFindFontForChar(uint32_t aCh, uint32_t aNextCh,
-                                      Script aRunScript,
-                                      const gfxFontStyle* aStyle,
-                                      FontVisibility* aVisibility,
-                                      FontMatchingStats* aFontMatchingStats);
+  gfxFont* SystemFindFontForChar(uint32_t aCh, uint32_t aNextCh,
+                                 Script aRunScript,
+                                 eFontPresentation aPresentation,
+                                 const gfxFontStyle* aStyle,
+                                 FontVisibility* aVisibility,
+                                 FontMatchingStats* aFontMatchingStats);
 
   // Flags to control optional behaviors in FindAndAddFamilies. The sense
   // of the bit flags have been chosen such that the default parameter of
@@ -278,8 +280,15 @@ class gfxPlatformFontList : public gfxFontInfoLoader {
   void SetupFamilyCharMap(uint32_t aGeneration,
                           const mozilla::fontlist::Pointer& aFamilyPtr);
 
-  [[nodiscard]] bool InitializeFamily(mozilla::fontlist::Family* aFamily);
-  void InitializeFamily(uint32_t aGeneration, uint32_t aFamilyIndex);
+  // Populate aFamily with face records, and if aLoadCmaps is true, also load
+  // their character maps (rather than leaving this to be done lazily).
+  // Note that even when aFamily->IsInitialized() is true, it can make sense
+  // to call InitializeFamily again if passing aLoadCmaps=true, in order to
+  // ensure cmaps are loaded.
+  [[nodiscard]] bool InitializeFamily(mozilla::fontlist::Family* aFamily,
+                                      bool aLoadCmaps = false);
+  void InitializeFamily(uint32_t aGeneration, uint32_t aFamilyIndex,
+                        bool aLoadCmaps);
 
   // name lookup table methods
 
@@ -438,8 +447,12 @@ class gfxPlatformFontList : public gfxFontInfoLoader {
   // default serif/sans-serif choice based on font.default.xxx prefs
   mozilla::StyleGenericFontFamily GetDefaultGeneric(eFontPrefLang aLang);
 
-  // Returns true if the font family whitelist is not empty.
-  bool IsFontFamilyWhitelistActive();
+  // Returns true if the font family whitelist is not empty. In this case we
+  // ignore the "CSS visibility level"; only the given fonts are present in
+  // the browser's font list.
+  bool IsFontFamilyWhitelistActive() const {
+    return mFontFamilyWhitelistActive;
+  };
 
   static void FontWhitelistPrefChanged(const char* aPref, void* aClosure);
 
@@ -476,6 +489,8 @@ class gfxPlatformFontList : public gfxFontInfoLoader {
 
   static bool FamilyInList(const nsACString& aName, const char* aList[],
                            size_t aCount);
+  // Check list is correctly sorted (in debug build only; no-op on release).
+  static void CheckFamilyList(const char* aList[], size_t aCount);
 
   class InitOtherFamilyNamesRunnable : public mozilla::CancelableRunnable {
    public:
@@ -608,17 +623,17 @@ class gfxPlatformFontList : public gfxFontInfoLoader {
   }
 
   // returns default font for a given character, null otherwise
-  gfxFontEntry* CommonFontFallback(uint32_t aCh, uint32_t aNextCh,
-                                   Script aRunScript,
-                                   const gfxFontStyle* aMatchStyle,
-                                   FontFamily& aMatchedFamily);
+  gfxFont* CommonFontFallback(uint32_t aCh, uint32_t aNextCh, Script aRunScript,
+                              eFontPresentation aPresentation,
+                              const gfxFontStyle* aMatchStyle,
+                              FontFamily& aMatchedFamily);
 
   // Search fonts system-wide for a given character, null if not found.
-  gfxFontEntry* GlobalFontFallback(const uint32_t aCh, Script aRunScript,
-                                   const gfxFontStyle* aMatchStyle,
-                                   uint32_t& aCmapCount,
-                                   FontFamily& aMatchedFamily,
-                                   FontMatchingStats* aFontMatchingStats);
+  gfxFont* GlobalFontFallback(uint32_t aCh, uint32_t aNextCh, Script aRunScript,
+                              eFontPresentation aPresentation,
+                              const gfxFontStyle* aMatchStyle,
+                              uint32_t& aCmapCount, FontFamily& aMatchedFamily,
+                              FontMatchingStats* aFontMatchingStats);
 
   // Platform-specific implementation of global font fallback, if any;
   // this may return nullptr in which case the default cmap-based fallback

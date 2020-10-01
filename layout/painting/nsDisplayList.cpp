@@ -38,6 +38,7 @@
 #include "mozilla/ViewportUtils.h"
 #include "nsCSSRendering.h"
 #include "nsCSSRenderingGradients.h"
+#include "nsRefreshDriver.h"
 #include "nsRegion.h"
 #include "nsStyleStructInlines.h"
 #include "nsStyleTransformMatrix.h"
@@ -100,6 +101,7 @@
 #include "nsSliderFrame.h"
 #include "nsFocusManager.h"
 #include "ClientLayerManager.h"
+#include "TextDrawTarget.h"
 #include "mozilla/layers/AnimationHelper.h"
 #include "mozilla/layers/CompositorThread.h"
 #include "mozilla/layers/InputAPZContext.h"
@@ -173,6 +175,34 @@ void UpdateDisplayItemData(nsPaintedDisplayItem* aItem) {
 }
 
 /* static */
+already_AddRefed<ActiveScrolledRoot> ActiveScrolledRoot::CreateASRForFrame(
+    const ActiveScrolledRoot* aParent, nsIScrollableFrame* aScrollableFrame,
+    bool aIsRetained) {
+  nsIFrame* f = do_QueryFrame(aScrollableFrame);
+
+  RefPtr<ActiveScrolledRoot> asr;
+  if (aIsRetained) {
+    asr = f->GetProperty(ActiveScrolledRootCache());
+  }
+
+  if (!asr) {
+    asr = new ActiveScrolledRoot();
+
+    if (aIsRetained) {
+      RefPtr<ActiveScrolledRoot> ref = asr;
+      f->SetProperty(ActiveScrolledRootCache(), ref.forget().take());
+    }
+  }
+  asr->mParent = aParent;
+  asr->mScrollableFrame = aScrollableFrame;
+  asr->mViewId = Nothing();
+  asr->mDepth = aParent ? aParent->mDepth + 1 : 1;
+  asr->mRetained = aIsRetained;
+
+  return asr.forget();
+}
+
+/* static */
 bool ActiveScrolledRoot::IsAncestor(const ActiveScrolledRoot* aAncestor,
                                     const ActiveScrolledRoot* aDescendant) {
   if (!aAncestor) {
@@ -205,9 +235,23 @@ nsCString ActiveScrolledRoot::ToString(
   return std::move(str);
 }
 
+mozilla::layers::ScrollableLayerGuid::ViewID ActiveScrolledRoot::ComputeViewId()
+    const {
+  nsIContent* content = mScrollableFrame->GetScrolledFrame()->GetContent();
+  return nsLayoutUtils::FindOrCreateIDFor(content);
+}
+
+ActiveScrolledRoot::~ActiveScrolledRoot() {
+  if (mScrollableFrame && mRetained) {
+    nsIFrame* f = do_QueryFrame(mScrollableFrame);
+    f->RemoveProperty(ActiveScrolledRootCache());
+  }
+}
+
 static uint64_t AddAnimationsForWebRender(
     nsDisplayItem* aItem, mozilla::layers::RenderRootStateManager* aManager,
-    nsDisplayListBuilder* aDisplayListBuilder) {
+    nsDisplayListBuilder* aDisplayListBuilder,
+    const Maybe<LayoutDevicePoint>& aPosition = Nothing()) {
   EffectSet* effects =
       EffectSet::GetEffectSetForFrame(aItem->Frame(), aItem->GetType());
   if (!effects || effects->IsEmpty()) {
@@ -227,9 +271,9 @@ static uint64_t AddAnimationsForWebRender(
       aManager->CommandBuilder()
           .CreateOrRecycleWebRenderUserData<WebRenderAnimationData>(aItem);
   AnimationInfo& animationInfo = animationData->GetAnimationInfo();
-  animationInfo.AddAnimationsForDisplayItem(aItem->Frame(), aDisplayListBuilder,
-                                            aItem, aItem->GetType(),
-                                            aManager->LayerManager());
+  animationInfo.AddAnimationsForDisplayItem(
+      aItem->Frame(), aDisplayListBuilder, aItem, aItem->GetType(),
+      aManager->LayerManager(), aPosition);
   animationInfo.StartPendingAnimations(
       aManager->LayerManager()->GetAnimationReadyTime());
 
@@ -485,7 +529,7 @@ nsRect nsDisplayListBuilder::OutOfFlowDisplayData::ComputeVisibleRectForFrame(
   *aOutDirtyRect = dirtyRectRelativeToDirtyFrame - aFrame->GetPosition();
   visible -= aFrame->GetPosition();
 
-  nsRect overflowRect = aFrame->GetVisualOverflowRect();
+  nsRect overflowRect = aFrame->InkOverflowRect();
 
   if (aFrame->IsTransformed() &&
       mozilla::EffectCompositor::HasAnimationsForCompositor(
@@ -802,8 +846,14 @@ void nsDisplayListBuilder::SetIsRelativeToLayoutViewport() {
 
 void nsDisplayListBuilder::UpdateShouldBuildAsyncZoomContainer() {
   Document* document = mReferenceFrame->PresContext()->Document();
+  // On desktop, we want to disable zooming in fullscreen mode (bug 1650488).
+  // On mobile (and RDM), we need zooming even in fullscreen mode to respect
+  // mobile viewport sizing (bug 1659761).
+  bool disableZoomingForFullscreen =
+      document->Fullscreen() &&
+      !document->GetPresShell()->UsesMobileViewportSizing();
   mBuildAsyncZoomContainer = !mIsRelativeToLayoutViewport &&
-                             !document->Fullscreen() &&
+                             !disableZoomingForFullscreen &&
                              nsLayoutUtils::AllowZoomingForDocument(document);
 }
 
@@ -3500,11 +3550,9 @@ bool nsDisplayBackgroundImage::AppendBackgroundItemsToTop(
   }
 
   bool drawBackgroundColor = false;
-  // Dummy initialisation to keep Valgrind/Memcheck happy.
-  // See bug 1122375 comment 1.
+  bool drawBackgroundImage = false;
   nscolor color = NS_RGBA(0, 0, 0, 0);
   if (!nsCSSRendering::IsCanvasFrame(aFrame) && bg) {
-    bool drawBackgroundImage;
     color = nsCSSRendering::DetermineBackgroundColor(
         presContext, bgSC, aFrame, drawBackgroundImage, drawBackgroundColor);
   }
@@ -3584,7 +3632,7 @@ bool nsDisplayBackgroundImage::AppendBackgroundItemsToTop(
     return true;
   }
 
-  if (!bg) {
+  if (!bg || !drawBackgroundImage) {
     aList->AppendToTop(&bgItemList);
     return false;
   }
@@ -4679,7 +4727,7 @@ void nsDisplayBackgroundColor::WriteDebugInfo(std::stringstream& aStream) {
 nsRect nsDisplayOutline::GetBounds(nsDisplayListBuilder* aBuilder,
                                    bool* aSnap) const {
   *aSnap = false;
-  return mFrame->GetVisualOverflowRectRelativeToSelf() + ToReferenceFrame();
+  return mFrame->InkOverflowRectRelativeToSelf() + ToReferenceFrame();
 }
 
 void nsDisplayOutline::Paint(nsDisplayListBuilder* aBuilder, gfxContext* aCtx) {
@@ -4832,18 +4880,15 @@ bool nsDisplayCompositorHitTestInfo::CreateWebRenderCommands(
       aBuilder.GetContainingFixedPosSideBits(GetActiveScrolledRoot());
 
   // Insert a transparent rectangle with the hit-test info
-  aBuilder.SetHitTestInfo(scrollId, HitTestFlags(),
-                          sideBits.valueOr(SideBits::eNone));
-
   const LayoutDeviceRect devRect =
       LayoutDeviceRect::FromAppUnits(HitTestArea(), mAppUnitsPerDevPixel);
 
   const wr::LayoutRect rect = wr::ToLayoutRect(devRect);
 
   aBuilder.StartGroup(this);
-  aBuilder.PushHitTest(rect, rect, !BackfaceIsHidden());
+  aBuilder.PushHitTest(rect, rect, !BackfaceIsHidden(), scrollId,
+                       HitTestFlags(), sideBits.valueOr(SideBits::eNone));
   aBuilder.FinishGroup();
-  aBuilder.ClearHitTestInfo();
 
   return true;
 }
@@ -5725,7 +5770,7 @@ already_AddRefed<Layer> nsDisplayOpacity::BuildLayer(
  */
 static bool IsItemTooSmallForActiveLayer(nsIFrame* aFrame) {
   nsIntRect visibleDevPixels =
-      aFrame->GetVisualOverflowRectRelativeToSelf().ToOutsidePixels(
+      aFrame->InkOverflowRectRelativeToSelf().ToOutsidePixels(
           aFrame->PresContext()->AppUnitsPerDevPixel());
   return visibleDevPixels.Size() <
          nsIntSize(StaticPrefs::layout_min_active_layer_size(),
@@ -7092,13 +7137,10 @@ LayerState nsDisplayScrollInfoLayer::GetLayerState(
 UniquePtr<ScrollMetadata> nsDisplayScrollInfoLayer::ComputeScrollMetadata(
     LayerManager* aLayerManager,
     const ContainerLayerParameters& aContainerParameters) {
-  nsRect viewport = mScrollFrame->GetRect() - mScrollFrame->GetPosition() +
-                    mScrollFrame->GetOffsetToCrossDoc(ReferenceFrame());
-
   ScrollMetadata metadata = nsLayoutUtils::ComputeScrollMetadata(
       mScrolledFrame, mScrollFrame, mScrollFrame->GetContent(),
-      ReferenceFrame(), aLayerManager, mScrollParentId, viewport, Nothing(),
-      false, Some(aContainerParameters));
+      ReferenceFrame(), aLayerManager, mScrollParentId, mScrollFrame->GetSize(),
+      Nothing(), false, Some(aContainerParameters));
   metadata.GetMetrics().SetIsScrollInfoLayer(true);
   nsIScrollableFrame* scrollableFrame = mScrollFrame->GetScrollTargetFrame();
   if (scrollableFrame) {
@@ -7130,14 +7172,13 @@ bool nsDisplayScrollInfoLayer::CreateWebRenderCommands(
   ScrollableLayerGuid::ViewID scrollId =
       nsLayoutUtils::FindOrCreateIDFor(mScrollFrame->GetContent());
 
-  aBuilder.SetHitTestInfo(scrollId, mHitInfo, SideBits::eNone);
   const LayoutDeviceRect devRect = LayoutDeviceRect::FromAppUnits(
       mHitArea, mScrollFrame->PresContext()->AppUnitsPerDevPixel());
 
   const wr::LayoutRect rect = wr::ToLayoutRect(devRect);
 
-  aBuilder.PushHitTest(rect, rect, !BackfaceIsHidden());
-  aBuilder.ClearHitTestInfo();
+  aBuilder.PushHitTest(rect, rect, !BackfaceIsHidden(), scrollId, mHitInfo,
+                       SideBits::eNone);
 
   return true;
 }
@@ -7732,7 +7773,7 @@ auto nsDisplayTransform::ShouldPrerenderTransformedContent(
 
   // If the incoming dirty rect already contains the entire overflow area,
   // we are already rendering the entire content.
-  nsRect overflow = aFrame->GetVisualOverflowRectRelativeToSelf();
+  nsRect overflow = aFrame->InkOverflowRectRelativeToSelf();
   // UntransformRect will not touch the output rect (`&untranformedDirtyRect`)
   // in cases of non-invertible transforms, so we set `untransformedRect` to
   // `aDirtyRect` as an initial value for such cases.
@@ -7966,7 +8007,9 @@ bool nsDisplayTransform::CreateWebRenderCommands(
   uint64_t animationsId =
       mIsTransformSeparator
           ? 0
-          : AddAnimationsForWebRender(this, aManager, aDisplayListBuilder);
+          : AddAnimationsForWebRender(
+                this, aManager, aDisplayListBuilder,
+                IsPartialPrerender() ? Some(position) : Nothing());
   wr::WrAnimationProperty prop{
       wr::WrAnimationType::Transform,
       animationsId,
@@ -8160,7 +8203,7 @@ bool nsDisplayTransform::ComputeVisibility(nsDisplayListBuilder* aBuilder,
    * If we can't untransform, take the entire overflow rect */
   nsRect untransformedVisibleRect;
   if (!UntransformPaintRect(aBuilder, &untransformedVisibleRect)) {
-    untransformedVisibleRect = mFrame->GetVisualOverflowRectRelativeToSelf();
+    untransformedVisibleRect = mFrame->InkOverflowRectRelativeToSelf();
   }
 
   bool snap;
@@ -8545,7 +8588,7 @@ bool nsDisplayTransform::UntransformRect(nsDisplayListBuilder* aBuilder,
 }
 
 void nsDisplayTransform::WriteDebugInfo(std::stringstream& aStream) {
-  AppendToString(aStream, GetTransform().GetMatrix());
+  aStream << GetTransform().GetMatrix();
   if (IsTransformSeparator()) {
     aStream << " transform-separator";
   }
@@ -8758,7 +8801,7 @@ nsDisplayText::nsDisplayText(nsDisplayListBuilder* aBuilder,
       mVisIEndEdge(0) {
   MOZ_COUNT_CTOR(nsDisplayText);
   mIsFrameSelected = aIsSelected;
-  mBounds = mFrame->GetVisualOverflowRectRelativeToSelf() + ToReferenceFrame();
+  mBounds = mFrame->InkOverflowRectRelativeToSelf() + ToReferenceFrame();
   // Bug 748228
   mBounds.Inflate(mFrame->PresContext()->AppUnitsPerDevPixel());
 }
@@ -9238,7 +9281,8 @@ bool nsDisplayMasksAndClipPaths::PaintMask(nsDisplayListBuilder* aBuilder,
 
   return maskIsComplete &&
          (imgParams.result == ImgDrawResult::SUCCESS ||
-          imgParams.result == ImgDrawResult::SUCCESS_NOT_COMPLETE);
+          imgParams.result == ImgDrawResult::SUCCESS_NOT_COMPLETE ||
+          imgParams.result == ImgDrawResult::WRONG_SIZE);
 }
 
 LayerState nsDisplayMasksAndClipPaths::GetLayerState(
@@ -9685,7 +9729,7 @@ bool nsDisplayBackdropFilters::CreateWebRenderCommands(
 nsDisplayFilters::nsDisplayFilters(nsDisplayListBuilder* aBuilder,
                                    nsIFrame* aFrame, nsDisplayList* aList)
     : nsDisplayEffectsBase(aBuilder, aFrame, aList),
-      mEffectsBounds(aFrame->GetVisualOverflowRectRelativeToSelf()) {
+      mEffectsBounds(aFrame->InkOverflowRectRelativeToSelf()) {
   MOZ_COUNT_CTOR(nsDisplayFilters);
 }
 

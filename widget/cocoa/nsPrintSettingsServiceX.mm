@@ -53,10 +53,10 @@ nsresult nsPrintSettingsServiceX::SerializeToPrintDataParent(nsIPrintSettings* a
     return NS_ERROR_FAILURE;
   }
 
-  NSString* printerName = [dict objectForKey:NSPrintPrinterName];
-  if (printerName) {
-    nsCocoaUtils::GetStringForNSString(printerName, data->printerName());
-  }
+  // We do NOT get the printer name from the printInfo dictionary, because it
+  // would not correctly represent the Save to PDF pseudo-destination. The base
+  // implementation will have set it directly from our internally-stored name
+  // already.
 
   NSString* faxNumber = [dict objectForKey:NSPrintFaxNumber];
   if (faxNumber) {
@@ -65,7 +65,11 @@ nsresult nsPrintSettingsServiceX::SerializeToPrintDataParent(nsIPrintSettings* a
 
   NSURL* printToFileURL = [dict objectForKey:NSPrintJobSavingURL];
   if (printToFileURL) {
-    nsCocoaUtils::GetStringForNSString([printToFileURL absoluteString], data -> toFileName());
+    if ([printToFileURL isFileURL]) {
+      nsCocoaUtils::GetStringForNSString([printToFileURL path], data -> toFileName());
+    } else {
+      MOZ_ASSERT_UNREACHABLE("expected a file URL");
+    }
   }
 
   NSDate* printTime = [dict objectForKey:NSPrintTime];
@@ -81,7 +85,7 @@ nsresult nsPrintSettingsServiceX::SerializeToPrintDataParent(nsIPrintSettings* a
 
   NSString* paperName = [dict objectForKey:NSPrintPaperName];
   if (paperName) {
-    nsCocoaUtils::GetStringForNSString(paperName, data->paperName());
+    nsCocoaUtils::GetStringForNSString(paperName, data->paperId());
   }
 
   float scalingFactor = [[dict objectForKey:NSPrintScalingFactor] floatValue];
@@ -95,20 +99,14 @@ nsresult nsPrintSettingsServiceX::SerializeToPrintDataParent(nsIPrintSettings* a
   }
   data->orientation() = orientation;
 
-  NSSize paperSize = [printInfo paperSize];
   float widthScale, heightScale;
   settingsX->GetInchesScale(&widthScale, &heightScale);
   if (orientation == nsIPrintSettings::kLandscapeOrientation) {
-    // switch widths and heights
     data->widthScale() = heightScale;
     data->heightScale() = widthScale;
-    data->paperWidth() = paperSize.height / heightScale;
-    data->paperHeight() = paperSize.width / widthScale;
   } else {
     data->widthScale() = widthScale;
     data->heightScale() = heightScale;
-    data->paperWidth() = paperSize.width / widthScale;
-    data->paperHeight() = paperSize.height / heightScale;
   }
 
   data->numCopies() = [[dict objectForKey:NSPrintCopies] intValue];
@@ -175,7 +173,17 @@ nsresult nsPrintSettingsServiceX::_CreatePrintSettings(nsIPrintSettings** _retva
     return rv;
   }
 
-  InitPrintSettingsFromPrefs(*_retval, false, nsIPrintSettings::kInitSaveAll);
+  auto globalPrintSettings =
+      nsIPrintSettings::kInitSaveShrinkToFit | nsIPrintSettings::kInitSaveHeaderLeft |
+      nsIPrintSettings::kInitSaveHeaderCenter | nsIPrintSettings::kInitSaveHeaderRight |
+      nsIPrintSettings::kInitSaveFooterLeft | nsIPrintSettings::kInitSaveFooterCenter |
+      nsIPrintSettings::kInitSaveFooterRight | nsIPrintSettings::kInitSaveEdges |
+      nsIPrintSettings::kInitSaveReversed | nsIPrintSettings::kInitSaveInColor;
+
+  // XXX Why is Mac special? Why are we copying global print settings here?
+  // nsPrintSettingsService::InitPrintSettingsFromPrefs already gets the few
+  // global defaults that we want, doesn't it?
+  InitPrintSettingsFromPrefs(*_retval, false, globalPrintSettings);
   return rv;
 }
 

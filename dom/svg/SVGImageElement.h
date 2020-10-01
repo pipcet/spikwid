@@ -57,15 +57,17 @@ class SVGImageElement : public SVGImageElementBase,
                                 nsIPrincipal* aSubjectPrincipal,
                                 bool aNotify) override;
   bool IsNodeOfType(uint32_t aFlags) const override {
-    // <imag> is not really a SVGGeometryElement, we should
+    // <image> is not really a SVGGeometryElement, we should
     // ignore eSHAPE flag accepted by SVGGeometryElement.
-    return SVGGraphicsElement::IsNodeOfType(aFlags);
+    return !(aFlags & ~eUSE_TARGET);
   }
 
   virtual nsresult BindToTree(BindContext&, nsINode& aParent) override;
   virtual void UnbindFromTree(bool aNullParent) override;
 
   virtual EventStates IntrinsicState() const override;
+
+  virtual void DestroyContent() override;
 
   NS_IMETHOD_(bool) IsAttributeMapped(const nsAtom* name) const override;
 
@@ -80,8 +82,6 @@ class SVGImageElement : public SVGImageElementBase,
   virtual bool HasValidDimensions() const override;
 
   virtual nsresult Clone(dom::NodeInfo*, nsINode** aResult) const override;
-
-  nsresult CopyInnerTo(mozilla::dom::Element* aDest);
 
   void MaybeLoadSVGImage();
 

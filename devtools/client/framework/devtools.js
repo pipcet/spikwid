@@ -52,7 +52,6 @@ const FORBIDDEN_IDS = new Set(["toolbox", ""]);
 const MAX_ORDINAL = 99;
 
 const CONTENT_FISSION_ENABLED_PREF = "devtools.contenttoolbox.fission";
-const FISSION_AUTOSTART_PREF = "fission.autostart";
 
 /**
  * DevTools is a class that represents a set of developer tools, it holds a
@@ -844,7 +843,7 @@ DevTools.prototype = {
    * the fission.autostart preference.
    */
   isFissionContentToolboxEnabled() {
-    if (typeof this._isFissionContentToolboxEnabled === "undefined") {
+    if (typeof this._cachedFissionContentToolboxEnabled === "undefined") {
       const isContentFissionEnabled = Services.prefs.getBoolPref(
         CONTENT_FISSION_ENABLED_PREF,
         false
@@ -853,14 +852,23 @@ DevTools.prototype = {
       // Checking fission.autostart is not used to check if the current target
       // is a Fission tab, but only to check if the user is currently dogfooding
       // Fission.
-      const isFissionEnabled = Services.prefs.getBoolPref(
-        FISSION_AUTOSTART_PREF,
-        false
-      );
-      this._isFissionContentToolboxEnabled =
+      const isFissionEnabled = Services.appinfo.fissionAutostart;
+      this._cachedFissionContentToolboxEnabled =
         isFissionEnabled && isContentFissionEnabled;
     }
-    return this._isFissionContentToolboxEnabled;
+    return this._cachedFissionContentToolboxEnabled;
+  },
+
+  /**
+   * Clear the _cachedFissionContentToolboxEnabled reference so next call to
+   * isFissionContentToolboxEnabled will read the preferences values again instead of
+   * relying on the cached value.
+   * ⚠️ This should only be used in tests as it could lead to different
+   * isFissionContentToolboxEnabled results if the preferences are changed while
+   * toolboxes are open ⚠️.
+   */
+  clearIsFissionContentToolboxEnabledReferenceForTest() {
+    delete this._cachedFissionContentToolboxEnabled;
   },
 };
 

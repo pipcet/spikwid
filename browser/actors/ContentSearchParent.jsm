@@ -116,9 +116,6 @@ let ContentSearch = {
       Services.obs.addObserver(this, "browser-search-service");
       Services.obs.addObserver(this, "shutdown-leaks-before-check");
       Services.prefs.addObserver("browser.search.hiddenOneOffs", this);
-      this._stringBundle = Services.strings.createBundle(
-        "chrome://global/locale/autocomplete.properties"
-      );
 
       this.initialized = true;
     }
@@ -253,6 +250,7 @@ let ContentSearch = {
     }
     win.BrowserSearch.recordSearchInTelemetry(engine, data.healthReportKey, {
       selection: data.selection,
+      url: submission.uri,
     });
   },
 
@@ -304,7 +302,7 @@ let ContentSearch = {
     return result;
   },
 
-  async addFormHistoryEntry(browser, entry = "") {
+  async addFormHistoryEntry(browser, entry = null) {
     let isPrivate = false;
     try {
       // isBrowserPrivate assumes that the passed-in browser has all the normal
@@ -314,7 +312,7 @@ let ContentSearch = {
     } catch (err) {
       return false;
     }
-    if (isPrivate || entry === "") {
+    if (isPrivate || !entry) {
       return false;
     }
     let browserData = this._suggestionDataForBrowser(browser, true);
@@ -322,7 +320,8 @@ let ContentSearch = {
       {
         op: "bump",
         fieldname: browserData.controller.formHistoryParam,
-        value: entry,
+        value: entry.value,
+        source: entry.engineName,
       },
       {
         handleCompletion: () => {},
@@ -529,13 +528,8 @@ let ContentSearch = {
     let engine =
       Services.search[usePrivate ? "defaultPrivateEngine" : "defaultEngine"];
     let favicon = engine.getIconURLBySize(16, 16);
-    let placeholder = this._stringBundle.formatStringFromName(
-      "searchWithEngine",
-      [engine.name]
-    );
     let obj = {
       name: engine.name,
-      placeholder,
       iconData: await this._maybeConvertURIToArrayBuffer(favicon),
       isAppProvided: engine.isAppProvided,
     };

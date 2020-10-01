@@ -7,7 +7,7 @@
 
 use std::fmt;
 
-use euclid::{Transform3D, Rect, Size2D, Point2D, Vector2D};
+use euclid::{Transform3D, Rect, Point2D, Vector2D};
 
 use api::units::*;
 use crate::spatial_tree::{SpatialTree, CoordinateSpaceMapping, SpatialNodeIndex, VisibleFace};
@@ -131,6 +131,23 @@ impl<F, T> SpaceMapper<F, T> where F: fmt::Debug {
         }
     }
 
+    // Attempt to return a rect that is contained in the mapped rect.
+    pub fn map_inner_bounds(&self, rect: &Rect<f32, F>) -> Option<Rect<f32, T>> {
+        match self.kind {
+            CoordinateSpaceMapping::Local => {
+                Some(rect.cast_unit())
+            }
+            CoordinateSpaceMapping::ScaleOffset(ref scale_offset) => {
+                Some(scale_offset.map_rect(rect))
+            }
+            CoordinateSpaceMapping::Transform(..) => {
+                // We could figure out a rect that is contained in the transformed rect but
+                // for now we do the simple thing here and bail out.
+                return None;
+            }
+        }
+    }
+
     pub fn map_vector(&self, v: Vector2D<f32, F>) -> Vector2D<f32, T> {
         match self.kind {
             CoordinateSpaceMapping::Local => {
@@ -228,18 +245,6 @@ impl SpaceSnapper {
                 scale_offset.unmap_point(&snapped_device_vector)
             }
             None => *point,
-        }
-    }
-
-    pub fn snap_size<F>(&self, size: &Size2D<f32, F>) -> Size2D<f32, F> where F: fmt::Debug {
-        debug_assert!(self.current_target_spatial_node_index != SpatialNodeIndex::INVALID);
-        match self.snapping_transform {
-            Some(ref scale_offset) => {
-                let rect = Rect::<f32, F>::new(Point2D::<f32, F>::zero(), *size);
-                let snapped_device_rect : DeviceRect = scale_offset.map_rect(&rect).snap();
-                scale_offset.unmap_rect(&snapped_device_rect).size
-            }
-            None => *size,
         }
     }
 }

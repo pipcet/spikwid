@@ -250,7 +250,10 @@ add_task(
     // Add a form history suggestion and wait for Satchel to notify about it.
     sendEventToContent(browser, {
       type: "AddFormHistoryEntry",
-      data: searchStr + "form",
+      data: {
+        value: searchStr + "form",
+        engineName: engine.name,
+      },
     });
     await new Promise(resolve => {
       Services.obs.addObserver(function onAdd(subj, topic, data) {
@@ -480,12 +483,8 @@ var currentStateObj = async function(isPrivateWindowValue, hiddenEngine = "") {
 
 async function constructEngineObj(engine) {
   let uriFavicon = engine.getIconURLBySize(16, 16);
-  let bundle = Services.strings.createBundle(
-    "chrome://global/locale/autocomplete.properties"
-  );
   return {
     name: engine.name,
-    placeholder: bundle.formatStringFromName("searchWithEngine", [engine.name]),
     iconData: await iconDataFromURI(uriFavicon),
     isAppProvided: engine.isAppProvided,
   };

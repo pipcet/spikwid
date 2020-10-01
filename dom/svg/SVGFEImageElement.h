@@ -7,7 +7,7 @@
 #ifndef DOM_SVG_SVGFEIMAGEELEMENT_H_
 #define DOM_SVG_SVGFEIMAGEELEMENT_H_
 
-#include "SVGFilters.h"
+#include "mozilla/dom/SVGFilters.h"
 #include "SVGAnimatedPreserveAspectRatio.h"
 
 nsresult NS_NewSVGFEImageElement(
@@ -68,6 +68,7 @@ class SVGFEImageElement final : public SVGFEImageElementBase,
   virtual nsresult BindToTree(BindContext&, nsINode& aParent) override;
   virtual void UnbindFromTree(bool aNullParent) override;
   virtual EventStates IntrinsicState() const override;
+  virtual void DestroyContent() override;
 
   void Notify(imgIRequest* aRequest, int32_t aType,
               const nsIntRect* aData) override;

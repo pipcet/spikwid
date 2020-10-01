@@ -14,8 +14,16 @@ ChromeUtils.defineModuleGetter(
 );
 ChromeUtils.defineModuleGetter(
   this,
+  "DownloadUtils",
+  "resource://gre/modules/DownloadUtils.jsm"
+);
+ChromeUtils.defineModuleGetter(
+  this,
   "UpdateListener",
   "resource://gre/modules/UpdateListener.jsm"
+);
+const { XPIInstall } = ChromeUtils.import(
+  "resource://gre/modules/addons/XPIInstall.jsm"
 );
 
 const BIN_SUFFIX = AppConstants.platform == "win" ? ".exe" : "";
@@ -100,6 +108,34 @@ registerCleanupFunction(async () => {
   // backup files are present then this is just a no-op.
   await finishTestRestoreUpdaterBackup();
 });
+
+/**
+ * Overrides the add-ons manager language pack staging with a mocked version.
+ * The returned promise resolves when language pack staging begins returning an
+ * object with the new appVersion and platformVersion and functions to resolve
+ * or reject the install.
+ */
+function mockLangpackInstall() {
+  let original = XPIInstall.stageLangpacksForAppUpdate;
+  registerCleanupFunction(() => {
+    XPIInstall.stageLangpacksForAppUpdate = original;
+  });
+
+  let stagingCall = PromiseUtils.defer();
+  XPIInstall.stageLangpacksForAppUpdate = (appVersion, platformVersion) => {
+    let result = PromiseUtils.defer();
+    stagingCall.resolve({
+      appVersion,
+      platformVersion,
+      resolve: result.resolve,
+      reject: result.reject,
+    });
+
+    return result.promise;
+  };
+
+  return stagingCall.promise;
+}
 
 /**
  * Creates the continue file used to signal that update staging or the mock http
@@ -680,7 +716,7 @@ function runAboutDialogUpdateTest(params, steps) {
   let aboutDialog;
   function processAboutDialogStep(step) {
     if (typeof step == "function") {
-      return step();
+      return step(aboutDialog);
     }
 
     const { panelId, checkActiveUpdate, continueFile, downloadInfo } = step;
@@ -745,12 +781,28 @@ function runAboutDialogUpdateTest(params, steps) {
               logTestInfo(e);
             });
             is(
-              patch.getProperty(resultName),
+              "" + patch.getProperty(resultName),
               data[resultName],
               "The patch property " +
                 resultName +
                 " value should equal " +
                 data[resultName]
+            );
+
+            // Check the download status text.  It should be something like,
+            // "1.4 of 1.4 KB".
+            let expectedText = DownloadUtils.getTransferTotal(
+              data[resultName] == gBadSizeResult ? 0 : patch.size,
+              patch.size
+            );
+            Assert.ok(
+              expectedText,
+              "Sanity check: Expected download status text should be non-empty"
+            );
+            Assert.equal(
+              aboutDialog.downloadStatus.textContent,
+              expectedText,
+              "Download status text should be correct"
             );
           }
         }
@@ -863,7 +915,7 @@ function runAboutPrefsUpdateTest(params, steps) {
   let tab;
   function processAboutPrefsStep(step) {
     if (typeof step == "function") {
-      return step();
+      return step(tab);
     }
 
     const { panelId, checkActiveUpdate, continueFile, downloadInfo } = step;
@@ -939,12 +991,34 @@ function runAboutPrefsUpdateTest(params, steps) {
               logTestInfo(e);
             });
             is(
-              patch.getProperty(resultName),
+              "" + patch.getProperty(resultName),
               data[resultName],
               "The patch property " +
                 resultName +
                 " value should equal " +
                 data[resultName]
+            );
+
+            // Check the download status text.  It should be something like,
+            // "Downloading update — 1.4 of 1.4 KB".  We check only the second
+            // part to make sure that the downloaded size is updated correctly.
+            let actualText = await SpecialPowers.spawn(
+              tab.linkedBrowser,
+              [],
+              () => content.document.getElementById("downloading").textContent
+            );
+            let expectedSuffix = DownloadUtils.getTransferTotal(
+              data[resultName] == gBadSizeResult ? 0 : patch.size,
+              patch.size
+            );
+            Assert.ok(
+              expectedSuffix,
+              "Sanity check: Expected download status text should be non-empty"
+            );
+            Assert.ok(
+              actualText.endsWith(expectedSuffix),
+              "Download status text should end as expected: " +
+                JSON.stringify({ actualText, expectedSuffix })
             );
           }
         }

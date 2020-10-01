@@ -97,23 +97,29 @@
 #  define USE_FRAME_POINTER_STACK_WALK
 #endif
 
+// No stack-walking in baseprofiler on linux, android, bsd.
+// APIs now make it easier to capture backtraces from the Base Profiler, which
+// is currently not supported on these platform, and would lead to a MOZ_CRASH
+// in Registers::SyncPopulate(). `#if 0` added in bug 1658232, follow-up bugs
+// should be referenced in meta bug 1557568.
+#if 0
 // Android builds use the ARM Exception Handling ABI to unwind.
-#if defined(GP_PLAT_arm_linux) || defined(GP_PLAT_arm_android)
-#  define HAVE_NATIVE_UNWIND
-#  define USE_EHABI_STACKWALK
-#  include "EHABIStackWalk.h"
-#endif
+#  if defined(GP_PLAT_arm_linux) || defined(GP_PLAT_arm_android)
+#    define HAVE_NATIVE_UNWIND
+#    define USE_EHABI_STACKWALK
+#    include "EHABIStackWalk.h"
+#  endif
 
 // Linux/BSD builds use LUL, which uses DWARF info to unwind stacks.
-#if defined(GP_PLAT_amd64_linux) || defined(GP_PLAT_x86_linux) ||       \
-    defined(GP_PLAT_amd64_android) || defined(GP_PLAT_x86_android) ||   \
-    defined(GP_PLAT_mips64_linux) || defined(GP_PLAT_arm64_linux) ||    \
-    defined(GP_PLAT_arm64_android) || defined(GP_PLAT_amd64_freebsd) || \
-    defined(GP_PLAT_arm64_freebsd)
-#  define HAVE_NATIVE_UNWIND
-#  define USE_LUL_STACKWALK
-#  include "lul/LulMain.h"
-#  include "lul/platform-linux-lul.h"
+#  if defined(GP_PLAT_amd64_linux) || defined(GP_PLAT_x86_linux) ||       \
+      defined(GP_PLAT_amd64_android) || defined(GP_PLAT_x86_android) ||   \
+      defined(GP_PLAT_mips64_linux) || defined(GP_PLAT_arm64_linux) ||    \
+      defined(GP_PLAT_arm64_android) || defined(GP_PLAT_amd64_freebsd) || \
+      defined(GP_PLAT_arm64_freebsd)
+#    define HAVE_NATIVE_UNWIND
+#    define USE_LUL_STACKWALK
+#    include "lul/LulMain.h"
+#    include "lul/platform-linux-lul.h"
 
 // On linux we use LUL for periodic samples and synchronous samples, but we use
 // FramePointerStackWalk for backtrace samples when MOZ_PROFILING is enabled.
@@ -124,8 +130,9 @@
 // in a shared library without framepointers, however LUL can take a long time
 // to initialize, which is undesirable for consumers of
 // profiler_suspend_and_sample_thread like the Background Hang Reporter.
-#  if defined(MOZ_PROFILING)
-#    define USE_FRAME_POINTER_STACK_WALK
+#    if defined(MOZ_PROFILING)
+#      define USE_FRAME_POINTER_STACK_WALK
+#    endif
 #  endif
 #endif
 
@@ -412,7 +419,7 @@ class CorePS {
   PS_GET_LOCKLESS(int, MainThreadId)
 
   // No PSLockRef is needed for this field because it's immutable.
-  PS_GET_LOCKLESS(TimeStamp, ProcessStartTime)
+  PS_GET_LOCKLESS(const TimeStamp&, ProcessStartTime)
 
   // No PSLockRef is needed for this field because it's thread-safe.
   PS_GET_LOCKLESS(ProfileChunkedBuffer&, CoreBuffer)
@@ -560,6 +567,11 @@ class CorePS {
 };
 
 CorePS* CorePS::sInstance = nullptr;
+
+ProfileChunkedBuffer& profiler_get_core_buffer() {
+  MOZ_ASSERT(CorePS::Exists());
+  return CorePS::CoreBuffer();
+}
 
 class SamplerThread;
 
@@ -1745,12 +1757,12 @@ static void AddSharedLibraryInfoToStream(JSONWriter& aWriter,
   aWriter.IntProperty("start", SafeJSInteger(aLib.GetStart()));
   aWriter.IntProperty("end", SafeJSInteger(aLib.GetEnd()));
   aWriter.IntProperty("offset", SafeJSInteger(aLib.GetOffset()));
-  aWriter.StringProperty("name", aLib.GetModuleName().c_str());
-  aWriter.StringProperty("path", aLib.GetModulePath().c_str());
-  aWriter.StringProperty("debugName", aLib.GetDebugName().c_str());
-  aWriter.StringProperty("debugPath", aLib.GetDebugPath().c_str());
-  aWriter.StringProperty("breakpadId", aLib.GetBreakpadId().c_str());
-  aWriter.StringProperty("arch", aLib.GetArch().c_str());
+  aWriter.StringProperty("name", aLib.GetModuleName());
+  aWriter.StringProperty("path", aLib.GetModulePath());
+  aWriter.StringProperty("debugName", aLib.GetDebugName());
+  aWriter.StringProperty("debugPath", aLib.GetDebugPath());
+  aWriter.StringProperty("breakpadId", aLib.GetBreakpadId());
+  aWriter.StringProperty("arch", aLib.GetArch());
   aWriter.EndObject();
 }
 
@@ -2796,7 +2808,7 @@ UniquePtr<char[]> profiler_get_profile(double aSinceTime, bool aIsShuttingDown,
   if (!WriteProfileToJSONWriter(b, aSinceTime, aIsShuttingDown, aOnlyThreads)) {
     return nullptr;
   }
-  return b.WriteFunc()->CopyData();
+  return b.ChunkedWriteFunc().CopyData();
 }
 
 void profiler_get_profile_json_into_lazily_allocated_buffer(
@@ -2809,7 +2821,7 @@ void profiler_get_profile_json_into_lazily_allocated_buffer(
     return;
   }
 
-  b.WriteFunc()->CopyDataIntoLazilyAllocatedBuffer(aAllocator);
+  b.ChunkedWriteFunc().CopyDataIntoLazilyAllocatedBuffer(aAllocator);
 }
 
 void profiler_get_start_params(int* aCapacity, Maybe<double>* aDuration,
@@ -2920,7 +2932,7 @@ static void locked_profiler_save_profile_to_file(PSLockRef aLock,
       Vector<std::string> exitProfiles = ActivePS::MoveExitProfiles(aLock);
       for (auto& exitProfile : exitProfiles) {
         if (!exitProfile.empty()) {
-          w.Splice(exitProfile.c_str());
+          w.Splice(exitProfile);
         }
       }
       w.EndArray();
@@ -3523,23 +3535,23 @@ double profiler_time() {
   return delta.ToMilliseconds();
 }
 
-static UniqueProfilerBacktrace locked_profiler_get_backtrace(PSLockRef aLock) {
+bool profiler_capture_backtrace_into(ProfileChunkedBuffer& aChunkedBuffer) {
   MOZ_RELEASE_ASSERT(CorePS::Exists());
 
-  if (!ActivePS::Exists(aLock)) {
-    return nullptr;
+  PSAutoLock lock;
+
+  if (!ActivePS::Exists(lock)) {
+    return false;
   }
 
   RegisteredThread* registeredThread =
-      TLSRegisteredThread::RegisteredThread(aLock);
+      TLSRegisteredThread::RegisteredThread(lock);
   if (!registeredThread) {
     MOZ_ASSERT(registeredThread);
-    return nullptr;
+    return false;
   }
 
-  int tid = profiler_current_thread_id();
-
-  TimeStamp now = TimeStamp::NowUnfuzzed();
+  ProfileBuffer profileBuffer(aChunkedBuffer);
 
   Registers regs;
 #if defined(HAVE_NATIVE_UNWIND)
@@ -3548,23 +3560,40 @@ static UniqueProfilerBacktrace locked_profiler_get_backtrace(PSLockRef aLock) {
   regs.Clear();
 #endif
 
-  auto bufferManager = MakeUnique<ProfileChunkedBuffer>(
+  DoSyncSample(lock, *registeredThread, TimeStamp::NowUnfuzzed(), regs,
+               profileBuffer);
+
+  return true;
+}
+
+UniquePtr<ProfileChunkedBuffer> profiler_capture_backtrace() {
+  MOZ_RELEASE_ASSERT(CorePS::Exists());
+
+  // Quick is-active check before allocating a buffer.
+  if (!profiler_is_active()) {
+    return nullptr;
+  }
+
+  auto buffer = MakeUnique<ProfileChunkedBuffer>(
       ProfileChunkedBuffer::ThreadSafety::WithoutMutex,
       MakeUnique<ProfileBufferChunkManagerSingle>(scExpectedMaximumStackSize));
-  auto buffer = MakeUnique<ProfileBuffer>(*bufferManager);
 
-  DoSyncSample(aLock, *registeredThread, now, regs, *buffer);
+  if (!profiler_capture_backtrace_into(*buffer)) {
+    return nullptr;
+  }
 
-  return UniqueProfilerBacktrace(new ProfilerBacktrace(
-      "SyncProfile", tid, std::move(bufferManager), std::move(buffer)));
+  return buffer;
 }
 
 UniqueProfilerBacktrace profiler_get_backtrace() {
-  MOZ_RELEASE_ASSERT(CorePS::Exists());
+  UniquePtr<ProfileChunkedBuffer> buffer = profiler_capture_backtrace();
 
-  PSAutoLock lock;
+  if (!buffer) {
+    return nullptr;
+  }
 
-  return locked_profiler_get_backtrace(lock);
+  return UniqueProfilerBacktrace(new ProfilerBacktrace(
+      "SyncProfile", profiler_current_thread_id(), std::move(buffer)));
 }
 
 void ProfilerBacktraceDestructor::operator()(ProfilerBacktrace* aBacktrace) {
@@ -3619,16 +3648,12 @@ void profiler_add_marker(const char* aMarkerName,
   racy_profiler_add_marker(aMarkerName, aCategoryPair, &aPayload);
 }
 
-void profiler_add_marker(const char* aMarkerName,
-                         ProfilingCategoryPair aCategoryPair) {
-  racy_profiler_add_marker(aMarkerName, aCategoryPair, nullptr);
-}
-
 // This is a simplified version of profiler_add_marker that can be easily passed
 // into the JS engine.
-void profiler_add_js_marker(const char* aMarkerName) {
-  AUTO_PROFILER_STATS(base_add_marker);
-  profiler_add_marker(aMarkerName, ProfilingCategoryPair::JS);
+void profiler_add_js_marker(const char* aMarkerName, const char* aMarkerText) {
+  BASE_PROFILER_MARKER_TEXT(
+      ProfilerString8View::WrapNullTerminatedString(aMarkerName), JS,
+      ProfilerString8View::WrapNullTerminatedString(aMarkerText));
 }
 
 static void maybelocked_profiler_add_marker_for_thread(
@@ -3732,18 +3757,6 @@ void profiler_tracing_marker(const char* aCategoryString,
   profiler_add_marker(aMarkerName, aCategoryPair,
                       TracingMarkerPayload(aCategoryString, aKind,
                                            aInnerWindowID, std::move(aCause)));
-}
-
-void profiler_add_text_marker(const char* aMarkerName, const std::string& aText,
-                              ProfilingCategoryPair aCategoryPair,
-                              const TimeStamp& aStartTime,
-                              const TimeStamp& aEndTime,
-                              const Maybe<uint64_t>& aInnerWindowID,
-                              UniqueProfilerBacktrace aCause) {
-  AUTO_PROFILER_STATS(base_add_marker_with_TextMarkerPayload);
-  profiler_add_marker(aMarkerName, aCategoryPair,
-                      TextMarkerPayload(aText, aStartTime, aEndTime,
-                                        aInnerWindowID, std::move(aCause)));
 }
 
 // NOTE: aCollector's methods will be called while the target thread is paused.

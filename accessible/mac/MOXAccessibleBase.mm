@@ -1,4 +1,6 @@
+/* clang-format off */
 /* -*- Mode: Objective-C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* clang-format on */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -9,31 +11,47 @@
 
 #include "nsObjCExceptions.h"
 #include "xpcAccessibleMacInterface.h"
+#include "mozilla/Logging.h"
 
 using namespace mozilla::a11y;
 
+#undef LOG
+mozilla::LogModule* GetMacAccessibilityLog() {
+  static mozilla::LazyLogModule sLog("MacAccessibility");
+
+  return sLog;
+}
+#define LOG(type, format, ...)                                             \
+  do {                                                                     \
+    if (MOZ_LOG_TEST(GetMacAccessibilityLog(), type)) {                    \
+      NSString* msg = [NSString stringWithFormat:(format), ##__VA_ARGS__]; \
+      MOZ_LOG(GetMacAccessibilityLog(), type, ("%s", [msg UTF8String]));   \
+    }                                                                      \
+  } while (0)
+
 @interface NSObject (MOXAccessible)
 
-// This NSObject conforms to mozAccessible.
+// This NSObject conforms to MOXAccessible.
 // This is needed to we know to mutate the value
 // (get represented view, check isAccessibilityElement)
 // before forwarding it to NSAccessibility.
-- (BOOL)isMozAccessible;
+- (BOOL)isMOXAccessible;
 
 // Same as above, but this checks if the NSObject is an array with
 // mozAccessible conforming objects.
-- (BOOL)hasMozAccessibles;
+- (BOOL)hasMOXAccessibles;
 
 @end
 
 @implementation NSObject (MOXAccessible)
 
-- (BOOL)isMozAccessible {
-  return [self conformsToProtocol:@protocol(mozAccessible)];
+- (BOOL)isMOXAccessible {
+  return [self conformsToProtocol:@protocol(MOXAccessible)];
 }
 
-- (BOOL)hasMozAccessibles {
-  return [self isKindOfClass:[NSArray class]] && [[(NSArray*)self firstObject] isMozAccessible];
+- (BOOL)hasMOXAccessibles {
+  return [self isKindOfClass:[NSArray class]] &&
+         [[(NSArray*)self firstObject] isMOXAccessible];
 }
 
 @end
@@ -98,8 +116,8 @@ using namespace mozilla::a11y;
     // We store a hash table with types as keys, and atttribute lists as values.
     // This lets us cache the atttribute list of each subclass so we only
     // need to gather its MOXAccessible methods once.
-    // XXX: Uncomment when accessibilityAttributeNames is removed from all subclasses.
-    // attributesForEachClass[[self class]] = attributes;
+    // XXX: Uncomment when accessibilityAttributeNames is removed from all
+    // subclasses. attributesForEachClass[[self class]] = attributes;
   }
 
   return attributes;
@@ -133,16 +151,16 @@ using namespace mozilla::a11y;
     }
   }
 
-  if ([value isMozAccessible]) {
-    // If this is a mozAccessible, get its represented view and filter it if
+  if ([value isMOXAccessible]) {
+    // If this is a MOXAccessible, get its represented view or filter it if
     // it should be ignored.
-    value = GetObjectOrRepresentedView(value);
-    return [value isAccessibilityElement] ? value : nil;
+    value = [value isAccessibilityElement] ? GetObjectOrRepresentedView(value)
+                                           : nil;
   }
 
-  if ([value hasMozAccessibles]) {
-    // If this is an array of mozAccessibles, get each element's represented view
-    // and remove it from the returned array if it should be ignored.
+  if ([value hasMOXAccessibles]) {
+    // If this is an array of mozAccessibles, get each element's represented
+    // view and remove it from the returned array if it should be ignored.
     NSUInteger arrSize = [value count];
     NSMutableArray* arr = [[NSMutableArray alloc] initWithCapacity:arrSize];
     for (NSUInteger i = 0; i < arrSize; i++) {
@@ -152,7 +170,18 @@ using namespace mozilla::a11y;
       }
     }
 
-    return arr;
+    value = arr;
+  }
+
+  if (MOZ_LOG_TEST(GetMacAccessibilityLog(), LogLevel::Debug)) {
+    if (MOZ_LOG_TEST(GetMacAccessibilityLog(), LogLevel::Verbose)) {
+      LOG(LogLevel::Verbose, @"[%@] attributeValue %@ => %@", self, attribute,
+          value);
+    } else if (![attribute isEqualToString:@"AXParent"] &&
+               ![attribute isEqualToString:@"AXRole"] &&
+               ![attribute isEqualToString:@"AXChildren"]) {
+      LOG(LogLevel::Debug, @"[%@] attributeValue %@", self, attribute);
+    }
   }
 
   return value;
@@ -170,7 +199,18 @@ using namespace mozilla::a11y;
   NSDictionary* setters = mac::AttributeSetters();
   if (setters[attribute]) {
     SEL selector = NSSelectorFromString(setters[attribute]);
-    return ([self isSelectorSupported:selector]);
+    if ([self isSelectorSupported:selector]) {
+      return YES;
+    }
+  } else if (id textMarkerDelegate = [self moxTextMarkerDelegate]) {
+    // If we have a delegate, check text setters on delegate
+    NSDictionary* textMarkerSetters = mac::TextAttributeSetters();
+    if (textMarkerSetters[attribute]) {
+      SEL selector = NSSelectorFromString(textMarkerSetters[attribute]);
+      if ([textMarkerDelegate respondsToSelector:selector]) {
+        return YES;
+      }
+    }
   }
 
   NS_OBJC_END_TRY_ABORT_BLOCK_RETURN(NO);
@@ -188,6 +228,17 @@ using namespace mozilla::a11y;
     SEL selector = NSSelectorFromString(setters[attribute]);
     if ([self isSelectorSupported:selector]) {
       [self performSelector:selector withObject:value];
+    }
+  } else if (id textMarkerDelegate = [self moxTextMarkerDelegate]) {
+    // If we have a delegate, check if attribute is a text marker
+    // attribute and call the associated selector on the delegate
+    // if so.
+    NSDictionary* textMarkerSetters = mac::TextAttributeSetters();
+    if (textMarkerSetters[attribute]) {
+      SEL selector = NSSelectorFromString(textMarkerSetters[attribute]);
+      if ([textMarkerDelegate respondsToSelector:selector]) {
+        [textMarkerDelegate performSelector:selector withObject:value];
+      }
     }
   }
 
@@ -261,7 +312,8 @@ using namespace mozilla::a11y;
 
   // If we have a delegate add all the text marker attributes.
   if ([self moxTextMarkerDelegate]) {
-    [attributeNames addObjectsFromArray:[mac::ParameterizedTextAttributeGetters() allKeys]];
+    [attributeNames
+        addObjectsFromArray:[mac::ParameterizedTextAttributeGetters() allKeys]];
   }
 
   return attributeNames;
@@ -269,18 +321,21 @@ using namespace mozilla::a11y;
   NS_OBJC_END_TRY_ABORT_BLOCK_NIL;
 }
 
-- (id)accessibilityAttributeValue:(NSString*)attribute forParameter:(id)parameter {
+- (id)accessibilityAttributeValue:(NSString*)attribute
+                     forParameter:(id)parameter {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NIL;
 
   if ([self isExpired]) {
     return nil;
   }
 
+  id value = nil;
+
   NSDictionary* getters = mac::ParameterizedAttributeGetters();
   if (getters[attribute]) {
     SEL selector = NSSelectorFromString(getters[attribute]);
     if ([self isSelectorSupported:selector]) {
-      return [self performSelector:selector withObject:parameter];
+      value = [self performSelector:selector withObject:parameter];
     }
   } else if (id textMarkerDelegate = [self moxTextMarkerDelegate]) {
     // If we have a delegate, check if attribute is a text marker
@@ -290,12 +345,20 @@ using namespace mozilla::a11y;
     if (textMarkerGetters[attribute]) {
       SEL selector = NSSelectorFromString(textMarkerGetters[attribute]);
       if ([textMarkerDelegate respondsToSelector:selector]) {
-        return [textMarkerDelegate performSelector:selector withObject:parameter];
+        value = [textMarkerDelegate performSelector:selector
+                                         withObject:parameter];
       }
     }
   }
 
-  return nil;
+  if (MOZ_LOG_TEST(GetMacAccessibilityLog(), LogLevel::Verbose)) {
+    LOG(LogLevel::Verbose, @"[%@] attributeValueForParam %@(%@) => %@", self,
+        attribute, parameter, value);
+  } else {
+    LOG(LogLevel::Debug, @"[%@] attributeValueForParam %@", self, attribute);
+  }
+
+  return value;
 
   NS_OBJC_END_TRY_ABORT_BLOCK_NIL;
 }
@@ -313,7 +376,20 @@ using namespace mozilla::a11y;
 }
 
 - (BOOL)isAccessibilityElement {
-  return YES;
+  NS_OBJC_BEGIN_TRY_ABORT_BLOCK_RETURN;
+
+  if ([self isExpired]) {
+    return YES;
+  }
+
+  id parent = [self moxParent];
+  if (![parent isMOXAccessible]) {
+    return YES;
+  }
+
+  return ![self moxIgnoreWithParent:parent];
+
+  NS_OBJC_END_TRY_ABORT_BLOCK_RETURN(NO);
 }
 
 - (BOOL)accessibilityNotifiesWhenDestroyed {
@@ -331,8 +407,19 @@ using namespace mozilla::a11y;
 }
 
 - (void)moxPostNotification:(NSString*)notification {
+  [self moxPostNotification:notification withUserInfo:nil];
+}
+
+- (void)moxPostNotification:(NSString*)notification
+               withUserInfo:(NSDictionary*)userInfo {
+  if (MOZ_LOG_TEST(GetMacAccessibilityLog(), LogLevel::Verbose)) {
+    LOG(LogLevel::Verbose, @"[%@] notify %@ %@", self, notification, userInfo);
+  } else {
+    LOG(LogLevel::Debug, @"[%@] notify %@", self, notification);
+  }
+
   // This sends events via nsIObserverService to be consumed by our mochitests.
-  xpcAccessibleMacInterface::FireEvent(self, notification);
+  xpcAccessibleMacEvent::FireEvent(self, notification, userInfo);
 
   if (gfxPlatform::IsHeadless()) {
     // Using a headless toolkit for tests and whatnot, posting accessibility
@@ -345,10 +432,61 @@ using namespace mozilla::a11y;
     return;
   }
 
-  NSAccessibilityPostNotification(GetObjectOrRepresentedView(self), notification);
+  if (userInfo) {
+    NSAccessibilityPostNotificationWithUserInfo(
+        GetObjectOrRepresentedView(self), notification, userInfo);
+  } else {
+    NSAccessibilityPostNotification(GetObjectOrRepresentedView(self),
+                                    notification);
+  }
 }
 
 - (BOOL)moxBlockSelector:(SEL)selector {
+  return NO;
+}
+
+- (NSArray*)moxChildren {
+  return @[];
+}
+
+- (NSArray*)moxUnignoredChildren {
+  NSMutableArray* unignoredChildren = [[NSMutableArray alloc] init];
+  NSArray* allChildren = [self moxChildren];
+
+  for (MOXAccessibleBase* nativeChild in allChildren) {
+    if ([nativeChild moxIgnoreWithParent:self]) {
+      // If this child should be ignored get its unignored children.
+      // This will in turn recurse to any unignored descendants if the
+      // child is ignored.
+      [unignoredChildren
+          addObjectsFromArray:[nativeChild moxUnignoredChildren]];
+    } else {
+      [unignoredChildren addObject:nativeChild];
+    }
+  }
+
+  return unignoredChildren;
+}
+
+- (id<mozAccessible>)moxParent {
+  return nil;
+}
+
+- (id<mozAccessible>)moxUnignoredParent {
+  id nativeParent = [self moxParent];
+
+  if (![nativeParent isAccessibilityElement]) {
+    return [nativeParent moxUnignoredParent];
+  }
+
+  return GetObjectOrRepresentedView(nativeParent);
+}
+
+- (BOOL)moxIgnoreWithParent:(MOXAccessibleBase*)parent {
+  return [parent moxIgnoreChild:self];
+}
+
+- (BOOL)moxIgnoreChild:(MOXAccessibleBase*)child {
   return NO;
 }
 
@@ -373,7 +511,8 @@ using namespace mozilla::a11y;
 #pragma mark - Private
 
 - (BOOL)isSelectorSupported:(SEL)selector {
-  return [self respondsToSelector:selector] && ![self moxBlockSelector:selector];
+  return
+      [self respondsToSelector:selector] && ![self moxBlockSelector:selector];
 }
 
 @end

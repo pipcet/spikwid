@@ -178,7 +178,7 @@ mozilla::PathString mozilla::GetLibraryName(mozilla::pathstr_t aDirectory,
 #  else
   char* temp = PR_GetLibraryName(aDirectory, aLib);
   if (!temp) {
-    return EmptyCString();
+    return ""_ns;
   }
   nsAutoCString libname(temp);
   PR_FreeLibraryName(temp);
@@ -191,7 +191,7 @@ mozilla::PathString mozilla::GetLibraryFilePathname(mozilla::pathstr_t aName,
 #  ifdef XP_WIN
   HMODULE handle = GetModuleHandleW(char16ptr_t(aName));
   if (!handle) {
-    return EmptyString();
+    return u""_ns;
   }
 
   nsAutoString path;
@@ -199,7 +199,7 @@ mozilla::PathString mozilla::GetLibraryFilePathname(mozilla::pathstr_t aName,
   DWORD len = GetModuleFileNameW(handle, char16ptr_t(path.BeginWriting()),
                                  path.Length());
   if (!len) {
-    return EmptyString();
+    return u""_ns;
   }
 
   path.SetLength(len);
@@ -207,7 +207,7 @@ mozilla::PathString mozilla::GetLibraryFilePathname(mozilla::pathstr_t aName,
 #  else
   char* temp = PR_GetLibraryFilePathname(aName, aAddr);
   if (!temp) {
-    return EmptyCString();
+    return ""_ns;
   }
   nsAutoCString path(temp);
   PR_Free(temp);  // PR_GetLibraryFilePathname() uses PR_Malloc().
@@ -243,6 +243,8 @@ static const uint32_t CPU_TYPE = CPU_TYPE_X86_64;
 static const uint32_t CPU_TYPE = CPU_TYPE_POWERPC;
 #  elif defined(__ppc64__)
 static const uint32_t CPU_TYPE = CPU_TYPE_POWERPC64;
+#  elif defined(__aarch64__)
+static const uint32_t CPU_TYPE = CPU_TYPE_ARM64;
 #  else
 #    error Unsupported CPU type
 #  endif

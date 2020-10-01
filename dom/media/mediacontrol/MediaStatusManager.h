@@ -180,12 +180,17 @@ class MediaStatusManager : public IMediaInfoUpdater {
   MediaEventSource<MediaMetadataBase>& MetadataChangedEvent() {
     return mMetadataChangedEvent;
   }
+
   MediaEventSource<PositionState>& PositionChangedEvent() {
     return mPositionStateChangedEvent;
   }
 
+  MediaEventSource<MediaSessionPlaybackState>& PlaybackChangedEvent() {
+    return mPlaybackStateChangedEvent;
+  }
+
   // Return the actual playback state.
-  MediaSessionPlaybackState GetState() const;
+  MediaSessionPlaybackState PlaybackState() const;
 
  protected:
   ~MediaStatusManager() = default;
@@ -223,6 +228,8 @@ class MediaStatusManager : public IMediaInfoUpdater {
   // media event.
   CopyableTArray<MediaSessionAction> GetSupportedActions() const;
 
+  void StoreMediaSessionContextIdOnWindowContext();
+
   // When the amount of playing media changes, we would use this function to
   // update the guessed playback state.
   void SetGuessedPlayState(MediaSessionPlaybackState aState);
@@ -257,6 +264,7 @@ class MediaStatusManager : public IMediaInfoUpdater {
   MediaEventProducer<nsTArray<MediaSessionAction>>
       mSupportedActionsChangedEvent;
   MediaEventProducer<PositionState> mPositionStateChangedEvent;
+  MediaEventProducer<MediaSessionPlaybackState> mPlaybackStateChangedEvent;
   MediaPlaybackStatus mPlaybackStatusDelegate;
 };
 

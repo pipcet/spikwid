@@ -28,11 +28,11 @@ const RESIZE_DEBOUNCE_RATE_MS = 500;
  *
  * @param id (Number)
  *   A unique numeric ID for the window, used for Telemetry Events.
- * @param originatingBrowser (xul:browser)
- *   The <xul:browser> that the Picture-in-Picture video is coming from.
+ * @param wgp (WindowGlobalParent)
+ *   The WindowGlobalParent that is hosting the originating video.
  */
-function setupPlayer(id, originatingBrowser) {
-  Player.init(id, originatingBrowser);
+function setupPlayer(id, wgp) {
+  Player.init(id, wgp);
 }
 
 /**
@@ -99,10 +99,10 @@ let Player = {
    *
    * @param id (Number)
    *   A unique numeric ID for the window, used for Telemetry Events.
-   * @param originatingBrowser (xul:browser)
-   *   The <xul:browser> that the Picture-in-Picture video is coming from.
+   * @param wgp (WindowGlobalParent)
+   *   The WindowGlobalParent that is hosting the originating video.
    */
-  init(id, originatingBrowser) {
+  init(id, wgp) {
     this.id = id;
 
     let holder = document.querySelector(".player-holder");
@@ -110,7 +110,16 @@ let Player = {
     browser.remove();
 
     browser.setAttribute("nodefaultsrc", "true");
-    browser.sameProcessAsFrameLoader = originatingBrowser.frameLoader;
+
+    // Set the specific remoteType and browsingContextGroupID to use for the
+    // initial about:blank load. The combination of these two properties will
+    // ensure that the browser loads in the same process as our originating
+    // browser.
+    browser.setAttribute("remoteType", wgp.domProcess.remoteType);
+    browser.setAttribute(
+      "initialBrowsingContextGroupId",
+      wgp.browsingContext.group.id
+    );
     holder.appendChild(browser);
 
     this.actor = browser.browsingContext.currentWindowGlobal.getActor(
@@ -200,7 +209,6 @@ let Player = {
           event.preventDefault();
         } else if (
           Services.prefs.getBoolPref(KEYBOARD_CONTROLS_ENABLED_PREF, false) &&
-          !this.controls.hasAttribute("keying") &&
           (event.keyCode != KeyEvent.DOM_VK_SPACE || !event.target.id)
         ) {
           // Pressing "space" fires a "keydown" event which can also trigger a control
@@ -331,6 +339,10 @@ let Player = {
   onResize(event) {
     this.resizeDebouncer.disarm();
     this.resizeDebouncer.arm();
+  },
+
+  onCommand(event) {
+    PictureInPicture.closePipWindow({ reason: "player-shortcut" });
   },
 
   get controls() {

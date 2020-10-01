@@ -11,8 +11,6 @@
 #include "mozilla/MacroForEach.h"
 #include "mozilla/MathAlgorithms.h"
 
-#include "vm/Realm.h"
-
 #if defined(JS_CODEGEN_X86)
 #  include "jit/x86/MacroAssembler-x86.h"
 #elif defined(JS_CODEGEN_X64)
@@ -36,10 +34,8 @@
 #include "jit/JitRealm.h"
 #include "jit/TemplateObject.h"
 #include "jit/VMFunctions.h"
+#include "js/ScalarType.h"  // js::Scalar::Type
 #include "util/Memory.h"
-#include "vm/ProxyObject.h"
-#include "vm/Shape.h"
-#include "vm/TypedArrayObject.h"
 
 // [SMDOC] MacroAssembler multi-platform overview
 //
@@ -207,6 +203,9 @@
 #endif
 
 namespace js {
+
+class TypedArrayObject;
+
 namespace jit {
 
 // Defined in JitFrames.h
@@ -1044,6 +1043,16 @@ class MacroAssembler : public MacroAssemblerSpecific {
   void truncDoubleToInt32(FloatRegister src, Register dest,
                           Label* fail) PER_SHARED_ARCH;
 
+  void nearbyIntDouble(RoundingMode mode, FloatRegister src,
+                       FloatRegister dest) PER_SHARED_ARCH;
+  void nearbyIntFloat32(RoundingMode mode, FloatRegister src,
+                        FloatRegister dest) PER_SHARED_ARCH;
+
+  void signInt32(Register input, Register output);
+  void signDouble(FloatRegister input, FloatRegister output);
+  void signDoubleToInt32(FloatRegister input, Register output,
+                         FloatRegister temp, Label* fail);
+
   // Returns a random double in range [0, 1) in |dest|. The |rng| register must
   // hold a pointer to a mozilla::non_crypto::XorShift128PlusRNG.
   void randomDouble(Register rng, FloatRegister dest, Register64 temp0,
@@ -1067,6 +1076,9 @@ class MacroAssembler : public MacroAssemblerSpecific {
   // |base| and |power| are preserved, the other input registers are clobbered.
   void pow32(Register base, Register power, Register dest, Register temp1,
              Register temp2, Label* onOver);
+
+  void sameValueDouble(FloatRegister left, FloatRegister right,
+                       FloatRegister temp, Register dest);
 
   void branchIfNotRegExpPrototypeOptimizable(Register proto, Register temp,
                                              Label* label);
@@ -1104,7 +1116,10 @@ class MacroAssembler : public MacroAssemblerSpecific {
   inline void rshift32Arithmetic(Register shift,
                                  Register srcDest) PER_SHARED_ARCH;
 
-  // These variants may use the stack, but do not have the above constraint.
+  // These variants do not have the above constraint, but may emit some extra
+  // instructions on x86_shared. They also handle shift >= 32 consistently by
+  // masking with 0x1F (either explicitly or relying on the hardware to do
+  // that).
   inline void flexibleLshift32(Register shift,
                                Register srcDest) PER_SHARED_ARCH;
   inline void flexibleRshift32(Register shift,
@@ -1406,6 +1421,11 @@ class MacroAssembler : public MacroAssemblerSpecific {
   // RESOLVED_LENGTH flags are not set.
   void loadFunctionLength(Register func, Register funFlags, Register output,
                           Label* slowPath);
+
+  // Loads the function name. This handles interpreted, native, and bound
+  // functions.
+  void loadFunctionName(Register func, Register output, ImmGCPtr emptyString,
+                        Label* slowPath);
 
   inline void branchFunctionKind(Condition cond,
                                  FunctionFlags::FunctionKind kind, Register fun,
@@ -2364,6 +2384,9 @@ class MacroAssembler : public MacroAssemblerSpecific {
 
   // Load
 
+  inline void loadUnalignedSimd128(const Operand& src, FloatRegister dest)
+      DEFINED_ON(x86_shared);
+
   inline void loadUnalignedSimd128(const Address& src, FloatRegister dest)
       DEFINED_ON(x86_shared);
 
@@ -2396,19 +2419,23 @@ class MacroAssembler : public MacroAssemblerSpecific {
 
   // NaN-propagating minimum
 
-  inline void minFloat32x4(FloatRegister rhs, FloatRegister lhsDest)
+  inline void minFloat32x4(FloatRegister rhs, FloatRegister lhsDest,
+                           FloatRegister temp1, FloatRegister temp2)
       DEFINED_ON(x86_shared);
 
-  inline void minFloat64x2(FloatRegister rhs, FloatRegister lhsDest)
+  inline void minFloat64x2(FloatRegister rhs, FloatRegister lhsDest,
+                           FloatRegister temp1, FloatRegister temp2)
       DEFINED_ON(x86_shared);
 
   // NaN-propagating maximum
 
   inline void maxFloat32x4(FloatRegister rhs, FloatRegister lhsDest,
-                           FloatRegister temp) DEFINED_ON(x86_shared);
+                           FloatRegister temp1, FloatRegister temp2)
+      DEFINED_ON(x86_shared);
 
   inline void maxFloat64x2(FloatRegister rhs, FloatRegister lhsDest,
-                           FloatRegister temp) DEFINED_ON(x86_shared);
+                           FloatRegister temp1, FloatRegister temp2)
+      DEFINED_ON(x86_shared);
 
   // Floating add
 
@@ -2513,6 +2540,54 @@ class MacroAssembler : public MacroAssemblerSpecific {
       DEFINED_ON(x86_shared);
 
   inline void unsignedWidenLowInt32x4(FloatRegister src, FloatRegister dest)
+      DEFINED_ON(x86_shared);
+
+  // Compare-based minimum/maximum (experimental as of August, 2020)
+  // https://github.com/WebAssembly/simd/pull/122
+
+  inline void pseudoMinFloat32x4(FloatRegister rhs, FloatRegister lhsDest)
+      DEFINED_ON(x86_shared);
+
+  inline void pseudoMinFloat64x2(FloatRegister rhs, FloatRegister lhsDest)
+      DEFINED_ON(x86_shared);
+
+  inline void pseudoMaxFloat32x4(FloatRegister rhs, FloatRegister lhsDest)
+      DEFINED_ON(x86_shared);
+
+  inline void pseudoMaxFloat64x2(FloatRegister rhs, FloatRegister lhsDest)
+      DEFINED_ON(x86_shared);
+
+  // Widening/pairwise integer dot product (experimental as of August, 2020)
+  // https://github.com/WebAssembly/simd/pull/127
+
+  inline void widenDotInt16x8(FloatRegister rhs, FloatRegister lhsDest)
+      DEFINED_ON(x86_shared);
+
+  // Floating point rounding (experimental as of August, 2020)
+  // https://github.com/WebAssembly/simd/pull/232
+
+  inline void ceilFloat32x4(FloatRegister src, FloatRegister dest)
+      DEFINED_ON(x86_shared);
+
+  inline void ceilFloat64x2(FloatRegister src, FloatRegister dest)
+      DEFINED_ON(x86_shared);
+
+  inline void floorFloat32x4(FloatRegister src, FloatRegister dest)
+      DEFINED_ON(x86_shared);
+
+  inline void floorFloat64x2(FloatRegister src, FloatRegister dest)
+      DEFINED_ON(x86_shared);
+
+  inline void truncFloat32x4(FloatRegister src, FloatRegister dest)
+      DEFINED_ON(x86_shared);
+
+  inline void truncFloat64x2(FloatRegister src, FloatRegister dest)
+      DEFINED_ON(x86_shared);
+
+  inline void nearestFloat32x4(FloatRegister src, FloatRegister dest)
+      DEFINED_ON(x86_shared);
+
+  inline void nearestFloat64x2(FloatRegister src, FloatRegister dest)
       DEFINED_ON(x86_shared);
 
  public:
@@ -3059,7 +3134,7 @@ class MacroAssembler : public MacroAssemblerSpecific {
   //
   // If arrayType is Scalar::Uint32 then:
   //
-  //   - `output` must be a float register (this is bug 1077305)
+  //   - `output` must be a float register
   //   - if the operation takes one temp register then `temp` must be defined
   //   - if the operation takes two temp registers then `temp2` must be defined.
   //
@@ -3167,6 +3242,8 @@ class MacroAssembler : public MacroAssemblerSpecific {
                         AtomicOp op, Register value, const BaseIndex& mem,
                         Register valueTemp, Register offsetTemp,
                         Register maskTemp) DEFINED_ON(mips_shared);
+
+  void atomicIsLockFreeJS(Register value, Register output);
 
   // ========================================================================
   // Spectre Mitigations.
@@ -3348,6 +3425,9 @@ class MacroAssembler : public MacroAssemblerSpecific {
   void guardSpecificAtom(Register str, JSAtom* atom, Register scratch,
                          const LiveRegisterSet& volatileRegs, Label* fail);
 
+  void guardStringToInt32(Register str, Register output, Register scratch,
+                          LiveRegisterSet volatileRegs, Label* fail);
+
   void loadWasmTlsRegFromFrame(Register dest = WasmTlsReg);
 
   template <typename T>
@@ -3496,6 +3576,9 @@ class MacroAssembler : public MacroAssemblerSpecific {
     bind(&done);
   }
 
+  void boxUint32(Register source, ValueOperand dest, bool allowDouble,
+                 Label* fail);
+
   template <typename T>
   void loadFromTypedArray(Scalar::Type arrayType, const T& src,
                           AnyRegister dest, Register temp, Label* fail);
@@ -3546,6 +3629,29 @@ class MacroAssembler : public MacroAssemblerSpecific {
 
   void debugAssertIsObject(const ValueOperand& val);
   void debugAssertObjHasFixedSlots(Register obj, Register scratch);
+
+  void branchArrayIsNotPacked(Register array, Register temp1, Register temp2,
+                              Label* label);
+
+  void setIsPackedArray(Register obj, Register output, Register temp);
+
+  void packedArrayPop(Register array, ValueOperand output, Register temp1,
+                      Register temp2, Label* fail);
+  void packedArrayShift(Register array, ValueOperand output, Register temp1,
+                        Register temp2, LiveRegisterSet volatileRegs,
+                        Label* fail);
+
+  void loadArgumentsObjectElement(Register obj, Register index,
+                                  ValueOperand output, Register temp,
+                                  Label* fail);
+
+  void loadArgumentsObjectLength(Register obj, Register output, Label* fail);
+
+  void branchArgumentsObjectHasOverridenIterator(Register obj, Register temp,
+                                                 Label* label);
+
+  void typedArrayElementShift(Register obj, Register output);
+  void branchIfClassIsNotTypedArray(Register clasp, Label* notTypedArray);
 
   void branchIfNativeIteratorNotReusable(Register ni, Label* notReusable);
 
@@ -3675,6 +3781,10 @@ class MacroAssembler : public MacroAssemblerSpecific {
     isCallableOrConstructor(false, obj, output, isProxy);
   }
 
+  void setIsCrossRealmArrayConstructor(Register obj, Register output);
+
+  void setIsDefinitelyTypedArrayConstructor(Register obj, Register output);
+
  private:
   void isCallableOrConstructor(bool isCallable, Register obj, Register output,
                                Label* isProxy);
@@ -3781,6 +3891,9 @@ class MacroAssembler : public MacroAssemblerSpecific {
  public:
   void loadJitCodeRaw(Register func, Register dest);
   void loadJitCodeNoArgCheck(Register func, Register dest);
+  void loadBaselineJitCodeRaw(Register func, Register dest,
+                              Label* failure = nullptr);
+  void storeICScriptInJSContext(Register icScript);
 
   void loadBaselineFramePtr(Register framePtr, Register dest);
 

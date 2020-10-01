@@ -6,14 +6,13 @@
 
 // Keep in (case-insensitive) order:
 #include "mozilla/PresShell.h"
+#include "mozilla/SVGObserverUtils.h"
 #include "mozilla/dom/SVGFEImageElement.h"
 #include "mozilla/dom/MutationEventBinding.h"
 #include "nsContainerFrame.h"
 #include "nsIFrame.h"
 #include "nsGkAtoms.h"
 #include "nsLiteralString.h"
-#include "SVGObserverUtils.h"
-#include "SVGFilters.h"
 
 using namespace mozilla::dom;
 
@@ -68,7 +67,7 @@ class SVGFEImageFrame final : public nsIFrame {
       const Maybe<OnNonvisible>& aNonvisibleAction = Nothing()) override;
 
   virtual bool ComputeCustomOverflow(nsOverflowAreas& aOverflowAreas) override {
-    // We don't maintain a visual overflow rect
+    // We don't maintain a ink overflow rect
     return false;
   }
 };

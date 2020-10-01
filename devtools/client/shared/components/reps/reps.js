@@ -3077,7 +3077,6 @@ const {
 
 
 const {
-  getGripType,
   isGrip,
   wrapRender
 } = __webpack_require__(2);
@@ -3338,7 +3337,7 @@ function supportsObject(object, noGrip = false) {
     return false;
   }
 
-  return object.preview && getGripType(object, noGrip) === "Error" || object.class === "DOMException";
+  return object.isError || object.class === "DOMException";
 } // Exports from this module
 
 

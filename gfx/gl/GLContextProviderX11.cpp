@@ -6,6 +6,7 @@
 #include "prenv.h"
 
 #include "GLContextProvider.h"
+#include "mozilla/gfx/gfxVars.h"
 
 namespace mozilla::gl {
 
@@ -15,24 +16,10 @@ using namespace mozilla::widget;
 static class GLContextProviderGLX sGLContextProviderGLX;
 static class GLContextProviderEGL sGLContextProviderEGL;
 
-static bool UseGLX() {
-  static bool useGLX = !PR_GetEnv("MOZ_X11_EGL");
-  return useGLX;
-}
-
-already_AddRefed<GLContext> GLContextProviderX11::CreateWrappingExisting(
-    void* aContext, void* aSurface) {
-  if (UseGLX()) {
-    return sGLContextProviderGLX.CreateWrappingExisting(aContext, aSurface);
-  } else {
-    return sGLContextProviderEGL.CreateWrappingExisting(aContext, aSurface);
-  }
-}
-
 already_AddRefed<GLContext> GLContextProviderX11::CreateForCompositorWidget(
     CompositorWidget* aCompositorWidget, bool aWebRender,
     bool aForceAccelerated) {
-  if (UseGLX()) {
+  if (!gfxVars::UseEGL()) {
     return sGLContextProviderGLX.CreateForCompositorWidget(
         aCompositorWidget, aWebRender, aForceAccelerated);
   } else {
@@ -44,7 +31,7 @@ already_AddRefed<GLContext> GLContextProviderX11::CreateForCompositorWidget(
 /*static*/
 already_AddRefed<GLContext> GLContextProviderX11::CreateHeadless(
     const GLContextCreateDesc& desc, nsACString* const out_failureId) {
-  if (UseGLX()) {
+  if (!gfxVars::UseEGL()) {
     return sGLContextProviderGLX.CreateHeadless(desc, out_failureId);
   } else {
     return sGLContextProviderEGL.CreateHeadless(desc, out_failureId);
@@ -53,7 +40,7 @@ already_AddRefed<GLContext> GLContextProviderX11::CreateHeadless(
 
 /*static*/
 GLContext* GLContextProviderX11::GetGlobalContext() {
-  if (UseGLX()) {
+  if (!gfxVars::UseEGL()) {
     return sGLContextProviderGLX.GetGlobalContext();
   } else {
     return sGLContextProviderEGL.GetGlobalContext();
@@ -62,7 +49,7 @@ GLContext* GLContextProviderX11::GetGlobalContext() {
 
 /*static*/
 void GLContextProviderX11::Shutdown() {
-  if (UseGLX()) {
+  if (!gfxVars::UseEGL()) {
     sGLContextProviderGLX.Shutdown();
   } else {
     sGLContextProviderEGL.Shutdown();

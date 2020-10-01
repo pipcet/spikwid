@@ -105,11 +105,12 @@ nsresult TextEditor::PrepareToInsertContent(
   }
 
   IgnoredErrorResult error;
-  SelectionRefPtr()->Collapse(pointToInsert, error);
+  SelectionRefPtr()->CollapseInLimiter(pointToInsert, error);
   if (NS_WARN_IF(Destroyed())) {
     return NS_ERROR_EDITOR_DESTROYED;
   }
-  NS_WARNING_ASSERTION(!error.Failed(), "Selection::Collapse() failed");
+  NS_WARNING_ASSERTION(!error.Failed(),
+                       "Selection::CollapseInLimiter() failed");
   return error.StealNSResult();
 }
 
@@ -170,7 +171,8 @@ nsresult TextEditor::InsertTextFromTransferable(
       // Sanitize possible carriage returns in the string to be inserted
       nsContentUtils::PlatformToDOMLineBreaks(stuffToPaste);
 
-      AutoPlaceholderBatch treatAsOneTransaction(*this);
+      AutoPlaceholderBatch treatAsOneTransaction(*this,
+                                                 ScrollSelectionIntoView::Yes);
       nsresult rv = InsertTextAsSubAction(stuffToPaste);
       if (NS_FAILED(rv)) {
         NS_WARNING("EditorBase::InsertTextAsSubAction() failed");
@@ -234,7 +236,7 @@ nsresult TextEditor::OnDrop(DragEvent* aDropEvent) {
     return NS_ERROR_NOT_INITIALIZED;
   }
 
-  uint32_t numItems = dataTransfer->MozItemCount();
+  const uint32_t numItems = dataTransfer->MozItemCount();
   if (NS_WARN_IF(!numItems)) {
     return NS_ERROR_FAILURE;  // Nothing to drop?
   }
@@ -322,7 +324,8 @@ nsresult TextEditor::OnDrop(DragEvent* aDropEvent) {
   }
 
   // Combine any deletion and drop insertion into one transaction.
-  AutoPlaceholderBatch treatAsOneTransaction(*this);
+  AutoPlaceholderBatch treatAsOneTransaction(*this,
+                                             ScrollSelectionIntoView::Yes);
 
   // Don't dispatch "selectionchange" event until inserting all contents.
   SelectionBatcher selectionBatcher(SelectionRefPtr());
@@ -543,7 +546,7 @@ nsresult TextEditor::DeleteSelectionByDragAsAction(bool aDispatchInputEvent) {
   // But keep using placeholder transaction for "insertFromDrop" if there is.
   Maybe<AutoPlaceholderBatch> treatAsOneTransaction;
   if (requestedByAnotherEditor) {
-    treatAsOneTransaction.emplace(*this);
+    treatAsOneTransaction.emplace(*this, ScrollSelectionIntoView::Yes);
   }
 
   rv = DeleteSelectionAsSubAction(nsIEditor::eNone, IsTextEditor()
@@ -661,10 +664,7 @@ nsresult TextEditor::PasteTransferableAsAction(nsITransferable* aTransferable,
 }
 
 bool TextEditor::CanPaste(int32_t aClipboardType) const {
-  // Always enable the paste command when inside of a HTML or XHTML document,
-  // but if the document is chrome, let it control it.
-  RefPtr<Document> doc = GetDocument();
-  if (doc && doc->IsHTMLOrXHTML() && !nsContentUtils::IsChromeDoc(doc)) {
+  if (AreClipboardCommandsUnconditionallyEnabled()) {
     return true;
   }
 
@@ -712,7 +712,7 @@ bool TextEditor::CanPasteTransferable(nsITransferable* aTransferable) {
   return NS_SUCCEEDED(rv) && data;
 }
 
-bool TextEditor::IsSafeToInsertData(Document* aSourceDoc) {
+bool TextEditor::IsSafeToInsertData(const Document* aSourceDoc) const {
   // Try to determine whether we should use a sanitizing fragment sink
   bool isSafe = false;
 

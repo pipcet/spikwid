@@ -402,8 +402,7 @@ void BlockReflowInput::AppendPushedFloatChain(nsIFrame* aFloatCont) {
     if (!aFloatCont || aFloatCont->GetParent() != mBlock) {
       break;
     }
-    DebugOnly<nsresult> rv = mBlock->StealFrame(aFloatCont);
-    NS_ASSERTION(NS_SUCCEEDED(rv), "StealFrame should succeed");
+    mBlock->StealFrame(aFloatCont);
   }
 }
 
@@ -614,16 +613,14 @@ static nscoord FloatMarginISize(const ReflowInput& aCBReflowInput,
   AutoMaybeDisableFontInflation an(aFloat);
   WritingMode wm = aFloatOffsetState.GetWritingMode();
 
-  LogicalSize floatSize = aFloat->ComputeSize(
+  auto floatSize = aFloat->ComputeSize(
       aCBReflowInput.mRenderingContext, wm, aCBReflowInput.ComputedSize(wm),
       aFloatAvailableISize, aFloatOffsetState.ComputedLogicalMargin().Size(wm),
-      aFloatOffsetState.ComputedLogicalBorderPadding().Size(wm) -
-          aFloatOffsetState.ComputedLogicalPadding().Size(wm),
-      aFloatOffsetState.ComputedLogicalPadding().Size(wm),
-      nsIFrame::ComputeSizeFlags::eShrinkWrap);
+      aFloatOffsetState.ComputedLogicalBorderPadding().Size(wm),
+      ComputeSizeFlag::ShrinkWrap);
 
   WritingMode cbwm = aCBReflowInput.GetWritingMode();
-  nscoord floatISize = floatSize.ConvertTo(cbwm, wm).ISize(cbwm);
+  nscoord floatISize = floatSize.mLogicalSize.ConvertTo(cbwm, wm).ISize(cbwm);
   if (floatISize == NS_UNCONSTRAINEDSIZE) {
     return NS_UNCONSTRAINEDSIZE;  // reflow is needed to get the true size
   }
@@ -1021,8 +1018,7 @@ void BlockReflowInput::PushFloatPastBreak(nsIFrame* aFloat) {
 
   // Put the float on the pushed floats list, even though it
   // isn't actually a continuation.
-  DebugOnly<nsresult> rv = mBlock->StealFrame(aFloat);
-  NS_ASSERTION(NS_SUCCEEDED(rv), "StealFrame should succeed");
+  mBlock->StealFrame(aFloat);
   AppendPushedFloatChain(aFloat);
   mReflowStatus.SetOverflowIncomplete();
 }

@@ -34,9 +34,9 @@ CONTEXTS_DIR = 'docker-contexts'
 DIGEST_RE = re.compile('^[0-9a-f]{64}$')
 
 IMAGE_BUILDER_IMAGE = (
-    'taskcluster/image_builder:4.0.0'
+    'mozillareleases/image_builder:5.0.0'
     "@sha256:"
-    "866c304445334703b68653e1390816012c9e6bdabfbd1906842b5b229e8ed044"
+    "e510a9a9b80385f71c112d61b2f2053da625aff2b6d430411ac42e424c58953f"
  )
 
 transforms = TransformSequence()
@@ -107,10 +107,12 @@ def fill_template(config, tasks):
                 context_hash = create_context_tar(
                     GECKO, context_path,
                     context_file,
+                    image_name,
                     args)
             else:
                 context_hash = generate_context_hash(
                     GECKO, context_path,
+                    image_name,
                     args)
         else:
             if config.write_artifacts:
@@ -137,7 +139,10 @@ def fill_template(config, tasks):
         taskdesc = {
             'label': 'build-docker-image-' + image_name,
             'description': description,
-            'attributes': {'image_name': image_name},
+            'attributes': {
+                'image_name': image_name,
+                'artifact_prefix': 'public',
+            },
             'expires-after': '28 days' if config.params.is_try() else '1 year',
             'scopes': [],
             'treeherder': {

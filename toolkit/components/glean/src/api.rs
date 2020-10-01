@@ -20,7 +20,7 @@
 // FIXME: Remove when code gets actually used eventually (by initializing Glean).
 #![allow(dead_code)]
 
-use glean::ping_upload::{self, UploadResult};
+use fog::ping_upload::{self, UploadResult};
 use glean_core::{global_glean, setup_glean, Configuration, Glean, Result};
 use once_cell::sync::OnceCell;
 use url::Url;
@@ -46,16 +46,14 @@ fn global_state() -> &'static AppState {
     STATE.get().unwrap()
 }
 
-/// Run a closure with a mutable reference to the locked global Glean object.
-fn with_glean_mut<F, R>(f: F) -> R
+/// Run a closure with a mutable reference to the locked global Glean object,
+/// or return None if the global Glean isn't available.
+fn with_glean_mut<F, R>(f: F) -> Option<R>
 where
     F: Fn(&mut Glean) -> R,
 {
-    let mut glean = global_glean()
-        .expect("Global Glean not initialized")
-        .lock()
-        .unwrap();
-    f(&mut glean)
+    let mut glean = global_glean()?.lock().unwrap();
+    Some(f(&mut glean))
 }
 
 /// Create and initialize a new Glean object.
@@ -138,6 +136,7 @@ pub fn set_upload_enabled(enabled: bool) -> bool {
 
         enabled
     })
+    .expect("Setting upload enabled failed!")
 }
 
 fn register_uploader() {
@@ -152,13 +151,16 @@ fn register_uploader() {
             let localhost_port = static_prefs::pref!("telemetry.fog.test.localhost_port");
             if localhost_port > 0 {
                 server = format!("http://localhost:{}", localhost_port);
+            } else if localhost_port < 0 {
+                log::info!("FOG Ping uploader faking success");
+                return Ok(UploadResult::HttpStatus(200));
             }
             let url = Url::parse(&server)?.join(&ping_request.path)?;
             log::info!("FOG Ping uploader uploading to {:?}", url);
 
             let mut req = Request::post(url).body(ping_request.body.clone());
-            for (&header_key, header_value) in ping_request.headers.iter() {
-                req = req.header(header_key, header_value)?;
+            for (header_key, header_value) in &ping_request.headers {
+                req = req.header(header_key.to_owned(), header_value)?;
             }
 
             log::trace!(
@@ -184,4 +186,23 @@ fn register_uploader() {
             result
         );
     }
+}
+
+pub fn set_debug_view_tag(value: &str) -> bool {
+    with_glean_mut(|glean| glean.set_debug_view_tag(value)).unwrap_or(false)
+}
+
+pub fn submit_ping(ping_name: &str) -> Result<bool> {
+    match with_glean_mut(|glean| glean.submit_ping_by_name(ping_name, None)) {
+        Some(Ok(true)) => {
+            ping_upload::check_for_uploads();
+            Ok(true)
+        }
+        Some(result) => result,
+        None => Ok(false),
+    }
+}
+
+pub fn set_log_pings(value: bool) -> bool {
+    with_glean_mut(|glean| glean.set_log_pings(value)).unwrap_or(false)
 }

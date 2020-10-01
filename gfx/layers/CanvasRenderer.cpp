@@ -8,6 +8,7 @@
 
 #include "BuildConstants.h"
 #include "ipc/KnowsCompositor.h"
+#include "mozilla/gfx/gfxVars.h"
 #include "mozilla/StaticPrefs_webgl.h"
 #include "nsICanvasRenderingContextInternal.h"
 #include "PersistentBufferProvider.h"
@@ -85,13 +86,12 @@ TextureType TexTypeForWebgl(KnowsCompositor* const knowsCompositor) {
   const auto layersBackend = knowsCompositor->GetCompositorBackendType();
 
   switch (layersBackend) {
-    case LayersBackend::LAYERS_NONE:
-      MOZ_CRASH("Unexpected LayersBackend::LAYERS_NONE");
     case LayersBackend::LAYERS_CLIENT:
       MOZ_CRASH("Unexpected LayersBackend::LAYERS_CLIENT");
     case LayersBackend::LAYERS_LAST:
       MOZ_CRASH("Unexpected LayersBackend::LAYERS_LAST");
 
+    case LayersBackend::LAYERS_NONE:
     case LayersBackend::LAYERS_BASIC:
       return TextureType::Unknown;
 
@@ -111,14 +111,15 @@ TextureType TexTypeForWebgl(KnowsCompositor* const knowsCompositor) {
     return TextureType::MacIOSurface;
   }
   if (kIsWayland) {
-    if (gfxPlatform::GetPlatform()->IsWaylandDisplay()) {
-      return TextureType::DMABUF;
-    }
+    return TextureType::DMABUF;
   }
   if (kIsX11) {
     return TextureType::X11;
   }
   if (kIsAndroid) {
+    if (gfx::gfxVars::UseAHardwareBufferSharedSurface()) {
+      return TextureType::AndroidHardwareBuffer;
+    }
     if (StaticPrefs::webgl_enable_surface_texture()) {
       return TextureType::AndroidNativeWindow;
     }

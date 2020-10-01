@@ -10,10 +10,9 @@
 #include "LayersTypes.h"
 #include "Units.h"
 #include "mozilla/EventForwards.h"
-#include "mozilla/layers/APZUtils.h"
 #include "mozilla/layers/MatrixMessage.h"
 #include "mozilla/layers/RepaintRequest.h"
-#include "nsRefreshDriver.h"
+#include "nsRefreshObservers.h"
 
 #include <functional>
 
@@ -149,8 +148,9 @@ class APZCCallbackHelper {
       uint64_t aInputBlockId);
 
   /* Figure out the allowed touch behaviors of each touch point in |aEvent|
-   * and send that information to the provided callback. */
-  static void SendSetAllowedTouchBehaviorNotification(
+   * and send that information to the provided callback. Also returns the
+   * allowed touch behaviors. */
+  static nsTArray<TouchBehaviorFlags> SendSetAllowedTouchBehaviorNotification(
       nsIWidget* aWidget, mozilla::dom::Document* aDocument,
       const WidgetTouchEvent& aEvent, uint64_t aInputBlockId,
       const SetAllowedTouchBehaviorCallback& aCallback);
@@ -179,8 +179,11 @@ class APZCCallbackHelper {
                                                       ScreenPoint aScrollDelta);
 
   /*
-   * Check if the scrollable frame is currently in the middle of an async
-   * or smooth scroll. We want to discard certain scroll input if this is
+   * Check if the scrollable frame is currently in the middle of a main thread
+   * async or smooth scroll, or has already requested some other apz scroll that
+   * hasn't been acknowledged by apz.
+   *
+   * We want to discard apz updates to the main-thread scroll offset if this is
    * true to prevent clobbering higher priority origins.
    */
   static bool IsScrollInProgress(nsIScrollableFrame* aFrame);

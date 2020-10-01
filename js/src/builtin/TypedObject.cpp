@@ -14,6 +14,7 @@
 #include "gc/Marking.h"
 #include "js/CharacterEncoding.h"
 #include "js/PropertySpec.h"
+#include "js/ScalarType.h"  // js::Scalar::Type
 #include "js/Vector.h"
 #include "util/StringBuffer.h"
 #include "vm/GlobalObject.h"
@@ -25,6 +26,7 @@
 #include "vm/StringType.h"
 #include "vm/TypedArrayObject.h"
 
+#include "gc/Marking-inl.h"
 #include "gc/Nursery-inl.h"
 #include "gc/StoreBuffer-inl.h"
 #include "vm/JSAtom-inl.h"
@@ -542,22 +544,12 @@ const JSFunctionSpec ArrayMetaTypeDescr::typeObjectMethods[] = {
      1,
      0,
      "TypeDescrEquivalent"},
-    JS_SELF_HOSTED_FN("build", "TypedObjectArrayTypeBuild", 3, 0),
-    JS_SELF_HOSTED_FN("from", "TypedObjectArrayTypeFrom", 3, 0),
     JS_FS_END};
 
 const JSPropertySpec ArrayMetaTypeDescr::typedObjectProperties[] = {JS_PS_END};
 
 const JSFunctionSpec ArrayMetaTypeDescr::typedObjectMethods[] = {
     {JSFunctionSpec::Name("forEach"), {nullptr, nullptr}, 1, 0, "ArrayForEach"},
-    {JSFunctionSpec::Name("redimension"),
-     {nullptr, nullptr},
-     1,
-     0,
-     "TypedObjectArrayRedimension"},
-    JS_SELF_HOSTED_FN("map", "TypedObjectArrayMap", 2, 0),
-    JS_SELF_HOSTED_FN("reduce", "TypedObjectArrayReduce", 2, 0),
-    JS_SELF_HOSTED_FN("filter", "TypedObjectArrayFilter", 1, 0),
     JS_FS_END};
 
 bool js::CreateUserSizeAndAlignmentProperties(JSContext* cx,
@@ -1729,8 +1721,9 @@ void OutlineTypedObject::obj_trace(JSTracer* trc, JSObject* object) {
 
   // Update the data pointer if the owner moved and the owner's data is
   // inline with it.
-  if (owner != oldOwner && (owner->is<InlineTypedObject>() ||
-                            owner->as<ArrayBufferObject>().hasInlineData())) {
+  if (owner != oldOwner &&
+      (IsInlineTypedObjectClass(gc::MaybeForwardedObjectClass(owner)) ||
+       gc::MaybeForwardedObjectAs<ArrayBufferObject>(owner).hasInlineData())) {
     newData += reinterpret_cast<uint8_t*>(owner) -
                reinterpret_cast<uint8_t*>(oldOwner);
     typedObj.setData(newData);
@@ -1743,6 +1736,11 @@ void OutlineTypedObject::obj_trace(JSTracer* trc, JSObject* object) {
   }
 
   if (!descr.opaque()) {
+    return;
+  }
+
+  if (descr.hasTraceList()) {
+    gc::VisitTraceList(trc, object, descr.traceList(), newData);
     return;
   }
 
@@ -2201,7 +2199,14 @@ void InlineTypedObject::obj_trace(JSTracer* trc, JSObject* object) {
     return;
   }
 
-  typedObj.typeDescr().traceInstance(trc, typedObj.inlineTypedMem());
+  TypeDescr& descr = typedObj.typeDescr();
+  if (descr.hasTraceList()) {
+    gc::VisitTraceList(trc, object, typedObj.typeDescr().traceList(),
+                       typedObj.inlineTypedMem());
+    return;
+  }
+
+  descr.traceInstance(trc, typedObj.inlineTypedMem());
 }
 
 /* static */
@@ -2332,7 +2337,7 @@ bool TypedObject::construct(JSContext* cx, unsigned int argc, Value* vp) {
   return false;
 }
 
-/* static */ JS::Result<TypedObject*, JS::OOM&> TypedObject::create(
+/* static */ JS::Result<TypedObject*, JS::OOM> TypedObject::create(
     JSContext* cx, js::gc::AllocKind kind, js::gc::InitialHeap heap,
     js::HandleShape shape, js::HandleObjectGroup group) {
   debugCheckNewObject(group, shape, kind, heap);
@@ -2424,16 +2429,6 @@ bool js::TypeDescrIsSimpleType(JSContext*, unsigned argc, Value* vp) {
   MOZ_ASSERT(args[0].isObject());
   MOZ_ASSERT(args[0].toObject().is<js::TypeDescr>());
   args.rval().setBoolean(args[0].toObject().is<js::SimpleTypeDescr>());
-  return true;
-}
-
-bool js::TypeDescrIsArrayType(JSContext*, unsigned argc, Value* vp) {
-  CallArgs args = CallArgsFromVp(argc, vp);
-  MOZ_ASSERT(args.length() == 1);
-  MOZ_ASSERT(args[0].isObject());
-  MOZ_ASSERT(args[0].toObject().is<js::TypeDescr>());
-  JSObject& obj = args[0].toObject();
-  args.rval().setBoolean(obj.is<js::ArrayTypeDescr>());
   return true;
 }
 

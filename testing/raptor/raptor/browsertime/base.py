@@ -12,6 +12,7 @@ import os
 import json
 import re
 import six
+import sys
 
 import mozprocess
 from benchmark import Benchmark
@@ -55,6 +56,9 @@ class Browsertime(Perftest):
         )
         LOG.info("cwd: '{}'".format(os.getcwd()))
         self.config["browsertime"] = True
+
+        # Setup browsertime-specific settings for result parsing
+        self.results_handler.browsertime_visualmetrics = self.browsertime_visualmetrics
 
         # For debugging.
         for k in (
@@ -163,15 +167,28 @@ class Browsertime(Perftest):
         super(Browsertime, self).clean_up()
 
     def _compose_cmd(self, test, timeout):
-        browsertime_script = [
-            os.path.join(
-                os.path.dirname(__file__),
-                "..",
-                "..",
-                "browsertime",
-                "browsertime_pageload.js",
-            )
-        ]
+        if test.get("type", "") == "scenario":
+            browsertime_script = [
+                os.path.join(
+                    os.path.dirname(__file__),
+                    "..",
+                    "..",
+                    "browsertime",
+                    "browsertime_scenario.js",
+                ),
+                "--browsertime.scenario_time", test.get("scenario_time", 60000),
+                "--browsertime.background_app", test.get("background_app", "false")
+            ]
+        else:
+            browsertime_script = [
+                os.path.join(
+                    os.path.dirname(__file__),
+                    "..",
+                    "..",
+                    "browsertime",
+                    "browsertime_pageload.js",
+                )
+            ]
 
         btime_args = self.browsertime_args
         if self.config["app"] in ("chrome", "chromium", 'chrome-m'):
@@ -202,7 +219,6 @@ class Browsertime(Perftest):
             "--firefox.disableBrowsertimeExtension", "true",
             "--pageCompleteCheckStartWait", "5000",
             "--pageCompleteCheckPollTimeout", "1000",
-            "--visualMetrics", "false",
             # url load timeout (milliseconds)
             "--timeouts.pageLoad", str(timeout),
             # running browser scripts timeout (milliseconds)
@@ -218,7 +234,8 @@ class Browsertime(Perftest):
             # recorder.  In the future we'd like to be able to selectively use Android's `adb
             # screenrecord` as well.  (There's no harm setting Firefox options for other browsers.)
             browsertime_options.extend([
-                "--video", "true"
+                "--video", "true",
+                "--visualMetrics", "true" if self.browsertime_visualmetrics else "false",
             ])
 
             if self.browsertime_no_ffwindowrecorder:
@@ -234,6 +251,7 @@ class Browsertime(Perftest):
         else:
             browsertime_options.extend([
                 "--video", "false",
+                "--visualMetrics", "false"
             ])
 
         # have browsertime use our newly-created conditioned-profile path
@@ -292,12 +310,14 @@ class Browsertime(Perftest):
         return bt_timeout
 
     def run_test(self, test, timeout):
+        global BROWSERTIME_PAGELOAD_OUTPUT_TIMEOUT
+
         self.run_test_setup(test)
         # timeout is a single page-load timeout value (ms) from the test INI
         # this will be used for btime --timeouts.pageLoad
         cmd = self._compose_cmd(test, timeout)
 
-        if test.get("type") == "benchmark":
+        if test.get("type", "") == "benchmark":
             cmd.extend(
                 [
                     "--script",
@@ -310,6 +330,11 @@ class Browsertime(Perftest):
                     ),
                 ]
             )
+
+        if test.get("type", "") == "scenario":
+            # Change the timeout for scenarios since they
+            # don't output much for a long period of time
+            BROWSERTIME_PAGELOAD_OUTPUT_TIMEOUT = timeout
 
         LOG.info("timeout (s): {}".format(timeout))
         LOG.info("browsertime cwd: {}".format(os.getcwd()))
@@ -360,6 +385,29 @@ class Browsertime(Perftest):
                     LOG.warning(msg)
                 else:
                     LOG.info(msg)
+
+            if self.browsertime_visualmetrics and self.run_local:
+                # Check if visual metrics is installed correctly before running the test
+                self.vismet_failed = False
+
+                def _vismet_line_handler(line):
+                    LOG.info(line)
+                    if "FAIL" in line:
+                        self.vismet_failed = True
+
+                proc = self.process_handler(
+                    [sys.executable, self.browsertime_vismet_script, "--check"],
+                    processOutputLine=_vismet_line_handler,
+                    env=env
+                )
+                proc.run()
+                proc.wait()
+
+                if self.vismet_failed:
+                    raise Exception(
+                        "Browsertime visual metrics dependencies were not "
+                        "installed correctly."
+                    )
 
             proc = self.process_handler(cmd, processOutputLine=_line_handler, env=env)
             proc.run(

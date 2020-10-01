@@ -926,7 +926,9 @@ class nsContextMenu {
       if (
         !loginFillInfo ||
         !loginFillInfo.passwordField.found ||
-        documentURI.schemeIs("about")
+        documentURI.schemeIs("about") ||
+        this.browser.contentPrincipal.spec ==
+          "resource://pdf.js/web/viewer.html"
       ) {
         // Both generation and fill will default to disabled.
         return;
@@ -1339,6 +1341,7 @@ class nsContextMenu {
 
     openUILink(this.bgImageURL, e, {
       referrerInfo: this.contentData.referrerInfo,
+      forceAllowDataURI: true,
       triggeringPrincipal: this.principal,
       csp: this.csp,
     });
@@ -1882,7 +1885,7 @@ class nsContextMenu {
   }
 
   printFrame() {
-    PrintUtils.printWindow(this.actor.browsingContext);
+    PrintUtils.startPrintWindow(this.actor.browsingContext);
   }
 
   switchPageDirection() {
@@ -1927,6 +1930,15 @@ class nsContextMenu {
 
   // Formats the 'Search <engine> for "<selection or link text>"' context menu.
   showAndFormatSearchContextItem() {
+    let menuItem = document.getElementById("context-searchselect");
+    let menuItemPrivate = document.getElementById(
+      "context-searchselect-private"
+    );
+    if (!Services.search.isInitialized) {
+      menuItem.hidden = true;
+      menuItemPrivate.hidden = true;
+      return;
+    }
     const docIsPrivate = PrivateBrowsingUtils.isBrowserPrivate(this.browser);
     const privatePref = "browser.search.separatePrivateDefault.ui.enabled";
     let showSearchSelect =
@@ -1940,10 +1952,6 @@ class nsContextMenu {
       !docIsPrivate &&
       Services.prefs.getBoolPref(privatePref);
 
-    let menuItem = document.getElementById("context-searchselect");
-    let menuItemPrivate = document.getElementById(
-      "context-searchselect-private"
-    );
     menuItem.hidden = !showSearchSelect;
     menuItemPrivate.hidden = !showPrivateSearchSelect;
     // If we're not showing the menu items, we can skip formatting the labels.

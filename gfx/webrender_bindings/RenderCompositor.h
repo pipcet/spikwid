@@ -7,6 +7,7 @@
 #ifndef MOZILLA_GFX_RENDERCOMPOSITOR_H
 #define MOZILLA_GFX_RENDERCOMPOSITOR_H
 
+#include "mozilla/ipc/FileDescriptor.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/webrender/WebRenderTypes.h"
@@ -19,6 +20,7 @@ class GLContext;
 }
 
 namespace layers {
+class CompositionRecorder;
 class SyncObjectHost;
 }  // namespace layers
 
@@ -31,7 +33,7 @@ namespace wr {
 class RenderCompositor {
  public:
   static UniquePtr<RenderCompositor> Create(
-      RefPtr<widget::CompositorWidget>&& aWidget);
+      RefPtr<widget::CompositorWidget>&& aWidget, nsACString& aError);
 
   RenderCompositor(RefPtr<widget::CompositorWidget>&& aWidget);
   virtual ~RenderCompositor();
@@ -105,11 +107,16 @@ class RenderCompositor {
   virtual void CreateSurface(wr::NativeSurfaceId aId,
                              wr::DeviceIntPoint aVirtualOffset,
                              wr::DeviceIntSize aTileSize, bool aIsOpaque) {}
+  virtual void CreateExternalSurface(wr::NativeSurfaceId aId, bool aIsOpaque) {}
   virtual void DestroySurface(NativeSurfaceId aId) {}
   virtual void CreateTile(wr::NativeSurfaceId, int32_t aX, int32_t aY) {}
   virtual void DestroyTile(wr::NativeSurfaceId, int32_t aX, int32_t aY) {}
-  virtual void AddSurface(wr::NativeSurfaceId aId, wr::DeviceIntPoint aPosition,
-                          wr::DeviceIntRect aClipRect) {}
+  virtual void AttachExternalImage(wr::NativeSurfaceId aId,
+                                   wr::ExternalImageId aExternalImage) {}
+  virtual void AddSurface(wr::NativeSurfaceId aId,
+                          const wr::CompositorSurfaceTransform& aTransform,
+                          wr::DeviceIntRect aClipRect,
+                          wr::ImageRendering aImageRendering) {}
   virtual void EnableNativeCompositor(bool aEnable) {}
   virtual void DeInit() {}
   virtual CompositorCapabilities GetCompositorCapabilities() = 0;
@@ -127,8 +134,24 @@ class RenderCompositor {
   // result. It could happen when WebRender renders to multiple overlay layers.
   virtual bool MaybeReadback(const gfx::IntSize& aReadbackSize,
                              const wr::ImageFormat& aReadbackFormat,
-                             const Range<uint8_t>& aReadbackBuffer) {
+                             const Range<uint8_t>& aReadbackBuffer,
+                             bool* aNeedsYFlip) {
     return false;
+  }
+  virtual bool MaybeRecordFrame(layers::CompositionRecorder& aRecorder) {
+    return false;
+  }
+  virtual bool MaybeGrabScreenshot(const gfx::IntSize& aWindowSize) {
+    return false;
+  }
+  virtual bool MaybeProcessScreenshotQueue() { return false; }
+
+  // Returns FileDescriptor of release fence.
+  // Release fence is a fence that is used for waiting until usage/composite of
+  // AHardwareBuffer is ended. The fence is delivered to client side via
+  // ImageBridge. It is used only on android.
+  virtual ipc::FileDescriptor GetAndResetReleaseFence() {
+    return ipc::FileDescriptor();
   }
 
  protected:

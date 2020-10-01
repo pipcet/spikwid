@@ -17,8 +17,7 @@
 #include "nsWrapperCache.h"
 
 class nsIGlobalObject;
-class nsQueryActorChild;
-class nsQueryActorParent;
+class nsQueryJSActor;
 
 namespace mozilla {
 namespace dom {
@@ -44,6 +43,7 @@ class JSActor : public nsISupports, public nsWrapperCache {
   explicit JSActor(nsISupports* aGlobal = nullptr);
 
   const nsCString& Name() const { return mName; }
+  void GetName(nsCString& aName) { aName = Name(); }
 
   void SendAsyncMessage(JSContext* aCx, const nsAString& aMessageName,
                         JS::Handle<JS::Value> aObj, ErrorResult& aRv);
@@ -92,18 +92,24 @@ class JSActor : public nsISupports, public nsWrapperCache {
 
  private:
   friend class JSActorManager;
-  friend class ::nsQueryActorChild;   // for QueryInterfaceActor
-  friend class ::nsQueryActorParent;  // for QueryInterfaceActor
+  friend class ::nsQueryJSActor;  // for QueryInterfaceActor
 
   nsresult QueryInterfaceActor(const nsIID& aIID, void** aPtr);
 
   // Called by JSActorManager when they receive raw message data destined for
   // this actor.
-  void ReceiveMessageOrQuery(JSContext* aCx,
-                             const JSActorMessageMeta& aMetadata,
-                             JS::Handle<JS::Value> aData, ErrorResult& aRv);
+  void ReceiveMessage(JSContext* aCx, const JSActorMessageMeta& aMetadata,
+                      JS::Handle<JS::Value> aData, ErrorResult& aRv);
+  void ReceiveQuery(JSContext* aCx, const JSActorMessageMeta& aMetadata,
+                    JS::Handle<JS::Value> aData, ErrorResult& aRv);
   void ReceiveQueryReply(JSContext* aCx, const JSActorMessageMeta& aMetadata,
                          JS::Handle<JS::Value> aData, ErrorResult& aRv);
+
+  // Call the actual `ReceiveMessage` method, and get the return value.
+  void CallReceiveMessage(JSContext* aCx, const JSActorMessageMeta& aMetadata,
+                          JS::Handle<JS::Value> aData,
+                          JS::MutableHandle<JS::Value> aRetVal,
+                          ErrorResult& aRv);
 
   // Helper object used while processing query messages to send the final reply
   // message.

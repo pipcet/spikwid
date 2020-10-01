@@ -17,8 +17,10 @@
 
 #include "mozilla/net/DNS.h"
 #include "mozilla/net/NeckoChannelParams.h"
+#include "nsCharSeparatedTokenizer.h"
 #include "nsComponentManagerUtils.h"
 #include "nsICryptoHash.h"
+#include "nsIDNSByTypeRecord.h"
 #include "nsIProtocolProxyService.h"
 #include "nsNetCID.h"
 #include "nsProxyInfo.h"
@@ -111,6 +113,7 @@ void nsHttpConnectionInfo::Init(const nsACString& host, int32_t port,
   mTRRMode = nsIRequest::TRR_DEFAULT_MODE;
   mIPv4Disabled = false;
   mIPv6Disabled = false;
+  mHasIPHintAddress = false;
 
   mUsingHttpsProxy = (proxyInfo && proxyInfo->IsHTTPS());
   mUsingHttpProxy = mUsingHttpsProxy || (proxyInfo && proxyInfo->IsHTTP());
@@ -335,7 +338,60 @@ already_AddRefed<nsHttpConnectionInfo> nsHttpConnectionInfo::Clone() const {
   clone->SetTRRMode(GetTRRMode());
   clone->SetIPv4Disabled(GetIPv4Disabled());
   clone->SetIPv6Disabled(GetIPv6Disabled());
+  clone->SetHasIPHintAddress(HasIPHintAddress());
   MOZ_ASSERT(clone->Equals(this));
+
+  return clone.forget();
+}
+
+already_AddRefed<nsHttpConnectionInfo>
+nsHttpConnectionInfo::CloneAndAdoptHTTPSSVCRecord(
+    nsISVCBRecord* aRecord) const {
+  MOZ_ASSERT(aRecord);
+
+  // Get the domain name of this HTTPS RR. This name will be assigned to
+  // mRoutedHost in the new connection info.
+  nsAutoCString name;
+  aRecord->GetName(name);
+
+  // Try to get the port and Alpn. If this record has SvcParamKeyPort defined,
+  // the new port will be used as mRoutedPort.
+  Maybe<uint16_t> port = aRecord->GetPort();
+  Maybe<nsCString> alpn = aRecord->GetAlpn();
+
+  LOG(("HTTPSSVC: use new routed host (%s) and new npnToken (%s)", name.get(),
+       alpn ? alpn->get() : "None"));
+
+  RefPtr<nsHttpConnectionInfo> clone;
+  if (name.IsEmpty()) {
+    clone = new nsHttpConnectionInfo(
+        mOrigin, mOriginPort, alpn ? *alpn : ""_ns, mUsername, mTopWindowOrigin,
+        mProxyInfo, mOriginAttributes, mEndToEndSSL, mIsolated, mIsHttp3);
+  } else {
+    MOZ_ASSERT(mEndToEndSSL);
+    clone = new nsHttpConnectionInfo(
+        mOrigin, mOriginPort, alpn ? *alpn : ""_ns, mUsername, mTopWindowOrigin,
+        mProxyInfo, mOriginAttributes, name, port ? *port : mRoutedPort,
+        mIsolated, mIsHttp3);
+  }
+
+  // Make sure the anonymous, insecure-scheme, and private flags are transferred
+  clone->SetAnonymous(GetAnonymous());
+  clone->SetPrivate(GetPrivate());
+  clone->SetInsecureScheme(GetInsecureScheme());
+  clone->SetNoSpdy(GetNoSpdy());
+  clone->SetBeConservative(GetBeConservative());
+  clone->SetTlsFlags(GetTlsFlags());
+  clone->SetIsTrrServiceChannel(GetIsTrrServiceChannel());
+  clone->SetTRRMode(GetTRRMode());
+  clone->SetIPv4Disabled(GetIPv4Disabled());
+  clone->SetIPv6Disabled(GetIPv6Disabled());
+
+  bool hasIPHint = false;
+  Unused << aRecord->GetHasIPHintAddress(&hasIPHint);
+  if (hasIPHint) {
+    clone->SetHasIPHintAddress(hasIPHint);
+  }
 
   return clone.forget();
 }
@@ -364,6 +420,7 @@ void nsHttpConnectionInfo::SerializeHttpConnectionInfo(
   aArgs.isIPv6Disabled() = aInfo->GetIPv6Disabled();
   aArgs.topWindowOrigin() = aInfo->GetTopWindowOrigin();
   aArgs.isHttp3() = aInfo->IsHttp3();
+  aArgs.hasIPHintAddress() = aInfo->HasIPHintAddress();
 
   if (!aInfo->ProxyInfo()) {
     return;
@@ -407,6 +464,7 @@ nsHttpConnectionInfo::DeserializeHttpConnectionInfoCloneArgs(
   cinfo->SetTRRMode(static_cast<nsIRequest::TRRMode>(aInfoArgs.trrMode()));
   cinfo->SetIPv4Disabled(aInfoArgs.isIPv4Disabled());
   cinfo->SetIPv6Disabled(aInfoArgs.isIPv6Disabled());
+  cinfo->SetHasIPHintAddress(aInfoArgs.hasIPHintAddress());
 
   return cinfo.forget();
 }
@@ -419,8 +477,8 @@ void nsHttpConnectionInfo::CloneAsDirectRoute(nsHttpConnectionInfo** outCI) {
   }
 
   RefPtr<nsHttpConnectionInfo> clone = new nsHttpConnectionInfo(
-      mOrigin, mOriginPort, EmptyCString(), mUsername, mTopWindowOrigin,
-      mProxyInfo, mOriginAttributes, mEndToEndSSL, mIsolated);
+      mOrigin, mOriginPort, ""_ns, mUsername, mTopWindowOrigin, mProxyInfo,
+      mOriginAttributes, mEndToEndSSL, mIsolated);
   // Make sure the anonymous, insecure-scheme, and private flags are transferred
   clone->SetAnonymous(GetAnonymous());
   clone->SetPrivate(GetPrivate());
@@ -432,6 +490,7 @@ void nsHttpConnectionInfo::CloneAsDirectRoute(nsHttpConnectionInfo** outCI) {
   clone->SetTRRMode(GetTRRMode());
   clone->SetIPv4Disabled(GetIPv4Disabled());
   clone->SetIPv6Disabled(GetIPv6Disabled());
+  clone->SetHasIPHintAddress(HasIPHintAddress());
 
   clone.forget(outCI);
 }
@@ -498,9 +557,8 @@ bool nsHttpConnectionInfo::HostIsLocalIPLiteral() const {
   } else if (PR_StringToNetAddr(Origin(), &prAddr) != PR_SUCCESS) {
     return false;
   }
-  NetAddr netAddr;
-  PRNetAddrToNetAddr(&prAddr, &netAddr);
-  return IsIPAddrLocal(&netAddr);
+  NetAddr netAddr(&prAddr);
+  return netAddr.IsIPAddrLocal();
 }
 
 }  // namespace net

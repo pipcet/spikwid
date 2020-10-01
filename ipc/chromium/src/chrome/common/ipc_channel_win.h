@@ -9,7 +9,6 @@
 
 #include "chrome/common/ipc_channel.h"
 
-#include <queue>
 #include <string>
 
 #include "base/message_loop.h"
@@ -17,15 +16,18 @@
 #include "nsISupportsImpl.h"
 
 #include "mozilla/Maybe.h"
+#include "mozilla/Queue.h"
 #include "mozilla/UniquePtr.h"
 
 namespace IPC {
 
 class Channel::ChannelImpl : public MessageLoopForIO::IOHandler {
  public:
+  using ChannelId = Channel::ChannelId;
+
   // Mirror methods of Channel, see ipc_channel.h for description.
-  ChannelImpl(const std::wstring& channel_id, Mode mode, Listener* listener);
-  ChannelImpl(const std::wstring& channel_id, HANDLE server_pipe, Mode mode,
+  ChannelImpl(const ChannelId& channel_id, Mode mode, Listener* listener);
+  ChannelImpl(const ChannelId& channel_id, HANDLE server_pipe, Mode mode,
               Listener* listener);
   ~ChannelImpl() {
     if (pipe_ != INVALID_HANDLE_VALUE) {
@@ -53,9 +55,8 @@ class Channel::ChannelImpl : public MessageLoopForIO::IOHandler {
   void OutputQueuePush(mozilla::UniquePtr<Message> msg);
   void OutputQueuePop();
 
-  const std::wstring PipeName(const std::wstring& channel_id,
-                              int32_t* secret) const;
-  bool CreatePipe(const std::wstring& channel_id, Mode mode);
+  const ChannelId PipeName(const ChannelId& channel_id, int32_t* secret) const;
+  bool CreatePipe(const ChannelId& channel_id, Mode mode);
   bool EnqueueHelloMessage();
 
   bool ProcessConnection();
@@ -84,7 +85,7 @@ class Channel::ChannelImpl : public MessageLoopForIO::IOHandler {
   Listener* listener_;
 
   // Messages to be sent are queued here.
-  std::queue<mozilla::UniquePtr<Message>> output_queue_;
+  mozilla::Queue<mozilla::UniquePtr<Message>, 64> output_queue_;
 
   // If sending a message blocks then we use this iterator to keep track of
   // where in the message we are. It gets reset when the message is finished
@@ -116,7 +117,7 @@ class Channel::ChannelImpl : public MessageLoopForIO::IOHandler {
   // record this when generating logs of IPC messages.
   int32_t other_pid_ = -1;
 
-  // This variable is updated so it matches output_queue_.size(), except we can
+  // This variable is updated so it matches output_queue_.Count(), except we can
   // read output_queue_length_ from any thread (if we're OK getting an
   // occasional out-of-date or bogus value).  We use output_queue_length_ to
   // implement Unsound_NumQueuedMessages.

@@ -20,7 +20,9 @@
 #include "jit/Lowering.h"
 #include "jit/MIR.h"
 #include "jit/MIRGraph.h"
-#include "js/RegExpFlags.h"  // JS::RegExpFlag, JS::RegExpFlags
+#include "js/experimental/JitInfo.h"  // JSJitInfo
+#include "js/RegExpFlags.h"           // JS::RegExpFlag, JS::RegExpFlags
+#include "js/ScalarType.h"            // js::Scalar::Type
 #include "vm/ArgumentsObject.h"
 #include "vm/ArrayBufferObject.h"
 #include "vm/JSObject.h"
@@ -324,6 +326,8 @@ IonBuilder::InliningResult IonBuilder::inlineNativeCall(CallInfo& callInfo,
       return inlineObjectCreate(callInfo);
     case InlinableNative::ObjectIs:
       return inlineObjectIs(callInfo);
+    case InlinableNative::ObjectIsPrototypeOf:
+      return inlineObjectIsPrototypeOf(callInfo);
     case InlinableNative::ObjectToString:
       return inlineObjectToString(callInfo);
 
@@ -428,6 +432,9 @@ IonBuilder::InliningResult IonBuilder::inlineNativeCall(CallInfo& callInfo,
     case InlinableNative::IntrinsicTypedArrayElementShift:
       return inlineTypedArrayElementShift(callInfo);
 
+    case InlinableNative::NumberToString:
+    case InlinableNative::StringToString:
+    case InlinableNative::StringValueOf:
     case InlinableNative::IntrinsicIsSuspendedGenerator:
       // Not supported in Ion.
       return InliningStatus_NotInlined;
@@ -1881,34 +1888,15 @@ IonBuilder::InliningResult IonBuilder::inlineIsPackedArray(CallInfo& callInfo) {
     return InliningStatus_NotInlined;
   }
 
-  MDefinition* array = callInfo.getArg(0);
+  MDefinition* obj = callInfo.getArg(0);
 
-  if (array->type() != MIRType::Object) {
-    return InliningStatus_NotInlined;
-  }
-
-  TemporaryTypeSet* arrayTypes = array->resultTypeSet();
-  if (!arrayTypes) {
-    return InliningStatus_NotInlined;
-  }
-
-  const JSClass* clasp = arrayTypes->getKnownClass(constraints());
-  if (clasp != &ArrayObject::class_) {
-    return InliningStatus_NotInlined;
-  }
-
-  // Only inline if the array uses dense storage.
-  ObjectGroupFlags unhandledFlags = OBJECT_FLAG_SPARSE_INDEXES |
-                                    OBJECT_FLAG_LENGTH_OVERFLOW |
-                                    OBJECT_FLAG_NON_PACKED;
-
-  if (arrayTypes->hasObjectFlags(constraints(), unhandledFlags)) {
+  if (obj->type() != MIRType::Object) {
     return InliningStatus_NotInlined;
   }
 
   callInfo.setImplicitlyUsedUnchecked();
 
-  auto* ins = MIsPackedArray::New(alloc(), array);
+  auto* ins = MIsPackedArray::New(alloc(), obj);
   current->add(ins);
   current->push(ins);
 
@@ -1954,14 +1942,6 @@ IonBuilder::InliningResult IonBuilder::inlineStrCharCodeAt(CallInfo& callInfo) {
     return InliningStatus_NotInlined;
   }
 
-  // Check for STR.charCodeAt(IDX) where STR is a constant string and IDX is a
-  // constant integer.
-  InliningStatus constInlineStatus;
-  MOZ_TRY_VAR(constInlineStatus, inlineConstantCharCodeAt(callInfo));
-  if (constInlineStatus != InliningStatus_NotInlined) {
-    return constInlineStatus;
-  }
-
   callInfo.setImplicitlyUsedUnchecked();
 
   MInstruction* index = MToIntegerInt32::New(alloc(), callInfo.getArg(0));
@@ -1975,40 +1955,6 @@ IonBuilder::InliningResult IonBuilder::inlineStrCharCodeAt(CallInfo& callInfo) {
   MCharCodeAt* charCode = MCharCodeAt::New(alloc(), callInfo.thisArg(), index);
   current->add(charCode);
   current->push(charCode);
-  return InliningStatus_Inlined;
-}
-
-IonBuilder::InliningResult IonBuilder::inlineConstantCharCodeAt(
-    CallInfo& callInfo) {
-  if (!callInfo.thisArg()->maybeConstantValue() ||
-      !callInfo.getArg(0)->maybeConstantValue()) {
-    return InliningStatus_NotInlined;
-  }
-
-  MConstant* strval = callInfo.thisArg()->maybeConstantValue();
-  MConstant* idxval = callInfo.getArg(0)->maybeConstantValue();
-
-  if (strval->type() != MIRType::String || idxval->type() != MIRType::Int32) {
-    return InliningStatus_NotInlined;
-  }
-
-  JSString* str = strval->toString();
-  if (!str->isLinear()) {
-    return InliningStatus_NotInlined;
-  }
-
-  int32_t idx = idxval->toInt32();
-  if (idx < 0 || (uint32_t(idx) >= str->length())) {
-    return InliningStatus_NotInlined;
-  }
-
-  callInfo.setImplicitlyUsedUnchecked();
-
-  JSLinearString& linstr = str->asLinear();
-  char16_t ch = linstr.latin1OrTwoByteChar(idx);
-  MConstant* result = MConstant::New(alloc(), Int32Value(ch));
-  current->add(result);
-  current->push(result);
   return InliningStatus_Inlined;
 }
 
@@ -2456,9 +2402,7 @@ IonBuilder::InliningResult IonBuilder::inlineStringReplaceString(
   MInstruction* cte = MStringReplace::New(alloc(), strArg, patArg, replArg);
   current->add(cte);
   current->push(cte);
-  if (cte->isEffectful()) {
-    MOZ_TRY(resumeAfter(cte));
-  }
+
   return InliningStatus_Inlined;
 }
 
@@ -2620,6 +2564,32 @@ IonBuilder::InliningResult IonBuilder::inlineObjectIs(CallInfo& callInfo) {
     current->add(ins);
     current->push(ins);
   }
+
+  callInfo.setImplicitlyUsedUnchecked();
+  return InliningStatus_Inlined;
+}
+
+IonBuilder::InliningResult IonBuilder::inlineObjectIsPrototypeOf(
+    CallInfo& callInfo) {
+  if (callInfo.constructing() || callInfo.argc() != 1) {
+    return InliningStatus_NotInlined;
+  }
+
+  if (getInlineReturnType() != MIRType::Boolean) {
+    return InliningStatus_NotInlined;
+  }
+
+  MDefinition* thisArg = callInfo.thisArg();
+  if (thisArg->type() != MIRType::Object) {
+    return InliningStatus_NotInlined;
+  }
+
+  MDefinition* arg = callInfo.getArg(0);
+
+  auto* ins = MInstanceOf::New(alloc(), arg, thisArg);
+  current->add(ins);
+  current->push(ins);
+  MOZ_TRY(resumeAfter(ins));
 
   callInfo.setImplicitlyUsedUnchecked();
   return InliningStatus_Inlined;
@@ -3333,6 +3303,7 @@ IonBuilder::InliningResult IonBuilder::inlineToObject(CallInfo& callInfo) {
     current->add(ins);
     current->push(ins);
 
+    MOZ_TRY(resumeAfter(ins));
     MOZ_TRY(
         pushTypeBarrier(ins, getInlineReturnTypeSet(), BarrierKind::TypeSet));
   }
@@ -3783,9 +3754,6 @@ bool IonBuilder::atomicsMeetsPreconditions(
       return checkResult == DontCheckAtomicResult ||
              getInlineReturnType() == MIRType::Int32;
     case Scalar::Uint32:
-      // Bug 1077305: it would be attractive to allow inlining even
-      // if the inline return type is Int32, which it will frequently
-      // be.
       return checkResult == DontCheckAtomicResult ||
              getInlineReturnType() == MIRType::Double;
     case Scalar::BigInt64:
@@ -4064,7 +4032,7 @@ IonBuilder::InliningResult IonBuilder::inlineWasmCall(CallInfo& callInfo,
         MOZ_CRASH("impossible per above check");
       case wasm::ValType::Ref:
         switch (sig.args()[i].refTypeKind()) {
-          case wasm::RefType::Any:
+          case wasm::RefType::Extern:
             // Transform the JS representation into an AnyRef representation.
             // The resulting type is MIRType::RefOrNull.  These cases are all
             // effect-free.

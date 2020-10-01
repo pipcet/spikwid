@@ -244,7 +244,11 @@ struct ParamTraits<mozilla::WidgetMouseEvent> {
     WriteParam(aMsg, static_cast<paramType::ReasonType>(aParam.mReason));
     WriteParam(aMsg, static_cast<paramType::ContextMenuTriggerType>(
                          aParam.mContextMenuTrigger));
-    WriteParam(aMsg, static_cast<paramType::ExitFromType>(aParam.mExitFrom));
+    WriteParam(aMsg, aParam.mExitFrom.isSome());
+    if (aParam.mExitFrom.isSome()) {
+      WriteParam(
+          aMsg, static_cast<paramType::ExitFromType>(aParam.mExitFrom.value()));
+    }
     WriteParam(aMsg, aParam.mClickCount);
   }
 
@@ -253,20 +257,24 @@ struct ParamTraits<mozilla::WidgetMouseEvent> {
     bool rv;
     paramType::ReasonType reason = 0;
     paramType::ContextMenuTriggerType contextMenuTrigger = 0;
-    paramType::ExitFromType exitFrom = 0;
+    bool hasExitFrom = false;
     rv = ReadParam(aMsg, aIter,
                    static_cast<mozilla::WidgetMouseEventBase*>(aResult)) &&
          ReadParam(aMsg, aIter,
                    static_cast<mozilla::WidgetPointerHelper*>(aResult)) &&
          ReadParam(aMsg, aIter, &aResult->mIgnoreRootScrollFrame) &&
          ReadParam(aMsg, aIter, &reason) &&
-         ReadParam(aMsg, aIter, &contextMenuTrigger) &&
-         ReadParam(aMsg, aIter, &exitFrom) &&
-         ReadParam(aMsg, aIter, &aResult->mClickCount);
+         ReadParam(aMsg, aIter, &contextMenuTrigger);
     aResult->mReason = static_cast<paramType::Reason>(reason);
     aResult->mContextMenuTrigger =
         static_cast<paramType::ContextMenuTrigger>(contextMenuTrigger);
-    aResult->mExitFrom = static_cast<paramType::ExitFrom>(exitFrom);
+    rv = rv && ReadParam(aMsg, aIter, &hasExitFrom);
+    if (hasExitFrom) {
+      paramType::ExitFromType exitFrom = 0;
+      rv = rv && ReadParam(aMsg, aIter, &exitFrom);
+      aResult->mExitFrom = Some(static_cast<paramType::ExitFrom>(exitFrom));
+    }
+    rv = rv && ReadParam(aMsg, aIter, &aResult->mClickCount);
     return rv;
   }
 };
@@ -939,6 +947,7 @@ struct ParamTraits<mozilla::widget::InputContext> {
     WriteParam(aMsg, aParam.mHTMLInputType);
     WriteParam(aMsg, aParam.mHTMLInputInputmode);
     WriteParam(aMsg, aParam.mActionHint);
+    WriteParam(aMsg, aParam.mAutocapitalize);
     WriteParam(aMsg, aParam.mOrigin);
     WriteParam(aMsg, aParam.mMayBeIMEUnaware);
     WriteParam(aMsg, aParam.mHasHandledUserInput);
@@ -951,6 +960,7 @@ struct ParamTraits<mozilla::widget::InputContext> {
            ReadParam(aMsg, aIter, &aResult->mHTMLInputType) &&
            ReadParam(aMsg, aIter, &aResult->mHTMLInputInputmode) &&
            ReadParam(aMsg, aIter, &aResult->mActionHint) &&
+           ReadParam(aMsg, aIter, &aResult->mAutocapitalize) &&
            ReadParam(aMsg, aIter, &aResult->mOrigin) &&
            ReadParam(aMsg, aIter, &aResult->mMayBeIMEUnaware) &&
            ReadParam(aMsg, aIter, &aResult->mHasHandledUserInput) &&
@@ -1306,6 +1316,7 @@ struct ParamTraits<mozilla::PinchGestureInput> {
     WriteParam(aMsg, aParam.mLocalFocusPoint);
     WriteParam(aMsg, aParam.mCurrentSpan);
     WriteParam(aMsg, aParam.mPreviousSpan);
+    WriteParam(aMsg, aParam.mLineOrPageDeltaY);
     WriteParam(aMsg, aParam.mHandledByAPZ);
   }
 
@@ -1319,6 +1330,7 @@ struct ParamTraits<mozilla::PinchGestureInput> {
            ReadParam(aMsg, aIter, &aResult->mLocalFocusPoint) &&
            ReadParam(aMsg, aIter, &aResult->mCurrentSpan) &&
            ReadParam(aMsg, aIter, &aResult->mPreviousSpan) &&
+           ReadParam(aMsg, aIter, &aResult->mLineOrPageDeltaY) &&
            ReadParam(aMsg, aIter, &aResult->mHandledByAPZ);
   }
 };

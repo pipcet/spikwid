@@ -9,7 +9,7 @@
  * preferences for the urlbar.
  */
 
-var EXPORTED_SYMBOLS = ["UrlbarPrefs"];
+var EXPORTED_SYMBOLS = ["UrlbarPrefs", "UrlbarPrefsObserver"];
 
 const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 const { XPCOMUtils } = ChromeUtils.import(
@@ -76,6 +76,9 @@ const PREF_URLBAR_DEFAULTS = new Map([
 
   // Whether the urlbar displays a permanent search button.
   ["experimental.searchButton", false],
+
+  // Whether we style the search mode indicator's close button on hover.
+  ["experimental.searchModeIndicatorHover", false],
 
   // When true, `javascript:` URLs are not included in search results.
   ["filter.javascript", true],
@@ -160,6 +163,16 @@ const PREF_URLBAR_DEFAULTS = new Map([
   // Also controls the other urlbar.update2 prefs.
   ["update2", false],
 
+  // Whether horizontal key navigation with left/right is disabled for urlbar's
+  // one-off buttons.
+  ["update2.disableOneOffsHorizontalKeyNavigation", false],
+
+  // Controls the empty search behavior in Search Mode:
+  //  0 - Show nothing
+  //  1 - Show search history
+  //  2 - Show search and browsing history
+  ["update2.emptySearchBehavior", 2],
+
   // Whether the urlbar displays one-offs to filter searches to history,
   // bookmarks, or tabs.
   ["update2.localOneOffs", false],
@@ -167,6 +180,11 @@ const PREF_URLBAR_DEFAULTS = new Map([
   // Whether the urlbar one-offs act as search filters instead of executing a
   // search immediately.
   ["update2.oneOffsRefresh", false],
+
+  // Whether browsing history that is recognized as a previous search should
+  // be restyled and deduped against form history. This only happens when
+  // search mode is active.
+  ["update2.restyleBrowsingHistoryAsSearch", true],
 
   // Whether we display a tab-to-complete result when the user types an engine
   // name.
@@ -238,6 +256,8 @@ class Preferences {
     for (let pref of PREF_OTHER_DEFAULTS.keys()) {
       Services.prefs.addObserver(pref, this, true);
     }
+    this._observerWeakRefs = [];
+    this.addObserver(this);
   }
 
   /**
@@ -276,6 +296,20 @@ class Preferences {
   }
 
   /**
+   * Adds a preference observer.  Observers are held weakly.
+   *
+   * @param {object} observer
+   *        An object that must have a method named `onPrefChanged`, which will
+   *        be called when a urlbar preference changes.  It will be passed the
+   *        pref name.  For prefs in the `browser.urlbar.` branch, the name will
+   *        be relative to the branch.  For other prefs, the name will be the
+   *        full name.
+   */
+  addObserver(observer) {
+    this._observerWeakRefs.push(Cu.getWeakReference(observer));
+  }
+
+  /**
    * Observes preference changes.
    *
    * @param {nsISupports} subject
@@ -287,6 +321,26 @@ class Preferences {
     if (!PREF_URLBAR_DEFAULTS.has(pref) && !PREF_OTHER_DEFAULTS.has(pref)) {
       return;
     }
+    for (let i = 0; i < this._observerWeakRefs.length; ) {
+      let observer = this._observerWeakRefs[i].get();
+      if (!observer) {
+        // The observer has been GC'ed, so remove it from our list.
+        this._observerWeakRefs.splice(i, 1);
+      } else {
+        observer.onPrefChanged(pref);
+        ++i;
+      }
+    }
+  }
+
+  /**
+   * Called when a pref tracked by UrlbarPrefs changes.
+   *
+   * @param {string} pref
+   *        The name of the pref, relative to `browser.urlbar.` if the pref is
+   *        in that branch.
+   */
+  onPrefChanged(pref) {
     this._map.delete(pref);
     // Some prefs may influence others.
     if (pref == "matchBuckets") {

@@ -62,6 +62,27 @@ class Front extends Pool {
   }
 
   destroy() {
+    super.destroy();
+    this.clearEvents();
+    // Prevent purging requests if a forwardCancelling request has already been received
+    // and already called purgeRequests
+    if (this.actorID) {
+      this.purgeRequestsForDestroy();
+    }
+    this.targetFront = null;
+    this.parentFront = null;
+    this._frontCreationListeners = null;
+    this._frontDestructionListeners = null;
+    this._beforeListeners = null;
+  }
+
+  // This method is also called from DevToolsClient, when a connector is destroyed
+  // and we should reject all pending request made to the remote process/target/thread.
+  // And also avoid trying to do new request against this remote context.
+  // When a connector is destroy a forwardCancelling RDP event is sent by the server.
+  // This is done in a distinct method from `destroy` in order to be able to purge
+  // requests immediately, even if `Front.destroy` is overloaded by an async method.
+  purgeRequestsForDestroy() {
     // Reject all outstanding requests, they won't make sense after
     // the front is destroyed.
     while (this._requests && this._requests.length > 0) {
@@ -76,14 +97,11 @@ class Front extends Pool {
         stack.formattedStack;
       deferred.reject(new Error(msg));
     }
-    super.destroy();
-    this.clearEvents();
     this.actorID = null;
-    this.targetFront = null;
-    this.parentFront = null;
-    this._frontCreationListeners = null;
-    this._frontDestructionListeners = null;
-    this._beforeListeners = null;
+  }
+
+  isDestroyed() {
+    return this.actorID === null;
   }
 
   async manage(front, form, ctx) {
@@ -149,7 +167,7 @@ class Front extends Pool {
    *        The function is called with the same argument than onAvailable.
    */
   watchFronts(typeName, onAvailable, onDestroy) {
-    if (!this.actorID) {
+    if (this.isDestroyed()) {
       // The front was already destroyed, bail out.
       console.error(
         `Tried to call watchFronts for the '${typeName}' type on an ` +
@@ -180,7 +198,7 @@ class Front extends Pool {
    * See `watchFronts()` for documentation of the arguments.
    */
   unwatchFronts(typeName, onAvailable, onDestroy) {
-    if (!this.actorID) {
+    if (this.isDestroyed()) {
       // The front was already destroyed, bail out.
       console.error(
         `Tried to call unwatchFronts for the '${typeName}' type on an ` +

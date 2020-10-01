@@ -13,6 +13,73 @@ exclude: true
 
 ⚠️  breaking change and deprecation notices
 
+## v83
+- Added [`WebExtension.MetaData.temporary`][83.1] which exposes whether an extension
+  has been installed temporarily, e.g. when using web-ext.
+  ([bug 1624410]({{bugzilla}}1624410))
+- ⚠️  Removing unsupported `MediaSession.Delegate.onPictureInPicture` for now.
+  Also, [`MediaSession.Delegate.onMetadata`][83.2] is no longer dispatched for
+  plain media elements.
+  ([bug 1658937]({{bugzilla}}1658937))
+- Replaced android.util.ArrayMap with java.util.TreeMap in [`WebMessage`][65.13] to enable case-insensitive handling of the HTTP headers.
+  ([bug 1666013]({{bugzilla}}1666013))
+- Added [`ContentBlocking.SafeBrowsingProvider`][83.3] to configure Safe
+  Browsing providers.
+  ([bug 1660241]({{bugzilla}}1660241))
+
+[83.1]: {{javadoc_uri}}/WebExtension.MetaData.html#temporary
+[83.2]: {{javadoc_uri}}/MediaSession.Delegate.html#onMetadata-org.mozilla.geckoview.GeckoSession-org.mozilla.geckoview.MediaSession-org.mozilla.geckoview.MediaSession.Metadata-
+[83.3]: {{javadoc_uri}}/ContentBlocking.SafeBrowsingProvider.html
+
+## v82
+- ⚠️  [`WebNotification.source`][79.2] is now `@Nullable` to account for
+  WebExtension notifications which don't have a `source` field.
+- ⚠️ Deprecated [`ContentDelegate#onExternalResponse(GeckoSession, WebResponseInfo)`][82.1] with the intention of removing
+  them in GeckoView v85. 
+  ([bug 1530022]({{bugzilla}}1530022))
+- Added [`ContentDelegate#onExternalResponse(GeckoSession, WebResponse)`][82.2] to eliminate the need
+  to make a second request for downloads and ensure more efficient and reliable downloads in a single request. The second
+  parameter is now a [`WebResponse`][65.15] 
+  ([bug 1530022]({{bugzilla}}1530022))
+- Added [`Image`][82.3] support for size-dependent bitmap retrieval from image resources.
+  ([bug 1658456]({{bugzilla}}1658456))
+- ⚠️ Use [`Image`][82.3] for [`MediaSession`][81.6] artwork and [`WebExtension`][69.5] icon support.
+  ([bug 1662508]({{bugzilla}}1662508))
+- Added [`RepostConfirmPrompt`][82.4] to prompt the user for cofirmation before
+  resending POST requests.
+  ([bug 1659073]({{bugzilla}}1659073))
+- Removed `Parcelable` support in `GeckoSession`. Use [`ProgressDelegate#onSessionStateChange`][68.29] and [`ProgressDelegate#restoreState`][82.5] instead.
+  ([bug 1650108]({{bugzilla}}1650108))
+- ⚠️ Use AndroidX instead of the Android support library. For the public API this only changes
+  the thread and nullable annotation types.
+- Added [`REPLACED_UNSAFE_CONTENT`][82.6] to content blocking API to indicate when unsafe content is shimmed.
+  ([bug 1663756]({{bugzilla}}1663756))
+  
+[82.1]: {{javadoc_uri}}/GeckoSession.ContentDelegate.html#onExternalResponse-org.mozilla.geckoview.GeckoSession-org.mozilla.geckoview.GeckoSession.WebResponseInfo-
+[82.2]: {{javadoc_uri}}/GeckoSession.ContentDelegate.html#onExternalResponse-org.mozilla.geckoview.GeckoSession-org.mozilla.geckoview.GeckoResult-
+[82.3]: {{javadoc_uri}}/Image.html
+[82.4]: {{javadoc_uri}}/GeckoSession.PromptDelegate.RepostConfirmPrompt.html
+[82.5]: {{javadoc_uri}}/GeckoSession.html#restoreState-org.mozilla.geckoview.GeckoSession.SessionState-
+[82.6]: {{javadoc_uri}}/ContentBlockingController.Event.html#REPLACED_UNSAFE_CONTENT
+
+## v81
+- Added `cookiePurging` to [`ContentBlocking.Settings.Builder`][81.1] and `getCookiePurging` and `setCookiePurging`
+  to [`ContentBlocking.Settings`][81.2].
+- Added [`GeckoSession.ContentDelegate.onPaintStatusReset()`][81.3] callback which notifies when valid content is no longer being rendered.
+- Made [`GeckoSession.ContentDelegate.onFirstContentfulPaint()`][81.4] additionally be called for the first contentful paint following a `onPaintStatusReset()` event, rather than just the first contentful paint of the session.
+- Removed deprecated `GeckoRuntime.registerWebExtension`. Use [`WebExtensionController.install`][73.1] instead.
+⚠️ - Changed [`GeckoView.onTouchEventForResult`][81.5] to return a `GeckoResult`, as it now
+makes a round-trip to Gecko. The result will be more accurate now, since how content treats
+the event is now considered.
+- Added [`MediaSession`][81.6] API for session-based media events and control.
+
+[81.1]: {{javadoc_uri}}/ContentBlocking.Settings.Builder.html
+[81.2]: {{javadoc_uri}}/ContentBlocking.Settings.html
+[81.3]: {{javadoc_uri}}/GeckoSession.ContentDelegate.html#onPaintStatusReset-org.mozilla.geckoview.GeckoSession-
+[81.4]: {{javadoc_uri}}/GeckoSession.ContentDelegate.html#onFirstContentfulPaint-org.mozilla.geckoview.GeckoSession-
+[81.5]: {{javadoc_uri}}/GeckoView.html#onTouchEventForResult-android.view.MotionEvent-
+[81.6]: {{javadoc_uri}}/MediaSession.html
+
 ## v80
 - Removed `GeckoSession.hashCode` and `GeckoSession.equals` overrides in favor
   of the default implementations. ([bug 1647883]({{bugzilla}}1647883))
@@ -752,4 +819,4 @@ to allow adding gecko profiler markers.
 [65.24]: {{javadoc_uri}}/CrashReporter.html#sendCrashReport-android.content.Context-android.os.Bundle-java.lang.String-
 [65.25]: {{javadoc_uri}}/GeckoResult.html
 
-[api-version]: c86252550df86d5790603805a43ad5a313c20dc0
+[api-version]: 2a562a8a5620ba5db90a9e7f59f6396eaeb4356f

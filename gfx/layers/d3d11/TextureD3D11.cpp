@@ -288,20 +288,7 @@ static void DestroyDrawTarget(RefPtr<DrawTarget>& aDT,
 
 D3D11TextureData::~D3D11TextureData() {
   if (mDrawTarget) {
-    if (PaintThread::Get() &&
-        StaticPrefs::gfx_direct2d_destroy_dt_on_paintthread()) {
-      RefPtr<DrawTarget> dt = mDrawTarget;
-      RefPtr<ID3D11Texture2D> tex = mTexture;
-      RefPtr<Runnable> task = NS_NewRunnableFunction(
-          "PaintThread::RunFunction",
-          [dt, tex]() mutable { DestroyDrawTarget(dt, tex); });
-      PaintThread::Get()->Dispatch(task);
-    }
-#ifdef DEBUG
-    else {
-      DestroyDrawTarget(mDrawTarget, mTexture);
-    }
-#endif
+    DestroyDrawTarget(mDrawTarget, mTexture);
   }
 }
 
@@ -981,8 +968,8 @@ bool DXGITextureHostD3D11::AcquireTextureSource(
 
 void DXGITextureHostD3D11::CreateRenderTexture(
     const wr::ExternalImageId& aExternalImageId) {
-  RefPtr<wr::RenderTextureHost> texture =
-      new wr::RenderDXGITextureHostOGL(mHandle, mFormat, mSize);
+  RefPtr<wr::RenderTextureHost> texture = new wr::RenderDXGITextureHostOGL(
+      mHandle, mFormat, mYUVColorSpace, mColorRange, mSize);
 
   wr::RenderThread::Get()->RegisterExternalImage(wr::AsUint64(aExternalImageId),
                                                  texture.forget());
@@ -1013,6 +1000,12 @@ void DXGITextureHostD3D11::PushResourceUpdates(
     const Range<wr::ImageKey>& aImageKeys, const wr::ExternalImageId& aExtID) {
   if (!gfx::gfxVars::UseWebRenderANGLE()) {
     MOZ_ASSERT_UNREACHABLE("unexpected to be called without ANGLE");
+    return;
+  }
+  // XXX Software WebRender is not handled yet.
+  if (gfx::gfxVars::UseSoftwareWebRender()) {
+    gfxCriticalNoteOnce
+        << "Software WebRender is not suppored by DXGITextureHostD3D11.";
     return;
   }
 
@@ -1064,6 +1057,17 @@ void DXGITextureHostD3D11::PushDisplayItems(
     const wr::LayoutRect& aClip, wr::ImageRendering aFilter,
     const Range<wr::ImageKey>& aImageKeys,
     const bool aPreferCompositorSurface) {
+  if (!gfx::gfxVars::UseWebRenderANGLE()) {
+    MOZ_ASSERT_UNREACHABLE("unexpected to be called without ANGLE");
+    return;
+  }
+  // XXX Software WebRender is not handled yet.
+  if (gfx::gfxVars::UseSoftwareWebRender()) {
+    gfxCriticalNoteOnce
+        << "Software WebRender is not suppored by DXGITextureHostD3D11.";
+    return;
+  }
+
   switch (GetFormat()) {
     case gfx::SurfaceFormat::R8G8B8X8:
     case gfx::SurfaceFormat::R8G8B8A8:
@@ -1080,12 +1084,19 @@ void DXGITextureHostD3D11::PushDisplayItems(
     case gfx::SurfaceFormat::P016:
     case gfx::SurfaceFormat::NV12: {
       MOZ_ASSERT(aImageKeys.length() == 2);
+      bool supportsExternalCompositing = false;
+      // XXX Add P010 and P016 support.
+      if (GetFormat() == gfx::SurfaceFormat::NV12 &&
+          gfx::gfxVars::UseWebRenderDCompVideoOverlayWin()) {
+        supportsExternalCompositing = true;
+      }
       aBuilder.PushNV12Image(
           aBounds, aClip, true, aImageKeys[0], aImageKeys[1],
           GetFormat() == gfx::SurfaceFormat::NV12 ? wr::ColorDepth::Color8
                                                   : wr::ColorDepth::Color16,
           wr::ToWrYuvColorSpace(mYUVColorSpace),
-          wr::ToWrColorRange(mColorRange), aFilter, aPreferCompositorSurface);
+          wr::ToWrColorRange(mColorRange), aFilter, aPreferCompositorSurface,
+          supportsExternalCompositing);
       break;
     }
     default: {
@@ -1265,6 +1276,12 @@ void DXGIYCbCrTextureHostD3D11::PushResourceUpdates(
     MOZ_ASSERT_UNREACHABLE("unexpected to be called without ANGLE");
     return;
   }
+  // XXX Software WebRender is not handled yet.
+  if (gfx::gfxVars::UseSoftwareWebRender()) {
+    gfxCriticalNoteOnce
+        << "Software WebRender is not suppored by DXGIYCbCrTextureHostD3D11.";
+    return;
+  }
 
   MOZ_ASSERT(mHandles[0] && mHandles[1] && mHandles[2]);
   MOZ_ASSERT(aImageKeys.length() == 3);
@@ -1294,6 +1311,17 @@ void DXGIYCbCrTextureHostD3D11::PushDisplayItems(
     const wr::LayoutRect& aClip, wr::ImageRendering aFilter,
     const Range<wr::ImageKey>& aImageKeys,
     const bool aPreferCompositorSurface) {
+  if (!gfx::gfxVars::UseWebRenderANGLE()) {
+    MOZ_ASSERT_UNREACHABLE("unexpected to be called without ANGLE");
+    return;
+  }
+  // XXX Software WebRender is not handled yet.
+  if (gfx::gfxVars::UseSoftwareWebRender()) {
+    gfxCriticalNoteOnce
+        << "Software WebRender is not suppored by DXGIYCbCrTextureHostD3D11.";
+    return;
+  }
+
   MOZ_ASSERT(aImageKeys.length() == 3);
 
   aBuilder.PushYCbCrPlanarImage(

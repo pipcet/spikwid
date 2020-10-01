@@ -17,6 +17,8 @@
 #include "gc/PublicIterators.h"
 #include "gc/Zone.h"
 #include "js/Date.h"
+#include "js/friend/StackLimits.h"  // js::CheckSystemRecursionLimit
+#include "js/friend/WindowProxy.h"  // js::IsWindow, js::IsWindowProxy, js::ToWindowProxyIfWindow
 #include "js/Proxy.h"
 #include "js/RootingAPI.h"
 #include "js/StableStringChars.h"
@@ -90,7 +92,7 @@ void Compartment::removeWrapper(js::ObjectWrapperMap::Ptr p) {
   JSObject* key = p->key();
   JSObject* value = p->value().unbarrieredGet();
   if (js::gc::detail::GetDelegate(value) == key) {
-    key->zone()->delegatePreWriteBarrier(value, key);
+    key->zone()->beforeClearDelegate(value, key);
   }
 
   crossCompartmentObjectWrappers.remove(p);

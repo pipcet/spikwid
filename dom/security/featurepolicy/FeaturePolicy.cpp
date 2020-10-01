@@ -8,6 +8,7 @@
 #include "mozilla/dom/FeaturePolicyBinding.h"
 #include "mozilla/dom/FeaturePolicyParser.h"
 #include "mozilla/dom/FeaturePolicyUtils.h"
+#include "mozilla/StaticPrefs_dom.h"
 #include "nsContentUtils.h"
 #include "nsNetUtil.h"
 
@@ -157,6 +158,7 @@ void FeaturePolicy::ResetDeclaredPolicy() {
   mSelfOrigin = nullptr;
   mSrcOrigin = nullptr;
   mDeclaredFeaturesInAncestorChain.Clear();
+  mAttributeEnabledFeatureNames.Clear();
 }
 
 JSObject* FeaturePolicy::WrapObject(JSContext* aCx,
@@ -325,6 +327,7 @@ void FeaturePolicy::MaybeSetAllowedPolicy(const nsAString& aFeatureName) {
   feature.SetAllowsAll();
 
   mFeatures.AppendElement(feature);
+  mAttributeEnabledFeatureNames.AppendElement(aFeatureName);
 }
 
 }  // namespace dom

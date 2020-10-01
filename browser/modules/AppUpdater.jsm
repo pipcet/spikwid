@@ -45,6 +45,10 @@ class AppUpdater {
       "@mozilla.org/updates/update-manager;1",
       "nsIUpdateManager"
     );
+    this.QueryInterface = ChromeUtils.generateQI([
+      "nsIProgressEventSink",
+      "nsIRequestObserver",
+    ]);
   }
 
   /**
@@ -326,7 +330,7 @@ class AppUpdater {
           this._setStatus(AppUpdater.STATUS.STAGING);
           this._awaitStagingComplete();
         } else {
-          this._setStatus(AppUpdater.STATUS.READY_FOR_RESTART);
+          this._awaitDownloadComplete();
         }
         break;
       default:
@@ -346,6 +350,19 @@ class AppUpdater {
    */
   onProgress(aRequest, aProgress, aProgressMax) {
     this._setStatus(AppUpdater.STATUS.DOWNLOADING, aProgress, aProgressMax);
+  }
+
+  /**
+   * This function registers an observer that watches for the download
+   * to complete. Once it does, it updates the status accordingly.
+   */
+  _awaitDownloadComplete() {
+    let observer = (aSubject, aTopic, aData) => {
+      // Update the UI when the download is finished
+      this._setStatus(AppUpdater.STATUS.READY_FOR_RESTART);
+      Services.obs.removeObserver(observer, "update-downloaded");
+    };
+    Services.obs.addObserver(observer, "update-downloaded");
   }
 
   /**

@@ -133,6 +133,7 @@
 /* https://drafts.csswg.org/css-lists-3/#ua-stylesheet */
 *|*::marker {
   text-align: end;
+  text-transform: none;
   unicode-bidi: isolate;
   font-variant-numeric: tabular-nums;
 }
@@ -151,6 +152,11 @@
 *|*:any-link:-moz-focusring {
   /* Don't specify the outline-color, we should always use initial value. */
   outline: 1px dotted;
+}
+
+/* Inert subtrees */
+*|*:-moz-inert {
+  -moz-inert: inert;
 }
 
 /* Miscellaneous */
@@ -248,9 +254,6 @@
 
 *|*::-moz-viewport-scroll {
   overflow: auto;
-%ifdef XP_WIN
-  resize: both;
-%endif
 }
 
 *|*::-moz-column-set,
@@ -296,9 +299,9 @@
   height: 100%;
 }
 
-*|*::-moz-page {
-  /* Individual page in print/print preview. Visual styles may only appear
-   * in print preview. */
+*|*::-moz-printed-sheet {
+  /* Individual sheet of paper in print/print preview. Visual styles may only
+   * appear in print preview. */
   display: block;
   background: white;
   box-shadow: 5px 5px 8px #202020;
@@ -307,7 +310,7 @@
   margin: 0.125in 0.25in;
 }
 
-@media (monochrome) {
+@media (monochrome) and (-moz-print-preview) {
   *|*::-moz-page {
     filter: grayscale(1);
   }

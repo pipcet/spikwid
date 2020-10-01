@@ -24,35 +24,6 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   UrlbarUtils: "resource:///modules/UrlbarUtils.jsm",
 });
 
-// Sqlite result row index constants.
-const QUERYINDEX = {
-  QUERYTYPE: 0,
-  URL: 1,
-  TITLE: 2,
-  BOOKMARKED: 3,
-  BOOKMARKTITLE: 4,
-  TAGS: 5,
-  VISITCOUNT: 6,
-  TYPED: 7,
-  PLACEID: 8,
-  SWITCHTAB: 9,
-  FRECENCY: 10,
-};
-
-// Result row indexes for originQuery()
-const QUERYINDEX_ORIGIN = {
-  AUTOFILLED_VALUE: 1,
-  URL: 2,
-  FRECENCY: 3,
-};
-
-// Result row indexes for urlQuery()
-const QUERYINDEX_URL = {
-  URL: 1,
-  STRIPPED_URL: 2,
-  FRECENCY: 3,
-};
-
 // AutoComplete query type constants.
 // Describes the various types of queries that we can process rows for.
 const QUERYTYPE = {
@@ -89,48 +60,44 @@ const SQL_AUTOFILL_FRECENCY_THRESHOLD = `host_frecency >= (
     SELECT value FROM autofill_frecency_threshold
   )`;
 
-function originQuery({ select = "", where = "", having = "" }) {
-  return `${SQL_AUTOFILL_WITH}
-            SELECT :query_type,
-                   fixed_up_host || '/',
-                   IFNULL(:prefix, prefix) || moz_origins.host || '/',
-                   frecency,
-                   bookmarked,
-                   id
-            FROM (
-              SELECT host,
-                     host AS fixed_up_host,
-                     TOTAL(frecency) AS host_frecency,
-                     (
-                       SELECT TOTAL(foreign_count) > 0
-                       FROM moz_places
-                       WHERE moz_places.origin_id = moz_origins.id
-                     ) AS bookmarked
-                     ${select}
-              FROM moz_origins
-              WHERE host BETWEEN :searchString AND :searchString || X'FFFF'
-                    ${where}
-              GROUP BY host
-              HAVING ${having}
-              UNION ALL
-              SELECT host,
-                     fixup_url(host) AS fixed_up_host,
-                     TOTAL(frecency) AS host_frecency,
-                     (
-                       SELECT TOTAL(foreign_count) > 0
-                       FROM moz_places
-                       WHERE moz_places.origin_id = moz_origins.id
-                     ) AS bookmarked
-                     ${select}
-              FROM moz_origins
-              WHERE host BETWEEN 'www.' || :searchString AND 'www.' || :searchString || X'FFFF'
-                    ${where}
-              GROUP BY host
-              HAVING ${having}
-            ) AS grouped_hosts
-            JOIN moz_origins ON moz_origins.host = grouped_hosts.host
-            ORDER BY frecency DESC, id DESC
-            LIMIT 1 `;
+function originQuery(where) {
+  // `frecency`, `bookmarked` and `visited` are partitioned by the fixed host,
+  // without `www.`. `host_prefix` instead is partitioned by full host, because
+  // we assume a prefix may not work regardless of `www.`.
+  let selectVisited = where.includes("visited")
+    ? `MAX(EXISTS(
+      SELECT 1 FROM moz_places WHERE origin_id = o.id AND visit_count > 0
+    )) OVER (PARTITION BY fixup_url(host)) > 0`
+    : "0";
+  return `/* do not warn (bug no): cannot use an index to sort */
+    ${SQL_AUTOFILL_WITH},
+    origins(id, prefix, host_prefix, host, fixed, host_frecency, frecency, bookmarked, visited) AS (
+      SELECT
+      id,
+      prefix,
+      first_value(prefix) OVER (
+        PARTITION BY host ORDER BY frecency DESC, prefix = "https://" DESC, id DESC
+      ),
+      host,
+      fixup_url(host),
+      TOTAL(frecency) OVER (PARTITION BY fixup_url(host)),
+      frecency,
+      MAX(EXISTS(
+        SELECT 1 FROM moz_places WHERE origin_id = o.id AND foreign_count > 0
+      )) OVER (PARTITION BY fixup_url(host)),
+      ${selectVisited}
+      FROM moz_origins o
+      WHERE (host BETWEEN :searchString AND :searchString || X'FFFF')
+         OR (host BETWEEN 'www.' || :searchString AND 'www.' || :searchString || X'FFFF')
+    )
+    SELECT :query_type AS query_type,
+           iif(instr(host, :searchString) = 1, host, fixed) || '/' AS host_fixed,
+           ifnull(:prefix, host_prefix) || host || '/' AS url
+    FROM origins
+    ${where}
+    ORDER BY frecency DESC, prefix = "https://" DESC, id DESC
+    LIMIT 1
+  `;
 }
 
 function urlQuery(where1, where2) {
@@ -139,9 +106,9 @@ function urlQuery(where1, where2) {
   // rows as possible.  Keep in mind that we run this query every time the user
   // types a key when the urlbar value looks like a URL with a path.
   return `/* do not warn (bug no): cannot use an index to sort */
-            SELECT :query_type,
+            SELECT :query_type AS query_type,
                    url,
-                   :strippedURL,
+                   :strippedURL AS stripped_url,
                    frecency,
                    foreign_count > 0 AS bookmarked,
                    visit_count > 0 AS visited,
@@ -150,9 +117,9 @@ function urlQuery(where1, where2) {
             WHERE rev_host = :revHost
                   ${where1}
             UNION ALL
-            SELECT :query_type,
+            SELECT :query_type AS query_type,
                    url,
-                   :strippedURL,
+                   :strippedURL AS stripped_url,
                    frecency,
                    foreign_count > 0 AS bookmarked,
                    visit_count > 0 AS visited,
@@ -164,42 +131,29 @@ function urlQuery(where1, where2) {
             LIMIT 1 `;
 }
 // Queries
-const QUERY_ORIGIN_HISTORY_BOOKMARK = originQuery({
-  having: `bookmarked OR ${SQL_AUTOFILL_FRECENCY_THRESHOLD}`,
-});
+const QUERY_ORIGIN_HISTORY_BOOKMARK = originQuery(
+  `WHERE bookmarked OR ${SQL_AUTOFILL_FRECENCY_THRESHOLD}`
+);
 
-const QUERY_ORIGIN_PREFIX_HISTORY_BOOKMARK = originQuery({
-  where: `AND prefix BETWEEN :prefix AND :prefix || X'FFFF'`,
-  having: `bookmarked OR ${SQL_AUTOFILL_FRECENCY_THRESHOLD}`,
-});
+const QUERY_ORIGIN_PREFIX_HISTORY_BOOKMARK = originQuery(
+  `WHERE prefix BETWEEN :prefix AND :prefix || X'FFFF'
+     AND (bookmarked OR ${SQL_AUTOFILL_FRECENCY_THRESHOLD})`
+);
 
-const QUERY_ORIGIN_HISTORY = originQuery({
-  select: `, (
-        SELECT TOTAL(visit_count) > 0
-        FROM moz_places
-        WHERE moz_places.origin_id = moz_origins.id
-       ) AS visited`,
-  having: `visited AND ${SQL_AUTOFILL_FRECENCY_THRESHOLD}`,
-});
+const QUERY_ORIGIN_HISTORY = originQuery(
+  `WHERE visited AND ${SQL_AUTOFILL_FRECENCY_THRESHOLD}`
+);
 
-const QUERY_ORIGIN_PREFIX_HISTORY = originQuery({
-  select: `, (
-        SELECT TOTAL(visit_count) > 0
-        FROM moz_places
-        WHERE moz_places.origin_id = moz_origins.id
-       ) AS visited`,
-  where: `AND prefix BETWEEN :prefix AND :prefix || X'FFFF'`,
-  having: `visited AND ${SQL_AUTOFILL_FRECENCY_THRESHOLD}`,
-});
+const QUERY_ORIGIN_PREFIX_HISTORY = originQuery(
+  `WHERE prefix BETWEEN :prefix AND :prefix || X'FFFF'
+     AND visited AND ${SQL_AUTOFILL_FRECENCY_THRESHOLD}`
+);
 
-const QUERY_ORIGIN_BOOKMARK = originQuery({
-  having: `bookmarked`,
-});
+const QUERY_ORIGIN_BOOKMARK = originQuery(`WHERE bookmarked`);
 
-const QUERY_ORIGIN_PREFIX_BOOKMARK = originQuery({
-  where: `AND prefix BETWEEN :prefix AND :prefix || X'FFFF'`,
-  having: `bookmarked`,
-});
+const QUERY_ORIGIN_PREFIX_BOOKMARK = originQuery(
+  `WHERE prefix BETWEEN :prefix AND :prefix || X'FFFF' AND bookmarked`
+);
 
 const QUERY_URL_HISTORY_BOOKMARK = urlQuery(
   `AND (bookmarked OR frecency > 20)
@@ -301,6 +255,12 @@ class ProviderAutofill extends UrlbarProvider {
   async isActive(queryContext) {
     let instance = this.queryInstance;
 
+    // This is usually reset on canceling or completing the query, but since we
+    // query in isActive, it may not have been canceled by the previous call.
+    // It is an object with values { result: UrlbarResult, instance: Query }.
+    // See the documentation for _getAutofillData for more information.
+    this._autofillData = null;
+
     // First of all, check for the autoFill pref.
     if (!UrlbarPrefs.get("autoFill")) {
       return false;
@@ -354,16 +314,11 @@ class ProviderAutofill extends UrlbarProvider {
     // muxer doesn't have to wait on autofill for every query, since startQuery
     // will be guaranteed to return a result very quickly using this approach.
     // Bug 1651101 is filed to improve this behaviour.
-    let autofilled = await this._getAutofillResult(queryContext);
-    if (!autofilled || !this._autofillResult) {
+    let result = await this._getAutofillResult(queryContext);
+    if (!result || instance != this.queryInstance) {
       return false;
     }
-
-    // Check the query was not canceled while this executed.
-    if (instance != this.queryInstance) {
-      return false;
-    }
-
+    this._autofillData = { result, instance };
     return true;
   }
 
@@ -375,8 +330,9 @@ class ProviderAutofill extends UrlbarProvider {
   getPriority(queryContext) {
     // Priority search results are restricting.
     if (
-      this._autofillResult &&
-      this._autofillResult.type == UrlbarUtils.RESULT_TYPE.SEARCH
+      this._autofillData &&
+      this._autofillData.instance == this.queryInstance &&
+      this._autofillData.result.type == UrlbarUtils.RESULT_TYPE.SEARCH
     ) {
       return 1;
     }
@@ -392,15 +348,20 @@ class ProviderAutofill extends UrlbarProvider {
    * @returns {Promise} resolved when the query stops.
    */
   async startQuery(queryContext, addCallback) {
-    // Sanity check since this._autofillResult is deleted in cancelQuery.
-    if (!this._autofillResult) {
-      this.logger.error("startQuery invoked without an _autofillResult");
+    // Check if the query was cancelled while the autofill result was being
+    // fetched. We don't expect this to be true since we also check the instance
+    // in isActive and clear _autofillData in cancelQuery, but we sanity check it.
+    if (
+      !this._autofillData ||
+      this._autofillData.instance != this.queryInstance
+    ) {
+      this.logger.error("startQuery invoked with an invalid _autofillData");
       return;
     }
 
-    this._autofillResult.heuristic = true;
-    addCallback(this, this._autofillResult);
-    delete this._autofillResult;
+    this._autofillData.result.heuristic = true;
+    addCallback(this, this._autofillData.result);
+    this._autofillData = null;
   }
 
   /**
@@ -408,7 +369,9 @@ class ProviderAutofill extends UrlbarProvider {
    * @param {object} queryContext The query context object
    */
   cancelQuery(queryContext) {
-    delete this._autofillResult;
+    if (this._autofillData?.instance == this.queryInstance) {
+      this._autofillData = null;
+    }
   }
 
   /**
@@ -492,10 +455,10 @@ class ProviderAutofill extends UrlbarProvider {
         .join("") + ".";
 
     // Build a string that's the URL stripped of its prefix, i.e., the host plus
-    // everything after the host.  Use queryContext.searchString instead of
+    // everything after.  Use queryContext.trimmedSearchString instead of
     // this._searchString because this._searchString has had unEscapeURIForUI()
     // called on it.  It's therefore not necessarily the literal URL.
-    let strippedURL = queryContext.searchString.trim();
+    let strippedURL = queryContext.trimmedSearchString;
     if (this._strippedPrefix) {
       strippedURL = strippedURL.substr(this._strippedPrefix.length);
     }
@@ -537,27 +500,23 @@ class ProviderAutofill extends UrlbarProvider {
   }
 
   /**
-   * Processes a matched row in the Places database and sets
-   * this._autofillResult to any matches.
+   * Processes a matched row in the Places database.
    * @param {object} row
    *   The matched row.
-   * @param {function} cancel
-   *   A callback to cancel the search.
    * @param {UrlbarQueryContext} queryContext
+   * @returns {UrlbarResult} a result generated from the matches row.
    */
-  _onResultRow(row, cancel, queryContext) {
-    let queryType = row.getResultByIndex(QUERYINDEX.QUERYTYPE);
+  _processRow(row, queryContext) {
+    let queryType = row.getResultByName("query_type");
     let autofilledValue, finalCompleteValue;
     switch (queryType) {
       case QUERYTYPE.AUTOFILL_ORIGIN:
-        autofilledValue = row.getResultByIndex(
-          QUERYINDEX_ORIGIN.AUTOFILLED_VALUE
-        );
-        finalCompleteValue = row.getResultByIndex(QUERYINDEX_ORIGIN.URL);
+        autofilledValue = row.getResultByName("host_fixed");
+        finalCompleteValue = row.getResultByName("url");
         break;
       case QUERYTYPE.AUTOFILL_URL:
-        let url = row.getResultByIndex(QUERYINDEX_URL.URL);
-        let strippedURL = row.getResultByIndex(QUERYINDEX_URL.STRIPPED_URL);
+        let url = row.getResultByName("url");
+        let strippedURL = row.getResultByName("stripped_url");
         // We autofill urls to-the-next-slash.
         // http://mozilla.org/foo/bar/baz will be autofilled to:
         //  - http://mozilla.org/f[oo/]
@@ -577,10 +536,6 @@ class ProviderAutofill extends UrlbarProvider {
         finalCompleteValue = strippedPrefix + autofilledValue;
         break;
     }
-
-    // We cancel the query right away since we're just looking for a single
-    // autofill result.
-    cancel();
 
     let [title] = UrlbarUtils.stripPrefixAndTrim(finalCompleteValue, {
       stripHttp: true,
@@ -604,37 +559,36 @@ class ProviderAutofill extends UrlbarProvider {
       selectionStart: queryContext.searchString.length,
       selectionEnd: autofilledValue.length,
     };
-
-    this._autofillResult = result;
+    return result;
   }
 
   async _getAutofillResult(queryContext) {
     // We may be autofilling an about: link.
-    this._matchAboutPageForAutofill(queryContext);
-    if (this._autofillResult) {
-      return true;
+    let result = this._matchAboutPageForAutofill(queryContext);
+    if (result) {
+      return result;
     }
 
     // It may also look like a URL we know from the database.
-    await this._matchKnownUrl(queryContext);
-    if (this._autofillResult) {
-      return true;
+    result = await this._matchKnownUrl(queryContext);
+    if (result) {
+      return result;
     }
 
     // Or it may look like a search engine domain.
-    await this._matchSearchEngineDomain(queryContext);
-    if (this._autofillResult) {
-      return true;
+    result = await this._matchSearchEngineDomain(queryContext);
+    if (result) {
+      return result;
     }
 
-    return false;
+    return null;
   }
 
   _matchAboutPageForAutofill(queryContext) {
     // Check that the typed query is at least one character longer than the
     // about: prefix.
     if (this._strippedPrefix != "about:" || !this._searchString) {
-      return;
+      return null;
     }
 
     for (const aboutUrl of AboutPagesUtils.visibleAboutUrls) {
@@ -661,16 +615,16 @@ class ProviderAutofill extends UrlbarProvider {
           selectionStart: queryContext.searchString.length,
           selectionEnd: autofilledValue.length,
         };
-        this._autofillResult = result;
-        return;
+        return result;
       }
     }
+    return null;
   }
 
   async _matchKnownUrl(queryContext) {
     let conn = await PlacesUtils.promiseLargeCacheDBConnection();
     if (!conn) {
-      return;
+      return null;
     }
     // If search string looks like an origin, try to autofill against origins.
     // Otherwise treat it as a possible URL.  When the string has only one slash
@@ -686,20 +640,22 @@ class ProviderAutofill extends UrlbarProvider {
       [query, params] = this._getUrlQuery(queryContext);
     }
 
-    // _getrlQuery doesn't always return a query.
+    // _getUrlQuery doesn't always return a query.
     if (query) {
-      await conn.executeCached(query, params, (row, cancel) => {
-        this._onResultRow(row, cancel, queryContext);
-      });
+      let rows = await conn.executeCached(query, params);
+      if (rows.length) {
+        return this._processRow(rows[0], queryContext);
+      }
     }
+    return null;
   }
 
   async _matchSearchEngineDomain(queryContext) {
     if (!UrlbarPrefs.get("autoFill.searchEngines")) {
-      return;
+      return null;
     }
 
-    // engineForDomainPrefix only matches against engine domains.
+    // enginesForDomainPrefix only matches against engine domains.
     // Remove an eventual trailing slash from the search string (without the
     // prefix) and check if the resulting string is worth matching.
     // Later, we'll verify that the found result matches the original
@@ -712,12 +668,14 @@ class ProviderAutofill extends UrlbarProvider {
     if (
       !UrlbarTokenizer.looksLikeOrigin(searchStr, { ignoreKnownDomains: true })
     ) {
-      return;
+      return null;
     }
 
-    let engine = await UrlbarSearchUtils.engineForDomainPrefix(searchStr);
+    // Since we are autofilling, we can only pick one matching engine. Use the
+    // first.
+    let engine = (await UrlbarSearchUtils.enginesForDomainPrefix(searchStr))[0];
     if (!engine) {
-      return;
+      return null;
     }
     let url = engine.searchForm;
     let domain = engine.getResultDomain();
@@ -727,7 +685,7 @@ class ProviderAutofill extends UrlbarProvider {
       (this._strippedPrefix && !url.startsWith(this._strippedPrefix)) ||
       !(domain + "/").includes(this._searchString)
     ) {
-      return;
+      return null;
     }
 
     // The value that's autofilled in the input is the prefix the user typed, if
@@ -741,7 +699,7 @@ class ProviderAutofill extends UrlbarProvider {
       UrlbarUtils.RESULT_SOURCE.SEARCH,
       ...UrlbarResult.payloadAndSimpleHighlights(queryContext.tokens, {
         engine: [engine.name, UrlbarUtils.HIGHLIGHT.TYPED],
-        icon: engine.iconURI ? engine.iconURI.spec : "",
+        icon: engine.iconURI?.spec,
       })
     );
     let autofilledValue =
@@ -752,7 +710,7 @@ class ProviderAutofill extends UrlbarProvider {
       selectionStart: queryContext.searchString.length,
       selectionEnd: autofilledValue.length,
     };
-    this._autofillResult = result;
+    return result;
   }
 }
 

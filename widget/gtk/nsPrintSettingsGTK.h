@@ -31,6 +31,7 @@ class nsPrintSettingsGTK : public nsPrintSettings {
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_PRINTSETTINGSGTK_IID)
 
   nsPrintSettingsGTK();
+  explicit nsPrintSettingsGTK(const PrintSettingsInitializer& aSettings);
 
   // We're overriding these methods because we want to read/write with GTK
   // objects, not local variables. This allows a simpler settings implementation
@@ -92,8 +93,8 @@ class nsPrintSettingsGTK : public nsPrintSettings {
 
   // A name recognised by GTK is strongly advised here, as this is used to
   // create a GtkPaperSize.
-  NS_IMETHOD GetPaperName(nsAString& aPaperName) override;
-  NS_IMETHOD SetPaperName(const nsAString& aPaperName) override;
+  NS_IMETHOD GetPaperId(nsAString& aPaperId) override;
+  NS_IMETHOD SetPaperId(const nsAString& aPaperId) override;
 
   NS_IMETHOD SetUnwriteableMarginInTwips(
       nsIntMargin& aUnwriteableMargin) override;

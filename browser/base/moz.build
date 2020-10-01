@@ -20,6 +20,7 @@ MOCHITEST_CHROME_MANIFESTS += [
 BROWSER_CHROME_MANIFESTS += [
     'content/test/about/browser.ini',
     'content/test/alerts/browser.ini',
+    'content/test/backforward/browser.ini',
     'content/test/caps/browser.ini',
     'content/test/captivePortal/browser.ini',
     'content/test/contextMenu/browser.ini',
@@ -51,6 +52,7 @@ BROWSER_CHROME_MANIFESTS += [
     'content/test/statuspanel/browser.ini',
     'content/test/sync/browser.ini',
     'content/test/tabcrashed/browser.ini',
+    'content/test/tabdialogs/browser.ini',
     'content/test/tabPrompts/browser.ini',
     'content/test/tabs/browser.ini',
     'content/test/touch/browser.ini',
@@ -58,6 +60,10 @@ BROWSER_CHROME_MANIFESTS += [
     'content/test/webrtc/browser.ini',
     'content/test/webrtc/legacyIndicator/browser.ini',
     'content/test/zoom/browser.ini',
+]
+
+PERFTESTS_MANIFESTS += [
+    'content/test/perftest.ini'
 ]
 
 DEFINES['MOZ_APP_VERSION'] = CONFIG['MOZ_APP_VERSION']

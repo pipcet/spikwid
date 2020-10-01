@@ -109,9 +109,8 @@ XPIDL_SOURCES += [
     'nsIFormatConverter.idl',
     'nsIGfxInfo.idl',
     'nsIGfxInfoDebug.idl',
-    'nsIIdleService.idl',
-    'nsIIdleServiceInternal.idl',
     'nsIPaper.idl',
+    'nsIPaperMargin.idl',
     'nsIPrinter.idl',
     'nsIPrinterList.idl',
     'nsIPrintSession.idl',
@@ -122,6 +121,8 @@ XPIDL_SOURCES += [
     'nsISharePicker.idl',
     'nsISound.idl',
     'nsITransferable.idl',
+    'nsIUserIdleService.idl',
+    'nsIUserIdleServiceInternal.idl',
 ]
 
 XPIDL_MODULE = 'widget'
@@ -137,7 +138,6 @@ EXPORTS += [
     'nsBaseScreen.h',
     'nsBaseWidget.h',
     'nsIDeviceContextSpec.h',
-    'nsIdleService.h',
     'nsIKeyEventInPluginCallback.h',
     'nsIPluginWidget.h',
     'nsIPrintDialogService.h',
@@ -145,7 +145,8 @@ EXPORTS += [
     'nsIWidget.h',
     'nsIWidgetListener.h',
     'nsPaper.h',
-    'nsPrinter.h',
+    'nsPrinterListBase.h',
+    'nsUserIdleService.h',
     'nsWidgetInitData.h',
     'nsWidgetsCID.h',
     'PuppetWidget.h',
@@ -205,15 +206,13 @@ UNIFIED_SOURCES += [
     'nsDragServiceProxy.cpp',
     'nsFilePickerProxy.cpp',
     'nsHTMLFormatConverter.cpp',
-    'nsIdleService.cpp',
     'nsIWidgetListener.cpp',
     'nsNativeBasicTheme.cpp',
-    'nsPaper.cpp',
     'nsPrimitiveHelpers.cpp',
-    'nsPrinter.cpp',
     'nsPrintSettingsImpl.cpp',
     'nsSoundProxy.cpp',
     'nsTransferable.cpp',
+    'nsUserIdleService.cpp',
     'nsXPLookAndFeel.cpp',
     'PuppetBidiKeyboard.cpp',
     'PuppetWidget.cpp',
@@ -240,9 +239,20 @@ if CONFIG['MOZ_XUL'] and CONFIG['NS_PRINTING']:
     ]
     UNIFIED_SOURCES += [
         'nsDeviceContextSpecProxy.cpp',
+        'nsPaper.cpp',
+        'nsPaperMargin.cpp',
+        'nsPrinterBase.cpp',
+        'nsPrinterListBase.cpp',
         'nsPrintSession.cpp',
         'nsPrintSettingsService.cpp',
     ]
+
+    if toolkit in ('cocoa', 'gtk'):
+        UNIFIED_SOURCES += [
+            'nsCUPSShim.cpp',
+            'nsPrinterCUPS.cpp',
+            'nsPrinterListCUPS.cpp',
+        ]
 
 # nsBaseWidget.cpp needs to be built separately because of name clashes in the OS X headers
 # nsBaseDragService.cpp moved out of UNIFIED to fix xgill crash (bug 1259850) after moving widget/ContentHelper -> apz/util/TouchActionHelper
@@ -294,10 +304,6 @@ if toolkit == 'gtk':
     XPIDL_SOURCES += [
         'nsIApplicationChooser.idl',
     ]
-if toolkit in ('gtk', 'cocoa'):
-    UNIFIED_SOURCES += [
-        'nsCUPSShim.cpp'
-    ]
 
 DEFINES['MOZ_CROSS_PROCESS_IME'] = True
 
@@ -317,6 +323,12 @@ LOCAL_INCLUDES += [
     '/widget',
     '/widget/headless',
 ]
+
+# We use the CUPS headers on Cocoa and GTK, but on GTK we don't depend on there being system headers.
+if toolkit == 'gtk':
+    LOCAL_INCLUDES += [
+        '/third_party/cups/include'
+    ]
 
 if toolkit == 'windows':
     IPDL_SOURCES = [

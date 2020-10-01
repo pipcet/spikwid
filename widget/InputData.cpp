@@ -315,6 +315,7 @@ WidgetMouseEvent MouseInput::ToWidgetMouseEvent(nsIWidget* aWidget) const {
 
   EventMessage msg = eVoidEvent;
   uint32_t clickCount = 0;
+  Maybe<WidgetMouseEvent::ExitFrom> exitFrom;
   switch (mType) {
     case MOUSE_MOVE:
       msg = eMouseMove;
@@ -338,6 +339,7 @@ WidgetMouseEvent MouseInput::ToWidgetMouseEvent(nsIWidget* aWidget) const {
       break;
     case MOUSE_WIDGET_EXIT:
       msg = eMouseExitFromWidget;
+      exitFrom = Some(WidgetMouseEvent::eChild);
       break;
     case MOUSE_HITTEST:
       msg = eMouseHitTest;
@@ -381,6 +383,7 @@ WidgetMouseEvent MouseInput::ToWidgetMouseEvent(nsIWidget* aWidget) const {
   event.mClickCount = clickCount;
   event.mInputSource = mInputSource;
   event.mFocusSequenceNumber = mFocusSequenceNumber;
+  event.mExitFrom = exitFrom;
 
   return event;
 }
@@ -494,6 +497,24 @@ ParentLayerPoint PanGestureInput::UserMultipliedLocalPanDisplacement() const {
                           mLocalPanDisplacement.y * mUserDeltaMultiplierY);
 }
 
+static int32_t TakeLargestInt(gfx::Float* aFloat) {
+  int32_t result(*aFloat);  // truncate towards zero
+  *aFloat -= result;
+  return result;
+}
+
+/* static */ gfx::IntPoint PanGestureInput::GetIntegerDeltaForEvent(
+    bool aIsStart, float x, float y) {
+  static gfx::Point sAccumulator(0.0f, 0.0f);
+  if (aIsStart) {
+    sAccumulator = gfx::Point(0.0f, 0.0f);
+  }
+  sAccumulator.x += x;
+  sAccumulator.y += y;
+  return gfx::IntPoint(TakeLargestInt(&sAccumulator.x),
+                       TakeLargestInt(&sAccumulator.y));
+}
+
 PinchGestureInput::PinchGestureInput()
     : InputData(PINCHGESTURE_INPUT),
       mType(PINCHGESTURE_START),
@@ -512,6 +533,7 @@ PinchGestureInput::PinchGestureInput(
       mScreenOffset(aScreenOffset),
       mCurrentSpan(aCurrentSpan),
       mPreviousSpan(aPreviousSpan),
+      mLineOrPageDeltaY(0),
       mHandledByAPZ(false) {}
 
 bool PinchGestureInput::TransformToLocal(
@@ -537,6 +559,16 @@ WidgetWheelEvent PinchGestureInput::ToWidgetWheelEvent(
   wheelEvent.mFlags.mHandledByAPZ = mHandledByAPZ;
   wheelEvent.mDeltaMode = WheelEvent_Binding::DOM_DELTA_PIXEL;
 
+  wheelEvent.mDeltaY = ComputeDeltaY(aWidget);
+
+  wheelEvent.mLineOrPageDeltaY = mLineOrPageDeltaY;
+
+  MOZ_ASSERT(mType == PINCHGESTURE_END || wheelEvent.mDeltaY != 0.0);
+
+  return wheelEvent;
+}
+
+double PinchGestureInput::ComputeDeltaY(nsIWidget* aWidget) const {
 #if defined(OS_MACOSX)
   // This converts the pinch gesture value to a fake wheel event that has the
   // control key pressed so that pages can implement custom pinch gesture
@@ -565,8 +597,8 @@ WidgetWheelEvent PinchGestureInput::ToWidgetWheelEvent(
   // (1.0 - M)|. We can calculate deltaY by solving the mPreviousSpan equation
   // for M in terms of mPreviousSpan and plugging that into to the formula for
   // deltaY.
-  wheelEvent.mDeltaY = (mPreviousSpan - 100.0) *
-                       (aWidget ? aWidget->GetDefaultScaleInternal() : 1.f);
+  return (mPreviousSpan - 100.0) *
+         (aWidget ? aWidget->GetDefaultScaleInternal() : 1.f);
 #else
   // This calculation is based on what the Windows widget code does.
   // Specifically, it creates a PinchGestureInput with |mCurrentSpan == 100.0 *
@@ -583,13 +615,21 @@ WidgetWheelEvent PinchGestureInput::ToWidgetWheelEvent(
   // XXX When we write the code for other platforms to do the same we'll need to
   // make sure this calculation is reasonable.
 
-  wheelEvent.mDeltaY = (mPreviousSpan - mCurrentSpan) *
-                       (aWidget ? aWidget->GetDefaultScaleInternal() : 1.f);
+  return (mPreviousSpan - mCurrentSpan) *
+         (aWidget ? aWidget->GetDefaultScaleInternal() : 1.f);
 #endif
+}
 
-  MOZ_ASSERT(mType == PINCHGESTURE_END || wheelEvent.mDeltaY != 0.0);
-
-  return wheelEvent;
+/* static */ gfx::IntPoint PinchGestureInput::GetIntegerDeltaForEvent(
+    bool aIsStart, float x, float y) {
+  static gfx::Point sAccumulator(0.0f, 0.0f);
+  if (aIsStart) {
+    sAccumulator = gfx::Point(0.0f, 0.0f);
+  }
+  sAccumulator.x += x;
+  sAccumulator.y += y;
+  return gfx::IntPoint(TakeLargestInt(&sAccumulator.x),
+                       TakeLargestInt(&sAccumulator.y));
 }
 
 TapGestureInput::TapGestureInput()

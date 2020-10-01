@@ -478,6 +478,32 @@ class HTMLEditUtils final {
   }
 
   /**
+   * Get previous/next editable point from start or end of aContent.
+   */
+  enum class InvisibleWhiteSpaces {
+    Ignore,    // Ignore invisible white-spaces, i.e., don't return middle of
+               // them.
+    Preserve,  // Preserve invisible white-spaces, i.e., result may be start or
+               // end of a text node even if it begins or ends with invisible
+               // white-spaces.
+  };
+  enum class TableBoundary {
+    Ignore,                  // May cross any table element boundary.
+    NoCrossTableElement,     // Won't cross `<table>` element boundary.
+    NoCrossAnyTableElement,  // Won't cross any table element boundary.
+  };
+  template <typename EditorDOMPointType>
+  static EditorDOMPointType GetPreviousEditablePoint(
+      nsIContent& aContent, const Element* aAncestorLimiter,
+      InvisibleWhiteSpaces aInvisibleWhiteSpaces,
+      TableBoundary aHowToTreatTableBoundary);
+  template <typename EditorDOMPointType>
+  static EditorDOMPointType GetNextEditablePoint(
+      nsIContent& aContent, const Element* aAncestorLimiter,
+      InvisibleWhiteSpaces aInvisibleWhiteSpaces,
+      TableBoundary aHowToTreatTableBoundary);
+
+  /**
    * GetAncestorBlockElement() returns parent or nearest ancestor of aContent
    * which is a block element.  If aAncestorLimiter is not nullptr,
    * this stops looking for the result when it meets the limiter.
@@ -529,6 +555,24 @@ class HTMLEditUtils final {
   }
 
   /**
+   * GetInclusiveAncestorBlockElementExceptHRElement() returns inclusive
+   * ancestor block element except `<hr>` element.
+   */
+  static Element* GetInclusiveAncestorBlockElementExceptHRElement(
+      const nsIContent& aContent, const nsINode* aAncestorLimiter = nullptr) {
+    Element* blockElement =
+        GetInclusiveAncestorBlockElement(aContent, aAncestorLimiter);
+    if (!blockElement || !blockElement->IsHTMLElement(nsGkAtoms::hr)) {
+      return blockElement;
+    }
+    if (!blockElement->GetParentElement()) {
+      return nullptr;
+    }
+    return GetInclusiveAncestorBlockElementExceptHRElement(
+        *blockElement->GetParentElement(), aAncestorLimiter);
+  }
+
+  /**
    * GetInclusiveAncestorEditableBlockElementOrInlineEditingHost() returns
    * inclusive block ancestor element of aContent.  If aContent is in inline
    * editing host, returns the editing host instead.
@@ -556,6 +600,36 @@ class HTMLEditUtils final {
   }
 
   static Element* GetClosestAncestorAnyListElement(const nsIContent& aContent);
+
+  /**
+   * GetMostDistantAnscestorEditableEmptyInlineElement() returns most distant
+   * ancestor which only has aEmptyContent or its ancestor, editable and
+   * inline element.
+   */
+  static Element* GetMostDistantAnscestorEditableEmptyInlineElement(
+      const nsIContent& aEmptyContent, const Element* aEditingHost = nullptr) {
+    nsIContent* lastEmptyContent = const_cast<nsIContent*>(&aEmptyContent);
+    for (Element* element = aEmptyContent.GetParentElement();
+         element && element != aEditingHost &&
+         HTMLEditUtils::IsInlineElement(*element) &&
+         HTMLEditUtils::IsSimplyEditableNode(*element);
+         element = element->GetParentElement()) {
+      if (element->GetChildCount() > 1) {
+        for (const nsIContent* child = element->GetFirstChild(); child;
+             child = child->GetNextSibling()) {
+          if (child == lastEmptyContent || child->IsComment()) {
+            continue;
+          }
+          return lastEmptyContent != &aEmptyContent
+                     ? lastEmptyContent->AsElement()
+                     : nullptr;
+        }
+      }
+      lastEmptyContent = element;
+    }
+    return lastEmptyContent != &aEmptyContent ? lastEmptyContent->AsElement()
+                                              : nullptr;
+  }
 
   /**
    * GetElementIfOnlyOneSelected() returns an element if aRange selects only
@@ -728,6 +802,16 @@ class HTMLEditUtils final {
  private:
   static bool CanNodeContain(nsHTMLTag aParentTagId, nsHTMLTag aChildTagId);
   static bool IsContainerNode(nsHTMLTag aTagId);
+
+  static bool CanCrossContentBoundary(nsIContent& aContent,
+                                      TableBoundary aHowToTreatTableBoundary) {
+    const bool cannotCrossBoundary =
+        (aHowToTreatTableBoundary == TableBoundary::NoCrossAnyTableElement &&
+         HTMLEditUtils::IsAnyTableElement(&aContent)) ||
+        (aHowToTreatTableBoundary == TableBoundary::NoCrossTableElement &&
+         aContent.IsHTMLElement(nsGkAtoms::table));
+    return !cannotCrossBoundary;
+  }
 };
 
 /**

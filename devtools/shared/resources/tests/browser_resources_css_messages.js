@@ -9,6 +9,7 @@
 const {
   ResourceWatcher,
 } = require("devtools/shared/resources/resource-watcher");
+const { MESSAGE_CATEGORY } = require("devtools/shared/constants");
 
 // Create a simple server so we have a nice sourceName in the resources packets.
 const httpServer = createTestHTTPServer();
@@ -25,13 +26,6 @@ httpServer.registerPathHandler(`/test_css_messages.html`, (req, res) => {
 const TEST_URI = `http://localhost:${httpServer.identity.primaryPort}/test_css_messages.html`;
 
 add_task(async function() {
-  info("Test css messages legacy listener");
-  await pushPref("devtools.testing.enableServerWatcherSupport", false);
-  await testWatchingCssMessages();
-  await testWatchingCachedCssMessages();
-
-  info("Test css messages server listener");
-  await pushPref("devtools.testing.enableServerWatcherSupport", true);
   await testWatchingCssMessages();
   await testWatchingCachedCssMessages();
 });
@@ -76,7 +70,7 @@ async function testWatchingCssMessages() {
   ok(true, "All the expected CSS messages were received");
 
   Services.console.reset();
-  targetList.stopListening();
+  targetList.destroy();
   await client.close();
 }
 
@@ -125,7 +119,7 @@ async function testWatchingCachedCssMessages() {
   is(receivedMessages.length, 3, "Cached messages were retrieved as expected");
 
   Services.console.reset();
-  targetList.stopListening();
+  targetList.destroy();
   await client.close();
 }
 
@@ -138,7 +132,7 @@ function setupOnAvailableFunction(targetList, receivedMessages) {
       pageError: {
         errorMessage: /Expected color but found ‘bloup’/,
         sourceName: /test_css_messages/,
-        category: "CSS Parser",
+        category: MESSAGE_CATEGORY.CSS_PARSER,
         timeStamp: /^\d+$/,
         error: false,
         warning: true,
@@ -149,7 +143,7 @@ function setupOnAvailableFunction(targetList, receivedMessages) {
       pageError: {
         errorMessage: /Error in parsing value for ‘width’/,
         sourceName: /test_css_messages/,
-        category: "CSS Parser",
+        category: MESSAGE_CATEGORY.CSS_PARSER,
         timeStamp: /^\d+$/,
         error: false,
         warning: true,
@@ -159,7 +153,7 @@ function setupOnAvailableFunction(targetList, receivedMessages) {
       pageError: {
         errorMessage: /Error in parsing value for ‘height’/,
         sourceName: /test_css_messages/,
-        category: "CSS Parser",
+        category: MESSAGE_CATEGORY.CSS_PARSER,
         timeStamp: /^\d+$/,
         error: false,
         warning: true,
@@ -169,29 +163,33 @@ function setupOnAvailableFunction(targetList, receivedMessages) {
 
   let done;
   const onAllMessagesReceived = new Promise(resolve => (done = resolve));
-  const onAvailable = ({ resourceType, targetFront, resource }) => {
-    const { pageError } = resource;
+  const onAvailable = resources => {
+    for (const resource of resources) {
+      const { pageError } = resource;
 
-    is(
-      resource.targetFront,
-      targetList.targetFront,
-      "The targetFront property is the expected one"
-    );
+      is(
+        resource.targetFront,
+        targetList.targetFront,
+        "The targetFront property is the expected one"
+      );
 
-    if (!pageError.sourceName.includes("test_css_messages")) {
-      info(`Ignore error from unknown source: "${pageError.sourceName}"`);
-      return;
-    }
+      if (!pageError.sourceName.includes("test_css_messages")) {
+        info(`Ignore error from unknown source: "${pageError.sourceName}"`);
+        continue;
+      }
 
-    const index = receivedMessages.length;
-    receivedMessages.push(pageError);
+      const index = receivedMessages.length;
+      receivedMessages.push(pageError);
 
-    info(`checking received css message #${index}: ${pageError.errorMessage}`);
-    ok(pageError, "The resource has a pageError attribute");
-    checkObject(resource, expectedMessages[index]);
+      info(
+        `checking received css message #${index}: ${pageError.errorMessage}`
+      );
+      ok(pageError, "The resource has a pageError attribute");
+      checkObject(resource, expectedMessages[index]);
 
-    if (receivedMessages.length == expectedMessages.length) {
-      done();
+      if (receivedMessages.length == expectedMessages.length) {
+        done();
+      }
     }
   };
   return { onAvailable, onAllMessagesReceived };

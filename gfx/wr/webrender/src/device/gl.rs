@@ -3,11 +3,12 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use super::super::shader_source::{OPTIMIZED_SHADERS, UNOPTIMIZED_SHADERS};
-use api::{ColorF, ImageDescriptor, ImageFormat, MemoryReport};
+use api::{ColorF, ImageDescriptor, ImageFormat};
 use api::{MixBlendMode, TextureTarget, VoidPtrToSizeFn};
 use api::units::*;
 use euclid::default::Transform3D;
 use gleam::gl;
+use crate::render_api::MemoryReport;
 use crate::internal_types::{FastHashMap, LayerIndex, RenderTargetInfo, Swizzle, SwizzleSettings};
 use crate::util::round_up_to_multiple;
 use crate::profiler;
@@ -955,6 +956,8 @@ pub struct Capabilities {
     pub supports_nonzero_pbo_offsets: bool,
     /// Whether the driver supports specifying the texture usage up front.
     pub supports_texture_usage: bool,
+    /// Whether offscreen render targets can be partially updated.
+    pub supports_render_target_partial_update: bool,
     /// The name of the renderer, as reported by GL
     pub renderer_name: String,
 }
@@ -1561,6 +1564,11 @@ impl Device {
         // from a non-zero offset within a PBO to fail. See bug 1603783.
         let supports_nonzero_pbo_offsets = !is_macos;
 
+        // On Mali-Gxx there is a driver bug when rendering partial updates to
+        // offscreen render targets, so we must ensure we render to the entire target.
+        // See bug 1663355.
+        let supports_render_target_partial_update = !renderer_name.starts_with("Mali-G");
+
         Device {
             gl,
             base_gl: None,
@@ -1580,6 +1588,7 @@ impl Device {
                 supports_texture_swizzle,
                 supports_nonzero_pbo_offsets,
                 supports_texture_usage,
+                supports_render_target_partial_update,
                 renderer_name,
             },
 
@@ -2387,9 +2396,6 @@ impl Device {
 
     /// Notifies the device that the contents of a render target are no longer
     /// needed.
-    ///
-    /// FIXME(bholley): We could/should invalidate the depth targets earlier
-    /// than the color targets, i.e. immediately after each pass.
     pub fn invalidate_render_target(&mut self, texture: &Texture) {
         let (fbos, attachments) = if texture.supports_depth() {
             (&texture.fbos_with_depth,
@@ -2407,6 +2413,16 @@ impl Device {
             self.gl.invalidate_framebuffer(gl::FRAMEBUFFER, attachments);
         }
         self.bind_external_draw_target(original_bound_fbo);
+    }
+
+    /// Notifies the device that the contents of the current framebuffer's depth
+    /// attachment is no longer needed. Unlike invalidate_render_target, this can
+    /// be called even when the contents of the colour attachment is still required.
+    /// This should be called before unbinding the framebuffer at the end of a pass,
+    /// to allow tiled GPUs to avoid writing the contents back to memory.
+    pub fn invalidate_depth_target(&mut self) {
+        assert!(self.depth_available);
+        self.gl.invalidate_framebuffer(gl::DRAW_FRAMEBUFFER, &[gl::DEPTH_ATTACHMENT]);
     }
 
     /// Notifies the device that a render target is about to be reused.
@@ -2781,7 +2797,7 @@ impl Device {
         debug_assert!(self.shader_is_ready);
 
         self.gl
-            .uniform_matrix_4fv(program.u_transform, false, &transform.to_row_major_array());
+            .uniform_matrix_4fv(program.u_transform, false, &transform.to_array());
     }
 
     pub fn switch_mode(&self, mode: i32) {
@@ -3532,7 +3548,7 @@ impl Device {
     pub fn set_blend_mode_alpha(&mut self) {
         self.set_blend_factors(
             (gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA),
-            (gl::ONE, gl::ONE),
+            (gl::ONE, gl::ONE_MINUS_SRC_ALPHA),
         );
     }
 

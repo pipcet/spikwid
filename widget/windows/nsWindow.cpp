@@ -60,6 +60,7 @@
 
 #include "mozilla/AppShutdown.h"
 #include "mozilla/AutoRestore.h"
+#include "mozilla/PreXULSkeletonUI.h"
 #include "mozilla/Logging.h"
 #include "mozilla/MathAlgorithms.h"
 #include "mozilla/MiscEvents.h"
@@ -600,6 +601,7 @@ nsWindow::nsWindow(bool aIsChildWindow)
   mMouseInDraggableArea = false;
   mDestroyCalled = false;
   mIsEarlyBlankWindow = false;
+  mWasPreXulSkeletonUI = false;
   mResizable = false;
   mHasTaskbarIconBeenCreated = false;
   mMouseTransparent = false;
@@ -722,16 +724,10 @@ static bool ShouldCacheTitleBarInfo(nsWindowType aWindowType,
 }
 
 void nsWindow::SendAnAPZEvent(InputData& aEvent) {
-  RefPtr<nsWindow> strongThis(this);
-  if (::IsWindowVisible(mWnd)) {
-    nsIRollupListener* rollupListener = nsBaseWidget::GetActiveRollupListener();
-    if (rollupListener) {
-      nsCOMPtr<nsIWidget> popup = rollupListener->GetRollupWidget();
-      if (popup) {
-        uint32_t popupsToRollup = UINT32_MAX;
-        rollupListener->Rollup(popupsToRollup, true, nullptr, nullptr);
-      }
-    }
+  LRESULT popupHandlingResult;
+  if (DealWithPopups(mWnd, MOZ_WM_DMANIP, 0, 0, &popupHandlingResult)) {
+    // We need to consume the event after using it to roll up the popup(s).
+    return;
   }
 
   APZEventResult result;
@@ -765,7 +761,8 @@ void nsWindow::RecreateDirectManipulationIfNeeded() {
     return;
   }
 
-  if (!StaticPrefs::apz_windows_use_direct_manipulation() ||
+  if (!(StaticPrefs::apz_allow_zooming() ||
+        StaticPrefs::apz_windows_use_direct_manipulation()) ||
       StaticPrefs::apz_windows_force_disable_direct_manipulation()) {
     return;
   }
@@ -894,9 +891,22 @@ nsresult nsWindow::Create(nsIWidget* aParent, nsNativeWidget aNativeParent,
       aInitData->mWindowType == eWindowType_plugin_ipc_content) {
     style |= WS_DISABLED;
   }
-  mWnd = ::CreateWindowExW(extendedStyle, className, L"", style, aRect.X(),
-                           aRect.Y(), aRect.Width(), GetHeight(aRect.Height()),
-                           parent, nullptr, nsToolkit::mDllInstance, nullptr);
+
+  if (aInitData->mWindowType == eWindowType_toplevel && !aParent) {
+    mWnd = ConsumePreXULSkeletonUIHandle();
+    if (mWnd) {
+      mWasPreXulSkeletonUI = true;
+      ::SetWindowLongPtrW(mWnd, GWL_STYLE, style);
+      ::SetWindowLongPtrW(mWnd, GWL_EXSTYLE, extendedStyle);
+    }
+  }
+
+  if (!mWnd) {
+    mWnd =
+        ::CreateWindowExW(extendedStyle, className, L"", style, aRect.X(),
+                          aRect.Y(), aRect.Width(), GetHeight(aRect.Height()),
+                          parent, nullptr, nsToolkit::mDllInstance, nullptr);
+  }
 
   if (!mWnd) {
     NS_WARNING("nsWindow CreateWindowEx failed.");
@@ -4560,8 +4570,9 @@ bool nsWindow::DispatchMouseEvent(EventMessage aEventMessage, WPARAM wParam,
       }
       break;
     case eMouseExitFromWidget:
-      event.mExitFrom = IsTopLevelMouseExit(mWnd) ? WidgetMouseEvent::eTopLevel
-                                                  : WidgetMouseEvent::eChild;
+      event.mExitFrom =
+          Some(IsTopLevelMouseExit(mWnd) ? WidgetMouseEvent::eTopLevel
+                                         : WidgetMouseEvent::eChild);
       break;
     default:
       break;
@@ -6922,7 +6933,7 @@ void nsWindow::OnWindowPosChanging(LPWINDOWPOS& info) {
 void nsWindow::UserActivity() {
   // Check if we have the idle service, if not we try to get it.
   if (!mIdleService) {
-    mIdleService = do_GetService("@mozilla.org/widget/idleservice;1");
+    mIdleService = do_GetService("@mozilla.org/widget/useridleservice;1");
   }
 
   // Check that we now have the idle service.
@@ -7345,6 +7356,8 @@ void nsWindow::OnDestroy() {
   // Prevent the widget from sending additional events.
   mWidgetListener = nullptr;
   mAttachedWidgetListener = nullptr;
+
+  DestroyDirectManipulation();
 
   if (mWnd == mLastKillFocusWindow) {
     mLastKillFocusWindow = nullptr;
@@ -7965,13 +7978,18 @@ static bool IsDifferentThreadWindow(HWND aWnd) {
 }
 
 // static
-bool nsWindow::EventIsInsideWindow(nsWindow* aWindow) {
+bool nsWindow::EventIsInsideWindow(nsWindow* aWindow,
+                                   Maybe<POINT> aEventPoint) {
   RECT r;
   ::GetWindowRect(aWindow->mWnd, &r);
-  DWORD pos = ::GetMessagePos();
   POINT mp;
-  mp.x = GET_X_LPARAM(pos);
-  mp.y = GET_Y_LPARAM(pos);
+  if (aEventPoint) {
+    mp = *aEventPoint;
+  } else {
+    DWORD pos = ::GetMessagePos();
+    mp.x = GET_X_LPARAM(pos);
+    mp.y = GET_Y_LPARAM(pos);
+  }
 
   // was the event inside this window?
   return static_cast<bool>(::PtInRect(&r, mp));
@@ -7979,7 +7997,8 @@ bool nsWindow::EventIsInsideWindow(nsWindow* aWindow) {
 
 // static
 bool nsWindow::GetPopupsToRollup(nsIRollupListener* aRollupListener,
-                                 uint32_t* aPopupsToRollup) {
+                                 uint32_t* aPopupsToRollup,
+                                 Maybe<POINT> aEventPoint) {
   // If we're dealing with menus, we probably have submenus and we don't want
   // to rollup some of them if the click is in a parent menu of the current
   // submenu.
@@ -7988,7 +8007,7 @@ bool nsWindow::GetPopupsToRollup(nsIRollupListener* aRollupListener,
   uint32_t sameTypeCount = aRollupListener->GetSubmenuWidgetChain(&widgetChain);
   for (uint32_t i = 0; i < widgetChain.Length(); ++i) {
     nsIWidget* widget = widgetChain[i];
-    if (EventIsInsideWindow(static_cast<nsWindow*>(widget))) {
+    if (EventIsInsideWindow(static_cast<nsWindow*>(widget), aEventPoint)) {
       // Don't roll up if the mouse event occurred within a menu of the
       // same type. If the mouse event occurred in a menu higher than that,
       // roll up, but pass the number of popups to Rollup so that only those
@@ -8091,20 +8110,25 @@ bool nsWindow::DealWithPopups(HWND aWnd, UINT aMessage, WPARAM aWParam,
       if (!pointerEvents.ShouldRollupOnPointerEvent(nativeMessage, aWParam)) {
         return false;
       }
-      if (!GetPopupsToRollup(rollupListener, &popupsToRollup)) {
-        return false;
-      }
-      // Can't use EventIsInsideWindow to check whether the event is inside
-      // the popup window. It's because EventIsInsideWindow gets message
-      // coordinates by GetMessagePos, which returns physical screen
-      // coordinates at WM_POINTERDOWN.
       POINT pt;
       pt.x = GET_X_LPARAM(aLParam);
       pt.y = GET_Y_LPARAM(aLParam);
-      RECT r;
-      ::GetWindowRect(popupWindow->mWnd, &r);
-      if (::PtInRect(&r, pt) != 0) {
+      if (!GetPopupsToRollup(rollupListener, &popupsToRollup, Some(pt))) {
+        return false;
+      }
+      if (EventIsInsideWindow(popupWindow, Some(pt))) {
         // Don't roll up if the event is inside the popup window.
+        return false;
+      }
+    } break;
+    case MOZ_WM_DMANIP: {
+      POINT pt;
+      ::GetCursorPos(&pt);
+      if (!GetPopupsToRollup(rollupListener, &popupsToRollup, Some(pt))) {
+        return false;
+      }
+      if (EventIsInsideWindow(popupWindow, Some(pt))) {
+        // Don't roll up if the event is inside the popup window
         return false;
       }
     } break;
@@ -8650,6 +8674,12 @@ void nsWindow::GetCompositorWidgetInitData(
 
 bool nsWindow::SynchronouslyRepaintOnResize() {
   return !gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled();
+}
+
+void nsWindow::MaybeDispatchInitialFocusEvent() {
+  if (mWasPreXulSkeletonUI && ::GetActiveWindow() == mWnd) {
+    DispatchFocusToTopLevelWindow(true);
+  }
 }
 
 already_AddRefed<nsIWidget> nsIWidget::CreateTopLevelWindow() {

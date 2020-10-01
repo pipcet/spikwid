@@ -394,11 +394,18 @@ function frecencyForUrl(aURI) {
  */
 function makeBookmarkResult(
   queryContext,
-  { title, uri, iconUri, tags = [], heuristic = false }
+  {
+    title,
+    uri,
+    iconUri,
+    tags = [],
+    heuristic = false,
+    source = UrlbarUtils.RESULT_SOURCE.BOOKMARKS,
+  }
 ) {
   let result = new UrlbarResult(
     UrlbarUtils.RESULT_TYPE.URL,
-    UrlbarUtils.RESULT_SOURCE.BOOKMARKS,
+    source,
     ...UrlbarResult.payloadAndSimpleHighlights(queryContext.tokens, {
       url: [uri, UrlbarUtils.HIGHLIGHT.TYPED],
       // Check against undefined so consumers can pass in the empty string.
@@ -531,7 +538,7 @@ function makePrioritySearchResult(
     UrlbarUtils.RESULT_SOURCE.SEARCH,
     ...UrlbarResult.payloadAndSimpleHighlights(queryContext.tokens, {
       engine: [engineName, UrlbarUtils.HIGHLIGHT.TYPED],
-      icon: engineIconUri ? engineIconUri : "",
+      icon: engineIconUri,
     })
   );
 
@@ -550,6 +557,8 @@ function makePrioritySearchResult(
  * @param {string} [options.engineName]
  *   The name of the engine providing the suggestion. Leave blank if there
  *   is no suggestion.
+ * @param {string} [options.uri]
+ *   The URI that the search result will navigate to.
  * @param {string} [options.query]
  *   The query that started the search. This overrides
  *   `queryContext.searchString`. This is useful when the query that will show
@@ -563,7 +572,7 @@ function makePrioritySearchResult(
  *   True if this is a heuristic result. Defaults to false.
  * @param {number} [options.keywordOffer]
  *   A value from UrlbarUtils.KEYWORD_OFFER.
- * @param {string} providerName
+ * @param {string} [options.providerName]
  *   The name of the provider offering this result. The test suite will not
  *   check which provider offered a result unless this option is specified.
  * @returns {UrlbarResult}
@@ -577,50 +586,61 @@ function makeSearchResult(
     tailOffsetIndex,
     engineName,
     alias,
+    uri,
     query,
     engineIconUri,
-    heuristic = false,
     keywordOffer,
     providerName,
+    inPrivateWindow,
+    isPrivateEngine,
+    heuristic = false,
+    type = UrlbarUtils.RESULT_TYPE.SEARCH,
+    source = UrlbarUtils.RESULT_SOURCE.SEARCH,
   }
 ) {
-  if (!keywordOffer) {
-    keywordOffer = UrlbarUtils.KEYWORD_OFFER.NONE;
-    if (alias && !query.trim() && alias.startsWith("@")) {
-      keywordOffer = heuristic
-        ? UrlbarUtils.KEYWORD_OFFER.HIDE
-        : UrlbarUtils.KEYWORD_OFFER.SHOW;
+  // Tail suggestion common cases, handled here to reduce verbosity in tests.
+  if (tail) {
+    if (!tailPrefix) {
+      tailPrefix = "… ";
+    }
+    if (!tailOffsetIndex) {
+      tailOffsetIndex = suggestion.indexOf(tail);
     }
   }
 
-  // Tail suggestion common cases, handled here to reduce verbosity in tests.
-  if (tail && !tailPrefix) {
-    tailPrefix = "… ";
-  }
+  let payload = {
+    engine: [engineName, UrlbarUtils.HIGHLIGHT.TYPED],
+    suggestion: [suggestion, UrlbarUtils.HIGHLIGHT.SUGGESTED],
+    tailPrefix,
+    tail: [tail, UrlbarUtils.HIGHLIGHT.SUGGESTED],
+    tailOffsetIndex,
+    keyword: [
+      alias,
+      keywordOffer == UrlbarUtils.KEYWORD_OFFER.SHOW
+        ? UrlbarUtils.HIGHLIGHT.TYPED
+        : UrlbarUtils.HIGHLIGHT.NONE,
+    ],
+    // Check against undefined so consumers can pass in the empty string.
+    query: [
+      typeof query != "undefined" ? query : queryContext.trimmedSearchString,
+      UrlbarUtils.HIGHLIGHT.TYPED,
+    ],
+    icon: engineIconUri,
+    keywordOffer,
+    inPrivateWindow,
+    isPrivateEngine,
+  };
 
-  if (!tailOffsetIndex) {
-    tailOffsetIndex = tail ? suggestion.indexOf(tail) : -1;
+  // Passing even an undefined URL in the payload creates a potentially-unwanted
+  // displayUrl parameter, so we add it only if specified.
+  if (uri) {
+    payload.url = uri;
   }
 
   let result = new UrlbarResult(
-    UrlbarUtils.RESULT_TYPE.SEARCH,
-    UrlbarUtils.RESULT_SOURCE.SEARCH,
-    ...UrlbarResult.payloadAndSimpleHighlights(queryContext.tokens, {
-      engine: [engineName, UrlbarUtils.HIGHLIGHT.TYPED],
-      suggestion: [suggestion, UrlbarUtils.HIGHLIGHT.SUGGESTED],
-      tailPrefix,
-      tail: [tail, UrlbarUtils.HIGHLIGHT.SUGGESTED],
-      tailOffsetIndex,
-      keyword: [alias, UrlbarUtils.HIGHLIGHT.TYPED],
-      // Check against undefined so consumers can pass in the empty string.
-      query: [
-        typeof query != "undefined" ? query : queryContext.searchString.trim(),
-        UrlbarUtils.HIGHLIGHT.TYPED,
-      ],
-      isSearchHistory: false,
-      icon: [engineIconUri ? engineIconUri : ""],
-      keywordOffer,
-    })
+    type,
+    source,
+    ...UrlbarResult.payloadAndSimpleHighlights(queryContext.tokens, payload)
   );
 
   if (typeof suggestion == "string") {
@@ -656,14 +676,29 @@ function makeSearchResult(
  */
 function makeVisitResult(
   queryContext,
-  { title, uri, iconUri, tags = null, heuristic = false, providerName }
+  {
+    title,
+    uri,
+    iconUri,
+    providerName,
+    tags = null,
+    heuristic = false,
+    source = UrlbarUtils.RESULT_SOURCE.HISTORY,
+  }
 ) {
   let payload = {
     url: [uri, UrlbarUtils.HIGHLIGHT.TYPED],
-    // Check against undefined so consumers can pass in the empty string.
-    icon: [typeof iconUri != "undefined" ? iconUri : `page-icon:${uri}`],
     title: [title, UrlbarUtils.HIGHLIGHT.TYPED],
   };
+
+  if (iconUri) {
+    payload.icon = iconUri;
+  } else if (
+    iconUri === undefined &&
+    source != UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL
+  ) {
+    payload.icon = `page-icon:${uri}`;
+  }
 
   if (!heuristic || tags) {
     payload.tags = [tags || [], UrlbarUtils.HIGHLIGHT.TYPED];
@@ -671,7 +706,7 @@ function makeVisitResult(
 
   let result = new UrlbarResult(
     UrlbarUtils.RESULT_TYPE.URL,
-    UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
+    source,
     ...UrlbarResult.payloadAndSimpleHighlights(queryContext.tokens, payload)
   );
 
@@ -721,12 +756,14 @@ async function check_results({
   let controller = UrlbarTestUtils.newMockController({
     input: {
       isPrivate: context.isPrivate,
+      onFirstResult() {
+        return false;
+      },
       window: {
         location: {
           href: AppConstants.BROWSER_CHROME_URL,
         },
       },
-      autofillFirstResult() {},
     },
   });
 
@@ -757,32 +794,146 @@ async function check_results({
       );
     }
   }
-
+  if (context.results.length != matches.length) {
+    info("Actual results: " + JSON.stringify(context.results));
+  }
   Assert.equal(
     context.results.length,
     matches.length,
     "Found the expected number of results."
   );
 
-  Assert.deepEqual(
-    matches.map(m => m.payload),
-    context.results.map(m => m.payload),
-    "Payloads are the same."
-  );
+  function getPayload(result) {
+    let payload = {};
+    for (let [key, value] of Object.entries(result.payload)) {
+      if (value !== undefined) {
+        payload[key] = value;
+      }
+    }
+    return payload;
+  }
 
-  Assert.deepEqual(
-    matches.map(m => m.heuristic),
-    context.results.map(m => m.heuristic),
-    "Heuristic results are correctly flagged."
-  );
-
-  matches.forEach((match, i) => {
-    if (match.providerName) {
+  for (let i = 0; i < matches.length; i++) {
+    let actual = context.results[i];
+    let expected = matches[i];
+    info(
+      `Comparing results at index ${i}:` +
+        " actual=" +
+        JSON.stringify(actual) +
+        " expected=" +
+        JSON.stringify(expected)
+    );
+    Assert.equal(
+      actual.type,
+      expected.type,
+      `result.type at result index ${i}`
+    );
+    Assert.equal(
+      actual.source,
+      expected.source,
+      `result.source at result index ${i}`
+    );
+    Assert.equal(
+      actual.heuristic,
+      expected.heuristic,
+      `result.heuristic at result index ${i}`
+    );
+    if (expected.providerName) {
       Assert.equal(
-        match.providerName,
-        context.results[i].providerName,
-        `The result at index ${i} is from the correct provider.`
+        actual.providerName,
+        expected.providerName,
+        `result.providerName at result index ${i}`
       );
     }
+    Assert.deepEqual(
+      getPayload(actual),
+      getPayload(expected),
+      `result.payload at result index ${i}`
+    );
+  }
+}
+
+/**
+ * Returns the frecency of an origin.
+ *
+ * @param   {string} prefix
+ *          The origin's prefix, e.g., "http://".
+ * @param   {string} aHost
+ *          The origin's host.
+ * @returns {number} The origin's frecency.
+ */
+async function getOriginFrecency(prefix, aHost) {
+  let db = await PlacesUtils.promiseDBConnection();
+  let rows = await db.execute(
+    `
+    SELECT frecency
+    FROM moz_origins
+    WHERE prefix = :prefix AND host = :host
+  `,
+    { prefix, host: aHost }
+  );
+  Assert.equal(rows.length, 1);
+  return rows[0].getResultByIndex(0);
+}
+
+/**
+ * Returns the origin frecency stats.
+ *
+ * @returns {object}
+ *          An object { count, sum, squares }.
+ */
+async function getOriginFrecencyStats() {
+  let db = await PlacesUtils.promiseDBConnection();
+  let rows = await db.execute(`
+    SELECT
+      IFNULL((SELECT value FROM moz_meta WHERE key = 'origin_frecency_count'), 0),
+      IFNULL((SELECT value FROM moz_meta WHERE key = 'origin_frecency_sum'), 0),
+      IFNULL((SELECT value FROM moz_meta WHERE key = 'origin_frecency_sum_of_squares'), 0)
+  `);
+  let count = rows[0].getResultByIndex(0);
+  let sum = rows[0].getResultByIndex(1);
+  let squares = rows[0].getResultByIndex(2);
+  return { count, sum, squares };
+}
+
+/**
+ * Returns the origin autofill frecency threshold.
+ *
+ * @returns {number}
+ *          The threshold.
+ */
+async function getOriginAutofillThreshold() {
+  let { count, sum, squares } = await getOriginFrecencyStats();
+  if (!count) {
+    return 0;
+  }
+  if (count == 1) {
+    return sum;
+  }
+  let stddevMultiplier = UrlbarPrefs.get("autoFill.stddevMultiplier");
+  return (
+    sum / count +
+    stddevMultiplier * Math.sqrt((squares - (sum * sum) / count) / count)
+  );
+}
+
+/**
+ * Checks that origins appear in a given order in the database.
+ * @param {string} host The "fixed" host, without "www."
+ * @param {Array} prefixOrder The prefixes (scheme + www.) sorted appropriately.
+ */
+async function checkOriginsOrder(host, prefixOrder) {
+  await PlacesUtils.withConnectionWrapper("checkOriginsOrder", async db => {
+    let prefixes = (
+      await db.execute(
+        `SELECT prefix || iif(instr(host, "www.") = 1, "www.", "")
+         FROM moz_origins
+         WHERE host = :host OR host = "www." || :host
+         ORDER BY ROWID ASC
+        `,
+        { host }
+      )
+    ).map(r => r.getResultByIndex(0));
+    Assert.deepEqual(prefixes, prefixOrder);
   });
 }

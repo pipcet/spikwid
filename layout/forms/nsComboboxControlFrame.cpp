@@ -708,8 +708,23 @@ bool nsComboboxControlFrame::HasDropDownButton() const {
           PresContext()->Theme()->ThemeNeedsComboboxDropmarker());
 }
 
-nscoord nsComboboxControlFrame::GetIntrinsicISize(
-    gfxContext* aRenderingContext, nsLayoutUtils::IntrinsicISizeType aType) {
+nscoord nsComboboxControlFrame::DropDownButtonISize() {
+  if (!HasDropDownButton()) {
+    return 0;
+  }
+
+  LayoutDeviceIntSize dropdownButtonSize;
+  bool canOverride = true;
+  nsPresContext* presContext = PresContext();
+  presContext->Theme()->GetMinimumWidgetSize(
+      presContext, this, StyleAppearance::MozMenulistArrowButton,
+      &dropdownButtonSize, &canOverride);
+
+  return presContext->DevPixelsToAppUnits(dropdownButtonSize.width);
+}
+
+nscoord nsComboboxControlFrame::GetIntrinsicISize(gfxContext* aRenderingContext,
+                                                  IntrinsicISizeType aType) {
   // get the scrollbar width, we'll use this later
   nscoord scrollbarWidth = 0;
   nsPresContext* presContext = PresContext();
@@ -756,10 +771,8 @@ nscoord nsComboboxControlFrame::GetIntrinsicISize(
     displayISize = std::max(dropdownContentISize, displayISize);
   }
 
-  // add room for the dropmarker button if there is one
-  if (HasDropDownButton()) {
-    displayISize += scrollbarWidth;
-  }
+  // Add room for the dropmarker button if there is one.
+  displayISize += DropDownButtonISize();
 
   return displayISize;
 }
@@ -819,21 +832,12 @@ void nsComboboxControlFrame::Reflow(nsPresContext* aPresContext,
     Unused << resize.forget();
   }
 
-  // Get the width of the vertical scrollbar.  That will be the inline
-  // size of the dropdown button.
   WritingMode wm = aReflowInput.GetWritingMode();
-  nscoord buttonISize;
-  if (!HasDropDownButton()) {
-    buttonISize = 0;
-  } else {
-    nsIScrollableFrame* scrollable = do_QueryFrame(mListControlFrame);
-    NS_ASSERTION(scrollable, "List must be a scrollable frame");
-    buttonISize = scrollable->GetNondisappearingScrollbarWidth(
-        PresContext(), aReflowInput.mRenderingContext, wm);
-    if (buttonISize > aReflowInput.ComputedISize()) {
-      buttonISize = 0;
-    }
-  }
+  nscoord buttonISize = 0;
+
+  // Check if the theme specifies a minimum size for the dropdown button
+  // first.
+  buttonISize += DropDownButtonISize();
 
   mDisplayISize = aReflowInput.ComputedISize() - buttonISize;
 
@@ -1340,6 +1344,10 @@ nsIFrame* nsComboboxControlFrame::CreateFrameForDisplayNode() {
   nsFrameList textList(textFrame, textFrame);
   mDisplayFrame->SetInitialChildList(kPrincipalList, textList);
   return mDisplayFrame;
+}
+
+nsIScrollableFrame* nsComboboxControlFrame::GetScrollTargetFrame() {
+  return do_QueryFrame(mDropdownFrame);
 }
 
 void nsComboboxControlFrame::DestroyFrom(nsIFrame* aDestructRoot,

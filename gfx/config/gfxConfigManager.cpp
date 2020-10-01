@@ -256,7 +256,8 @@ void gfxConfigManager::ConfigureWebRender() {
   }
 
   // HW_COMPOSITING being disabled implies interfacing with the GPU might break
-  if (!mFeatureHwCompositing->IsEnabled()) {
+  if (!mFeatureHwCompositing->IsEnabled() &&
+      !Preferences::GetBool("gfx.webrender.software", false)) {
     mFeatureWr->ForceDisable(FeatureStatus::UnavailableNoHwCompositing,
                              "Hardware compositing is disabled",
                              "FEATURE_FAILURE_WEBRENDER_NEED_HWCOMP"_ns);
@@ -271,7 +272,7 @@ void gfxConfigManager::ConfigureWebRender() {
   if (mXRenderEnabled) {
     // XRender and WebRender don't play well together. XRender is disabled by
     // default. If the user opts into it don't enable webrender.
-    mFeatureWr->ForceDisable(FeatureStatus::Blocked,"XRender is enabled",
+    mFeatureWr->ForceDisable(FeatureStatus::Blocked, "XRender is enabled",
                              "FEATURE_FAILURE_XRENDER"_ns);
   }
 
@@ -283,7 +284,7 @@ void gfxConfigManager::ConfigureWebRender() {
     if (!mFeatureD3D11HwAngle->IsEnabled()) {
       mFeatureWr->ForceDisable(FeatureStatus::UnavailableNoAngle,
                                "ANGLE is disabled",
-                               "FEATURE_FAILURE_ANGLE_DISABLED"_ns);
+                               mFeatureD3D11HwAngle->GetFailureId());
     } else if (!mFeatureGPUProcess->IsEnabled() &&
                (!mIsNightly || !mWrForceAngleNoGPUProcess)) {
       // WebRender with ANGLE relies on the GPU process when on Windows
@@ -302,8 +303,7 @@ void gfxConfigManager::ConfigureWebRender() {
       // already have been forced disabled (e.g. safe mode, headless). It may
       // still be forced on by the user, and if so, this should have no effect.
       mFeatureHwCompositing->Disable(FeatureStatus::Blocked,
-                                     "Acceleration blocked by platform",
-                                     EmptyCString());
+                                     "Acceleration blocked by platform", ""_ns);
     }
 
     if (!mFeatureHwCompositing->IsEnabled() &&
@@ -312,21 +312,29 @@ void gfxConfigManager::ConfigureWebRender() {
       // for basic compositor, and it wasn't disabled already.
       mFeatureGPUProcess->Disable(FeatureStatus::Unavailable,
                                   "Hardware compositing is unavailable.",
-                                  EmptyCString());
+                                  ""_ns);
     }
   }
 
-  mFeatureWrDComp->DisableByDefault(
-      FeatureStatus::OptIn, "WebRender DirectComposition is an opt-in feature",
-      "FEATURE_FAILURE_DEFAULT_OFF"_ns);
+  mFeatureWrDComp->EnableByDefault();
+  if (!mWrDCompWinEnabled) {
+    mFeatureWrDComp->UserDisable("User disabled via pref",
+                                 "FEATURE_FAILURE_DCOMP_PREF_DISABLED"_ns);
+  }
 
-  if (mWrDCompWinEnabled) {
+  if (!mIsWin10OrLater) {
     // XXX relax win version to windows 8.
-    if (mIsWin10OrLater && mFeatureWr->IsEnabled() &&
-        mFeatureWrAngle->IsEnabled()) {
-      mFeatureWrDComp->UserEnable("Enabled");
-    }
+    mFeatureWrDComp->Disable(FeatureStatus::Unavailable,
+                             "Requires Windows 10 or later",
+                             "FEATURE_FAILURE_DCOMP_NOT_WIN10"_ns);
   }
+
+  mFeatureWrDComp->MaybeSetFailed(
+      mFeatureWr->IsEnabled(), FeatureStatus::Unavailable, "Requires WebRender",
+      "FEATURE_FAILURE_DCOMP_NOT_WR"_ns);
+  mFeatureWrDComp->MaybeSetFailed(mFeatureWrAngle->IsEnabled(),
+                                  FeatureStatus::Unavailable, "Requires ANGLE",
+                                  "FEATURE_FAILURE_DCOMP_NOT_ANGLE"_ns);
 
   if (!mWrPictureCaching) {
     mFeatureWrCompositor->ForceDisable(
@@ -335,9 +343,9 @@ void gfxConfigManager::ConfigureWebRender() {
   }
 
   if (!mFeatureWrDComp->IsEnabled() && mWrCompositorDCompRequired) {
-    mFeatureWrCompositor->ForceDisable(
-        FeatureStatus::Unavailable, "No DirectComposition usage",
-        "FEATURE_FAILURE_NO_DIRECTCOMPOSITION"_ns);
+    mFeatureWrCompositor->ForceDisable(FeatureStatus::Unavailable,
+                                       "No DirectComposition usage",
+                                       mFeatureWrDComp->GetFailureId());
   }
 
   // Initialize WebRender partial present config.

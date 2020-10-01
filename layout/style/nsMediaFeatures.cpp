@@ -281,7 +281,7 @@ StyleContrastPref Gecko_MediaFeatures_PrefersContrast(
   // https://github.com/w3c/csswg-drafts/issues/3856#issuecomment-642313572
   // https://github.com/w3c/csswg-drafts/issues/2943
   if (!!LookAndFeel::GetInt(LookAndFeel::IntID::UseAccessibilityTheme, 0)) {
-    return StyleContrastPref::High;
+    return StyleContrastPref::More;
   }
   return StyleContrastPref::NoPreference;
 }
@@ -424,11 +424,6 @@ void nsMediaFeatures::InitSystemMetrics() {
   if (NS_SUCCEEDED(rv) && metricResult) {
     sSystemMetrics->AppendElement(
         (nsStaticAtom*)nsGkAtoms::_moz_windows_classic);
-  }
-
-  rv = LookAndFeel::GetInt(LookAndFeel::IntID::TouchEnabled, &metricResult);
-  if (NS_SUCCEEDED(rv) && metricResult) {
-    sSystemMetrics->AppendElement((nsStaticAtom*)nsGkAtoms::_moz_touch_enabled);
   }
 
   rv = LookAndFeel::GetInt(LookAndFeel::IntID::SwipeAnimationEnabled,

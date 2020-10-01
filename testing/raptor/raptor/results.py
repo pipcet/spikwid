@@ -33,6 +33,7 @@ class PerftestResultsHandler(object):
         no_conditioned_profile=False,
         cold=False,
         enable_webrender=False,
+        chimera=False,
         **kwargs
     ):
         self.gecko_profile = gecko_profile
@@ -53,6 +54,7 @@ class PerftestResultsHandler(object):
         self.browser_name = None
         self.no_conditioned_profile = no_conditioned_profile
         self.cold = cold
+        self.chimera = chimera
 
     @abstractmethod
     def add(self, new_result_json):
@@ -239,6 +241,9 @@ class RaptorResultsHandler(PerftestResultsHandler):
             (self.fission_enabled, "fission"),
             (self.webrender_enabled, "webrender"),
         ]))
+        if self.live_sites:
+            new_result_json.setdefault("tags", []).append("live")
+            new_result_json["extra_options"].append("live")
         self.results.append(new_result_json)
 
     def summarize_and_output(self, test_config, tests, test_names):
@@ -278,6 +283,7 @@ class BrowsertimeResultsHandler(PerftestResultsHandler):
     def __init__(self, config, root_results_dir=None):
         super(BrowsertimeResultsHandler, self).__init__(**config)
         self._root_results_dir = root_results_dir
+        self.browsertime_visualmetrics = False
 
     def result_dir(self):
         return self._root_results_dir
@@ -478,6 +484,44 @@ class BrowsertimeResultsHandler(PerftestResultsHandler):
                 "statistics": {},
             }
 
+            if self.power_test:
+                power_result = {
+                    "bt_ver": bt_ver,
+                    "browser": bt_browser,
+                    "url": bt_url,
+                    "measurements": {},
+                    "statistics": {},
+                    "power_data": True,
+                }
+                for cycle in raw_result["android"]["power"]:
+                    for metric in cycle:
+                        if "total" in metric:
+                            continue
+                        power_result["measurements"].setdefault(
+                            metric, []
+                        ).append(cycle[metric])
+                power_result["statistics"] = raw_result["statistics"]["android"]["power"]
+                results.append(power_result)
+
+            if self.browsertime_visualmetrics:
+                vismet_result = {
+                    "bt_ver": bt_ver,
+                    "browser": bt_browser,
+                    "url": bt_url,
+                    "measurements": {},
+                    "statistics": {},
+                }
+                for cycle in raw_result["visualMetrics"]:
+                    for metric in cycle:
+                        if "progress" in metric.lower():
+                            # Bug 1665750 - Determine if we should display progress
+                            continue
+                        vismet_result["measurements"].setdefault(
+                            metric, []
+                        ).append(cycle[metric])
+                vismet_result["statistics"] = raw_result["statistics"]["visualMetrics"]
+                results.append(vismet_result)
+
             custom_types = raw_result["browserScripts"][0].get("custom")
             if custom_types:
                 for custom_type in custom_types:
@@ -530,7 +574,9 @@ class BrowsertimeResultsHandler(PerftestResultsHandler):
 
         return results
 
-    def _extract_vmetrics(self, test_name, browsertime_json):
+    def _extract_vmetrics(
+        self, test_name, browsertime_json, json_name="browsertime.json", extra_options=[]
+    ):
         # The visual metrics task expects posix paths.
         def _normalized_join(*args):
             path = os.path.join(*args)
@@ -540,8 +586,9 @@ class BrowsertimeResultsHandler(PerftestResultsHandler):
         reldir = _normalized_join("browsertime-results", name)
 
         return {
-            "browsertime_json_path": _normalized_join(reldir, "browsertime.json"),
+            "browsertime_json_path": _normalized_join(reldir, json_name),
             "test_name": test_name,
+            "extra_options": extra_options
         }
 
     def summarize_and_output(self, test_config, tests, test_names):
@@ -595,8 +642,55 @@ class BrowsertimeResultsHandler(PerftestResultsHandler):
                 LOG.error("Exception: %s %s" % (type(e).__name__, str(e)))
                 raise
 
+            # Split the chimera videos here for local testing
+            cold_path = None
+            warm_path = None
+            if self.chimera:
+                # First result is cold, second is warm
+                cold_data = raw_btresults[0]
+                warm_data = raw_btresults[1]
+
+                dirpath = os.path.dirname(os.path.abspath(bt_res_json))
+                cold_path = os.path.join(dirpath, "cold-browsertime.json")
+                warm_path = os.path.join(dirpath, "warm-browsertime.json")
+
+                with open(cold_path, "w") as f:
+                    json.dump([cold_data], f)
+                with open(warm_path, "w") as f:
+                    json.dump([warm_data], f)
+
             if not run_local:
-                video_jobs.append(self._extract_vmetrics(test_name, bt_res_json))
+                extra_options = self.build_extra_options()
+
+                if self.chimera:
+                    if cold_path is None or warm_path is None:
+                        raise Exception("Cold and warm paths were not created")
+
+                    video_jobs.append(
+                        self._extract_vmetrics(
+                            test_name,
+                            cold_path,
+                            json_name="cold-browsertime.json",
+                            extra_options=list(extra_options)
+                        )
+                    )
+
+                    extra_options.remove("cold")
+                    extra_options.append("warm")
+                    video_jobs.append(
+                        self._extract_vmetrics(
+                            test_name,
+                            warm_path,
+                            json_name="warm-browsertime.json",
+                            extra_options=list(extra_options)
+                        )
+                    )
+                else:
+                    video_jobs.append(self._extract_vmetrics(
+                        test_name,
+                        bt_res_json,
+                        extra_options=list(extra_options)
+                    ))
 
             for new_result in self.parse_browsertime_json(
                 raw_btresults,
@@ -606,7 +700,7 @@ class BrowsertimeResultsHandler(PerftestResultsHandler):
                 test.get("measure"),
             ):
 
-                def _new_pageload_result(new_result):
+                def _new_standard_result(new_result, subtest_unit="ms"):
                     # add additional info not from the browsertime json
                     for field in (
                         "name",
@@ -615,55 +709,69 @@ class BrowsertimeResultsHandler(PerftestResultsHandler):
                         "alert_threshold",
                         "cold",
                     ):
+                        if field in new_result:
+                            continue
                         new_result[field] = test[field]
 
-                    # Differentiate Raptor `pageload` tests from `browsertime-pageload`
-                    # tests while we compare and contrast.
-                    new_result["type"] = "pageload"
-
                     # All Browsertime measurements are elapsed times in milliseconds.
-                    new_result["subtest_lower_is_better"] = True
-                    new_result["subtest_unit"] = "ms"
-                    LOG.info("parsed new result: %s" % str(new_result))
+                    new_result["subtest_lower_is_better"] = test.get(
+                        "subtest_lower_is_better", True
+                    )
+                    new_result["subtest_unit"] = subtest_unit
 
                     new_result["extra_options"] = self.build_extra_options()
 
+                    # Split the chimera
+                    if self.chimera and "run=2" in new_result["url"][0]:
+                        new_result["extra_options"].remove("cold")
+                        new_result["extra_options"].append("warm")
+
+                    return new_result
+
+                def _new_powertest_result(new_result):
+                    new_result["type"] = "power"
+                    new_result["unit"] = "mAh"
+                    new_result["lower_is_better"] = True
+
+                    new_result = _new_standard_result(new_result, subtest_unit="mAh")
+                    new_result["extra_options"].append("power")
+
+                    LOG.info("parsed new power result: %s" % str(new_result))
+                    return new_result
+
+                def _new_pageload_result(new_result):
+                    new_result["type"] = "pageload"
+                    new_result = _new_standard_result(new_result)
+
+                    LOG.info("parsed new pageload result: %s" % str(new_result))
                     return new_result
 
                 def _new_benchmark_result(new_result):
-                    # add additional info not from the browsertime json
-                    for field in (
-                        "name",
-                        "unit",
-                        "lower_is_better",
-                        "alert_threshold",
-                        "cold",
-                    ):
-                        new_result[field] = test[field]
-
-                    # Differentiate Raptor `pageload` tests from other `browsertime`
-                    # tests while we compare and contrast.
                     new_result["type"] = "benchmark"
 
-                    # Try to get subtest values or use the defaults
-                    # If values not available use the defaults
-                    subtest_lower_is_better = test.get("subtest_lower_is_better", True)
-                    new_result["subtest_lower_is_better"] = subtest_lower_is_better
-
-                    new_result["subtest_unit"] = test.get("subtest_unit", "ms")
-                    LOG.info("parsed new result: %s" % str(new_result))
-
-                    new_result["extra_options"] = self.build_extra_options()
+                    new_result = _new_standard_result(
+                        new_result,
+                        subtest_unit=test.get("subtest_unit", "ms")
+                    )
+                    # XXX Is this still needed?
                     if self.app != "firefox":
                         new_result["extra_options"].append(self.app)
 
+                    LOG.info("parsed new benchmark result: %s" % str(new_result))
                     return new_result
 
-                if test["type"] == "pageload":
+                def _is_supporting_data(res):
+                    if res.get("power_data", False):
+                        return True
+                    return False
+
+                if new_result.get("power_data", False):
+                    self.results.append(_new_powertest_result(new_result))
+                elif test["type"] == "pageload":
                     self.results.append(_new_pageload_result(new_result))
                 elif test["type"] == "benchmark":
                     for i, item in enumerate(self.results):
-                        if item["name"] == test["name"]:
+                        if item["name"] == test["name"] and not _is_supporting_data(item):
                             # add page cycle custom measurements to the existing results
                             for measurement in new_result["measurements"].iteritems():
                                 self.results[i]["measurements"][measurement[0]].extend(

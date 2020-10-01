@@ -57,10 +57,6 @@ extern mozilla::LazyLogModule gWidgetLog;
   ((nscolor)NS_RGBA((int)((c).red * 255), (int)((c).green * 255), \
                     (int)((c).blue * 255), (int)((c).alpha * 255)))
 
-#if !GTK_CHECK_VERSION(3, 12, 0)
-#  define GTK_STATE_FLAG_LINK (static_cast<GtkStateFlags>(1 << 9))
-#endif
-
 nsLookAndFeel::nsLookAndFeel() = default;
 
 nsLookAndFeel::~nsLookAndFeel() = default;
@@ -267,33 +263,25 @@ void nsLookAndFeel::RefreshImpl() {
   nsXPLookAndFeel::RefreshImpl();
   moz_gtk_refresh();
 
-  mDefaultFontCached = false;
-  mButtonFontCached = false;
-  mFieldFontCached = false;
-  mMenuFontCached = false;
-
   mInitialized = false;
 }
 
-nsTArray<LookAndFeelInt> nsLookAndFeel::GetIntCacheImpl() {
-  nsTArray<LookAndFeelInt> lookAndFeelIntCache =
-      nsXPLookAndFeel::GetIntCacheImpl();
+LookAndFeelCache nsLookAndFeel::GetCacheImpl() {
+  LookAndFeelCache cache = nsXPLookAndFeel::GetCacheImpl();
 
   const IntID kIdsToCache[] = {IntID::SystemUsesDarkTheme,
                                IntID::PrefersReducedMotion,
                                IntID::UseAccessibilityTheme};
 
   for (IntID id : kIdsToCache) {
-    lookAndFeelIntCache.AppendElement(
-        LookAndFeelInt{.id = id, .value = GetInt(id)});
+    cache.mInts.AppendElement(LookAndFeelInt{.id = id, .value = GetInt(id)});
   }
 
-  return lookAndFeelIntCache;
+  return cache;
 }
 
-void nsLookAndFeel::SetIntCacheImpl(
-    const nsTArray<LookAndFeelInt>& aLookAndFeelIntCache) {
-  for (const auto& entry : aLookAndFeelIntCache) {
+void nsLookAndFeel::SetCacheImpl(const LookAndFeelCache& aCache) {
+  for (const auto& entry : aCache.mInts) {
     switch (entry.id) {
       case IntID::SystemUsesDarkTheme:
         mSystemUsesDarkTheme = entry.value;
@@ -981,9 +969,6 @@ void nsLookAndFeel::ConfigureContentGtkTheme() {
 }
 
 void nsLookAndFeel::EnsureInit() {
-  GdkColor colorValue;
-  GdkColor* colorValuePtr;
-
   if (mInitialized) {
     return;
   }
@@ -1140,18 +1125,30 @@ void nsLookAndFeel::EnsureInit() {
   mFieldText = GDK_RGBA_TO_NS_RGBA(color);
 
   // Selected text and background
-  gtk_style_context_get_background_color(
-      style,
-      static_cast<GtkStateFlags>(GTK_STATE_FLAG_FOCUSED |
-                                 GTK_STATE_FLAG_SELECTED),
-      &color);
-  mTextSelectedBackground = GDK_RGBA_TO_NS_RGBA(color);
-  gtk_style_context_get_color(
-      style,
-      static_cast<GtkStateFlags>(GTK_STATE_FLAG_FOCUSED |
-                                 GTK_STATE_FLAG_SELECTED),
-      &color);
-  mTextSelectedText = GDK_RGBA_TO_NS_RGBA(color);
+  {
+    GtkStyleContext* selectionStyle =
+        GetStyleContext(MOZ_GTK_TEXT_VIEW_TEXT_SELECTION);
+    auto GrabSelectionColors = [&](GtkStyleContext* style) {
+      gtk_style_context_get_background_color(
+          style,
+          static_cast<GtkStateFlags>(GTK_STATE_FLAG_FOCUSED |
+                                     GTK_STATE_FLAG_SELECTED),
+          &color);
+      mTextSelectedBackground = GDK_RGBA_TO_NS_RGBA(color);
+      gtk_style_context_get_color(
+          style,
+          static_cast<GtkStateFlags>(GTK_STATE_FLAG_FOCUSED |
+                                     GTK_STATE_FLAG_SELECTED),
+          &color);
+      mTextSelectedText = GDK_RGBA_TO_NS_RGBA(color);
+    };
+    GrabSelectionColors(selectionStyle);
+    if (mTextSelectedBackground == mTextSelectedText) {
+      // Some old distros/themes don't properly use the .selection style, so
+      // fall back to the regular text view style.
+      GrabSelectionColors(style);
+    }
+  }
 
   // Button text color
   style = GetStyleContext(MOZ_GTK_BUTTON);
@@ -1246,25 +1243,12 @@ void nsLookAndFeel::EnsureInit() {
   }
   mMenuSupportsDrag = supports_menubar_drag;
 
-  if (gtk_check_version(3, 12, 0) == nullptr) {
-    // TODO: It returns wrong color for themes which
-    // sets link color for GtkLabel only as we query
-    // GtkLinkButton style here.
-    style = gtk_widget_get_style_context(linkButton);
-    gtk_style_context_get_color(style, GTK_STATE_FLAG_LINK, &color);
-    mNativeHyperLinkText = GDK_RGBA_TO_NS_RGBA(color);
-  } else {
-    colorValuePtr = nullptr;
-    gtk_widget_style_get(linkButton, "link-color", &colorValuePtr, nullptr);
-    if (colorValuePtr) {
-      colorValue = *colorValuePtr;  // we can't pass deref pointers to
-                                    // GDK_COLOR_TO_NS_RGB
-      mNativeHyperLinkText = GDK_COLOR_TO_NS_RGB(colorValue);
-      gdk_color_free(colorValuePtr);
-    } else {
-      mNativeHyperLinkText = NS_RGB(0x00, 0x00, 0xEE);
-    }
-  }
+  // TODO: It returns wrong color for themes which
+  // sets link color for GtkLabel only as we query
+  // GtkLinkButton style here.
+  style = gtk_widget_get_style_context(linkButton);
+  gtk_style_context_get_color(style, GTK_STATE_FLAG_LINK, &color);
+  mNativeHyperLinkText = GDK_RGBA_TO_NS_RGBA(color);
 
   // invisible character styles
   guint value;
@@ -1301,8 +1285,8 @@ void nsLookAndFeel::EnsureInit() {
   // as -moz-gtk* media features.
   ButtonLayout buttonLayout[TOOLBAR_BUTTONS];
 
-  size_t activeButtons = GetGtkHeaderBarButtonLayout(MakeSpan(buttonLayout),
-                                                     &mCSDReversedPlacement);
+  size_t activeButtons =
+      GetGtkHeaderBarButtonLayout(Span(buttonLayout), &mCSDReversedPlacement);
   for (size_t i = 0; i < activeButtons; i++) {
     // We check if a button is represented on the right side of the tabbar.
     // Then we assign it a value from 3 to 5, instead of 0 to 2 when it is on

@@ -218,6 +218,7 @@ struct MOZ_STACK_CLASS DebuggerScript::CallData {
   bool getIsFunction();
   bool getIsModule();
   bool getDisplayName();
+  bool getParameterNames();
   bool getUrl();
   bool getStartLine();
   bool getStartColumn();
@@ -319,6 +320,26 @@ bool DebuggerScript::CallData::getDisplayName() {
     return false;
   }
   args.rval().set(namev);
+  return true;
+}
+
+bool DebuggerScript::CallData::getParameterNames() {
+  if (!ensureScriptMaybeLazy()) {
+    return false;
+  }
+
+  RootedFunction fun(cx, referent.as<BaseScript*>()->function());
+  if (!fun) {
+    args.rval().setUndefined();
+    return true;
+  }
+
+  ArrayObject* arr = GetFunctionParameterNamesArray(cx, fun);
+  if (!arr) {
+    return false;
+  }
+
+  args.rval().setObject(*arr);
   return true;
 }
 
@@ -1336,7 +1357,6 @@ static bool BytecodeIsEffectful(JSOp op) {
     case JSOp::StrictSetPropSuper:
     case JSOp::SetElem:
     case JSOp::StrictSetElem:
-    case JSOp::SetPrivateElem:
     case JSOp::SetElemSuper:
     case JSOp::StrictSetElemSuper:
     case JSOp::SetName:
@@ -1351,7 +1371,6 @@ static bool BytecodeIsEffectful(JSOp op) {
     case JSOp::SetAliasedVar:
     case JSOp::InitHomeObject:
     case JSOp::InitAliasedLexical:
-    case JSOp::InitPrivateElem:
     case JSOp::SetIntrinsic:
     case JSOp::InitGLexical:
     case JSOp::DefVar:
@@ -1445,6 +1464,7 @@ static bool BytecodeIsEffectful(JSOp op) {
     case JSOp::NewObjectWithGroup:
     case JSOp::InitElem:
     case JSOp::InitHiddenElem:
+    case JSOp::InitLockedElem:
     case JSOp::InitElemInc:
     case JSOp::InitElemArray:
     case JSOp::InitProp:
@@ -1488,7 +1508,6 @@ static bool BytecodeIsEffectful(JSOp op) {
     case JSOp::Int32:
     case JSOp::LoopHead:
     case JSOp::GetElem:
-    case JSOp::GetPrivateElem:
     case JSOp::CallElem:
     case JSOp::Length:
     case JSOp::Not:
@@ -1522,6 +1541,7 @@ static bool BytecodeIsEffectful(JSOp op) {
     case JSOp::EndIter:
     case JSOp::In:
     case JSOp::HasOwn:
+    case JSOp::CheckPrivateField:
     case JSOp::SetRval:
     case JSOp::Instanceof:
     case JSOp::DebugLeaveLexicalEnv:
@@ -1546,7 +1566,7 @@ static bool BytecodeIsEffectful(JSOp op) {
     case JSOp::CheckClassHeritage:
     case JSOp::FunWithProto:
     case JSOp::ObjWithProto:
-    case JSOp::FunctionProto:
+    case JSOp::BuiltinObject:
     case JSOp::DerivedConstructor:
     case JSOp::CheckThis:
     case JSOp::CheckReturn:
@@ -1895,7 +1915,8 @@ struct DebuggerScript::SetBreakpointMatcher {
     }
 
     // If the Debugger's compartment has killed incoming wrappers, we may not
-    // have gotten usable results from the 'wrap' calls. Treat it as a failure.
+    // have gotten usable results from the 'wrap' calls. Treat it as a
+    // failure.
     if (IsDeadProxyObject(handler_) || IsDeadProxyObject(debuggerObject_)) {
       ReportAccessDenied(cx_);
       return false;
@@ -2080,9 +2101,9 @@ class DebuggerScript::ClearBreakpointMatcher {
 
     // A Breakpoint belongs logically to its script's compartment, so it holds
     // its handler via a cross-compartment wrapper. But the handler passed to
-    // `clearBreakpoint` is same-compartment with the Debugger. Wrap it here, so
-    // that `DebugScript::clearBreakpointsIn` gets the right value to search
-    // for.
+    // `clearBreakpoint` is same-compartment with the Debugger. Wrap it here,
+    // so that `DebugScript::clearBreakpointsIn` gets the right value to
+    // search for.
     AutoRealm ar(cx_, script);
     if (!cx_->compartment()->wrap(cx_, &handler_)) {
       return false;
@@ -2098,10 +2119,11 @@ class DebuggerScript::ClearBreakpointMatcher {
       return true;
     }
 
-    // A Breakpoint belongs logically to its instance's compartment, so it holds
-    // its handler via a cross-compartment wrapper. But the handler passed to
-    // `clearBreakpoint` is same-compartment with the Debugger. Wrap it here, so
-    // that `DebugState::clearBreakpointsIn` gets the right value to search for.
+    // A Breakpoint belongs logically to its instance's compartment, so it
+    // holds its handler via a cross-compartment wrapper. But the handler
+    // passed to `clearBreakpoint` is same-compartment with the Debugger. Wrap
+    // it here, so that `DebugState::clearBreakpointsIn` gets the right value
+    // to search for.
     AutoRealm ar(cx_, instanceObj);
     if (!cx_->compartment()->wrap(cx_, &handler_)) {
       return false;
@@ -2318,6 +2340,7 @@ const JSPropertySpec DebuggerScript::properties_[] = {
     JS_DEBUG_PSG("isFunction", getIsFunction),
     JS_DEBUG_PSG("isModule", getIsModule),
     JS_DEBUG_PSG("displayName", getDisplayName),
+    JS_DEBUG_PSG("parameterNames", getParameterNames),
     JS_DEBUG_PSG("url", getUrl),
     JS_DEBUG_PSG("startLine", getStartLine),
     JS_DEBUG_PSG("startColumn", getStartColumn),

@@ -14,6 +14,7 @@ import six
 import logging
 import taskcluster_urls as liburls
 from mozbuild.util import memoize
+from redo import retry
 from requests.packages.urllib3.util.retry import Retry
 from taskcluster import Hooks
 from taskgraph.task import Task
@@ -97,18 +98,25 @@ def get_session():
     return requests_retry_session(retries=5)
 
 
-def _do_request(url, force_get=False, **kwargs):
+def _do_request(url, method=None, **kwargs):
+    if method is None:
+        method = "post" if kwargs else "get"
+
     session = get_session()
-    if kwargs and not force_get:
-        response = session.post(url, **kwargs)
-    else:
-        response = session.get(url, stream=True, **kwargs)
+    if method == "get":
+        kwargs["stream"] = True
+    response = getattr(session, method)(url, **kwargs)
+
     if response.status_code >= 400:
         # Consume content before raise_for_status, so that the connection can be
         # reused.
         response.content
     response.raise_for_status()
     return response
+
+
+def _retry_request(*args, **kwargs):
+    return retry(_do_request, sleeptime=10, args=args, kwargs=kwargs)
 
 
 def _handle_artifact(path, response):
@@ -131,7 +139,7 @@ def get_artifact_url(task_id, path, use_proxy=False):
         # endpoint instead.
         # The bewit URL is the body of a 303 redirect, which we don't
         # want to follow (which fetches a potentially large resource).
-        response = _do_request(
+        response = _retry_request(
             os.environ['TASKCLUSTER_PROXY_URL'] + '/bewit',
             data=data,
             allow_redirects=False)
@@ -148,12 +156,12 @@ def get_artifact(task_id, path, use_proxy=False):
     dict) is returned.
     For other types of content, a file-like object is returned.
     """
-    response = _do_request(get_artifact_url(task_id, path, use_proxy))
+    response = _retry_request(get_artifact_url(task_id, path, use_proxy))
     return _handle_artifact(path, response)
 
 
 def list_artifacts(task_id, use_proxy=False):
-    response = _do_request(get_artifact_url(task_id, '', use_proxy).rstrip('/'))
+    response = _retry_request(get_artifact_url(task_id, '', use_proxy).rstrip('/'))
     return response.json()['artifacts']
 
 
@@ -179,7 +187,7 @@ def get_index_url(index_path, use_proxy=False, multiple=False):
 
 def find_task_id(index_path):
     try:
-        response = _do_request(get_index_url(index_path))
+        response = _retry_request(get_index_url(index_path))
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 404:
             raise KeyError("index path {} not found".format(index_path))
@@ -189,7 +197,7 @@ def find_task_id(index_path):
 
 def get_artifact_from_index(index_path, artifact_path, use_proxy=False):
     full_path = index_path + '/artifacts/' + artifact_path
-    response = _do_request(get_index_url(full_path, use_proxy))
+    response = _retry_request(get_index_url(full_path, use_proxy))
     return _handle_artifact(full_path, response)
 
 
@@ -201,7 +209,7 @@ def list_tasks(index_path, use_proxy=False):
     results = []
     data = {}
     while True:
-        response = _do_request(get_index_url(index_path, use_proxy, multiple=True), json=data)
+        response = _retry_request(get_index_url(index_path, use_proxy, multiple=True), json=data)
         response = response.json()
         results += response['tasks']
         if response.get('continuationToken'):
@@ -217,6 +225,21 @@ def list_tasks(index_path, use_proxy=False):
     return [t['taskId'] for t in results]
 
 
+def insert_index(index_path, task_id, data=None, use_proxy=False):
+    index_url = get_index_url(index_path, use_proxy=use_proxy)
+
+    # Find task expiry.
+    expires = get_task_definition(task_id, use_proxy=use_proxy)["expires"]
+
+    response = _retry_request(index_url, method="put", json={
+        "taskId": task_id,
+        "rank": 0,
+        "data": data or {},
+        "expires": expires,
+    })
+    return response
+
+
 def parse_time(timestamp):
     """Turn a "JSON timestamp" as used in TC APIs into a datetime"""
     return datetime.datetime.strptime(timestamp, '%Y-%m-%dT%H:%M:%S.%fZ')
@@ -228,7 +251,7 @@ def get_task_url(task_id, use_proxy=False):
 
 
 def get_task_definition(task_id, use_proxy=False):
-    response = _do_request(get_task_url(task_id, use_proxy))
+    response = _retry_request(get_task_url(task_id, use_proxy))
     return response.json()
 
 
@@ -238,7 +261,7 @@ def cancel_task(task_id, use_proxy=False):
     if testing:
         logger.info('Would have cancelled {}.'.format(task_id))
     else:
-        _do_request(get_task_url(task_id, use_proxy) + '/cancel', json={})
+        _retry_request(get_task_url(task_id, use_proxy) + '/cancel', json={})
 
 
 def status_task(task_id, use_proxy=False):
@@ -247,7 +270,7 @@ def status_task(task_id, use_proxy=False):
     if testing:
         logger.info('Would have gotten status for {}.'.format(task_id))
     else:
-        resp = _do_request(get_task_url(task_id, use_proxy) + '/status')
+        resp = _retry_request(get_task_url(task_id, use_proxy) + '/status')
         status = resp.json().get("status", {}).get('state') or 'unknown'
         return status
 
@@ -258,7 +281,7 @@ def rerun_task(task_id):
     if testing:
         logger.info('Would have rerun {}.'.format(task_id))
     else:
-        _do_request(get_task_url(task_id, use_proxy=True) + '/rerun', json={})
+        _retry_request(get_task_url(task_id, use_proxy=True) + '/rerun', json={})
 
 
 def trigger_hook(hook_group_id, hook_id, hook_payload):
@@ -275,7 +298,7 @@ def get_current_scopes():
     """Get the current scopes.  This only makes sense in a task with the Taskcluster
     proxy enabled, where it returns the actual scopes accorded to the task."""
     auth_url = liburls.api(get_root_url(True), 'auth', 'v1', 'scopes/current')
-    resp = _do_request(auth_url)
+    resp = _retry_request(auth_url)
     return resp.json().get("scopes", [])
 
 
@@ -291,14 +314,14 @@ def purge_cache(provisioner_id, worker_type, cache_name, use_proxy=False):
     else:
         logger.info('Purging {}/{}/{}.'.format(provisioner_id, worker_type, cache_name))
         purge_cache_url = get_purge_cache_url(provisioner_id, worker_type, use_proxy)
-        _do_request(purge_cache_url, json={'cacheName': cache_name})
+        _retry_request(purge_cache_url, json={'cacheName': cache_name})
 
 
 def send_email(address, subject, content, link, use_proxy=False):
     """Sends an email using the notify service"""
     logger.info('Sending email to {}.'.format(address))
     url = liburls.api(get_root_url(use_proxy), 'notify', 'v1', 'email')
-    _do_request(url, json={
+    _retry_request(url, json={
         'address': address,
         'subject': subject,
         'content': content,
@@ -306,17 +329,23 @@ def send_email(address, subject, content, link, use_proxy=False):
     })
 
 
-def list_task_group_incomplete_tasks(task_group_id):
-    """Generate the incomplete tasks in a task group"""
+def list_task_group_tasks(task_group_id):
+    """Generate the tasks in a task group"""
     params = {}
     while True:
         url = liburls.api(get_root_url(False), 'queue', 'v1',
                           'task-group/{}/list'.format(task_group_id))
-        resp = _do_request(url, force_get=True, params=params).json()
-        for task in [t['status'] for t in resp['tasks']]:
-            if task['state'] in ['running', 'pending', 'unscheduled']:
-                yield task['taskId']
+        resp = _retry_request(url, method="get", params=params).json()
+        for task in resp['tasks']:
+            yield task
         if resp.get('continuationToken'):
             params = {'continuationToken': resp.get('continuationToken')}
         else:
             break
+
+
+def list_task_group_incomplete_task_ids(task_group_id):
+    states = ('running', 'pending', 'unscheduled')
+    for task in [t['status'] for t in list_task_group_tasks(task_group_id)]:
+        if task['state'] in states:
+            yield task['taskId']

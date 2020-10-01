@@ -1,29 +1,16 @@
-// |jit-test| skip-if: !wasmReftypesEnabled() || !wasmGcEnabled() || wasmCompileMode() != 'baseline'
+// |jit-test| skip-if: !wasmGcEnabled()
 
-// Moving a JS value through a wasm anyref is a pair of boxing/unboxing
+// Moving a JS value through a wasm externref is a pair of boxing/unboxing
 // conversions that leaves the value unchanged.  There are many cases,
 // along these axes:
 //
-//  - global variables, see anyref-boxing.js
-//  - tables, see anyref-boxing.js
-//  - function parameters and returns, see anyref-boxing.js
+//  - global variables, see externref-boxing.js
+//  - tables, see externref-boxing.js
+//  - function parameters and returns, see externref-boxing.js
 //  - struct fields [for the gc feature], this file
-//  - TypedObject fields when we construct with the anyref type; this file
+//  - TypedObject fields when we construct with the externref type; this file
 
-let VALUES = [null,
-              undefined,
-              true,
-              false,
-              {x:1337},
-              ["abracadabra"],
-              1337,
-              13.37,
-              "hi",
-              37n,
-              Symbol("status"),
-              () => 1337];
-
-// Struct fields of anyref type can receive their value in these ways:
+// Struct fields of externref type can receive their value in these ways:
 //
 // - the struct.new and struct.set instructions
 // - storing into mutable fields from JS
@@ -40,12 +27,12 @@ let VALUES = [null,
 
 // Write with struct.new, read with the JS getter
 
-for (let v of VALUES)
+for (let v of WasmExternrefValues)
 {
     let ins = wasmEvalText(
         `(module
-           (type $S (struct (field $S.x (mut anyref))))
-           (func (export "make") (param $v anyref) (result anyref)
+           (type $S (struct (field $S.x (mut externref))))
+           (func (export "make") (param $v externref) (result externref)
              (struct.new $S (local.get $v))))`);
     let x = ins.exports.make(v);
     assertEq(x._0, v);
@@ -53,15 +40,15 @@ for (let v of VALUES)
 
 // Write with JS setter, read with struct.get
 
-for (let v of VALUES)
+for (let v of WasmExternrefValues)
 {
     let ins = wasmEvalText(
         `(module
-           (type $S (struct (field $S.x (mut anyref))))
-           (func (export "make") (result anyref)
+           (type $S (struct (field $S.x (mut externref))))
+           (func (export "make") (result externref)
              (struct.new $S (ref.null extern)))
-           (func (export "get") (param $o anyref) (result anyref)
-             (struct.get $S 0 (struct.narrow anyref (ref opt $S) (local.get $o)))))`);
+           (func (export "get") (param $o externref) (result externref)
+             (struct.get $S 0 (struct.narrow externref (ref null $S) (local.get $o)))))`);
     let x = ins.exports.make();
     x._0 = v;
     assertEq(ins.exports.get(x), v);
@@ -69,15 +56,15 @@ for (let v of VALUES)
 
 // Write with JS constructor, read with struct.get
 
-for (let v of VALUES)
+for (let v of WasmExternrefValues)
 {
     let ins = wasmEvalText(
         `(module
-           (type $S (struct (field $S.x (mut anyref))))
-           (func (export "make") (result anyref)
+           (type $S (struct (field $S.x (mut externref))))
+           (func (export "make") (result externref)
              (struct.new $S (ref.null extern)))
-           (func (export "get") (param $o anyref) (result anyref)
-             (struct.get $S 0 (struct.narrow anyref (ref opt $S) (local.get $o)))))`);
+           (func (export "get") (param $o externref) (result externref)
+             (struct.get $S 0 (struct.narrow externref (ref null $S) (local.get $o)))))`);
     let constructor = ins.exports.make().constructor;
     let x = new constructor({_0: v});
     assertEq(ins.exports.get(x), v);
@@ -86,7 +73,7 @@ for (let v of VALUES)
 // TypedObject.WasmAnyRef exists and is an identity operation
 
 assertEq(typeof TypedObject.WasmAnyRef, "function");
-for (let v of VALUES) {
+for (let v of WasmExternrefValues) {
     assertEq(TypedObject.WasmAnyRef(v), v);
 }
 
@@ -101,13 +88,13 @@ for (let v of VALUES) {
     assertEq(y._0, assertEq);
 }
 
-// The default value of an anyref field should be null.
+// The default value of an externref field should be null.
 
 {
     let ins = wasmEvalText(
         `(module
-           (type $S (struct (field $S.x (mut anyref))))
-           (func (export "make") (result anyref)
+           (type $S (struct (field $S.x (mut externref))))
+           (func (export "make") (result externref)
              (struct.new $S (ref.null extern))))`);
     let constructor = ins.exports.make().constructor;
     let x = new constructor();
@@ -115,13 +102,13 @@ for (let v of VALUES) {
 }
 
 // Here we should actually see an undefined value since undefined is
-// representable as AnyRef.
+// representable as ExternRef.
 
 {
     let ins = wasmEvalText(
         `(module
-           (type $S (struct (field $S.x (mut anyref))))
-           (func (export "make") (result anyref)
+           (type $S (struct (field $S.x (mut externref))))
+           (func (export "make") (result externref)
              (struct.new $S (ref.null extern))))`);
     let constructor = ins.exports.make().constructor;
     let x = new constructor({});
@@ -138,15 +125,15 @@ for (let v of VALUES) {
                        /can't convert undefined/);
 }
 
-// Try to make sure anyrefs are properly traced
+// Try to make sure externrefs are properly traced
 
 {
-    let fields = iota(10).map(() => `(field anyref)`).join(' ');
-    let params = iota(10).map((i) => `(param $${i} anyref)`).join(' ');
+    let fields = iota(10).map(() => `(field externref)`).join(' ');
+    let params = iota(10).map((i) => `(param $${i} externref)`).join(' ');
     let args = iota(10).map((i) => `(local.get $${i})`).join(' ');
     let txt = `(module
                  (type $S (struct ${fields}))
-                 (func (export "make") ${params} (result anyref)
+                 (func (export "make") ${params} (result externref)
                    (struct.new $S ${args})))`;
     let ins = wasmEvalText(txt);
     let x = ins.exports.make({x:0}, {x:1}, {x:2}, {x:3}, {x:4}, {x:5}, {x:6}, {x:7}, {x:8}, {x:9})

@@ -7,6 +7,7 @@
 #ifndef vm_Runtime_h
 #define vm_Runtime_h
 
+#include "mozilla/Assertions.h"  // MOZ_ASSERT
 #include "mozilla/Atomics.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/DoublyLinkedList.h"
@@ -35,13 +36,15 @@
 #include "js/CompilationAndEvaluation.h"
 #include "js/Debug.h"
 #include "js/experimental/SourceHook.h"  // js::SourceHook
+#include "js/friend/StackLimits.h"       // js::ReportOverRecursed
+#include "js/friend/UsageStatistics.h"   // JSAccumulateTelemetryDataCallback
 #include "js/GCVector.h"
 #include "js/HashTable.h"
 #include "js/Modules.h"  // JS::Module{DynamicImport,Metadata,Resolve}Hook
 #ifdef DEBUG
 #  include "js/Proxy.h"  // For AutoEnterPolicy
 #endif
-#include "js/Stream.h"
+#include "js/Stream.h"  // JS::AbortSignalIsAborted
 #include "js/Symbol.h"
 #include "js/UniquePtr.h"
 #include "js/Utility.h"
@@ -57,14 +60,16 @@
 #include "vm/OffThreadPromiseRuntimeState.h"  // js::OffThreadPromiseRuntimeState
 #include "vm/Scope.h"
 #include "vm/SharedImmutableStringsCache.h"
+#include "vm/SharedStencil.h"  // js::SharedImmutableScriptDataTable
 #include "vm/Stack.h"
 #include "vm/SymbolType.h"
 #include "wasm/WasmTypes.h"
 
+struct JSClass;
+
 namespace js {
 
 class AutoAssertNoContentJS;
-class AutoKeepAtoms;
 class EnterDebuggeeNoExecute;
 #ifdef JS_TRACE_LOGGING
 class TraceLoggerThread;
@@ -86,12 +91,10 @@ namespace js {
 extern MOZ_COLD void ReportOutOfMemory(JSContext* cx);
 
 /* Different signature because the return type has MOZ_MUST_USE_TYPE. */
-extern MOZ_COLD mozilla::GenericErrorResult<OOM&> ReportOutOfMemoryResult(
+extern MOZ_COLD mozilla::GenericErrorResult<OOM> ReportOutOfMemoryResult(
     JSContext* cx);
 
 extern MOZ_COLD void ReportAllocationOverflow(JSContext* maybecx);
-
-extern MOZ_COLD void ReportOverRecursed(JSContext* cx);
 
 class Activation;
 class ActivationIterator;
@@ -228,12 +231,21 @@ struct SelfHostedLazyScript {
   // in BaseScript::jitCodeRaw_.
   uint8_t* jitCodeRaw_ = nullptr;
 
+  // Warm-up count of zero. This field is stored at the same offset as
+  // BaseScript::warmUpData_.
+  ScriptWarmUpData warmUpData_ = {};
+
   static constexpr size_t offsetOfJitCodeRaw() {
     return offsetof(SelfHostedLazyScript, jitCodeRaw_);
+  }
+  static constexpr size_t offsetOfWarmUpData() {
+    return offsetof(SelfHostedLazyScript, warmUpData_);
   }
 };
 
 }  // namespace js
+
+struct JSTelemetrySender;
 
 struct JSRuntime {
  private:
@@ -323,8 +335,9 @@ struct JSRuntime {
     profilerSampleBufferRangeStart_ = rangeStart;
   }
 
-  /* Call this to accumulate telemetry data. */
-  js::MainThreadData<JSAccumulateTelemetryDataCallback> telemetryCallback;
+  /* Call this to accumulate telemetry data. May be called from any thread; the
+   * embedder is responsible for locking. */
+  JSAccumulateTelemetryDataCallback telemetryCallback;
 
   /* Call this to accumulate use counter data. */
   js::MainThreadData<JSSetUseCounterCallback> useCounterCallback;
@@ -336,6 +349,8 @@ struct JSRuntime {
   // histogram. |key| provides an additional key to identify the histogram.
   // |sample| is the data to add to the histogram.
   void addTelemetry(int id, uint32_t sample, const char* key = nullptr);
+
+  JSTelemetrySender getTelemetrySender() const;
 
   void setTelemetryCallback(JSRuntime* rt,
                             JSAccumulateTelemetryDataCallback callback);
@@ -443,6 +458,30 @@ struct JSRuntime {
  public:
   const JSClass* maybeWindowProxyClass() const { return windowProxyClass_; }
   void setWindowProxyClass(const JSClass* clasp) { windowProxyClass_ = clasp; }
+
+ private:
+  js::WriteOnceData<const JSClass*> abortSignalClass_;
+  js::WriteOnceData<JS::AbortSignalIsAborted> abortSignalIsAborted_;
+
+ public:
+  void initAbortSignalHandling(const JSClass* clasp,
+                               JS::AbortSignalIsAborted isAborted) {
+    MOZ_ASSERT(clasp != nullptr,
+               "doesn't make sense for an embedder to provide a null class "
+               "when specifying AbortSignal handling");
+    MOZ_ASSERT(isAborted != nullptr, "must pass a valid function pointer");
+
+    abortSignalClass_ = clasp;
+    abortSignalIsAborted_ = isAborted;
+  }
+
+  const JSClass* maybeAbortSignalClass() const { return abortSignalClass_; }
+
+  bool abortSignalIsAborted(JSObject* obj) {
+    MOZ_ASSERT(abortSignalIsAborted_ != nullptr,
+               "must call initAbortSignalHandling first");
+    return abortSignalIsAborted_(obj);
+  }
 
  private:
   // List of non-ephemeron weak containers to sweep during
@@ -847,10 +886,10 @@ struct JSRuntime {
   // within the runtime. This may be modified by threads using
   // AutoLockScriptData.
  private:
-  js::ScriptDataLockData<js::RuntimeScriptDataTable> scriptDataTable_;
+  js::ScriptDataLockData<js::SharedImmutableScriptDataTable> scriptDataTable_;
 
  public:
-  js::RuntimeScriptDataTable& scriptDataTable(
+  js::SharedImmutableScriptDataTable& scriptDataTable(
       const js::AutoLockScriptData& lock) {
     return scriptDataTable_.ref();
   }
@@ -1069,6 +1108,34 @@ struct JSRuntime {
   };
   ErrorInterceptionSupport errorInterception;
 #endif  // defined(NIGHTLY_BUILD)
+};
+
+// Context for sending telemetry to the embedder from any thread, main or
+// helper.  Obtain a |JSTelemetrySender| by calling |getTelemetrySender()| on
+// the |JSRuntime|.
+struct JSTelemetrySender {
+ private:
+  friend struct JSRuntime;
+
+  JSAccumulateTelemetryDataCallback callback_;
+
+  explicit JSTelemetrySender(JSAccumulateTelemetryDataCallback callback)
+      : callback_(callback) {}
+
+ public:
+  JSTelemetrySender() : callback_(nullptr) {}
+  JSTelemetrySender(const JSTelemetrySender& other) = default;
+  explicit JSTelemetrySender(JSRuntime* runtime)
+      : JSTelemetrySender(runtime->getTelemetrySender()) {}
+
+  // Accumulates data for Firefox telemetry. |id| is the ID of a JS_TELEMETRY_*
+  // histogram. |key| provides an additional key to identify the histogram.
+  // |sample| is the data to add to the histogram.
+  void addTelemetry(int id, uint32_t sample, const char* key = nullptr) {
+    if (callback_) {
+      callback_(id, sample, key);
+    }
+  }
 };
 
 namespace js {

@@ -178,30 +178,25 @@ void nsInlineFrame::DestroyFrom(nsIFrame* aDestructRoot,
   nsContainerFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
 }
 
-nsresult nsInlineFrame::StealFrame(nsIFrame* aChild) {
+void nsInlineFrame::StealFrame(nsIFrame* aChild) {
   if (MaybeStealOverflowContainerFrame(aChild)) {
-    return NS_OK;
+    return;
   }
 
   nsInlineFrame* parent = this;
-  bool removed = false;
   do {
-    removed = parent->mFrames.StartRemoveFrame(aChild);
-    if (removed) {
-      break;
+    if (parent->mFrames.StartRemoveFrame(aChild)) {
+      return;
     }
 
     // We didn't find the child in our principal child list.
     // Maybe it's on the overflow list?
     nsFrameList* frameList = parent->GetOverflowFrames();
-    if (frameList) {
-      removed = frameList->ContinueRemoveFrame(aChild);
+    if (frameList && frameList->ContinueRemoveFrame(aChild)) {
       if (frameList->IsEmpty()) {
         parent->DestroyOverflowList();
       }
-      if (removed) {
-        break;
-      }
+      return;
     }
 
     // Due to our "lazy reparenting" optimization 'aChild' might not actually
@@ -209,8 +204,7 @@ nsresult nsInlineFrame::StealFrame(nsIFrame* aChild) {
     parent = static_cast<nsInlineFrame*>(parent->GetNextInFlow());
   } while (parent);
 
-  MOZ_ASSERT(removed, "nsInlineFrame::StealFrame: can't find aChild");
-  return removed ? NS_OK : NS_ERROR_UNEXPECTED;
+  MOZ_ASSERT_UNREACHABLE("nsInlineFrame::StealFrame: can't find aChild");
 }
 
 void nsInlineFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
@@ -243,19 +237,19 @@ void nsInlineFrame::AddInlinePrefISize(gfxContext* aRenderingContext,
 }
 
 /* virtual */
-LogicalSize nsInlineFrame::ComputeSize(
+nsIFrame::SizeComputationResult nsInlineFrame::ComputeSize(
     gfxContext* aRenderingContext, WritingMode aWM, const LogicalSize& aCBSize,
     nscoord aAvailableISize, const LogicalSize& aMargin,
-    const LogicalSize& aBorder, const LogicalSize& aPadding,
-    ComputeSizeFlags aFlags) {
+    const LogicalSize& aBorderPadding, ComputeSizeFlags aFlags) {
   // Inlines and text don't compute size before reflow.
-  return LogicalSize(aWM, NS_UNCONSTRAINEDSIZE, NS_UNCONSTRAINEDSIZE);
+  return {LogicalSize(aWM, NS_UNCONSTRAINEDSIZE, NS_UNCONSTRAINEDSIZE),
+          AspectRatioUsage::None};
 }
 
 nsRect nsInlineFrame::ComputeTightBounds(DrawTarget* aDrawTarget) const {
   // be conservative
   if (Style()->HasTextDecorationLines()) {
-    return GetVisualOverflowRect();
+    return InkOverflowRect();
   }
   return ComputeSimpleTightBounds(aDrawTarget);
 }

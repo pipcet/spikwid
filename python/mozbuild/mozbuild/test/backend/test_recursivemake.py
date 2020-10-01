@@ -322,9 +322,6 @@ class TestRecursiveMakeBackend(BackendTester):
             'RCFILE': [
                 'RCFILE := $(srcdir)/foo.rc',
             ],
-            'RESFILE': [
-                'RESFILE := bar.res',
-            ],
             'RCINCLUDE': [
                 'RCINCLUDE := $(srcdir)/bar.rc',
             ],
@@ -405,7 +402,7 @@ class TestRecursiveMakeBackend(BackendTester):
 
         expected = [
             'include $(topsrcdir)/config/AB_rCD.mk',
-            'pre-compile:: $(MDDEPDIR)/bar.c.stub',
+            'PRE_COMPILE_TARGETS += $(MDDEPDIR)/bar.c.stub',
             'bar.c: $(MDDEPDIR)/bar.c.stub ;',
             'GARBAGE += bar.c',
             'GARBAGE += $(MDDEPDIR)/bar.c.stub',
@@ -415,7 +412,7 @@ class TestRecursiveMakeBackend(BackendTester):
             '$(call py_action,file_generate,%s/generate-bar.py baz bar.c $(MDDEPDIR)/bar.c.pp $(MDDEPDIR)/bar.c.stub)' % env.topsrcdir,  # noqa
             '@$(TOUCH) $@',
             '',
-            'export:: $(MDDEPDIR)/foo.h.stub',
+            'EXPORT_TARGETS += $(MDDEPDIR)/foo.h.stub',
             'foo.h: $(MDDEPDIR)/foo.h.stub ;',
             'GARBAGE += foo.h',
             'GARBAGE += $(MDDEPDIR)/foo.h.stub',
@@ -439,7 +436,7 @@ class TestRecursiveMakeBackend(BackendTester):
 
         expected = [
             'include $(topsrcdir)/config/AB_rCD.mk',
-            'pre-compile:: $(MDDEPDIR)/bar.c.stub',
+            'PRE_COMPILE_TARGETS += $(MDDEPDIR)/bar.c.stub',
             'bar.c: $(MDDEPDIR)/bar.c.stub ;',
             'GARBAGE += bar.c',
             'GARBAGE += $(MDDEPDIR)/bar.c.stub',
@@ -449,7 +446,7 @@ class TestRecursiveMakeBackend(BackendTester):
             '$(call py_action,file_generate,%s/generate-bar.py baz bar.c $(MDDEPDIR)/bar.c.pp $(MDDEPDIR)/bar.c.stub)' % env.topsrcdir,  # noqa
             '@$(TOUCH) $@',
             '',
-            'pre-compile:: $(MDDEPDIR)/foo.c.stub',
+            'PRE_COMPILE_TARGETS += $(MDDEPDIR)/foo.c.stub',
             'foo.c: $(MDDEPDIR)/foo.c.stub ;',
             'GARBAGE += foo.c',
             'GARBAGE += $(MDDEPDIR)/foo.c.stub',
@@ -473,7 +470,7 @@ class TestRecursiveMakeBackend(BackendTester):
 
         expected = [
             'include $(topsrcdir)/config/AB_rCD.mk',
-            'misc:: $(MDDEPDIR)/foo.xyz.stub',
+            'MISC_TARGETS += $(MDDEPDIR)/foo.xyz.stub',
             'foo.xyz: $(MDDEPDIR)/foo.xyz.stub ;',
             'GARBAGE += foo.xyz',
             'GARBAGE += $(MDDEPDIR)/foo.xyz.stub',
@@ -501,7 +498,7 @@ class TestRecursiveMakeBackend(BackendTester):
 
         expected = [
             'include $(topsrcdir)/config/AB_rCD.mk',
-            'misc:: $(MDDEPDIR)/foo.xyz.stub',
+            'MISC_TARGETS += $(MDDEPDIR)/foo.xyz.stub',
             'foo.xyz: $(MDDEPDIR)/foo.xyz.stub ;',
             'GARBAGE += foo.xyz',
             'GARBAGE += $(MDDEPDIR)/foo.xyz.stub',
@@ -511,7 +508,7 @@ class TestRecursiveMakeBackend(BackendTester):
             '$(call py_action,file_generate,--locale=$(AB_CD) %s/generate-foo.py main foo.xyz $(MDDEPDIR)/foo.xyz.pp $(MDDEPDIR)/foo.xyz.stub $(call MERGE_FILE,localized-input) $(srcdir)/non-localized-input)' % env.topsrcdir,  # noqa
             '@$(TOUCH) $@',
             '',
-            'misc:: $(MDDEPDIR)/abc.xyz.stub',
+            'MISC_TARGETS += $(MDDEPDIR)/abc.xyz.stub',
             'abc.xyz: $(MDDEPDIR)/abc.xyz.stub ;',
             'GARBAGE += abc.xyz',
             'GARBAGE += $(MDDEPDIR)/abc.xyz.stub',
@@ -536,7 +533,7 @@ class TestRecursiveMakeBackend(BackendTester):
 
         expected = [
             'include $(topsrcdir)/config/AB_rCD.mk',
-            'misc:: $(MDDEPDIR)/foo$(AB_CD).xyz.stub',
+            'MISC_TARGETS += $(MDDEPDIR)/foo$(AB_CD).xyz.stub',
             'foo$(AB_CD).xyz: $(MDDEPDIR)/foo$(AB_CD).xyz.stub ;',
             'GARBAGE += foo$(AB_CD).xyz',
             'GARBAGE += $(MDDEPDIR)/foo$(AB_CD).xyz.stub',

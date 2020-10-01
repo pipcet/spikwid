@@ -131,29 +131,23 @@ class DNSListener {
     this.promise = new Promise(resolve => {
       this.resolve = resolve;
     });
-    if (trrServer == "") {
+
+    let resolverInfo =
+      trrServer == "" ? null : dns.newTRRResolverInfo(trrServer);
+    try {
       this.request = dns.asyncResolve(
         name,
+        Ci.nsIDNSService.RESOLVE_TYPE_DEFAULT,
         flags,
+        resolverInfo,
         this,
         mainThread,
         defaultOriginAttributes
       );
-    } else {
-      try {
-        this.request = dns.asyncResolveWithTrrServer(
-          name,
-          trrServer,
-          flags,
-          this,
-          mainThread,
-          defaultOriginAttributes
-        );
-        Assert.ok(!expectEarlyFail);
-      } catch (e) {
-        Assert.ok(expectEarlyFail);
-        this.resolve([e]);
-      }
+      Assert.ok(!expectEarlyFail);
+    } catch (e) {
+      Assert.ok(expectEarlyFail);
+      this.resolve([e]);
     }
   }
 
@@ -171,6 +165,7 @@ class DNSListener {
     }
 
     Assert.equal(inStatus, Cr.NS_OK, "Checking status");
+    inRecord.QueryInterface(Ci.nsIDNSAddrRecord);
     let answer = inRecord.getNextAddrAsString();
     Assert.equal(
       answer,
@@ -245,6 +240,7 @@ function makeChan(url, mode) {
 add_task(
   { skip_if: () => mozinfo.os == "mac" },
   async function test_trr_flags() {
+    Services.prefs.setBoolPref("network.trr.fallback-on-zero-response", true);
     let httpserv = new HttpServer();
     httpserv.registerPathHandler("/", function handler(metadata, response) {
       let content = "ok";
@@ -353,6 +349,7 @@ add_task(
     await new Promise(resolve => chan.asyncOpen(new ChannelListener(resolve)));
 
     await new Promise(resolve => httpserv.stop(resolve));
+    Services.prefs.clearUserPref("network.trr.fallback-on-zero-response");
   }
 );
 
@@ -1333,9 +1330,14 @@ add_task(async function test_dnsSuffix() {
       "network:dns-suffix-list-updated"
     );
     await new DNSListener("test.com", "1.2.3.4");
-    await new DNSListener("example.org", "127.0.0.1");
-    // Also test that we don't use the pushed entry.
-    await new DNSListener("push.example.org", "127.0.0.1");
+    if (Services.prefs.getBoolPref("network.trr.split_horizon_mitigations")) {
+      await new DNSListener("example.org", "127.0.0.1");
+      // Also test that we don't use the pushed entry.
+      await new DNSListener("push.example.org", "127.0.0.1");
+    } else {
+      await new DNSListener("example.org", "1.2.3.4");
+      await new DNSListener("push.example.org", "2018::2018");
+    }
 
     // Attempt to clean up, just in case
     networkLinkService.dnsSuffixList = [];
@@ -1345,56 +1347,16 @@ add_task(async function test_dnsSuffix() {
     );
   }
 
+  Services.prefs.setBoolPref("network.trr.split_horizon_mitigations", true);
   await checkDnsSuffixInMode(2);
   Services.prefs.setCharPref("network.trr.bootstrapAddress", "127.0.0.1");
   await checkDnsSuffixInMode(3);
+  Services.prefs.setBoolPref("network.trr.split_horizon_mitigations", false);
+  // Test again with mitigations off
+  await checkDnsSuffixInMode(2);
+  await checkDnsSuffixInMode(3);
+  Services.prefs.clearUserPref("network.trr.split_horizon_mitigations");
   Services.prefs.clearUserPref("network.trr.bootstrapAddress");
-});
-
-add_task(async function test_vpnDetection() {
-  Services.prefs.setIntPref("network.trr.mode", 2);
-  Services.prefs.setCharPref(
-    "network.trr.uri",
-    `https://foo.example.com:${h2Port}/doh?responseIP=1.2.3.4&push=true`
-  );
-  dns.clearCache(true);
-  await new DNSListener("example.org", "1.2.3.4");
-  await new DNSListener("push.example.org", "2018::2018");
-
-  let networkLinkService = {
-    platformDNSIndications: Ci.nsINetworkLinkService.VPN_DETECTED,
-    QueryInterface: ChromeUtils.generateQI(["nsINetworkLinkService"]),
-  };
-
-  Services.obs.notifyObservers(
-    networkLinkService,
-    "network:link-status-changed",
-    "changed"
-  );
-  await new DNSListener("example.org", "127.0.0.1");
-  await new DNSListener("test.com", "127.0.0.1");
-  // Also test that we don't use the pushed entry.
-  await new DNSListener("push.example.org", "127.0.0.1");
-
-  Services.prefs.setCharPref("network.trr.bootstrapAddress", "127.0.0.1");
-  Services.prefs.setIntPref("network.trr.mode", 3);
-  dns.clearCache(true);
-
-  await new DNSListener("example.org", "127.0.0.1");
-  await new DNSListener("test.com", "127.0.0.1");
-  // Also test that we don't use the pushed entry.
-  await new DNSListener("push.example.org", "127.0.0.1");
-
-  Services.prefs.clearUserPref("network.trr.bootstrapAddress");
-
-  // Attempt to clean up, just in case
-  networkLinkService.platformDNSIndications =
-    Ci.nsINetworkLinkService.NONE_DETECTED;
-  Services.obs.notifyObservers(
-    networkLinkService,
-    "network:link-status-changed",
-    "changed"
-  );
 });
 
 // Test AsyncResoleWithTrrServer.
@@ -1744,6 +1706,7 @@ add_task(async function test_resolve_not_confirmed() {
       undefined,
       false
     );
+    inRecord.QueryInterface(Ci.nsIDNSAddrRecord);
     let responseIP = inRecord.getNextAddrAsString();
     if (responseIP == "7.7.7.7") {
       break;
@@ -2106,4 +2069,53 @@ add_task(async function test_ipv6_trr_fallback() {
 
   override.clearOverrides();
   await httpserver.stop();
+});
+
+add_task(async function test_no_retry_without_doh() {
+  // See bug 1648147 - if the TRR returns 0.0.0.0 we should not retry with DNS
+  Services.prefs.setBoolPref("network.trr.fallback-on-zero-response", false);
+
+  async function test(url, ip) {
+    Services.prefs.setIntPref("network.trr.mode", 2);
+    Services.prefs.setCharPref(
+      "network.trr.uri",
+      `https://foo.example.com:${h2Port}/doh?responseIP=${ip}`
+    );
+
+    // Requests to 0.0.0.0 are usually directed to localhost, so let's use a port
+    // we know isn't being used - 666 (Doom)
+    let chan = makeChan(url, Ci.nsIRequest.TRR_DEFAULT_MODE);
+    let resolutions = 0;
+    let statusCounter = {
+      statusCount: {},
+      QueryInterface: ChromeUtils.generateQI([
+        "nsIInterfaceRequestor",
+        "nsIProgressEventSink",
+      ]),
+      getInterface(iid) {
+        return this.QueryInterface(iid);
+      },
+      onProgress(request, progress, progressMax) {},
+      onStatus(request, status, statusArg) {
+        this.statusCount[status] = 1 + (this.statusCount[status] || 0);
+      },
+    };
+    chan.notificationCallbacks = statusCounter;
+    let req = await new Promise(resolve =>
+      chan.asyncOpen(new ChannelListener(resolve, null, CL_EXPECT_FAILURE))
+    );
+    equal(
+      statusCounter.statusCount[0x804b000b],
+      1,
+      "Expecting only one instance of NS_NET_STATUS_RESOLVED_HOST"
+    );
+    equal(
+      statusCounter.statusCount[0x804b0007],
+      1,
+      "Expecting only one instance of NS_NET_STATUS_CONNECTING_TO"
+    );
+  }
+
+  await test(`http://unknown.ipv4.stuff:666/path`, "0.0.0.0");
+  await test(`http://unknown.ipv6.stuff:666/path`, "::");
 });

@@ -538,10 +538,10 @@ nsNavBookmarks::InsertBookmark(int64_t aFolder, nsIURI* aURI, int32_t aIndex,
 
       NOTIFY_BOOKMARKS_OBSERVERS(
           mCanNotify, mObservers, DontSkip,
-          OnItemChanged(bookmarks[i].id, "tags"_ns, false, EmptyCString(),
+          OnItemChanged(bookmarks[i].id, "tags"_ns, false, ""_ns,
                         bookmarks[i].lastModified, TYPE_BOOKMARK,
                         bookmarks[i].parentId, bookmarks[i].guid,
-                        bookmarks[i].parentGuid, EmptyCString(), aSource));
+                        bookmarks[i].parentGuid, ""_ns, aSource));
     }
   }
 
@@ -667,10 +667,10 @@ nsNavBookmarks::RemoveItem(int64_t aItemId, uint16_t aSource) {
     for (uint32_t i = 0; i < bookmarks.Length(); ++i) {
       NOTIFY_BOOKMARKS_OBSERVERS(
           mCanNotify, mObservers, DontSkip,
-          OnItemChanged(bookmarks[i].id, "tags"_ns, false, EmptyCString(),
+          OnItemChanged(bookmarks[i].id, "tags"_ns, false, ""_ns,
                         bookmarks[i].lastModified, TYPE_BOOKMARK,
                         bookmarks[i].parentId, bookmarks[i].guid,
-                        bookmarks[i].parentGuid, EmptyCString(), aSource));
+                        bookmarks[i].parentGuid, ""_ns, aSource));
     }
   }
 
@@ -964,10 +964,10 @@ nsresult nsNavBookmarks::RemoveFolderChildren(int64_t aFolderId,
       for (uint32_t i = 0; i < bookmarks.Length(); ++i) {
         NOTIFY_BOOKMARKS_OBSERVERS(
             mCanNotify, mObservers, DontSkip,
-            OnItemChanged(bookmarks[i].id, "tags"_ns, false, EmptyCString(),
+            OnItemChanged(bookmarks[i].id, "tags"_ns, false, ""_ns,
                           bookmarks[i].lastModified, TYPE_BOOKMARK,
                           bookmarks[i].parentId, bookmarks[i].guid,
-                          bookmarks[i].parentGuid, EmptyCString(), aSource));
+                          bookmarks[i].parentGuid, ""_ns, aSource));
       }
     }
   }
@@ -1181,8 +1181,7 @@ nsNavBookmarks::SetItemLastModified(int64_t aItemId, PRTime aLastModified,
       OnItemChanged(bookmark.id, "lastModified"_ns, false,
                     nsPrintfCString("%" PRId64, bookmark.lastModified),
                     bookmark.lastModified, bookmark.type, bookmark.parentId,
-                    bookmark.guid, bookmark.parentGuid, EmptyCString(),
-                    aSource));
+                    bookmark.guid, bookmark.parentGuid, ""_ns, aSource));
   return NS_OK;
 }
 
@@ -1381,8 +1380,7 @@ nsNavBookmarks::SetItemTitle(int64_t aItemId, const nsACString& aTitle,
       mCanNotify, mObservers, SKIP_TAGS(isChangingTagFolder),
       OnItemChanged(bookmark.id, "title"_ns, false, title,
                     bookmark.lastModified, bookmark.type, bookmark.parentId,
-                    bookmark.guid, bookmark.parentGuid, EmptyCString(),
-                    aSource));
+                    bookmark.guid, bookmark.parentGuid, ""_ns, aSource));
   return NS_OK;
 }
 
@@ -1870,7 +1868,7 @@ void nsNavBookmarks::HandlePlacesEvent(const PlacesEventSequence& aEvents) {
 
     ItemVisitData visitData;
     visitData.visitId = visit->mVisitId;
-    visitData.bookmark.url = NS_ConvertUTF16toUTF8(visit->mUrl);
+    CopyUTF16toUTF8(visit->mUrl, visitData.bookmark.url);
     visitData.time = visit->mVisitTime * 1000;
     visitData.transitionType = visit->mTransitionType;
     RefPtr<AsyncGetBookmarksForURI<ItemVisitMethod, ItemVisitData>> notifier =
@@ -1923,7 +1921,7 @@ nsNavBookmarks::OnPageChanged(nsIURI* aURI, uint32_t aChangedAttribute,
     NS_ENSURE_SUCCESS(rv, rv);
     changeData.property = "favicon"_ns;
     changeData.isAnnotation = false;
-    changeData.newValue = NS_ConvertUTF16toUTF8(aNewValue);
+    CopyUTF16toUTF8(aNewValue, changeData.newValue);
     changeData.bookmark.lastModified = 0;
     changeData.bookmark.type = TYPE_BOOKMARK;
 

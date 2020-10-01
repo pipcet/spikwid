@@ -75,7 +75,7 @@ static void ReportConn(nsIHandleReportCallback* aHandleReport,
   path.AppendLiteral("-used");
 
   int32_t val = aConn->getSqliteRuntimeStatus(aOption);
-  aHandleReport->Callback(EmptyCString(), path, nsIMemoryReporter::KIND_HEAP,
+  aHandleReport->Callback(""_ns, path, nsIMemoryReporter::KIND_HEAP,
                           nsIMemoryReporter::UNITS_BYTES, int64_t(val), aDesc,
                           aData);
   *aTotal += val;
@@ -431,7 +431,7 @@ class AsyncInitDatabase final : public Runnable {
 
     if (mGrowthIncrement >= 0) {
       // Ignore errors. In the future, we might wish to log them.
-      (void)mConnection->SetGrowthIncrement(mGrowthIncrement, EmptyCString());
+      (void)mConnection->SetGrowthIncrement(mGrowthIncrement, ""_ns);
     }
 
     return DispatchResult(
@@ -596,6 +596,7 @@ Service::OpenUnsharedDatabase(nsIFile* aDatabaseFile,
 
 NS_IMETHODIMP
 Service::OpenDatabaseWithFileURL(nsIFileURL* aFileURL,
+                                 const nsACString& aTelemetryFilename,
                                  mozIStorageConnection** _connection) {
   NS_ENSURE_ARG(aFileURL);
 
@@ -605,7 +606,7 @@ Service::OpenDatabaseWithFileURL(nsIFileURL* aFileURL,
               SQLITE_OPEN_CREATE | SQLITE_OPEN_URI;
   RefPtr<Connection> msc = new Connection(this, flags, Connection::SYNCHRONOUS);
 
-  nsresult rv = msc->initialize(aFileURL);
+  nsresult rv = msc->initialize(aFileURL, aTelemetryFilename);
   NS_ENSURE_SUCCESS(rv, rv);
 
   msc.forget(_connection);

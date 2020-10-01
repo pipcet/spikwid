@@ -9,7 +9,6 @@
 #include "TouchActionHelper.h"
 #include "gfxPlatform.h"  // For gfxPlatform::UseTiling
 
-#include "LayersLogging.h"  // For Stringify
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/MouseEventBinding.h"
 #include "mozilla/dom/BrowserParent.h"
@@ -20,6 +19,7 @@
 #include "mozilla/layers/WebRenderBridgeChild.h"
 #include "mozilla/PresShell.h"
 #include "mozilla/TouchEvents.h"
+#include "mozilla/ToString.h"
 #include "mozilla/ViewportUtils.h"
 #include "nsContainerFrame.h"
 #include "nsContentUtils.h"
@@ -75,9 +75,7 @@ static CSSPoint ScrollFrameTo(nsIScrollableFrame* aFrame,
                               const RepaintRequest& aRequest,
                               bool& aSuccessOut) {
   aSuccessOut = false;
-  CSSPoint targetScrollPosition = aRequest.IsRootContent()
-                                      ? aRequest.GetLayoutViewport().TopLeft()
-                                      : aRequest.GetScrollOffset();
+  CSSPoint targetScrollPosition = aRequest.GetLayoutScrollOffset();
 
   if (!aFrame) {
     return targetScrollPosition;
@@ -164,16 +162,17 @@ static ScreenMargin ScrollFrame(nsIContent* aContent,
   nsIScrollableFrame* sf =
       nsLayoutUtils::FindScrollableFrameFor(aRequest.GetScrollId());
   if (sf) {
-    sf->ResetScrollInfoIfGeneration(aRequest.GetScrollGeneration());
+    sf->ResetScrollInfoIfNeeded(aRequest.GetScrollGeneration(),
+                                aRequest.IsAnimationInProgress());
     sf->SetScrollableByAPZ(!aRequest.IsScrollInfoLayer());
     if (sf->IsRootScrollFrameOfDocument()) {
       if (!APZCCallbackHelper::IsScrollInProgress(sf)) {
         if (RefPtr<PresShell> presShell = GetPresShell(aContent)) {
           APZCCH_LOG("Setting VV offset to %s on presShell %p\n",
-                     Stringify(aRequest.GetScrollOffset()).c_str(),
+                     ToString(aRequest.GetVisualScrollOffset()).c_str(),
                      presShell.get());
           if (presShell->SetVisualViewportOffset(
-                  CSSPoint::ToAppUnits(aRequest.GetScrollOffset()),
+                  CSSPoint::ToAppUnits(aRequest.GetVisualScrollOffset()),
                   presShell->GetLayoutViewportOffset())) {
             sf->MarkEverScrolled();
           }
@@ -183,7 +182,7 @@ static ScreenMargin ScrollFrame(nsIContent* aContent,
   }
   bool scrollUpdated = false;
   ScreenMargin displayPortMargins = aRequest.GetDisplayPortMargins();
-  CSSPoint apzScrollOffset = aRequest.GetScrollOffset();
+  CSSPoint apzScrollOffset = aRequest.GetVisualScrollOffset();
   CSSPoint actualScrollOffset = ScrollFrameTo(sf, aRequest, scrollUpdated);
   CSSPoint scrollDelta = apzScrollOffset - actualScrollOffset;
 
@@ -206,7 +205,7 @@ static ScreenMargin ScrollFrame(nsIContent* aContent,
           scrollDelta * aRequest.DisplayportPixelsPerCSSPixel());
     }
   } else if (aRequest.IsRootContent() &&
-             apzScrollOffset != aRequest.GetLayoutViewport().TopLeft()) {
+             apzScrollOffset != aRequest.GetLayoutScrollOffset()) {
     // APZ uses the visual viewport's offset to calculate where to place the
     // display port, so the display port is misplaced when a pinch zoom occurs.
     //
@@ -265,7 +264,7 @@ static void SetDisplayPortMargins(PresShell* aPresShell, nsIContent* aContent,
       MOZ_LOG(
           sDisplayportLog, LogLevel::Debug,
           ("APZCCH installing displayport margins %s on scrollId=%" PRIu64 "\n",
-           Stringify(aDisplayPortMargins).c_str(), viewID));
+           ToString(aDisplayPortMargins).c_str(), viewID));
     }
   }
   nsLayoutUtils::SetDisplayPortMargins(aContent, aPresShell,
@@ -525,7 +524,7 @@ void APZCCallbackHelper::FireSingleTapEvent(const LayoutDevicePoint& aPoint,
     return;
   }
   APZCCH_LOG("Dispatching single-tap component events to %s\n",
-             Stringify(aPoint).c_str());
+             ToString(aPoint).c_str());
   int time = 0;
   DispatchSynthesizedMouseEvent(eMouseMove, time, aPoint, aModifiers,
                                 aClickCount, aWidget);
@@ -599,7 +598,7 @@ static bool PrepareForSetTargetAPZCNotification(
       dpElement->Describe(dpElementDesc);
     }
     APZCCH_LOG("For event at %s found scrollable element %p (%s)\n",
-               Stringify(aRefPoint).c_str(), dpElement.get(),
+               ToString(aRefPoint).c_str(), dpElement.get(),
                NS_LossyConvertUTF16toASCII(dpElementDesc).get());
   }
 
@@ -779,24 +778,26 @@ APZCCallbackHelper::SendSetTargetAPZCNotification(nsIWidget* aWidget,
   return nullptr;
 }
 
-void APZCCallbackHelper::SendSetAllowedTouchBehaviorNotification(
+nsTArray<TouchBehaviorFlags>
+APZCCallbackHelper::SendSetAllowedTouchBehaviorNotification(
     nsIWidget* aWidget, dom::Document* aDocument,
     const WidgetTouchEvent& aEvent, uint64_t aInputBlockId,
     const SetAllowedTouchBehaviorCallback& aCallback) {
+  nsTArray<TouchBehaviorFlags> flags;
   if (!aWidget || !aDocument) {
-    return;
+    return flags;
   }
   if (PresShell* presShell = aDocument->GetPresShell()) {
     if (nsIFrame* rootFrame = presShell->GetRootFrame()) {
-      nsTArray<TouchBehaviorFlags> flags;
       for (uint32_t i = 0; i < aEvent.mTouches.Length(); i++) {
         flags.AppendElement(TouchActionHelper::GetAllowedTouchBehavior(
             aWidget, RelativeTo{rootFrame, ViewportType::Visual},
             aEvent.mTouches[i]->mRefPoint));
       }
-      aCallback(aInputBlockId, std::move(flags));
+      aCallback(aInputBlockId, flags);
     }
   }
+  return flags;
 }
 
 void APZCCallbackHelper::NotifyMozMouseScrollEvent(
@@ -834,9 +835,10 @@ void APZCCallbackHelper::NotifyFlushComplete(PresShell* aPresShell) {
 
 /* static */
 bool APZCCallbackHelper::IsScrollInProgress(nsIScrollableFrame* aFrame) {
-  return aFrame->IsProcessingAsyncScroll() ||
-         nsLayoutUtils::CanScrollOriginClobberApz(aFrame->LastScrollOrigin()) ||
-         aFrame->LastSmoothScrollOrigin() != ScrollOrigin::None;
+  using IncludeApzAnimation = nsIScrollableFrame::IncludeApzAnimation;
+
+  return aFrame->IsScrollAnimating(IncludeApzAnimation::No) ||
+         nsLayoutUtils::CanScrollOriginClobberApz(aFrame->LastScrollOrigin());
 }
 
 /* static */

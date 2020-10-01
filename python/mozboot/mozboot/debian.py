@@ -4,11 +4,10 @@
 
 from __future__ import absolute_import, print_function, unicode_literals
 
-import subprocess
-
 from mozboot.base import BaseBootstrapper
 from mozboot.linux_common import LinuxBootstrapper
 
+import sys
 
 MERCURIAL_INSTALL_PROMPT = '''
 Mercurial releases a new version every 3 months and your distro's package
@@ -37,7 +36,6 @@ class DebianBootstrapper(
         'autoconf2.13',
         'build-essential',
         'nodejs',
-        'python-setuptools',
         'unzip',
         'uuid',
         'zip',
@@ -84,52 +82,29 @@ class DebianBootstrapper(
         self.packages = list(self.COMMON_PACKAGES)
         if self.distro == 'debian':
             self.packages += self.DEBIAN_PACKAGES
-        # Due to the Python 2 EOL, newer versions of Ubuntu don't carry the
-        # same Python packages as older ones.
-        if self.distro == 'ubuntu' and int(self.version.split('.')[0]) >= 20:
-            self.packages.extend(['python2.7', 'python2.7-dev'])
-        else:
-            if (self.distro == 'ubuntu'
-                or (self.distro == 'debian' and self.codename not in ('bullseye', 'sid',))):
-                # On old Ubuntu and Debian before bullseye (11), it was called this way
-                # Note that we don't use Debian version code as the Python API doesn't provide
-                # it yet
-                # TODO: Update once bullseye is released in 2021
-                self.packages.append('python-pip')
 
-            self.packages.append('python-dev')
+    def suggest_install_distutils(self):
+        print('HINT: Try installing distutils with '
+              '`apt-get install python3-distutils`.', file=sys.stderr)
+
+    def suggest_install_pip3(self):
+        print("HINT: Try installing pip3 with `apt-get install python3-pip`.",
+              file=sys.stderr)
 
     def install_system_packages(self):
-        # Python 3 may not be present on all distros. Search for it and
-        # install if found.
-        packages = list(self.packages)
+        self.apt_install(*self.packages)
 
-        have_python3 = any([self.which('python3'), self.which('python3.8'),
-                            self.which('python3.7'), self.which('python3.6'),
-                            self.which('python3.5')])
-        python3_packages = subprocess.check_output(
-            ['apt-cache', 'pkgnames', 'python3'], universal_newlines=True)
-        python3_packages = python3_packages.splitlines()
-
-        if not have_python3 and 'python3' in python3_packages:
-            packages.extend(['python3', 'python3-dev'])
-
-        if not self.which('pip3') and 'python3-pip' in python3_packages:
-            packages.append('python3-pip')
-
-        self.apt_install(*packages)
-
-    def install_browser_packages(self):
+    def install_browser_packages(self, mozconfig_builder):
         self.ensure_browser_packages()
 
-    def install_browser_artifact_mode_packages(self):
+    def install_browser_artifact_mode_packages(self, mozconfig_builder):
         self.ensure_browser_packages(artifact_mode=True)
 
-    def install_mobile_android_packages(self):
-        self.ensure_mobile_android_packages()
+    def install_mobile_android_packages(self, mozconfig_builder):
+        self.ensure_mobile_android_packages(mozconfig_builder)
 
-    def install_mobile_android_artifact_mode_packages(self):
-        self.ensure_mobile_android_packages(artifact_mode=True)
+    def install_mobile_android_artifact_mode_packages(self, mozconfig_builder):
+        self.ensure_mobile_android_packages(mozconfig_builder, artifact_mode=True)
 
     def ensure_browser_packages(self, artifact_mode=False):
         # TODO: Figure out what not to install for artifact mode
@@ -138,7 +113,7 @@ class DebianBootstrapper(
         if not modern:
             self.apt_install('nasm')
 
-    def ensure_mobile_android_packages(self, artifact_mode=False):
+    def ensure_mobile_android_packages(self, mozconfig_builder, artifact_mode=False):
         # Multi-part process:
         # 1. System packages.
         # 2. Android SDK. Android NDK only if we are not in artifact mode. Android packages.

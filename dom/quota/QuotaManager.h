@@ -256,9 +256,8 @@ class QuotaManager final : public BackgroundThreadObject {
   // for the given process.
   void AbortOperationsForProcess(ContentParentId aContentParentId);
 
-  nsresult GetDirectoryForOrigin(PersistenceType aPersistenceType,
-                                 const nsACString& aASCIIOrigin,
-                                 nsIFile** aDirectory) const;
+  Result<nsCOMPtr<nsIFile>, nsresult> GetDirectoryForOrigin(
+      PersistenceType aPersistenceType, const nsACString& aASCIIOrigin) const;
 
   nsresult RestoreDirectoryMetadata2(nsIFile* aDirectory, bool aPersistent);
 
@@ -535,8 +534,10 @@ class QuotaManager final : public BackgroundThreadObject {
   nsresult CreateLocalStorageArchiveConnectionFromWebAppsStore(
       mozIStorageConnection** aConnection);
 
-  nsresult CreateLocalStorageArchiveConnection(
-      mozIStorageConnection** aConnection, bool& aNewlyCreated);
+  // The second object in the pair is used to signal if the localStorage
+  // archive database was newly created or recreated.
+  Result<std::pair<nsCOMPtr<mozIStorageConnection>, bool>, nsresult>
+  CreateLocalStorageArchiveConnection();
 
   nsresult RecreateLocalStorageArchive(
       nsCOMPtr<mozIStorageConnection>& aConnection);
@@ -563,7 +564,7 @@ class QuotaManager final : public BackgroundThreadObject {
   void DeleteFilesForOrigin(PersistenceType aPersistenceType,
                             const nsACString& aOrigin);
 
-  void FinalizeOriginEviction(nsTArray<RefPtr<DirectoryLockImpl>>& aLocks);
+  void FinalizeOriginEviction(nsTArray<RefPtr<DirectoryLockImpl>>&& aLocks);
 
   void ReleaseIOThreadObjects() {
     AssertIsOnIOThread();

@@ -11,15 +11,19 @@ EXPORTS += [
 EXPORTS.mozilla.a11y += [
     'AccessibleWrap.h',
     'HyperTextAccessibleWrap.h',
+    'RangeTypes.h',
 ]
 
 UNIFIED_SOURCES += [
     'AccessibleWrap.mm',
     'DocAccessibleWrap.mm',
     'GeckoTextMarker.mm',
+    'HyperTextAccessibleWrap.mm',
     'MacUtils.mm',
     'MOXAccessibleBase.mm',
+    'MOXLandmarkAccessibles.mm',
     'MOXMathAccessibles.mm',
+    'MOXSearchInfo.mm',
     'MOXTextMarkerDelegate.mm',
     'MOXWebAreaAccessible.mm',
     'mozAccessible.mm',
@@ -31,6 +35,7 @@ UNIFIED_SOURCES += [
     'mozTextAccessible.mm',
     'Platform.mm',
     'RootAccessibleWrap.mm',
+    'RotorRules.mm',
 ]
 
 SOURCES += [

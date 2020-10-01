@@ -9,7 +9,6 @@
 
 #include "jit/BaselineFrame.h"
 
-#include "vm/EnvironmentObject.h"
 #include "vm/JSContext.h"
 #include "vm/Realm.h"
 
@@ -94,6 +93,13 @@ inline ICScript* BaselineFrame::icScript() const {
     return icScript_;
   }
   return script()->jitScript()->icScript();
+}
+
+inline JSScript* BaselineFrame::invalidationScript() const {
+  if (!icScript()->isInlined()) {
+    return script();
+  }
+  return icScript()->inliningRoot()->owningScript();
 }
 
 inline void BaselineFrame::unsetIsDebuggee() {

@@ -71,11 +71,13 @@ class Kind(object):
                                        write_artifacts=write_artifacts)
         tasks = [Task(self.name,
                       label=task_dict['label'],
+                      description=task_dict['description'],
                       attributes=task_dict['attributes'],
                       task=task_dict['task'],
                       optimization=task_dict.get('optimization'),
                       dependencies=task_dict.get('dependencies'),
                       soft_dependencies=task_dict.get('soft-dependencies'),
+                      if_dependencies=task_dict.get('if-dependencies'),
                       release_artifacts=task_dict.get('release-artifacts'),
                       )
                  for task_dict in transforms(trans_config, inputs)]
@@ -345,7 +347,7 @@ class TaskGraphGenerator(object):
 
         # this is used for testing experimental optimization strategies
         strategies = os.environ.get('TASKGRAPH_OPTIMIZE_STRATEGIES',
-                                    parameters['try_task_config'].get('optimize-strategies'))
+                                    parameters.get('optimize_strategies'))
         if strategies:
             strategies = find_object(strategies)
 
@@ -362,7 +364,8 @@ class TaskGraphGenerator(object):
         yield verifications('optimized_task_graph', optimized_task_graph, graph_config, parameters)
 
         morphed_task_graph, label_to_taskid = morph(
-            optimized_task_graph, label_to_taskid, parameters, graph_config)
+            optimized_task_graph, label_to_taskid, parameters, graph_config,
+            self._decision_task_id)
 
         yield 'label_to_taskid', label_to_taskid
         yield verifications('morphed_task_graph', morphed_task_graph, graph_config, parameters)

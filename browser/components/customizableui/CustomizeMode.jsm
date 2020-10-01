@@ -4,7 +4,7 @@
 
 "use strict";
 
-var EXPORTED_SYMBOLS = ["CustomizeMode"];
+var EXPORTED_SYMBOLS = ["CustomizeMode", "_defaultImportantThemes"];
 
 const kPrefCustomizationDebug = "browser.uiCustomization.debug";
 const kPaletteId = "customization-palette";
@@ -87,6 +87,18 @@ XPCOMUtils.defineLazyGetter(this, "log", () => {
   };
   return new scope.ConsoleAPI(consoleOptions);
 });
+
+const DEFAULT_THEME_ID = "default-theme@mozilla.org";
+const LIGHT_THEME_ID = "firefox-compact-light@mozilla.org";
+const DARK_THEME_ID = "firefox-compact-dark@mozilla.org";
+const ALPENGLOW_THEME_ID = "firefox-alpenglow@mozilla.org";
+
+const _defaultImportantThemes = [
+  DEFAULT_THEME_ID,
+  LIGHT_THEME_ID,
+  DARK_THEME_ID,
+  ALPENGLOW_THEME_ID,
+];
 
 var gDraggingInToolbars;
 
@@ -185,6 +197,25 @@ CustomizeMode.prototype = {
   _customizing: false,
   _skipSourceNodeCheck: null,
   _mainViewContext: null,
+
+  // These are the commands we continue to leave enabled while in customize mode.
+  // All other commands are disabled, and we remove the disabled attribute when
+  // leaving customize mode.
+  _enabledCommands: new Set([
+    "cmd_newNavigator",
+    "cmd_newNavigatorTab",
+    "cmd_newNavigatorTabNoEvent",
+    "cmd_close",
+    "cmd_closeWindow",
+    "cmd_quitApplication",
+    "View:FullScreen",
+    "Browser:NextTab",
+    "Browser:PrevTab",
+    "Browser:NewUserContextTab",
+    "Tools:PrivateBrowsing",
+    "minimizeWindow",
+    "zoomWindow",
+  ]),
 
   get _handler() {
     return this.window.CustomizationHandler;
@@ -816,6 +847,11 @@ CustomizeMode.prototype = {
       this.visiblePalette.appendChild(fragment);
       this._stowedPalette = this.window.gNavToolbox.palette;
       this.window.gNavToolbox.palette = this.visiblePalette;
+
+      // Now that the palette items are all here, disable all commands.
+      // We do this here rather than directly in `enter` because we
+      // need to do/undo this when we're called from reset(), too.
+      this._updateCommandsDisabledState(true);
     } catch (ex) {
       log.error(ex);
     }
@@ -844,6 +880,9 @@ CustomizeMode.prototype = {
   },
 
   _depopulatePalette() {
+    // Quick, undo the command disabling before we depopulate completely:
+    this._updateCommandsDisabledState(false);
+
     this.visiblePalette.hidden = true;
     let paletteChild = this.visiblePalette.firstElementChild;
     let nextChild;
@@ -866,6 +905,24 @@ CustomizeMode.prototype = {
     }
     this.visiblePalette.hidden = false;
     this.window.gNavToolbox.palette = this._stowedPalette;
+  },
+
+  _updateCommandsDisabledState(shouldBeDisabled) {
+    for (let command of this.document.querySelectorAll("command")) {
+      if (!command.id || !this._enabledCommands.has(command.id)) {
+        if (shouldBeDisabled) {
+          if (command.getAttribute("disabled") != "true") {
+            command.setAttribute("disabled", true);
+          } else {
+            command.setAttribute("wasdisabled", true);
+          }
+        } else if (command.getAttribute("wasdisabled") != "true") {
+          command.removeAttribute("disabled");
+        } else {
+          command.removeAttribute("wasdisabled");
+        }
+      }
+    }
   },
 
   isCustomizableItem(aNode) {
@@ -1462,9 +1519,6 @@ CustomizeMode.prototype = {
   },
 
   async onThemesMenuShowing(aEvent) {
-    const DEFAULT_THEME_ID = "default-theme@mozilla.org";
-    const LIGHT_THEME_ID = "firefox-compact-light@mozilla.org";
-    const DARK_THEME_ID = "firefox-compact-dark@mozilla.org";
     const MAX_THEME_COUNT = 6;
 
     this._clearThemesMenu(aEvent.target);
@@ -1504,12 +1558,8 @@ CustomizeMode.prototype = {
     let themes = await AddonManager.getAddonsByTypes(["theme"]);
     let currentTheme = themes.find(theme => theme.isActive);
 
-    // Move the current theme (if any) and the light/dark themes to the start:
-    let importantThemes = new Set([
-      DEFAULT_THEME_ID,
-      LIGHT_THEME_ID,
-      DARK_THEME_ID,
-    ]);
+    // Move the current theme (if any) and the default themes to the start:
+    let importantThemes = new Set(_defaultImportantThemes);
     if (currentTheme) {
       importantThemes.add(currentTheme.id);
     }

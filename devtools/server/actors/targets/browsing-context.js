@@ -33,6 +33,7 @@ var { assert } = DevToolsUtils;
 var { TabSources } = require("devtools/server/actors/utils/TabSources");
 var makeDebugger = require("devtools/server/actors/utils/make-debugger");
 const InspectorUtils = require("InspectorUtils");
+const Targets = require("devtools/server/actors/targets/index");
 const { TargetActorRegistry } = ChromeUtils.import(
   "resource://devtools/server/actors/targets/target-actor-registry.jsm"
 );
@@ -51,39 +52,27 @@ const Resources = require("devtools/server/actors/resources/index");
 
 loader.lazyRequireGetter(
   this,
-  "ThreadActor",
+  ["ThreadActor", "unwrapDebuggerObjectGlobal"],
   "devtools/server/actors/thread",
   true
 );
 loader.lazyRequireGetter(
   this,
-  "unwrapDebuggerObjectGlobal",
-  "devtools/server/actors/thread",
-  true
-);
-loader.lazyRequireGetter(
-  this,
-  "WorkerTargetActorList",
-  "devtools/server/actors/worker/worker-target-actor-list",
+  "WorkerDescriptorActorList",
+  "devtools/server/actors/worker/worker-descriptor-actor-list",
   true
 );
 loader.lazyImporter(this, "ExtensionContent", EXTENSION_CONTENT_JSM);
 
 loader.lazyRequireGetter(
   this,
-  "StyleSheetActor",
-  "devtools/server/actors/stylesheets",
-  true
-);
-loader.lazyRequireGetter(
-  this,
-  "getSheetText",
+  ["StyleSheetActor", "getSheetText"],
   "devtools/server/actors/stylesheets",
   true
 );
 
 function getWindowID(window) {
-  return window.windowUtils.currentInnerWindowID;
+  return window.windowGlobalChild.innerWindowId;
 }
 
 function getDocShellChromeEventHandler(docShell) {
@@ -123,7 +112,7 @@ exports.getChildDocShells = getChildDocShells;
  */
 
 function getInnerId(window) {
-  return window.windowUtils.currentInnerWindowID;
+  return window.windowGlobalChild.innerWindowId;
 }
 
 const browsingContextTargetPrototype = {
@@ -305,14 +294,28 @@ const browsingContextTargetPrototype = {
       navigation: true,
     };
 
-    this._workerTargetActorList = null;
-    this._workerTargetActorPool = null;
-    this._onWorkerTargetActorListChanged = this._onWorkerTargetActorListChanged.bind(
+    this._workerDescriptorActorList = null;
+    this._workerDescriptorActorPool = null;
+    this._onWorkerDescriptorActorListChanged = this._onWorkerDescriptorActorListChanged.bind(
       this
     );
     this.notifyResourceAvailable = this.notifyResourceAvailable.bind(this);
+    this.notifyResourceDestroyed = this.notifyResourceDestroyed.bind(this);
+    this.notifyResourceUpdated = this.notifyResourceUpdated.bind(this);
 
     TargetActorRegistry.registerTargetActor(this);
+  },
+
+  addWatcherDataEntry(type, entries) {
+    if (type == "resources") {
+      this.watchTargetResources(entries);
+    }
+  },
+
+  removeWatcherDataEntry(type, entries) {
+    if (type == "resources") {
+      this.unwatchTargetResources(entries);
+    }
   },
 
   /**
@@ -324,11 +327,11 @@ const browsingContextTargetPrototype = {
    * which is a JSM and doesn't have a reference to a DevTools Loader.
    */
   watchTargetResources(resourceTypes) {
-    return Resources.watchTargetResources(this, resourceTypes);
+    return Resources.watchResources(this, resourceTypes);
   },
 
   unwatchTargetResources(resourceTypes) {
-    return Resources.unwatchTargetResources(this, resourceTypes);
+    return Resources.unwatchResources(this, resourceTypes);
   },
 
   /**
@@ -339,11 +342,27 @@ const browsingContextTargetPrototype = {
    *        It may contain actor IDs, actor forms, to be manually marshalled by the client.
    */
   notifyResourceAvailable(resources) {
-    if (!this.actorID) {
-      // Don't try to emit if the actor was destroyed.
+    this._emitResourcesForm("resource-available-form", resources);
+  },
+
+  notifyResourceDestroyed(resources) {
+    this._emitResourcesForm("resource-destroyed-form", resources);
+  },
+
+  notifyResourceUpdated(resources) {
+    this._emitResourcesForm("resource-updated-form", resources);
+  },
+
+  /**
+   * Wrapper around emit for resource forms to bail early after destroy.
+   */
+  _emitResourcesForm(name, resources) {
+    if (resources.length === 0 || this.isDestroyed()) {
+      // Don't try to emit if the resources array is empty or the actor was
+      // destroyed.
       return;
     }
-    this.emit("resource-available-form", resources);
+    this.emit(name, resources);
   },
 
   traits: null,
@@ -380,7 +399,7 @@ const browsingContextTargetPrototype = {
    * Try to locate the console actor if it exists.
    */
   get _consoleActor() {
-    if (this.exited || !this.actorID) {
+    if (this.exited || this.isDestroyed()) {
       return null;
     }
     const form = this.form();
@@ -389,10 +408,7 @@ const browsingContextTargetPrototype = {
 
   _targetScopedActorPool: null,
 
-  /**
-   * A constant prefix that will be used to form the actor ID by the server.
-   */
-  typeName: "browsingContextTarget",
+  targetType: Targets.TYPES.FRAME,
 
   /**
    * An object on which listen for DOMWindowCreated and pageshow events.
@@ -430,8 +446,8 @@ const browsingContextTargetPrototype = {
   },
 
   get outerWindowID() {
-    if (this.window) {
-      return this.window.windowUtils.outerWindowID;
+    if (this.docShell) {
+      return this.docShell.outerWindowID;
     }
     return null;
   },
@@ -728,18 +744,21 @@ const browsingContextTargetPrototype = {
     return { frames: windows };
   },
 
-  ensureWorkerTargetActorList() {
-    if (this._workerTargetActorList === null) {
-      this._workerTargetActorList = new WorkerTargetActorList(this.conn, {
-        type: Ci.nsIWorkerDebugger.TYPE_DEDICATED,
-        window: this.window,
-      });
+  ensureWorkerDescriptorActorList() {
+    if (this._workerDescriptorActorList === null) {
+      this._workerDescriptorActorList = new WorkerDescriptorActorList(
+        this.conn,
+        {
+          type: Ci.nsIWorkerDebugger.TYPE_DEDICATED,
+          window: this.window,
+        }
+      );
     }
-    return this._workerTargetActorList;
+    return this._workerDescriptorActorList;
   },
 
   pauseWorkersUntilAttach(shouldPause) {
-    this.ensureWorkerTargetActorList().workerPauser.setPauseMatching(
+    this.ensureWorkerDescriptorActorList().workerPauser.setPauseMatching(
       shouldPause
     );
   },
@@ -751,7 +770,7 @@ const browsingContextTargetPrototype = {
       };
     }
 
-    return this.ensureWorkerTargetActorList()
+    return this.ensureWorkerDescriptorActorList()
       .getList()
       .then(actors => {
         const pool = new Pool(this.conn, "worker-targets");
@@ -761,12 +780,12 @@ const browsingContextTargetPrototype = {
 
         // Do not destroy the pool before transfering ownership to the newly created
         // pool, so that we do not accidently destroy actors that are still in use.
-        if (this._workerTargetActorPool) {
-          this._workerTargetActorPool.destroy();
+        if (this._workerDescriptorActorPool) {
+          this._workerDescriptorActorPool.destroy();
         }
 
-        this._workerTargetActorPool = pool;
-        this._workerTargetActorList.onListChanged = this._onWorkerTargetActorListChanged;
+        this._workerDescriptorActorPool = pool;
+        this._workerDescriptorActorList.onListChanged = this._onWorkerDescriptorActorListChanged;
 
         return {
           workers: actors,
@@ -792,8 +811,8 @@ const browsingContextTargetPrototype = {
     return {};
   },
 
-  _onWorkerTargetActorListChanged() {
-    this._workerTargetActorList.onListChanged = null;
+  _onWorkerDescriptorActorListChanged() {
+    this._workerDescriptorActorList.onListChanged = null;
     this.emit("workerListChanged");
   },
 
@@ -893,7 +912,7 @@ const browsingContextTargetPrototype = {
       .QueryInterface(Ci.nsIInterfaceRequestor)
       .getInterface(Ci.nsIWebProgress);
     const window = webProgress.DOMWindow;
-    const id = window.windowUtils.outerWindowID;
+    const id = docShell.outerWindowID;
     let parentID = undefined;
     // Ignore the parent of the original document on non-e10s firefox,
     // as we get the xul window as parent and don't care about it.
@@ -905,7 +924,7 @@ const browsingContextTargetPrototype = {
       window.parent != window &&
       window != this._originalWindow
     ) {
-      parentID = window.parent.windowUtils.outerWindowID;
+      parentID = window.parent.docShell.outerWindowID;
     }
 
     return {
@@ -952,7 +971,7 @@ const browsingContextTargetPrototype = {
     }
 
     webProgress = webProgress.QueryInterface(Ci.nsIWebProgress);
-    const id = webProgress.DOMWindow.windowUtils.outerWindowID;
+    const id = webProgress.DOMWindow.docShell.outerWindowID;
     this.emit("frameUpdate", {
       frames: [
         {
@@ -1034,14 +1053,14 @@ const browsingContextTargetPrototype = {
     }
 
     // Make sure that no more workerListChanged notifications are sent.
-    if (this._workerTargetActorList !== null) {
-      this._workerTargetActorList.destroy();
-      this._workerTargetActorList = null;
+    if (this._workerDescriptorActorList !== null) {
+      this._workerDescriptorActorList.destroy();
+      this._workerDescriptorActorList = null;
     }
 
-    if (this._workerTargetActorPool !== null) {
-      this._workerTargetActorPool.destroy();
-      this._workerTargetActorPool = null;
+    if (this._workerDescriptorActorPool !== null) {
+      this._workerDescriptorActorPool.destroy();
+      this._workerDescriptorActorPool = null;
     }
 
     if (this._dbg) {

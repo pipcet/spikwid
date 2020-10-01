@@ -181,9 +181,12 @@ class AutoFile {
 };
 
 struct MARChannelStringTable {
-  MARChannelStringTable() { MARChannelID[0] = '\0'; }
+  MARChannelStringTable() {
+    MARChannelID = mozilla::MakeUnique<char[]>(1);
+    MARChannelID[0] = '\0';
+  }
 
-  char MARChannelID[MAX_TEXT_LEN];
+  mozilla::UniquePtr<char[]> MARChannelID;
 };
 
 //-----------------------------------------------------------------------------
@@ -1976,8 +1979,6 @@ bool LaunchWinPostProcess(const WCHAR* installationDir,
 
   WCHAR exefile[MAX_PATH + 1];
   WCHAR exearg[MAX_PATH + 1];
-  WCHAR exeasync[10];
-  bool async = true;
   if (!GetPrivateProfileStringW(L"PostUpdateWin", L"ExeRelPath", nullptr,
                                 exefile, MAX_PATH + 1, inifile)) {
     return false;
@@ -1985,12 +1986,6 @@ bool LaunchWinPostProcess(const WCHAR* installationDir,
 
   if (!GetPrivateProfileStringW(L"PostUpdateWin", L"ExeArg", nullptr, exearg,
                                 MAX_PATH + 1, inifile)) {
-    return false;
-  }
-
-  if (!GetPrivateProfileStringW(
-          L"PostUpdateWin", L"ExeAsync", L"TRUE", exeasync,
-          sizeof(exeasync) / sizeof(exeasync[0]), inifile)) {
     return false;
   }
 
@@ -2054,11 +2049,6 @@ bool LaunchWinPostProcess(const WCHAR* installationDir,
   wcsncpy(cmdline, dummyArg, len);
   wcscat(cmdline, exearg);
 
-  if (sUsingService || !_wcsnicmp(exeasync, L"false", 6) ||
-      !_wcsnicmp(exeasync, L"0", 2)) {
-    async = false;
-  }
-
   // We want to launch the post update helper app to update the Windows
   // registry even if there is a failure with removing the uninstall.update
   // file or copying the update.log file.
@@ -2077,9 +2067,7 @@ bool LaunchWinPostProcess(const WCHAR* installationDir,
                            workingDirectory, &si, &pi);
   free(cmdline);
   if (ok) {
-    if (!async) {
-      WaitForSingleObject(pi.hProcess, INFINITE);
-    }
+    WaitForSingleObject(pi.hProcess, INFINITE);
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
   }
@@ -2471,13 +2459,8 @@ static int ReadMARChannelIDs(const NS_tchar* path,
                              MARChannelStringTable* results) {
   const unsigned int kNumStrings = 1;
   const char* kUpdaterKeys = "ACCEPTED_MAR_CHANNEL_IDS\0";
-  char updater_strings[kNumStrings][MAX_TEXT_LEN];
-
-  int result =
-      ReadStrings(path, kUpdaterKeys, kNumStrings, updater_strings, "Settings");
-
-  strncpy(results->MARChannelID, updater_strings[0], MAX_TEXT_LEN - 1);
-  results->MARChannelID[MAX_TEXT_LEN - 1] = 0;
+  int result = ReadStrings(path, kUpdaterKeys, kNumStrings,
+                           &results->MARChannelID, "Settings");
 
   return result;
 }
@@ -2507,7 +2490,7 @@ static void UpdateThreadFunc(void* param) {
 
     if (rv == OK) {
       if (rv == OK) {
-        NS_tchar updateSettingsPath[MAX_TEXT_LEN];
+        NS_tchar updateSettingsPath[MAXPATHLEN];
         NS_tsnprintf(updateSettingsPath,
                      sizeof(updateSettingsPath) / sizeof(updateSettingsPath[0]),
 #  ifdef XP_MACOSX
@@ -2520,8 +2503,8 @@ static void UpdateThreadFunc(void* param) {
         if (ReadMARChannelIDs(updateSettingsPath, &MARStrings) != OK) {
           rv = UPDATE_SETTINGS_FILE_CHANNEL;
         } else {
-          rv = gArchiveReader.VerifyProductInformation(MARStrings.MARChannelID,
-                                                       MOZ_APP_VERSION);
+          rv = gArchiveReader.VerifyProductInformation(
+              MARStrings.MARChannelID.get(), MOZ_APP_VERSION);
         }
       }
     }
@@ -3320,26 +3303,6 @@ int NS_main(int argc, NS_tchar** argv) {
         return 0;
       }
 
-#  ifdef MOZ_MAINTENANCE_SERVICE
-      // If we started the service command, and it finished, check the secure
-      // update status file to make sure that it succeeded, and if it did we
-      // need to launch the PostUpdate process in the unelevated updater which
-      // is running in the current user's session. Note that we don't need to do
-      // this when staging an update since the PostUpdate step runs during the
-      // replace request.
-      if (useService && !sStagedUpdate) {
-        bool updateStatusSucceeded = false;
-        if (IsSecureUpdateStatusSucceeded(updateStatusSucceeded) &&
-            updateStatusSucceeded) {
-          if (!LaunchWinPostProcess(gInstallDirPath, gPatchDirPath)) {
-            fprintf(stderr,
-                    "The post update process which runs as the user"
-                    " for service update could not be launched.");
-          }
-        }
-      }
-#  endif
-
       // If we didn't want to use the service at all, or if an update was
       // already happening, or launching the service command failed, then
       // launch the elevated updater.exe as we do without the service.
@@ -3395,10 +3358,23 @@ int NS_main(int argc, NS_tchar** argv) {
         }
       }
 
-      // Note: The PostUpdate process is launched by the elevated updater which
-      // is running in the current user's session when the update is successful
-      // and doesn't need to be launched here by the unelevated updater as is
-      // done when the maintenance service launches the updater code above.
+      // If we started the elevated updater, and it finished, check the secure
+      // update status file to make sure that it succeeded, and if it did we
+      // need to launch the PostUpdate process in the unelevated updater which
+      // is running in the current user's session. Note that we don't need to do
+      // this when staging an update since the PostUpdate step runs during the
+      // replace request.
+      if (!sStagedUpdate) {
+        bool updateStatusSucceeded = false;
+        if (IsSecureUpdateStatusSucceeded(updateStatusSucceeded) &&
+            updateStatusSucceeded) {
+          if (!LaunchWinPostProcess(gInstallDirPath, gPatchDirPath)) {
+            fprintf(stderr,
+                    "The post update process which runs as the user"
+                    " for service update could not be launched.");
+          }
+        }
+      }
 
       CloseHandle(elevatedFileHandle);
 

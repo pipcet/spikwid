@@ -506,20 +506,19 @@ pub struct TextureCache {
     /// Number of bytes allocated in standalone textures. Used as an input to deciding
     /// when to run texture cache eviction.
     standalone_bytes_allocated: usize,
+}
 
+impl TextureCache {
     /// If the total bytes allocated in shared / standalone cache is less
     /// than this, then allow the cache to grow without forcing an eviction.
-    // TODO(gw): In future, it's probably reasonable to make this higher again, perhaps 64-128 MB.
-    eviction_threshold_bytes: usize,
+    const EVICTION_THRESHOLD_SIZE: usize = 64 * 1024 * 1024;
 
     /// The maximum number of items that will be evicted per frame. This limit helps avoid jank
     /// on frames where we want to evict a large number of items. Instead, we'd prefer to drop
     /// the items incrementally over a number of frames, even if that means the total allocated
     /// size of the cache is above the desired threshold for a small number of frames.
-    max_evictions_per_frame: usize,
-}
+    const MAX_EVICTIONS_PER_FRAME: usize = 32;
 
-impl TextureCache {
     pub fn new(
         max_texture_size: i32,
         mut max_texture_layers: usize,
@@ -527,8 +526,6 @@ impl TextureCache {
         initial_size: DeviceIntSize,
         color_formats: TextureFormatPair<ImageFormat>,
         swizzle: Option<SwizzleSettings>,
-        eviction_threshold_bytes: usize,
-        max_evictions_per_frame: usize,
     ) -> Self {
         // On MBP integrated Intel GPUs, texture arrays appear to be
         // implemented as a single texture of stacked layers, and that
@@ -589,8 +586,6 @@ impl TextureCache {
             standalone_bytes_allocated: 0,
             picture_cache_handles: Vec::new(),
             manual_handles: Vec::new(),
-            eviction_threshold_bytes,
-            max_evictions_per_frame,
         }
     }
 
@@ -610,8 +605,6 @@ impl TextureCache {
             DeviceIntSize::zero(),
             TextureFormatPair::from(image_format),
             None,
-            64 * 1024 * 1024,
-            32,
         );
         let mut now = FrameStamp::first(DocumentId::new(IdNamespace(1), 1));
         now.advance();
@@ -745,16 +738,6 @@ impl TextureCache {
     #[cfg(feature = "replay")]
     pub fn swizzle_settings(&self) -> Option<SwizzleSettings> {
         self.swizzle
-    }
-
-    #[cfg(feature = "replay")]
-    pub fn eviction_threshold_bytes(&self) -> usize {
-        self.eviction_threshold_bytes
-    }
-
-    #[cfg(feature = "replay")]
-    pub fn max_evictions_per_frame(&self) -> usize {
-        self.max_evictions_per_frame
     }
 
     pub fn pending_updates(&mut self) -> TextureUpdateList {
@@ -972,7 +955,7 @@ impl TextureCache {
 
         // Keep evicting while memory is above the threshold, and we haven't
         // reached a maximum number of evictions this frame.
-        while self.current_memory_estimate() > self.eviction_threshold_bytes && eviction_count < self.max_evictions_per_frame {
+        while self.should_continue_evicting(eviction_count) {
             match self.lru_cache.pop_oldest() {
                 Some(entry) => {
                     entry.evict();
@@ -990,13 +973,29 @@ impl TextureCache {
         }
     }
 
-    /// Return the total used bytes in standalone and shared textures. This is
-    /// used to determine how many textures need to be evicted to keep texture
-    /// cache memory usage under a reasonable limit. Note that this does not
-    /// include memory allocated to picture cache tiles, which are considered
-    /// separately for the purposes of texture cache eviction.
-    fn current_memory_estimate(&self) -> usize {
-        self.standalone_bytes_allocated + self.shared_bytes_allocated
+    /// Returns true if texture cache eviction loop should continue
+    fn should_continue_evicting(
+        &self,
+        eviction_count: usize,
+    ) -> bool {
+        // Get the total used bytes in standalone and shared textures. Note that
+        // this does not include memory allocated to picture cache tiles, which are
+        // considered separately for the purposes of texture cache eviction.
+        let current_memory_estimate = self.standalone_bytes_allocated + self.shared_bytes_allocated;
+
+        // If current memory usage is below selected threshold, we can stop evicting items
+        if current_memory_estimate < Self::EVICTION_THRESHOLD_SIZE {
+            return false;
+        }
+
+        // If current memory usage is significantly more than the threshold, keep evicting this frame
+        if current_memory_estimate > 4 * Self::EVICTION_THRESHOLD_SIZE {
+            return true;
+        }
+
+        // Otherwise, only allow evicting up to a certain number of items per frame. This allows evictions
+        // to be spread over a number of frames, to avoid frame spikes.
+        eviction_count < Self::MAX_EVICTIONS_PER_FRAME
     }
 
     // Free a cache entry from the standalone list or shared cache.
@@ -1206,7 +1205,7 @@ impl TextureCache {
         &mut self,
         params: &CacheAllocParams,
     ) -> CacheEntry {
-        assert!(!params.descriptor.size.is_empty_or_negative());
+        assert!(!params.descriptor.size.is_empty());
 
         // If this image doesn't qualify to go in the shared (batching) cache,
         // allocate a standalone entry.

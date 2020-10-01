@@ -446,7 +446,7 @@ void SheetLoadData::FireLoadEvent(nsIThreadInternal* aThread) {
                                        mLoadFailed ? u"error"_ns : u"load"_ns,
                                        CanBubble::eNo, Cancelable::eNo);
 
-  // And unblock onload
+  MOZ_ASSERT(BlocksLoadEvent());
   mLoader->UnblockOnload(true);
 }
 
@@ -455,10 +455,11 @@ void SheetLoadData::ScheduleLoadEventIfNeeded() {
     return;
   }
 
+  MOZ_ASSERT(BlocksLoadEvent(), "The rel=preload load event happens elsewhere");
+
   nsCOMPtr<nsIThread> thread = do_GetCurrentThread();
   nsCOMPtr<nsIThreadInternal> internalThread = do_QueryInterface(thread);
   if (NS_SUCCEEDED(internalThread->AddObserver(this))) {
-    // Make sure to block onload here
     mLoader->BlockOnload();
   }
 }
@@ -1146,7 +1147,9 @@ nsresult Loader::LoadSheet(SheetLoadData& aLoadData, SheetState aSheetState,
   // If we're firing a pending load, this load is already accounted for the
   // first time it went through this function.
   if (aPendingLoad == PendingLoad::No) {
-    IncrementOngoingLoadCount();
+    if (aLoadData.BlocksLoadEvent()) {
+      IncrementOngoingLoadCount();
+    }
 
     // We technically never defer non-top-level sheets, so this condition could
     // be outside the branch, but conceptually it should be here.
@@ -1531,7 +1534,9 @@ void Loader::NotifyObservers(SheetLoadData& aData, nsresult aStatus) {
     // NOTE(emilio): This needs to happen before notifying observers, as
     // FontFaceSet for example checks for pending sheet loads from the
     // StyleSheetLoaded callback.
-    DecrementOngoingLoadCount();
+    if (aData.BlocksLoadEvent()) {
+      DecrementOngoingLoadCount();
+    }
   }
 
   if (aData.mMustNotify) {
@@ -1901,7 +1906,7 @@ nsresult Loader::LoadChildSheet(StyleSheet& aParentSheet,
 
   nsIPrincipal* principal = aParentSheet.Principal();
   nsresult rv = CheckContentPolicy(LoaderPrincipal(), principal, aURL, context,
-                                   EmptyString(), IsPreload::No);
+                                   u""_ns, IsPreload::No);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     if (aParentData) {
       MarkLoadTreeFailed(*aParentData);
@@ -1941,9 +1946,9 @@ nsresult Loader::LoadChildSheet(StyleSheet& aParentSheet,
     std::tie(sheet, state) =
         CreateSheet(aURL, nullptr, principal, aParentSheet.ParsingMode(),
                     CORS_NONE, aParentData ? aParentData->mEncoding : nullptr,
-                    EmptyString(),  // integrity is only checked on main sheet
+                    u""_ns,  // integrity is only checked on main sheet
                     aParentData && aParentData->mSyncLoad, IsPreload::No);
-    PrepareSheet(*sheet, EmptyString(), EmptyString(), aMedia, IsAlternate::No,
+    PrepareSheet(*sheet, u""_ns, u""_ns, aMedia, IsAlternate::No,
                  IsExplicitlyEnabled::No);
   }
 
@@ -1984,9 +1989,9 @@ Result<RefPtr<StyleSheet>, nsresult> Loader::LoadSheetSync(
     UseSystemPrincipal aUseSystemPrincipal) {
   LOG(("css::Loader::LoadSheetSync"));
   nsCOMPtr<nsIReferrerInfo> referrerInfo = new ReferrerInfo(nullptr);
-  return InternalLoadNonDocumentSheet(
-      aURL, IsPreload::No, aParsingMode, aUseSystemPrincipal, nullptr,
-      referrerInfo, nullptr, CORS_NONE, EmptyString());
+  return InternalLoadNonDocumentSheet(aURL, IsPreload::No, aParsingMode,
+                                      aUseSystemPrincipal, nullptr,
+                                      referrerInfo, nullptr, CORS_NONE, u""_ns);
 }
 
 Result<RefPtr<StyleSheet>, nsresult> Loader::LoadSheet(
@@ -1995,7 +2000,7 @@ Result<RefPtr<StyleSheet>, nsresult> Loader::LoadSheet(
   nsCOMPtr<nsIReferrerInfo> referrerInfo = new ReferrerInfo(nullptr);
   return InternalLoadNonDocumentSheet(
       aURI, IsPreload::No, aParsingMode, aUseSystemPrincipal, nullptr,
-      referrerInfo, aObserver, CORS_NONE, EmptyString());
+      referrerInfo, aObserver, CORS_NONE, u""_ns);
 }
 
 Result<RefPtr<StyleSheet>, nsresult> Loader::LoadSheet(
@@ -2028,7 +2033,7 @@ Result<RefPtr<StyleSheet>, nsresult> Loader::InternalLoadNonDocumentSheet(
   nsIPrincipal* loadingPrincipal = LoaderPrincipal();
   nsIPrincipal* triggeringPrincipal = loadingPrincipal;
   nsresult rv = CheckContentPolicy(loadingPrincipal, triggeringPrincipal, aURL,
-                                   mDocument, EmptyString(), aIsPreload);
+                                   mDocument, u""_ns, aIsPreload);
   if (NS_FAILED(rv)) {
     return Err(rv);
   }
@@ -2038,7 +2043,7 @@ Result<RefPtr<StyleSheet>, nsresult> Loader::InternalLoadNonDocumentSheet(
       CreateSheet(aURL, nullptr, triggeringPrincipal, aParsingMode, aCORSMode,
                   aPreloadEncoding, aIntegrity, syncLoad, aIsPreload);
 
-  PrepareSheet(*sheet, EmptyString(), EmptyString(), nullptr, IsAlternate::No,
+  PrepareSheet(*sheet, u""_ns, u""_ns, nullptr, IsAlternate::No,
                IsExplicitlyEnabled::No);
 
   auto data = MakeRefPtr<SheetLoadData>(
@@ -2090,7 +2095,9 @@ nsresult Loader::PostLoadEvent(RefPtr<SheetLoadData> aLoadData) {
     NS_WARNING("failed to dispatch stylesheet load event");
     mPostedEvents.RemoveElement(aLoadData);
   } else {
-    IncrementOngoingLoadCount();
+    if (aLoadData->BlocksLoadEvent()) {
+      IncrementOngoingLoadCount();
+    }
 
     // We want to notify the observer for this data.
     aLoadData->mMustNotify = true;

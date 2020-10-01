@@ -9,13 +9,11 @@
 
 #include <type_traits>
 
-#include "builtin/ModuleObject.h"
 #include "frontend/NameAnalysisTypes.h"
 #include "gc/Barrier.h"
 #include "gc/WeakMap.h"
 #include "js/GCHashTable.h"
 #include "vm/ArgumentsObject.h"
-#include "vm/GeneratorObject.h"
 #include "vm/GlobalObject.h"
 #include "vm/JSContext.h"
 #include "vm/JSObject.h"
@@ -24,7 +22,10 @@
 
 namespace js {
 
+class AbstractGeneratorObject;
+class IndirectBindingMap;
 class ModuleObject;
+
 using HandleModuleObject = Handle<ModuleObject*>;
 
 /*
@@ -316,14 +317,16 @@ class EnvironmentObject : public NativeObject {
 
 class CallObject : public EnvironmentObject {
  protected:
-  static const uint32_t CALLEE_SLOT = 1;
+  static constexpr uint32_t CALLEE_SLOT = 1;
 
   static CallObject* create(JSContext* cx, HandleScript script,
                             HandleFunction callee, HandleObject enclosing);
 
  public:
-  static const uint32_t RESERVED_SLOTS = 2;
   static const JSClass class_;
+
+  static constexpr uint32_t RESERVED_SLOTS = 2;
+  static constexpr uint32_t BASESHAPE_FLAGS = BaseShape::QUALIFIED_VAROBJ;
 
   /* These functions are internal and are exposed only for JITs. */
 
@@ -370,7 +373,7 @@ class CallObject : public EnvironmentObject {
 };
 
 class VarEnvironmentObject : public EnvironmentObject {
-  static const uint32_t SCOPE_SLOT = 1;
+  static constexpr uint32_t SCOPE_SLOT = 1;
 
   static VarEnvironmentObject* create(JSContext* cx, HandleShape shape,
                                       HandleObject enclosing,
@@ -381,8 +384,10 @@ class VarEnvironmentObject : public EnvironmentObject {
   }
 
  public:
-  static const uint32_t RESERVED_SLOTS = 2;
   static const JSClass class_;
+
+  static constexpr uint32_t RESERVED_SLOTS = 2;
+  static constexpr uint32_t BASESHAPE_FLAGS = BaseShape::QUALIFIED_VAROBJ;
 
   static VarEnvironmentObject* create(JSContext* cx, HandleScope scope,
                                       AbstractFramePtr frame);
@@ -401,7 +406,7 @@ class VarEnvironmentObject : public EnvironmentObject {
 };
 
 class ModuleEnvironmentObject : public EnvironmentObject {
-  static const uint32_t MODULE_SLOT = 1;
+  static constexpr uint32_t MODULE_SLOT = 1;
 
   static const ObjectOps objectOps_;
   static const JSClassOps classOps_;
@@ -409,7 +414,9 @@ class ModuleEnvironmentObject : public EnvironmentObject {
  public:
   static const JSClass class_;
 
-  static const uint32_t RESERVED_SLOTS = 2;
+  static constexpr uint32_t RESERVED_SLOTS = 2;
+  static constexpr uint32_t BASESHAPE_FLAGS =
+      BaseShape::NOT_EXTENSIBLE | BaseShape::QUALIFIED_VAROBJ;
 
   static ModuleEnvironmentObject* create(JSContext* cx,
                                          HandleModuleObject module);
@@ -457,12 +464,13 @@ class WasmInstanceEnvironmentObject : public EnvironmentObject {
   // meaningful way. However, it is an invariant of DebugEnvironments that
   // environments kept in those maps have live scopes, thus this strong
   // reference.
-  static const uint32_t SCOPE_SLOT = 1;
+  static constexpr uint32_t SCOPE_SLOT = 1;
 
  public:
   static const JSClass class_;
 
-  static const uint32_t RESERVED_SLOTS = 2;
+  static constexpr uint32_t RESERVED_SLOTS = 2;
+  static constexpr uint32_t BASESHAPE_FLAGS = BaseShape::NOT_EXTENSIBLE;
 
   static WasmInstanceEnvironmentObject* createHollowForDebug(
       JSContext* cx, Handle<WasmInstanceScope*> scope);
@@ -478,12 +486,15 @@ class WasmFunctionCallObject : public EnvironmentObject {
   // meaningful way. However, it is an invariant of DebugEnvironments that
   // environments kept in those maps have live scopes, thus this strong
   // reference.
-  static const uint32_t SCOPE_SLOT = 1;
+  static constexpr uint32_t SCOPE_SLOT = 1;
 
  public:
   static const JSClass class_;
 
-  static const uint32_t RESERVED_SLOTS = 2;
+  // TODO Check what Debugger behavior should be when it evaluates a
+  // var declaration.
+  static constexpr uint32_t RESERVED_SLOTS = 2;
+  static constexpr uint32_t BASESHAPE_FLAGS = BaseShape::NOT_EXTENSIBLE;
 
   static WasmFunctionCallObject* createHollowForDebug(
       JSContext* cx, HandleObject enclosing, Handle<WasmFunctionScope*> scope);
@@ -500,11 +511,13 @@ class LexicalEnvironmentObject : public EnvironmentObject {
   // backpointer to the LexicalScope.
   //
   // Since the two sets are disjoint, we only use one slot to save space.
-  static const unsigned THIS_VALUE_OR_SCOPE_SLOT = 1;
+  static constexpr uint32_t THIS_VALUE_OR_SCOPE_SLOT = 1;
 
  public:
-  static const unsigned RESERVED_SLOTS = 2;
   static const JSClass class_;
+
+  static constexpr uint32_t RESERVED_SLOTS = 2;
+  static constexpr uint32_t BASESHAPE_FLAGS = BaseShape::NOT_EXTENSIBLE;
 
  private:
   static LexicalEnvironmentObject* createTemplateObject(
@@ -615,8 +628,10 @@ class NamedLambdaObject : public LexicalEnvironmentObject {
 // the global object.
 class NonSyntacticVariablesObject : public EnvironmentObject {
  public:
-  static const unsigned RESERVED_SLOTS = 1;
   static const JSClass class_;
+
+  static constexpr uint32_t RESERVED_SLOTS = 1;
+  static constexpr uint32_t BASESHAPE_FLAGS = 0;
 
   static NonSyntacticVariablesObject* create(JSContext* cx);
 };
@@ -628,13 +643,15 @@ extern bool CreateNonSyntacticEnvironmentChain(JSContext* cx,
 
 // With environment objects on the run-time environment chain.
 class WithEnvironmentObject : public EnvironmentObject {
-  static const unsigned OBJECT_SLOT = 1;
-  static const unsigned THIS_SLOT = 2;
-  static const unsigned SCOPE_SLOT = 3;
+  static constexpr uint32_t OBJECT_SLOT = 1;
+  static constexpr uint32_t THIS_SLOT = 2;
+  static constexpr uint32_t SCOPE_SLOT = 3;
 
  public:
-  static const unsigned RESERVED_SLOTS = 4;
   static const JSClass class_;
+
+  static constexpr uint32_t RESERVED_SLOTS = 4;
+  static constexpr uint32_t BASESHAPE_FLAGS = 0;
 
   static WithEnvironmentObject* create(JSContext* cx, HandleObject object,
                                        HandleObject enclosing,
@@ -719,23 +736,20 @@ class MOZ_RAII EnvironmentIter {
 
  public:
   // Constructing from a copy of an existing EnvironmentIter.
-  EnvironmentIter(JSContext* cx,
-                  const EnvironmentIter& ei MOZ_GUARD_OBJECT_NOTIFIER_PARAM);
+  EnvironmentIter(JSContext* cx, const EnvironmentIter& ei);
 
   // Constructing from an environment, scope pair. All environments
   // considered not to be withinInitialFrame, since no frame is given.
-  EnvironmentIter(JSContext* cx, JSObject* env,
-                  Scope* scope MOZ_GUARD_OBJECT_NOTIFIER_PARAM);
+  EnvironmentIter(JSContext* cx, JSObject* env, Scope* scope);
 
   // Constructing from a frame. Places the EnvironmentIter on the innermost
   // environment at pc.
-  EnvironmentIter(JSContext* cx, AbstractFramePtr frame,
-                  jsbytecode* pc MOZ_GUARD_OBJECT_NOTIFIER_PARAM);
+  EnvironmentIter(JSContext* cx, AbstractFramePtr frame, jsbytecode* pc);
 
   // Constructing from an environment, scope and frame. The frame is given
   // to initialize to proper enclosing environment/scope.
   EnvironmentIter(JSContext* cx, JSObject* env, Scope* scope,
-                  AbstractFramePtr frame MOZ_GUARD_OBJECT_NOTIFIER_PARAM);
+                  AbstractFramePtr frame);
 
   bool done() const { return si_.done(); }
 
@@ -790,8 +804,6 @@ class MOZ_RAII EnvironmentIter {
   }
 
   AbstractFramePtr maybeInitialFrame() const { return frame_; }
-
-  MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
 };
 
 // The key in MissingEnvironmentMap. For live frames, maps live frames to
@@ -1117,7 +1129,7 @@ inline bool IsFrameInitialEnvironment(AbstractFramePtr frame,
   // start of execution in the frame.
   //
   // This logic must be in sync with the HAS_INITIAL_ENV logic in
-  // InitFromBailout.
+  // BaselineStackBuilder::buildBaselineFrame.
 
   // A function frame's CallObject, if present, is always the initial
   // environment.

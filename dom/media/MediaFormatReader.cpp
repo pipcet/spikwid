@@ -6,10 +6,15 @@
 
 #include "MediaFormatReader.h"
 
+#include <algorithm>
+#include <map>
+#include <queue>
+
 #include "AllocationPolicy.h"
 #include "DecoderBenchmark.h"
 #include "GeckoProfiler.h"
 #include "MediaData.h"
+#include "MediaDataDecoderProxy.h"
 #include "MediaInfo.h"
 #include "VideoFrameContainer.h"
 #include "VideoUtils.h"
@@ -24,10 +29,6 @@
 #include "mozilla/Unused.h"
 #include "nsContentUtils.h"
 #include "nsPrintfCString.h"
-
-#include <algorithm>
-#include <map>
-#include <queue>
 
 using namespace mozilla::media;
 
@@ -354,12 +355,17 @@ MediaResult MediaFormatReader::DecoderFactory::DoCreateDecoder(Data& aData) {
 
   switch (aData.mTrack) {
     case TrackInfo::kAudioTrack: {
-      aData.mDecoder = platform->CreateDecoder(
-          {*ownerData.GetCurrentInfo()->GetAsAudioInfo(), ownerData.mTaskQueue,
-           mOwner->mCrashHelper,
+      RefPtr<MediaDataDecoder> decoder = platform->CreateDecoder(
+          {*ownerData.GetCurrentInfo()->GetAsAudioInfo(), mOwner->mCrashHelper,
            CreateDecoderParams::UseNullDecoder(ownerData.mIsNullDecode),
            &result, TrackInfo::kAudioTrack,
            &mOwner->OnTrackWaitingForKeyProducer()});
+      if (!decoder) {
+        aData.mDecoder = nullptr;
+        break;
+      }
+      aData.mDecoder = new MediaDataDecoderProxy(
+          decoder.forget(), do_AddRef(ownerData.mTaskQueue.get()));
       break;
     }
 
@@ -369,8 +375,8 @@ MediaResult MediaFormatReader::DecoderFactory::DoCreateDecoder(Data& aData) {
       using Option = CreateDecoderParams::Option;
       using OptionSet = CreateDecoderParams::OptionSet;
 
-      aData.mDecoder = platform->CreateDecoder(
-          {*ownerData.GetCurrentInfo()->GetAsVideoInfo(), ownerData.mTaskQueue,
+      RefPtr<MediaDataDecoder> decoder = platform->CreateDecoder(
+          {*ownerData.GetCurrentInfo()->GetAsVideoInfo(),
            mOwner->mKnowsCompositor, mOwner->GetImageContainer(),
            mOwner->mCrashHelper,
            CreateDecoderParams::UseNullDecoder(ownerData.mIsNullDecode),
@@ -380,6 +386,12 @@ MediaResult MediaFormatReader::DecoderFactory::DoCreateDecoder(Data& aData) {
            OptionSet(ownerData.mHardwareDecodingDisabled
                          ? Option::HardwareDecoderNotAllowed
                          : Option::Default)});
+      if (!decoder) {
+        aData.mDecoder = nullptr;
+        break;
+      }
+      aData.mDecoder = new MediaDataDecoderProxy(
+          decoder.forget(), do_AddRef(ownerData.mTaskQueue.get()));
       break;
     }
 
@@ -803,7 +815,7 @@ MediaFormatReader::DemuxerProxy::NotifyDataArrived() {
 
 MediaFormatReader::MediaFormatReader(MediaFormatReaderInit& aInit,
                                      MediaDataDemuxer* aDemuxer)
-    : mTaskQueue(new TaskQueue(GetMediaThreadPool(MediaThreadType::PLAYBACK),
+    : mTaskQueue(new TaskQueue(GetMediaThreadPool(MediaThreadType::CONTROLLER),
                                "MediaFormatReader::mTaskQueue",
                                /* aSupportsTailDispatch = */ true)),
       mAudio(this, MediaData::Type::AUDIO_DATA,
@@ -2491,7 +2503,7 @@ void MediaFormatReader::SkipVideoDemuxToNextKeyFrame(TimeUnit aTimeThreshold) {
 }
 
 void MediaFormatReader::VideoSkipReset(uint32_t aSkipped) {
-  PROFILER_ADD_MARKER("SkippedVideoDecode", MEDIA_PLAYBACK);
+  PROFILER_MARKER_UNTYPED("SkippedVideoDecode", MEDIA_PLAYBACK);
   MOZ_ASSERT(OnTaskQueue());
 
   // Some frames may have been output by the decoder since we initiated the
@@ -2963,8 +2975,8 @@ void MediaFormatReader::GetDebugInfo(dom::MediaFormatReaderDebugInfo& aInfo) {
     }
   }
 
-  aInfo.mAudioDecoderName = NS_ConvertUTF8toUTF16(audioDecoderName);
-  aInfo.mAudioType = NS_ConvertUTF8toUTF16(audioType);
+  CopyUTF8toUTF16(audioDecoderName, aInfo.mAudioDecoderName);
+  CopyUTF8toUTF16(audioType, aInfo.mAudioType);
   aInfo.mAudioChannels = audioInfo.mChannels;
   aInfo.mAudioRate = audioInfo.mRate / 1000.0f;
   aInfo.mAudioFramesDecoded = mAudio.mNumSamplesOutputTotal;
@@ -2993,8 +3005,8 @@ void MediaFormatReader::GetDebugInfo(dom::MediaFormatReaderDebugInfo& aInfo) {
     aInfo.mAudioState.mLastStreamSourceID = mAudio.mLastStreamSourceID;
   }
 
-  aInfo.mVideoDecoderName = NS_ConvertUTF8toUTF16(videoDecoderName);
-  aInfo.mVideoType = NS_ConvertUTF8toUTF16(videoType);
+  CopyUTF8toUTF16(videoDecoderName, aInfo.mVideoDecoderName);
+  CopyUTF8toUTF16(videoType, aInfo.mVideoType);
   aInfo.mVideoWidth =
       videoInfo.mDisplay.width < 0 ? 0 : videoInfo.mDisplay.width;
   aInfo.mVideoHeight =

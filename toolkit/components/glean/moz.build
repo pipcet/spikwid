@@ -24,6 +24,24 @@ if CONFIG['MOZ_GLEAN']:
         'gtest',
     ]
 
+    PYTHON_UNITTEST_MANIFESTS += [
+        'pytest/python.ini',
+    ]
+
+    GeneratedFile('api/src/metrics.rs',
+                  script='build_scripts/glean_parser_ext/run_glean_parser.py',
+                  flags=['METRICS', CONFIG['MOZ_APP_VERSION']],
+                  inputs=['metrics_index.py'])
+
+    GeneratedFile('api/src/pings.rs',
+                  script='build_scripts/glean_parser_ext/run_glean_parser.py',
+                  flags=['PINGS', CONFIG['MOZ_APP_VERSION']],
+                  inputs=['metrics_index.py'])
+
+    DIRS += [
+        'xpcom',
+    ]
+
 with Files('docs/**'):
     SCHEDULES.exclusive = ['docs']
 

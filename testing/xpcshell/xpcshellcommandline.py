@@ -112,6 +112,10 @@ def add_common_arguments(parser):
                         action="store", dest="xpcshell",
                         default=None,
                         help="Path to xpcshell binary")
+    parser.add_argument("--http3server",
+                        action="store", dest="http3server",
+                        default=None,
+                        help="Path to http3server binary")
     # This argument can be just present, or the path to a manifest file. The
     # just-present case is usually used for mach which can provide a default
     # path to the failure file from the previous run
@@ -149,6 +153,10 @@ def add_common_arguments(parser):
                         dest="headless",
                         help="Enable headless mode by default for tests which don't specify "
                              "whether to use headless mode")
+    parser.add_argument("--self-test",
+                        action="store_true", default=False,
+                        dest="self_test",
+                        help="Run self tests")
 
 
 def add_remote_arguments(parser):
@@ -176,7 +184,7 @@ def add_remote_arguments(parser):
 
     parser.add_argument("--remoteTestRoot", action="store", type=str, dest="remoteTestRoot",
                         help="Remote directory to use as test root "
-                             "(eg. /mnt/sdcard/tests or /data/local/tests).")
+                             "(eg. /data/local/tmp/test_root).")
 
 
 def parser_desktop():

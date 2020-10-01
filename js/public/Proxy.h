@@ -14,6 +14,8 @@
 #include "js/Array.h"  // JS::IsArrayAnswer
 #include "js/CallNonGenericMethod.h"
 #include "js/Class.h"
+#include "js/Object.h"         // JS::GetClass
+#include "js/shadow/Object.h"  // JS::shadow::Object
 
 namespace js {
 
@@ -317,6 +319,10 @@ class JS_FRIEND_API BaseProxyHandler {
                    HandleValue v, HandleValue receiver,
                    ObjectOpResult& result) const;
 
+  // Use the ProxyExpando object for private fields, rather than taking the
+  // normal get/set/defineField paths.
+  virtual bool useProxyExpandoObjectForPrivateFields() const { return true; }
+
   /*
    * [[Call]] and [[Construct]] are standard internal methods but according
    * to the spec, they are not present on every object.
@@ -376,7 +382,7 @@ class JS_FRIEND_API BaseProxyHandler {
 extern JS_FRIEND_DATA const JSClass ProxyClass;
 
 inline bool IsProxy(const JSObject* obj) {
-  return GetObjectClass(obj)->isProxy();
+  return JS::GetClass(obj)->isProxy();
 }
 
 namespace detail {
@@ -386,6 +392,8 @@ namespace detail {
 //
 // Every proxy has a ProxyValueArray that contains the following Values:
 //
+// - The expando slot. This is used to hold private fields should they be
+//   stamped into a non-forwarding proxy type.
 // - The private slot.
 // - The reserved slots. The number of slots is determined by the proxy's Class.
 //
@@ -394,8 +402,8 @@ namespace detail {
 // ProxyValueArray::fromReservedSlots or ProxyDataLayout::values.
 //
 // Storing a pointer to ProxyReservedSlots instead of ProxyValueArray has a
-// number of advantages. In particular, it means js::GetReservedSlot and
-// js::SetReservedSlot can be used with both proxies and native objects. This
+// number of advantages. In particular, it means JS::GetReservedSlot and
+// JS::SetReservedSlot can be used with both proxies and native objects. This
 // works because the ProxyReservedSlots* pointer is stored where native objects
 // store their dynamic slots pointer.
 
@@ -419,10 +427,12 @@ struct ProxyReservedSlots {
 };
 
 struct ProxyValueArray {
+  Value expandoSlot;
   Value privateSlot;
   ProxyReservedSlots reservedSlots;
 
   void init(size_t nreserved) {
+    expandoSlot = JS::ObjectOrNullValue(nullptr);
     privateSlot = JS::UndefinedValue();
     reservedSlots.init(nreserved);
   }
@@ -483,7 +493,7 @@ JS_FRIEND_API void SetValueInProxy(Value* slot, const Value& value);
 
 inline void SetProxyReservedSlotUnchecked(JSObject* obj, size_t n,
                                           const Value& extra) {
-  MOZ_ASSERT(n < JSCLASS_RESERVED_SLOTS(GetObjectClass(obj)));
+  MOZ_ASSERT(n < JSCLASS_RESERVED_SLOTS(JS::GetClass(obj)));
 
   Value* vp = &GetProxyDataLayout(obj)->reservedSlots->slots[n];
 
@@ -505,12 +515,16 @@ inline const Value& GetProxyPrivate(const JSObject* obj) {
   return detail::GetProxyDataLayout(obj)->values()->privateSlot;
 }
 
+inline const Value& GetProxyExpando(const JSObject* obj) {
+  return detail::GetProxyDataLayout(obj)->values()->expandoSlot;
+}
+
 inline JSObject* GetProxyTargetObject(JSObject* obj) {
   return GetProxyPrivate(obj).toObjectOrNull();
 }
 
 inline const Value& GetProxyReservedSlot(const JSObject* obj, size_t n) {
-  MOZ_ASSERT(n < JSCLASS_RESERVED_SLOTS(GetObjectClass(obj)));
+  MOZ_ASSERT(n < JSCLASS_RESERVED_SLOTS(JS::GetClass(obj)));
   return detail::GetProxyDataLayout(obj)->reservedSlots->slots[n];
 }
 
@@ -706,7 +720,7 @@ constexpr unsigned CheckProxyFlags() {
       (offsetof(js::detail::ProxyValueArray, reservedSlots) / sizeof(Value)) +
               ((Flags >> JSCLASS_RESERVED_SLOTS_SHIFT) &
                JSCLASS_RESERVED_SLOTS_MASK) <=
-          shadow::Object::MAX_FIXED_SLOTS,
+          JS::shadow::Object::MAX_FIXED_SLOTS,
       "ProxyValueArray size must not exceed max JSObject size");
 
   // Proxies must not have the JSCLASS_SKIP_NURSERY_FINALIZE flag set: they

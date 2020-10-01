@@ -52,12 +52,7 @@ XPCOMUtils.defineLazyPreferenceGetter(
   false,
   val => val.split(",")
 );
-XPCOMUtils.defineLazyPreferenceGetter(
-  this,
-  "documentChannel",
-  "browser.tabs.documentchannel",
-  false
-);
+
 XPCOMUtils.defineLazyPreferenceGetter(
   this,
   "useCrossOriginOpenerPolicy",
@@ -131,44 +126,13 @@ const kSafeSchemes = [
 ];
 
 const kDocumentChannelDeniedSchemes = ["javascript"];
-const kDocumentChannelDeniedURIs = [
-  "about:blank",
-  "about:crashcontent",
-  "about:printpreview",
-];
+const kDocumentChannelDeniedURIs = ["about:crashcontent", "about:printpreview"];
 
 // Changes here should also be made in URIUsesDocChannel in DocumentChannel.cpp.
 function documentChannelPermittedForURI(aURI) {
   return (
     !kDocumentChannelDeniedSchemes.includes(aURI.scheme) &&
     !kDocumentChannelDeniedURIs.includes(aURI.spec)
-  );
-}
-
-function canProcessSwitchWithDocumentChannel(
-  aURI,
-  aRemoteSubframes,
-  aDesiredRemoteType,
-  aBrowsingContext
-) {
-  if (
-    aBrowsingContext &&
-    aBrowsingContext.top &&
-    aBrowsingContext.inRDMPane &&
-    aBrowsingContext.embedderElementType == "iframe" &&
-    aDesiredRemoteType == NOT_REMOTE
-  ) {
-    // If we're in an old-style <iframe mozbrowser> RDM pane,
-    // and we need to switch to the parent process, then we can't
-    // use DocumentChannel process switching (since it doesn't
-    // support tunneling to the outer <browser>.
-    // We can remove this once bug 1648616 removes the tests
-    // depending on it.
-    return false;
-  }
-  return (
-    (aRemoteSubframes || documentChannel) &&
-    documentChannelPermittedForURI(aURI)
   );
 }
 
@@ -192,7 +156,8 @@ function validatedWebRemoteType(
   aTargetUri,
   aCurrentUri,
   aResultPrincipal,
-  aRemoteSubframes
+  aRemoteSubframes,
+  aIsWorker = false
 ) {
   // To load into the Privileged Mozilla Content Process you must be https,
   // and be an exact match or a subdomain of an allowlisted domain.
@@ -212,6 +177,15 @@ function validatedWebRemoteType(
   // If we're in the parent and we were passed a web-handled scheme,
   // transform it now to avoid trying to load it in the wrong process.
   if (aRemoteSubframes && hasPotentiallyWebHandledScheme(aTargetUri)) {
+    // We shouldn't even get to this for a worker, throw an unexpected error
+    // if we do.
+    if (aIsWorker) {
+      throw Components.Exception(
+        "Unexpected remote worker with a web handled scheme",
+        Cr.NS_ERROR_UNEXPECTED
+      );
+    }
+
     if (
       Services.appinfo.processType != Services.appinfo.PROCESS_TYPE_DEFAULT &&
       Services.appinfo.remoteType.startsWith(FISSION_WEB_REMOTE_TYPE + "=")
@@ -221,6 +195,7 @@ function validatedWebRemoteType(
       // we know the "real" URL to which we'll redirect.
       return Services.appinfo.remoteType;
     }
+
     // This doesn't work (throws) in the child - see
     // https://bugzilla.mozilla.org/show_bug.cgi?id=1589082
     // Even if it did, it'd cause sync IPC
@@ -245,7 +220,7 @@ function validatedWebRemoteType(
   // If the domain is whitelisted to allow it to use file:// URIs, then we have
   // to run it in a file content process, in case it uses file:// sub-resources.
   const sm = Services.scriptSecurityManager;
-  if (sm.inFileURIAllowlist(aTargetUri)) {
+  if (!aIsWorker && sm.inFileURIAllowlist(aTargetUri)) {
     return FILE_REMOTE_TYPE;
   }
 
@@ -287,35 +262,14 @@ function validatedWebRemoteType(
     return aPreferredRemoteType;
   }
 
-  if (aPreferredRemoteType == FILE_REMOTE_TYPE && !aRemoteSubframes) {
-    E10SUtils.log().debug("checking allowLinkedWebInFileUriProcess");
-    if (!aCurrentUri) {
-      E10SUtils.log().debug("No aCurrentUri");
-      return FILE_REMOTE_TYPE;
-    }
-
-    // If aCurrentUri is passed then we should only allow FILE_REMOTE_TYPE
-    // when it is same origin as target or the current URI is already a
-    // file:// URI.
-    if (aCurrentUri.scheme == "file" || aCurrentUri.spec == "about:blank") {
-      return FILE_REMOTE_TYPE;
-    }
-
-    try {
-      // checkSameOriginURI throws when not same origin.
-      // todo: if you intend to update CheckSameOriginURI to log the error to the
-      // console you also need to update the 'aFromPrivateWindow' argument.
-      sm.checkSameOriginURI(aCurrentUri, aTargetUri, false, false);
-      E10SUtils.log().debug("Next URL is same origin");
-      return FILE_REMOTE_TYPE;
-    } catch (e) {
-      E10SUtils.log().debug("Leaving same origin");
-      return WEB_REMOTE_TYPE;
-    }
-  }
-
   return WEB_REMOTE_TYPE;
 }
+
+// remoteTypes allowed to host system-principal remote workers.
+const SYSTEM_WORKERS_REMOTE_TYPES_ALLOWED = [
+  NOT_REMOTE,
+  PRIVILEGEDABOUT_REMOTE_TYPE,
+];
 
 var E10SUtils = {
   DEFAULT_REMOTE_TYPE,
@@ -327,12 +281,10 @@ var E10SUtils = {
   PRIVILEGEDABOUT_REMOTE_TYPE,
   PRIVILEGEDMOZILLA_REMOTE_TYPE,
   LARGE_ALLOCATION_REMOTE_TYPE,
+  FISSION_WEB_REMOTE_TYPE,
 
   useCrossOriginOpenerPolicy() {
     return useCrossOriginOpenerPolicy;
-  },
-  documentChannel() {
-    return documentChannel;
   },
 
   _log: null,
@@ -344,7 +296,7 @@ var E10SUtils = {
     if (!this._log) {
       this._log = console.createInstance({
         prefix: "ProcessSwitch",
-        maxLogLevel: "Error", // Change to debug the process switching code
+        maxLogLevel: "Error", // Change to "Debug" the process switching code
       });
 
       this._log.debug("Setup logger");
@@ -455,7 +407,8 @@ var E10SUtils = {
     aPreferredRemoteType = DEFAULT_REMOTE_TYPE,
     aCurrentUri = null,
     aResultPrincipal = null,
-    aIsSubframe = false
+    aIsSubframe = false,
+    aIsWorker = false
   ) {
     if (!aMultiProcess) {
       return NOT_REMOTE;
@@ -501,7 +454,12 @@ var E10SUtils = {
           if (
             flags & Ci.nsIAboutModule.URI_CAN_LOAD_IN_PRIVILEGEDABOUT_PROCESS &&
             (useSeparatePrivilegedAboutContentProcess ||
-              aURI.filePath == "logins")
+              aURI.filePath == "logins" ||
+              // Force about:welcome into the privileged content process to
+              // workaround code coverage test failures which result from the
+              // workaround in bug 161269. Once that bug is fixed for real,
+              // the about:welcome case below can be removed.
+              aURI.filePath == "welcome")
           ) {
             return PRIVILEGEDABOUT_REMOTE_TYPE;
           }
@@ -553,6 +511,15 @@ var E10SUtils = {
         // Protocols that redirect to http(s) will just flip back to a
         // regular content process after the redirect.
         if (aURI.scheme.startsWith("ext+")) {
+          // We shouldn't even get to this for a worker, throw an unexpected error
+          // if we do.
+          if (aIsWorker) {
+            throw Components.Exception(
+              "Unexpected remote worker with extension handled scheme",
+              Cr.NS_ERROR_UNEXPECTED
+            );
+          }
+
           return WebExtensionPolicy.useRemoteWebExtensions
             ? EXTENSION_REMOTE_TYPE
             : NOT_REMOTE;
@@ -566,6 +533,15 @@ var E10SUtils = {
         // innermost URI. Any URIs like this will need to be handled in the
         // cases above, so we don't still end up using the fake inner URI here.
         if (aURI instanceof Ci.nsINestedURI) {
+          // We shouldn't even get to this for a worker, throw an unexpected error
+          // if we do.
+          if (aIsWorker) {
+            throw Components.Exception(
+              "Unexpected worker with a NestedURI",
+              Cr.NS_ERROR_UNEXPECTED
+            );
+          }
+
           let innerURI = aURI.QueryInterface(Ci.nsINestedURI).innerURI;
           return this.getRemoteTypeForURIObject(
             innerURI,
@@ -587,7 +563,8 @@ var E10SUtils = {
           aURI,
           aCurrentUri,
           aResultPrincipal,
-          aRemoteSubframes
+          aRemoteSubframes,
+          aIsWorker
         );
         log.debug(`  validatedWebRemoteType() returning: ${remoteType}`);
         return remoteType;
@@ -607,10 +584,17 @@ var E10SUtils = {
       return NOT_REMOTE;
     }
 
-    // We want to use the original URI for "about:" and "chrome://" scheme,
-    // so that we can properly determine the remote type.
-    let useOriginalURI =
-      aOriginalURI.scheme == "about" || aOriginalURI.scheme == "chrome";
+    // We want to use the original URI for "about:" (except for "about:srcdoc"
+    // and "about:blank") and "chrome://" scheme, so that we can properly
+    // determine the remote type.
+    let useOriginalURI;
+    if (aOriginalURI.scheme == "about") {
+      useOriginalURI = !["about:srcdoc", "about:blank"].includes(
+        aOriginalURI.spec
+      );
+    } else {
+      useOriginalURI = aOriginalURI.scheme == "chrome";
+    }
 
     if (!useOriginalURI) {
       // We can't pick a process based on a system principal or expanded
@@ -623,7 +607,9 @@ var E10SUtils = {
       // using fission we add the option to force them into the default
       // web process for better test coverage.
       if (aPrincipal.isNullPrincipal) {
-        if (
+        if (aOriginalURI.spec == "about:blank") {
+          useOriginalURI = true;
+        } else if (
           (aRemoteSubframes && useSeparateDataUriProcess) ||
           aPreferredRemoteType == NOT_REMOTE
         ) {
@@ -637,17 +623,101 @@ var E10SUtils = {
     // non-content principal.
     let currentURI =
       aCurrentPrincipal && aCurrentPrincipal.isContentPrincipal
-        ? aCurrentPrincipal.URI
+        ? Services.io.newURI(aCurrentPrincipal.spec)
         : null;
 
     return E10SUtils.getRemoteTypeForURIObject(
-      useOriginalURI ? aOriginalURI : aPrincipal.URI,
+      useOriginalURI ? aOriginalURI : Services.io.newURI(aPrincipal.spec),
       aMultiProcess,
       aRemoteSubframes,
       aPreferredRemoteType,
       currentURI,
       aPrincipal,
       aIsSubframe
+    );
+  },
+
+  getRemoteTypeForWorkerPrincipal(
+    aPrincipal,
+    aWorkerType,
+    aIsMultiProcess,
+    aIsFission,
+    aPreferredRemoteType = DEFAULT_REMOTE_TYPE
+  ) {
+    if (aPrincipal.isExpandedPrincipal) {
+      // Explicitly disallow expanded principals:
+      // The worker principal is based on the worker script, an expanded principal
+      // is not expected.
+      throw new Error("Unexpected expanded principal worker");
+    }
+
+    if (
+      aWorkerType === Ci.nsIE10SUtils.REMOTE_WORKER_TYPE_SERVICE &&
+      !aPrincipal.isContentPrincipal
+    ) {
+      // Fails earlier on service worker with a non content principal.
+      throw new Error("Unexpected system or null principal service worker");
+    }
+
+    if (!aIsMultiProcess) {
+      // Return earlier when multiprocess is disabled.
+      return NOT_REMOTE;
+    }
+
+    if (
+      // We don't want to launch workers in a large allocation remote type,
+      // change it to the web remote type (then getRemoteTypeForURIObject
+      // may change it to an isolated one).
+      aPreferredRemoteType === LARGE_ALLOCATION_REMOTE_TYPE ||
+      // Similarly to the large allocation remote type, we don't want to
+      // launch the shared worker in a web coop+coep remote type even if
+      // was registered from a frame loaded in a child process with that
+      // remote type.
+      aPreferredRemoteType?.startsWith(WEB_REMOTE_COOP_COEP_TYPE_PREFIX)
+    ) {
+      aPreferredRemoteType = DEFAULT_REMOTE_TYPE;
+    }
+
+    // System principal shared workers are allowed to run in the main process
+    // or in the privilegedabout child process. Early return the preferred remote type
+    // if it is one where a system principal worked is allowed to run.
+    if (
+      aPrincipal.isSystemPrincipal &&
+      SYSTEM_WORKERS_REMOTE_TYPES_ALLOWED.includes(aPreferredRemoteType)
+    ) {
+      return aPreferredRemoteType;
+    }
+
+    // Allow null principal shared workers to run in the same process type where they
+    // have been registered (the preferredRemoteType), but return the DEFAULT_REMOTE_TYPE
+    // if the preferred remote type was NOT_REMOTE.
+    if (aPrincipal.isNullPrincipal) {
+      return aPreferredRemoteType === NOT_REMOTE
+        ? DEFAULT_REMOTE_TYPE
+        : aPreferredRemoteType;
+    }
+
+    // Sanity check, there shouldn't be any system or null principal after this point.
+    if (aPrincipal.isContentPrincipal) {
+      // For content principal, get a remote type based on the worker principal URI
+      // (which is based on the worker script url) and an initial preferredRemoteType
+      // (only set for shared worker, based on the remote type where the shared worker
+      // was registered from).
+      return E10SUtils.getRemoteTypeForURIObject(
+        aPrincipal.URI,
+        aIsMultiProcess,
+        aIsFission,
+        aPreferredRemoteType,
+        null,
+        aPrincipal,
+        false, // aIsSubFrame
+        true // aIsWorker
+      );
+    }
+
+    // Throw explicitly if we were unable to get a remoteType for the worker.
+    throw new Error(
+      "Failed to get a remoteType for a non content principal worker"
     );
   },
 
@@ -848,15 +918,7 @@ var E10SUtils = {
     // If we already have a content process, and the load will be
     // handled using DocumentChannel, then we can skip switching
     // for now, and let DocumentChannel do it during the response.
-    if (
-      uriObject &&
-      canProcessSwitchWithDocumentChannel(
-        uriObject,
-        remoteSubframes,
-        requiredRemoteType,
-        browser.browsingContext
-      )
-    ) {
+    if (uriObject && documentChannelPermittedForURI(uriObject)) {
       mustChangeProcess = false;
       newFrameloader = false;
     }
@@ -881,13 +943,7 @@ var E10SUtils = {
       `shouldLoadURIInThisProcess: have ${remoteType} want ${wantRemoteType}`
     );
 
-    if (
-      canProcessSwitchWithDocumentChannel(
-        aURI,
-        aRemoteSubframes,
-        wantRemoteType
-      )
-    ) {
+    if (documentChannelPermittedForURI(aURI)) {
       // We can switch later with documentchannel.
       return true;
     }
@@ -922,12 +978,7 @@ var E10SUtils = {
     // 1640019).
     if (
       AppConstants.MOZ_WIDGET_TOOLKIT != "android" &&
-      canProcessSwitchWithDocumentChannel(
-        aURI,
-        useRemoteSubframes,
-        wantRemoteType,
-        aDocShell.browsingContext
-      )
+      documentChannelPermittedForURI(aURI)
     ) {
       return true;
     }
@@ -947,23 +998,25 @@ var E10SUtils = {
     }
 
     // Allow history load if loaded in this process before.
-    let requestedIndex = sessionHistory.legacySHistory.requestedIndex;
-    if (requestedIndex >= 0) {
-      this.log().debug("Checking history case\n");
-      if (
-        sessionHistory.legacySHistory.getEntryAtIndex(requestedIndex)
-          .loadedInThisProcess
-      ) {
-        this.log().info("History entry loaded in this process");
-        return true;
-      }
+    if (!Services.appinfo.sessionHistoryInParent) {
+      let requestedIndex = sessionHistory.legacySHistory.requestedIndex;
+      if (requestedIndex >= 0) {
+        this.log().debug("Checking history case\n");
+        if (
+          sessionHistory.legacySHistory.getEntryAtIndex(requestedIndex)
+            .loadedInThisProcess
+        ) {
+          this.log().info("History entry loaded in this process");
+          return true;
+        }
 
-      // If not originally loaded in this process allow it if the URI would
-      // normally be allowed to load in this process by default.
-      this.log().debug(
-        `Checking remote type, got: ${remoteType} want: ${wantRemoteType}\n`
-      );
-      return remoteType == wantRemoteType;
+        // If not originally loaded in this process allow it if the URI would
+        // normally be allowed to load in this process by default.
+        this.log().debug(
+          `Checking remote type, got: ${remoteType} want: ${wantRemoteType}\n`
+        );
+        return remoteType == wantRemoteType;
+      }
     }
 
     // If the URI can be loaded in the current process then continue
@@ -980,23 +1033,33 @@ var E10SUtils = {
   ) {
     const actor = aDocShell.domWindow.windowGlobalChild.getActor("BrowserTab");
 
+    let loadOptions = {
+      uri: aURI.spec,
+      flags: aFlags || Ci.nsIWebNavigation.LOAD_FLAGS_NONE,
+      referrerInfo: this.serializeReferrerInfo(aReferrerInfo),
+      triggeringPrincipal: this.serializePrincipal(
+        aTriggeringPrincipal ||
+          Services.scriptSecurityManager.createNullPrincipal({})
+      ),
+      csp: aCsp ? this.serializeCSP(aCsp) : null,
+    };
     // Retarget the load to the correct process
-    let sessionHistory = aDocShell.QueryInterface(Ci.nsIWebNavigation)
-      .sessionHistory;
+    if (Services.appinfo.sessionHistoryInParent) {
+      let sessionHistory = aDocShell.QueryInterface(Ci.nsIWebNavigation)
+        .sessionHistory;
+      actor.sendAsyncMessage("Browser:LoadURI", {
+        loadOptions,
+        historyIndex: sessionHistory.legacySHistory.requestedIndex,
+      });
+    } else {
+      // If we can't access legacySHistory, session history in the
+      // parent is enabled. Browser:LoadURI knows about this and will
+      // act accordingly.
+      actor.sendAsyncMessage("Browser:LoadURI", {
+        loadOptions,
+      });
+    }
 
-    actor.sendAsyncMessage("Browser:LoadURI", {
-      loadOptions: {
-        uri: aURI.spec,
-        flags: aFlags || Ci.nsIWebNavigation.LOAD_FLAGS_NONE,
-        referrerInfo: this.serializeReferrerInfo(aReferrerInfo),
-        triggeringPrincipal: this.serializePrincipal(
-          aTriggeringPrincipal ||
-            Services.scriptSecurityManager.createNullPrincipal({})
-        ),
-        csp: aCsp ? this.serializeCSP(aCsp) : null,
-      },
-      historyIndex: sessionHistory.legacySHistory.requestedIndex,
-    });
     return false;
   },
 

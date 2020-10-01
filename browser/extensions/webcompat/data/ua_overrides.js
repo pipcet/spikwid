@@ -233,7 +233,8 @@ const AVAILABLE_UA_OVERRIDES = [
     /*
      * Bug 969844 - mobile.de sends desktop site to Firefox on Android
      *
-     * mobile.de sends the desktop site to Fennec. Spooing as Chrome works fine.
+     * mobile.de sends the desktop site to Firefox Mobile.
+     * Spoofing as Chrome works fine.
      */
     id: "bug969844",
     platform: "android",
@@ -271,10 +272,10 @@ const AVAILABLE_UA_OVERRIDES = [
      * Bug 1509873 - zmags.com - Add UA override for secure.viewer.zmags.com
      * WebCompat issue #21576 - https://webcompat.com/issues/21576
      *
-     * The zmags viewer locks out Fennec with a "Browser unsupported" message,
-     * but tests showed that it works just fine with a Chrome UA. Outreach
-     * attempts were unsuccessful, and as the site has a relatively high rank,
-     * we alter the UA.
+     * The zmags viewer locks out Firefox Mobile with a "Browser unsupported"
+     * message, but tests showed that it works just fine with a Chrome UA.
+     * Outreach attempts were unsuccessful, and as the site has a relatively
+     * high rank, we alter the UA.
      */
     id: "bug1509873",
     platform: "android",
@@ -336,8 +337,8 @@ const AVAILABLE_UA_OVERRIDES = [
      *
      * ceskatelevize sets streamingProtocol depending on the User-Agent it sees
      * in the request headers, returning DASH for Chrome, HLS for iOS,
-     * and Flash for Fennec. Since Fennec has no Flash, the video doesn't work.
-     * Spoofing as Chrome makes the video play
+     * and Flash for Firefox Mobile. Since Mobile has no Flash, the video
+     * doesn't work. Spoofing as Chrome makes the video play
      */
     id: "bug1574564",
     platform: "android",
@@ -574,6 +575,7 @@ const AVAILABLE_UA_OVERRIDES = [
     /*
      * Bug 1563839 - rolb.santanderbank.com - Build UA override
      * Bug 1646791 - bancosantander.es - Re-add UA override.
+     * Bug 1665129 - *.gruposantander.es - Add wildcard domains.
      * WebCompat issue #33462 - https://webcompat.com/issues/33462
      * SuMo request - https://support.mozilla.org/es/questions/1291085
      *
@@ -581,13 +583,14 @@ const AVAILABLE_UA_OVERRIDES = [
      * xmlDoc.onload whose support has been dropped. It results in missing labels in forms
      * and some other issues.  Adding 'like Gecko' fixes those issues.
      */
-    id: "bug1563839",
+    id: "bug1646791",
     platform: "all",
     domain: "santanderbank.com",
-    bug: "1563839",
+    bug: "1646791",
     config: {
       matches: [
-        "*://*.bancosantander.es*",
+        "*://*.bancosantander.es/*",
+        "*://*.gruposantander.es/*",
         "*://*.santander.co.uk/*",
         "*://bob.santanderbank.com/*",
         "*://rolb.santanderbank.com/*",
@@ -614,6 +617,44 @@ const AVAILABLE_UA_OVERRIDES = [
       matches: ["*://www.jp.square-enix.com/music/sem/page/FF7R/ost/*"],
       uaTransformer: originalUA => {
         return originalUA + " Chrome/83";
+      },
+    },
+  },
+  {
+    /*
+     * Bug 1654888 - UA override for ebuyer.com
+     * Webcompat issue #52463 - https://webcompat.com/issues/52463
+     *
+     * This site returns desktop site based on server side UA detection.
+     * Spoofing as Chrome allows to get mobile experience
+     */
+    id: "bug1654888",
+    platform: "android",
+    domain: "ebuyer.com",
+    bug: "1654888",
+    config: {
+      matches: ["*://*.ebuyer.com/*"],
+      uaTransformer: () => {
+        return UAHelpers.getDeviceAppropriateChromeUA();
+      },
+    },
+  },
+  {
+    /*
+     * Bug 1664174 - UA override for indiatimes.com
+     * Webcompat issue #57961 - https://webcompat.com/issues/57961
+     *
+     * This site returns desktop site based on server side UA detection.
+     * Spoofing as Chrome allows to get mobile experience
+     */
+    id: "bug1664174",
+    platform: "android",
+    domain: "indiatimes.com",
+    bug: "1664174",
+    config: {
+      matches: ["*://*.indiatimes.com/*"],
+      uaTransformer: () => {
+        return UAHelpers.getDeviceAppropriateChromeUA();
       },
     },
   },

@@ -7,10 +7,10 @@
 #include "ProfiledThreadData.h"
 
 #include "ProfileBuffer.h"
-#include "ProfileJSONWriter.h"
 
 #include "js/TraceLoggerAPI.h"
 #include "mozilla/dom/ContentChild.h"
+#include "mozilla/ProfileJSONWriter.h"
 
 #if defined(GP_OS_darwin)
 #  include <pthread.h>
@@ -205,18 +205,19 @@ void StreamSamplesAndMarkers(const char* aName, int aThreadId,
                              const mozilla::TimeStamp& aRegisterTime,
                              const mozilla::TimeStamp& aUnregisterTime,
                              double aSinceTime, UniqueStacks& aUniqueStacks) {
-  aWriter.StringProperty("processType", XRE_GetProcessTypeString());
+  aWriter.StringProperty("processType",
+                         MakeStringSpan(XRE_GetProcessTypeString()));
 
-  aWriter.StringProperty("name", aName);
+  aWriter.StringProperty("name", MakeStringSpan(aName));
 
   // Use given process name (if any), unless we're the parent process.
   if (XRE_IsParentProcess()) {
     aWriter.StringProperty("processName", "Parent Process");
   } else if (!aProcessName.IsEmpty()) {
-    aWriter.StringProperty("processName", aProcessName.Data());
+    aWriter.StringProperty("processName", aProcessName);
   }
   if (!aETLDplus1.IsEmpty()) {
-    aWriter.StringProperty("eTLD+1", aETLDplus1.Data());
+    aWriter.StringProperty("eTLD+1", aETLDplus1);
   }
 
   aWriter.IntProperty("tid", static_cast<int64_t>(aThreadId));
@@ -261,7 +262,9 @@ void StreamSamplesAndMarkers(const char* aName, int aThreadId,
     {
       JSONSchemaWriter schema(aWriter);
       schema.WriteField("name");
-      schema.WriteField("time");
+      schema.WriteField("startTime");
+      schema.WriteField("endTime");
+      schema.WriteField("phase");
       schema.WriteField("category");
       schema.WriteField("data");
     }

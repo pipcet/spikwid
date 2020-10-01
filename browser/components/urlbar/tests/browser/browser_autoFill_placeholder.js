@@ -62,14 +62,17 @@ add_task(async function tokenAlias() {
   });
   let details = await UrlbarTestUtils.getDetailsOfResultAt(window, 0);
   Assert.ok(details.autofill);
-  Assert.equal(gURLBar.value, "@__example ");
+  Assert.equal(gURLBar.value, getAutofillSearchString("@__example"));
   Assert.equal(gURLBar.selectionStart, "@__ex".length);
-  Assert.equal(gURLBar.selectionEnd, "@__example ".length);
+  Assert.equal(
+    gURLBar.selectionEnd,
+    getAutofillSearchString("@__example").length
+  );
 
-  await searchAndCheck("@__exa", "@__example ");
-  await searchAndCheck("@__EXAM", "@__EXAMple ");
-  await searchAndCheck("@__eXaMp", "@__eXaMple ");
-  await searchAndCheck("@__exampl", "@__example ");
+  await searchAndCheck("@__exa", getAutofillSearchString("@__example"));
+  await searchAndCheck("@__EXAM", getAutofillSearchString("@__EXAMple"));
+  await searchAndCheck("@__eXaMp", getAutofillSearchString("@__eXaMple"));
+  await searchAndCheck("@__exampl", getAutofillSearchString("@__example"));
 
   await cleanUp();
 });
@@ -211,7 +214,19 @@ add_task(async function clear_placeholder_for_keyword_or_alias() {
   await searchAndCheck("ex", "example.com/", "ex");
   await searchAndCheck("EXA", "EXAmple.com/", "EXAmple.com/");
   // Matches the alias.
+
+  await SpecialPowers.pushPrefEnv({
+    set: [["browser.urlbar.update2", true]],
+  });
+  await searchAndCheck("eXaM", "eXaMple.com/", "eXaMple.com/");
+  await SpecialPowers.popPrefEnv();
+
+  await SpecialPowers.pushPrefEnv({
+    set: [["browser.urlbar.update2", false]],
+  });
   await searchAndCheck("eXaM", "eXaMple.com/", "eXaM");
+  await SpecialPowers.popPrefEnv();
+
   await searchAndCheck("examp", "example.com/", "example.com/");
 
   await cleanUp();

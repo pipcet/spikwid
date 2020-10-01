@@ -10,8 +10,11 @@
 #include "mozilla/dom/WindowGlobalParent.h"
 #include "mozilla/dom/SyncedContextInlines.h"
 #include "mozilla/dom/BrowsingContext.h"
+#include "mozilla/dom/Document.h"
+#include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/ClearOnShutdown.h"
+#include "nsGlobalWindowInner.h"
 #include "nsIScriptError.h"
 #include "nsRefPtrHashtable.h"
 #include "nsContentUtils.h"
@@ -24,6 +27,11 @@ namespace dom {
 template class syncedcontext::Transaction<WindowContext>;
 
 static LazyLogModule gWindowContextLog("WindowContext");
+
+extern mozilla::LazyLogModule gUserInteractionPRLog;
+
+#define USER_ACTIVATION_LOG(msg, ...) \
+  MOZ_LOG(gUserInteractionPRLog, LogLevel::Debug, (msg, ##__VA_ARGS__))
 
 using WindowContextByIdMap = nsDataHashtable<nsUint64HashKey, WindowContext*>;
 static StaticAutoPtr<WindowContextByIdMap> gWindowContexts;
@@ -53,6 +61,19 @@ bool WindowContext::IsCached() const {
   return mBrowsingContext->mCurrentWindowContext != this;
 }
 
+nsGlobalWindowInner* WindowContext::GetInnerWindow() const {
+  if (mInProcess) {
+    // FIXME: Replace this with something more efficient.
+    return nsGlobalWindowInner::GetInnerWindowWithId(mInnerWindowId);
+  }
+  return nullptr;
+}
+
+Document* WindowContext::GetDocument() const {
+  nsGlobalWindowInner* innerWindow = GetInnerWindow();
+  return innerWindow ? innerWindow->GetDocument() : nullptr;
+}
+
 WindowContext* WindowContext::GetParentWindowContext() {
   return mBrowsingContext->GetParentWindowContext();
 }
@@ -64,6 +85,8 @@ WindowContext* WindowContext::TopWindowContext() {
   }
   return current;
 }
+
+bool WindowContext::IsTop() const { return mBrowsingContext->IsTop(); }
 
 nsIGlobalObject* WindowContext::GetParentObject() const {
   return xpc::NativeGlobal(xpc::PrivilegedJunkScope());
@@ -133,6 +156,12 @@ bool WindowContext::CanSet(FieldIndex<IDX_AllowMixedContent>,
   return CheckOnlyOwningProcessCanSet(aSource);
 }
 
+bool WindowContext::CanSet(FieldIndex<IDX_HasBeforeUnload>,
+                           const bool& aHasBeforeUnload,
+                           ContentParent* aSource) {
+  return CheckOnlyOwningProcessCanSet(aSource);
+}
+
 bool WindowContext::CanSet(FieldIndex<IDX_CookieBehavior>,
                            const Maybe<uint32_t>& aValue,
                            ContentParent* aSource) {
@@ -162,13 +191,35 @@ bool WindowContext::CanSet(FieldIndex<IDX_IsSecureContext>,
   return CheckOnlyOwningProcessCanSet(aSource);
 }
 
-bool WindowContext::CanSet(FieldIndex<IDX_DocTreeHadAudibleMedia>,
+bool WindowContext::CanSet(FieldIndex<IDX_IsOriginalFrameSource>,
+                           const bool& aIsOriginalFrameSource,
+                           ContentParent* aSource) {
+  return CheckOnlyOwningProcessCanSet(aSource);
+}
+
+bool WindowContext::CanSet(FieldIndex<IDX_DocTreeHadMedia>,
                            const bool& aValue, ContentParent* aSource) {
-  return GetBrowsingContext()->IsTop();
+  return IsTop();
 }
 
 bool WindowContext::CanSet(FieldIndex<IDX_AutoplayPermission>,
                            const uint32_t& aValue, ContentParent* aSource) {
+  return CheckOnlyOwningProcessCanSet(aSource);
+}
+
+bool WindowContext::CanSet(FieldIndex<IDX_ShortcutsPermission>,
+                           const uint32_t& aValue, ContentParent* aSource) {
+  return IsTop() && CheckOnlyOwningProcessCanSet(aSource);
+}
+
+bool WindowContext::CanSet(FieldIndex<IDX_ActiveMediaSessionContextId>,
+                           const Maybe<uint64_t>& aValue,
+                           ContentParent* aSource) {
+  return IsTop();
+}
+
+bool WindowContext::CanSet(FieldIndex<IDX_PopupPermission>, const uint32_t&,
+                           ContentParent* aSource) {
   return CheckOnlyOwningProcessCanSet(aSource);
 }
 
@@ -184,6 +235,23 @@ bool WindowContext::CanSet(
     const PermissionDelegateHandler::DelegatedPermissionList& aValue,
     ContentParent* aSource) {
   return CheckOnlyOwningProcessCanSet(aSource);
+}
+
+void WindowContext::DidSet(FieldIndex<IDX_UserActivationState>) {
+  MOZ_ASSERT_IF(!mInProcess, mUserGestureStart.IsNull());
+  USER_ACTIVATION_LOG("Set user gesture activation %" PRIu8
+                      " for %s browsing context 0x%08" PRIx64,
+                      static_cast<uint8_t>(GetUserActivationState()),
+                      XRE_IsParentProcess() ? "Parent" : "Child", Id());
+  if (mInProcess) {
+    USER_ACTIVATION_LOG(
+        "Set user gesture start time for %s browsing context 0x%08" PRIx64,
+        XRE_IsParentProcess() ? "Parent" : "Child", Id());
+    mUserGestureStart =
+        (GetUserActivationState() == UserActivation::State::FullActivated)
+            ? TimeStamp::Now()
+            : TimeStamp();
+  }
 }
 
 void WindowContext::DidSet(FieldIndex<IDX_HasReportedShadowDOMUsage>,
@@ -254,7 +322,9 @@ void WindowContext::Discard() {
   }
 
   mIsDiscarded = true;
-  gWindowContexts->Remove(InnerWindowId());
+  if (gWindowContexts) {
+    gWindowContexts->Remove(InnerWindowId());
+  }
   mBrowsingContext->UnregisterWindowContext(this);
   Group()->Unregister(this);
 }
@@ -277,19 +347,84 @@ void WindowContext::AddMixedContentSecurityState(uint32_t aStateFlags) {
   }
 }
 
+void WindowContext::NotifyUserGestureActivation() {
+  Unused << SetUserActivationState(UserActivation::State::FullActivated);
+}
+
+void WindowContext::NotifyResetUserGestureActivation() {
+  Unused << SetUserActivationState(UserActivation::State::None);
+}
+
+bool WindowContext::HasBeenUserGestureActivated() {
+  return GetUserActivationState() != UserActivation::State::None;
+}
+
+bool WindowContext::HasValidTransientUserGestureActivation() {
+  MOZ_ASSERT(mInProcess);
+
+  if (GetUserActivationState() != UserActivation::State::FullActivated) {
+    MOZ_ASSERT(mUserGestureStart.IsNull(),
+               "mUserGestureStart should be null if the document hasn't ever "
+               "been activated by user gesture");
+    return false;
+  }
+
+  MOZ_ASSERT(!mUserGestureStart.IsNull(),
+             "mUserGestureStart shouldn't be null if the document has ever "
+             "been activated by user gesture");
+  TimeDuration timeout = TimeDuration::FromMilliseconds(
+      StaticPrefs::dom_user_activation_transient_timeout());
+
+  return timeout <= TimeDuration() ||
+         (TimeStamp::Now() - mUserGestureStart) <= timeout;
+}
+
+bool WindowContext::ConsumeTransientUserGestureActivation() {
+  MOZ_ASSERT(mInProcess);
+  MOZ_ASSERT(!IsCached());
+
+  if (!HasValidTransientUserGestureActivation()) {
+    return false;
+  }
+
+  BrowsingContext* top = mBrowsingContext->Top();
+  top->PreOrderWalk([&](BrowsingContext* aBrowsingContext) {
+    WindowContext* windowContext = aBrowsingContext->GetCurrentWindowContext();
+    if (windowContext && windowContext->GetUserActivationState() ==
+                             UserActivation::State::FullActivated) {
+      Unused << windowContext->SetUserActivationState(
+          UserActivation::State::HasBeenActivated);
+    }
+  });
+
+  return true;
+}
+
+bool WindowContext::CanShowPopup() {
+  uint32_t permit = GetPopupPermission();
+  if (permit == nsIPermissionManager::ALLOW_ACTION) {
+    return true;
+  }
+  if (permit == nsIPermissionManager::DENY_ACTION) {
+    return false;
+  }
+
+  return !StaticPrefs::dom_disable_open_during_load();
+}
+
 WindowContext::IPCInitializer WindowContext::GetIPCInitializer() {
   IPCInitializer init;
   init.mInnerWindowId = mInnerWindowId;
   init.mOuterWindowId = mOuterWindowId;
   init.mBrowsingContextId = mBrowsingContext->Id();
-  init.mFields = mFields.Fields();
+  init.mFields = mFields.RawValues();
   return init;
 }
 
 WindowContext::WindowContext(BrowsingContext* aBrowsingContext,
                              uint64_t aInnerWindowId, uint64_t aOuterWindowId,
-                             bool aInProcess, FieldTuple&& aFields)
-    : mFields(std::move(aFields)),
+                             bool aInProcess, FieldValues&& aInit)
+    : mFields(std::move(aInit)),
       mInnerWindowId(aInnerWindowId),
       mOuterWindowId(aOuterWindowId),
       mBrowsingContext(aBrowsingContext),

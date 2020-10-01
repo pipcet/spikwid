@@ -19,9 +19,8 @@
 #include "nsReadableUtils.h"
 #include "nsThreadUtils.h"
 
-#include "nsPaper.h"
-#include "nsPrinter.h"
-#include "nsPSPrinters.h"
+#include "nsCUPSShim.h"
+#include "nsPrinterCUPS.h"
 
 #include "nsPrintSettingsGTK.h"
 
@@ -48,42 +47,6 @@ using mozilla::gfx::PrintTargetPS;
 
 static LazyLogModule sDeviceContextSpecGTKLog("DeviceContextSpecGTK");
 
-//----------------------------------------------------------------------------------
-// The printer data is shared between the PrinterList and the
-// nsDeviceContextSpecGTK The PrinterList creates the printer info but the
-// nsDeviceContextSpecGTK cleans it up If it gets created (via the Page Setup
-// Dialog) but the user never prints anything then it will never be delete, so
-// this class takes care of that.
-class GlobalPrinters {
- public:
-  static GlobalPrinters* GetInstance() { return &mGlobalPrinters; }
-  ~GlobalPrinters() { FreeGlobalPrinters(); }
-
-  void FreeGlobalPrinters();
-  nsresult InitializeGlobalPrinters();
-
-  bool PrintersAreAllocated() { return mGlobalPrinterList != nullptr; }
-  uint32_t GetNumPrinters() {
-    return mGlobalPrinterList ? mGlobalPrinterList->Length() : 0;
-  }
-  nsString* GetStringAt(int32_t aInx) {
-    return &mGlobalPrinterList->ElementAt(aInx);
-  }
-  void GetSystemDefaultPrinterName(nsAString& aName);
-
- protected:
-  GlobalPrinters() = default;
-
-  static GlobalPrinters mGlobalPrinters;
-  static nsTArray<nsString>* mGlobalPrinterList;
-};
-
-//---------------
-// static members
-GlobalPrinters GlobalPrinters::mGlobalPrinters;
-nsTArray<nsString>* GlobalPrinters::mGlobalPrinterList = nullptr;
-//---------------
-
 nsDeviceContextSpecGTK::nsDeviceContextSpecGTK()
     : mGtkPrintSettings(nullptr), mGtkPageSetup(nullptr) {}
 
@@ -94,6 +57,10 @@ nsDeviceContextSpecGTK::~nsDeviceContextSpecGTK() {
 
   if (mGtkPrintSettings) {
     g_object_unref(mGtkPrintSettings);
+  }
+
+  if (mSpoolFile) {
+    mSpoolFile->Remove(false);
   }
 }
 
@@ -216,11 +183,6 @@ static void print_callback(GtkPrintJob* aJob, gpointer aData,
   ((nsIFile*)aData)->Remove(false);
 }
 
-static void ns_release_macro(gpointer aData) {
-  nsIFile* spoolFile = (nsIFile*)aData;
-  NS_RELEASE(spoolFile);
-}
-
 /* static */
 gboolean nsDeviceContextSpecGTK::PrinterEnumerator(GtkPrinter* aPrinter,
                                                    gpointer aData) {
@@ -258,8 +220,12 @@ void nsDeviceContextSpecGTK::StartPrintJob() {
 
   if (!gtk_print_job_set_source_file(job, mSpoolName.get(), nullptr)) return;
 
-  NS_ADDREF(mSpoolFile.get());
-  gtk_print_job_send(job, print_callback, mSpoolFile, ns_release_macro);
+  // Now gtk owns the print job, and will be released via our callback.
+  gtk_print_job_send(job, print_callback, mSpoolFile.forget().take(),
+                     [](gpointer aData) {
+                       auto* spoolFile = static_cast<nsIFile*>(aData);
+                       NS_RELEASE(spoolFile);
+                     });
 }
 
 void nsDeviceContextSpecGTK::EnumeratePrinters() {
@@ -293,8 +259,7 @@ NS_IMETHODIMP nsDeviceContextSpecGTK::EndDocument() {
     // content process side. In that case, we need to enumerate the printers
     // on the content side, and find a printer with a matching name.
 
-    GtkPrinter* printer = mPrintSettings->GetGtkPrinter();
-    if (printer) {
+    if (mPrintSettings->GetGtkPrinter()) {
       // We have a printer, so we can print right away.
       StartPrintJob();
     } else {
@@ -324,6 +289,8 @@ NS_IMETHODIMP nsDeviceContextSpecGTK::EndDocument() {
     rv = mSpoolFile->MoveTo(destDir, destLeafName);
     NS_ENSURE_SUCCESS(rv, rv);
 
+    mSpoolFile = nullptr;
+
     // This is the standard way to get the UNIX umask. Ugh.
     mode_t mask = umask(0);
     umask(mask);
@@ -349,123 +316,4 @@ NS_IMETHODIMP nsDeviceContextSpecGTK::EndDocument() {
     }
   }
   return NS_OK;
-}
-
-//  Printer List
-NS_IMPL_ISUPPORTS(nsPrinterListGTK, nsIPrinterList)
-
-NS_IMETHODIMP
-nsPrinterListGTK::GetPrinters(nsTArray<RefPtr<nsIPrinter>>& aPrinters) {
-  nsresult rv = GlobalPrinters::GetInstance()->InitializeGlobalPrinters();
-  if (NS_FAILED(rv)) {
-    return rv;
-  }
-
-  uint32_t numPrinters = GlobalPrinters::GetInstance()->GetNumPrinters();
-  for (uint32_t i = 0; i < numPrinters; ++i) {
-    nsString* name = GlobalPrinters::GetInstance()->GetStringAt(i);
-    nsTArray<RefPtr<nsIPaper>> paperList;
-    aPrinters.AppendElement(new nsPrinter(*name, paperList));
-  }
-  GlobalPrinters::GetInstance()->FreeGlobalPrinters();
-
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsPrinterListGTK::GetSystemDefaultPrinterName(nsAString& aName) {
-  GlobalPrinters::GetInstance()->GetSystemDefaultPrinterName(aName);
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsPrinterListGTK::InitPrintSettingsFromPrinter(
-    const nsAString& aPrinterName, nsIPrintSettings* aPrintSettings) {
-  NS_ENSURE_ARG_POINTER(aPrintSettings);
-
-  // Set a default file name.
-  nsAutoString filename;
-  nsresult rv = aPrintSettings->GetToFileName(filename);
-  if (NS_FAILED(rv) || filename.IsEmpty()) {
-    const char* path = PR_GetEnv("PWD");
-    if (!path) {
-      path = PR_GetEnv("HOME");
-    }
-
-    if (path) {
-      CopyUTF8toUTF16(MakeStringSpan(path), filename);
-      filename.AppendLiteral("/mozilla.pdf");
-    } else {
-      filename.AssignLiteral("mozilla.pdf");
-    }
-
-    aPrintSettings->SetToFileName(filename);
-  }
-
-  aPrintSettings->SetIsInitializedFromPrinter(true);
-
-  return NS_OK;
-}
-
-//----------------------------------------------------------------------
-nsresult GlobalPrinters::InitializeGlobalPrinters() {
-  if (PrintersAreAllocated()) {
-    return NS_OK;
-  }
-
-  mGlobalPrinterList = new nsTArray<nsString>();
-
-  nsPSPrinterList psMgr;
-  if (psMgr.Enabled()) {
-    /* Get the list of PostScript-module printers */
-    // XXX: this function is the only user of GetPrinterList
-    // So it may be interesting to convert the nsCStrings
-    // in this function, we would save one loop here
-    nsTArray<nsCString> printerList;
-    psMgr.GetPrinterList(printerList);
-    for (uint32_t i = 0; i < printerList.Length(); i++) {
-      mGlobalPrinterList->AppendElement(NS_ConvertUTF8toUTF16(printerList[i]));
-    }
-  }
-
-  /* If there are no printers available after all checks, return an error */
-  if (!mGlobalPrinterList->Length()) {
-    /* Make sure we do not cache an empty printer list */
-    FreeGlobalPrinters();
-
-    return NS_ERROR_GFX_PRINTER_NO_PRINTER_AVAILABLE;
-  }
-
-  return NS_OK;
-}
-
-//----------------------------------------------------------------------
-void GlobalPrinters::FreeGlobalPrinters() {
-  if (mGlobalPrinterList) {
-    delete mGlobalPrinterList;
-    mGlobalPrinterList = nullptr;
-  }
-}
-
-void GlobalPrinters::GetSystemDefaultPrinterName(nsAString& aName) {
-  aName.Truncate();
-
-  bool allocate = !GlobalPrinters::GetInstance()->PrintersAreAllocated();
-
-  if (allocate) {
-    nsresult rv = GlobalPrinters::GetInstance()->InitializeGlobalPrinters();
-    if (NS_FAILED(rv)) {
-      return;
-    }
-  }
-  NS_ASSERTION(GlobalPrinters::GetInstance()->PrintersAreAllocated(),
-               "no GlobalPrinters");
-
-  if (GlobalPrinters::GetInstance()->GetNumPrinters() == 0) return;
-
-  aName = *GlobalPrinters::GetInstance()->GetStringAt(0);
-
-  if (allocate) {
-    GlobalPrinters::GetInstance()->FreeGlobalPrinters();
-  }
 }

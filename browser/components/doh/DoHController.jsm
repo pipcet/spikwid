@@ -16,28 +16,22 @@ const { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
 );
 
-ChromeUtils.defineModuleGetter(
-  this,
-  "AsyncShutdown",
-  "resource://gre/modules/AsyncShutdown.jsm"
-);
+XPCOMUtils.defineLazyModuleGetters(this, {
+  AsyncShutdown: "resource://gre/modules/AsyncShutdown.jsm",
+  ClientID: "resource://gre/modules/ClientID.jsm",
+  ExtensionStorageIDB: "resource://gre/modules/ExtensionStorageIDB.jsm",
+  Config: "resource:///modules/DoHConfig.jsm",
+  Heuristics: "resource:///modules/DoHHeuristics.jsm",
+  Preferences: "resource://gre/modules/Preferences.jsm",
+  setTimeout: "resource://gre/modules/Timer.jsm",
+  clearTimeout: "resource://gre/modules/Timer.jsm",
+});
 
-ChromeUtils.defineModuleGetter(
+XPCOMUtils.defineLazyPreferenceGetter(
   this,
-  "ExtensionStorageIDB",
-  "resource://gre/modules/ExtensionStorageIDB.jsm"
-);
-
-ChromeUtils.defineModuleGetter(
-  this,
-  "Heuristics",
-  "resource:///modules/DoHHeuristics.jsm"
-);
-
-ChromeUtils.defineModuleGetter(
-  this,
-  "Preferences",
-  "resource://gre/modules/Preferences.jsm"
+  "kDebounceTimeout",
+  "doh-rollout.network-debounce-timeout",
+  1000
 );
 
 XPCOMUtils.defineLazyServiceGetter(
@@ -61,9 +55,6 @@ XPCOMUtils.defineLazyServiceGetter(
   "nsINetworkLinkService"
 );
 
-// Enables this controller. Turned on via Normandy rollout.
-const ENABLED_PREF = "doh-rollout.enabled";
-
 // Stores whether we've done first-run.
 const FIRST_RUN_PREF = "doh-rollout.doneFirstRun";
 
@@ -78,6 +69,10 @@ const DISABLED_PREF = "doh-rollout.disable-heuristics";
 // tells us to disable it. This pref's effect is to suppress the opt-out CFR.
 const SKIP_HEURISTICS_PREF = "doh-rollout.skipHeuristicsCheck";
 
+// Whether to clear doh-rollout.mode on shutdown. When false, the mode value
+// that exists at shutdown will be used at startup until heuristics re-run.
+const CLEAR_ON_SHUTDOWN_PREF = "doh-rollout.clearModeOnShutdown";
+
 const BREADCRUMB_PREF = "doh-rollout.self-enabled";
 
 // Necko TRR prefs to watch for user-set values.
@@ -89,10 +84,8 @@ const TRR_LIST_PREF = "network.trr.resolvers";
 const ROLLOUT_MODE_PREF = "doh-rollout.mode";
 const ROLLOUT_URI_PREF = "doh-rollout.uri";
 
-const TRR_SELECT_ENABLED_PREF = "doh-rollout.trr-selection.enabled";
 const TRR_SELECT_DRY_RUN_RESULT_PREF =
   "doh-rollout.trr-selection.dry-run-result";
-const TRR_SELECT_COMMIT_RESULT_PREF = "doh-rollout.trr-selection.commit-result";
 
 const HEURISTICS_TELEMETRY_CATEGORY = "doh";
 const TRRSELECT_TELEMETRY_CATEGORY = "security.doh.trrPerformance";
@@ -100,6 +93,28 @@ const TRRSELECT_TELEMETRY_CATEGORY = "security.doh.trrPerformance";
 const kLinkStatusChangedTopic = "network:link-status-changed";
 const kConnectivityTopic = "network:captive-portal-connectivity";
 const kPrefChangedTopic = "nsPref:changed";
+
+// Helper function to hash the network ID concatenated with telemetry client ID.
+// This prevents us from being able to tell if 2 clients are on the same network.
+function getHashedNetworkID() {
+  let currentNetworkID = gNetworkLinkService.networkID;
+  if (!currentNetworkID) {
+    return "";
+  }
+
+  let hasher = Cc["@mozilla.org/security/hash;1"].createInstance(
+    Ci.nsICryptoHash
+  );
+
+  hasher.init(Ci.nsICryptoHash.SHA256);
+  // Concat the client ID with the network ID before hashing.
+  let clientNetworkID = ClientID.getClientID() + currentNetworkID;
+  hasher.update(
+    clientNetworkID.split("").map(c => c.charCodeAt(0)),
+    clientNetworkID.length
+  );
+  return hasher.finish(true);
+}
 
 const DoHController = {
   _heuristicsAreEnabled: false,
@@ -118,18 +133,18 @@ const DoHController = {
       true
     );
 
-    Preferences.observe(ENABLED_PREF, this);
+    Services.obs.addObserver(this, Config.kConfigUpdateTopic);
     Preferences.observe(NETWORK_TRR_MODE_PREF, this);
     Preferences.observe(NETWORK_TRR_URI_PREF, this);
 
-    if (Preferences.get(ENABLED_PREF, false)) {
+    if (Config.enabled) {
       await this.maybeEnableHeuristics();
     } else if (Preferences.get(FIRST_RUN_PREF, false)) {
       await this.rollback();
     }
 
     this._asyncShutdownBlocker = async () => {
-      await this.disableHeuristics();
+      await this.disableHeuristics("shutdown");
     };
 
     AsyncShutdown.profileBeforeChange.addBlocker(
@@ -140,14 +155,20 @@ const DoHController = {
     Preferences.set(FIRST_RUN_PREF, true);
   },
 
-  // Used by tests to reset DoHController state (prefs are not cleared here -
-  // tests do that when needed between _uninit and init).
+  // Also used by tests to reset DoHController state (prefs are not cleared
+  // here - tests do that when needed between _uninit and init).
   async _uninit() {
-    Preferences.ignore(ENABLED_PREF, this);
+    Services.obs.removeObserver(this, Config.kConfigUpdateTopic);
     Preferences.ignore(NETWORK_TRR_MODE_PREF, this);
     Preferences.ignore(NETWORK_TRR_URI_PREF, this);
     AsyncShutdown.profileBeforeChange.removeBlocker(this._asyncShutdownBlocker);
-    await this.disableHeuristics();
+    await this.disableHeuristics("shutdown");
+  },
+
+  // Called to reset state when a new config is available.
+  async reset() {
+    await this._uninit();
+    await this.init();
   },
 
   async migrateLocalStoragePrefs() {
@@ -277,18 +298,60 @@ const DoHController = {
     this._heuristicsAreEnabled = true;
   },
 
+  _lastHeuristicsRunTimestamp: 0,
   async runHeuristics(evaluateReason) {
+    let start = Date.now();
+    // If this function is called in quick succession, _lastHeuristicsRunTimestamp
+    // might be refreshed while we are still awaiting Heuristics.run() below.
+    this._lastHeuristicsRunTimestamp = start;
+
     let results = await Heuristics.run();
+
+    if (
+      !gNetworkLinkService.isLinkUp ||
+      this._lastDebounceTimestamp > start ||
+      this._lastHeuristicsRunTimestamp > start ||
+      gCaptivePortalService.state == gCaptivePortalService.LOCKED_PORTAL
+    ) {
+      // If the network is currently down or there was a debounce triggered
+      // while we were running heuristics, it means the network fluctuated
+      // during this heuristics run. We simply discard the results in this case.
+      // Same thing if there was another heuristics run triggered or if we have
+      // detected a locked captive portal while this one was ongoing.
+      return;
+    }
 
     let decision = Object.values(results).includes(Heuristics.DISABLE_DOH)
       ? Heuristics.DISABLE_DOH
       : Heuristics.ENABLE_DOH;
 
-    results.evaluateReason = evaluateReason;
+    let getCaptiveStateString = () => {
+      switch (gCaptivePortalService.state) {
+        case gCaptivePortalService.NOT_CAPTIVE:
+          return "not_captive";
+        case gCaptivePortalService.UNLOCKED_PORTAL:
+          return "unlocked";
+        case gCaptivePortalService.LOCKED_PORTAL:
+          return "locked";
+        default:
+          return "unknown";
+      }
+    };
+
+    let resultsForTelemetry = {
+      evaluateReason,
+      steeredProvider: "",
+      captiveState: getCaptiveStateString(),
+      // NOTE: This might not yet be available after a network change. We mainly
+      // care about the startup case though - we want to look at whether the
+      // heuristics result is consistent for networkIDs often seen at startup.
+      // TODO: Use this data to implement cached results to use early at startup.
+      networkID: getHashedNetworkID(),
+    };
 
     if (results.steeredProvider) {
       gDNSService.setDetectedTrrURI(results.steeredProvider.uri);
-      results.steeredProvider = results.steeredProvider.name;
+      resultsForTelemetry.steeredProvider = results.steeredProvider.name;
     }
 
     if (decision === Heuristics.DISABLE_DOH) {
@@ -297,12 +360,45 @@ const DoHController = {
       await this.setState("enabled");
     }
 
+    // For telemetry, we group the heuristics results into three categories.
+    // Only heuristics with a DISABLE_DOH result are included.
+    // Each category is finally included in the event as a comma-separated list.
+    let canaries = [];
+    let filtering = [];
+    let enterprise = [];
+    let platform = [];
+
+    for (let [heuristicName, result] of Object.entries(results)) {
+      if (result !== Heuristics.DISABLE_DOH) {
+        continue;
+      }
+
+      if (["canary", "zscalerCanary"].includes(heuristicName)) {
+        canaries.push(heuristicName);
+      } else if (
+        ["browserParent", "google", "youtube"].includes(heuristicName)
+      ) {
+        filtering.push(heuristicName);
+      } else if (
+        ["policy", "modifiedRoots", "thirdPartyRoots"].includes(heuristicName)
+      ) {
+        enterprise.push(heuristicName);
+      } else if (["vpn", "proxy", "nrpt"].includes(heuristicName)) {
+        platform.push(heuristicName);
+      }
+    }
+
+    resultsForTelemetry.canaries = canaries.join(",");
+    resultsForTelemetry.filtering = filtering.join(",");
+    resultsForTelemetry.enterprise = enterprise.join(",");
+    resultsForTelemetry.platform = platform.join(",");
+
     Services.telemetry.recordEvent(
       HEURISTICS_TELEMETRY_CATEGORY,
-      "evaluate",
+      "evaluate_v2",
       "heuristics",
       decision,
-      results
+      resultsForTelemetry
     );
   },
 
@@ -323,9 +419,13 @@ const DoHController = {
       case "UIDisabled":
         Preferences.reset(BREADCRUMB_PREF);
       // Fall through.
-      case "shutdown":
       case "rollback":
         Preferences.reset(ROLLOUT_MODE_PREF);
+        break;
+      case "shutdown":
+        if (Preferences.get(CLEAR_ON_SHUTDOWN_PREF, true)) {
+          Preferences.reset(ROLLOUT_MODE_PREF);
+        }
         break;
     }
 
@@ -337,30 +437,30 @@ const DoHController = {
     );
   },
 
-  async disableHeuristics() {
+  async disableHeuristics(state) {
+    await this.setState(state);
+
     if (!this._heuristicsAreEnabled) {
       return;
     }
 
-    await this.setState("shutdown");
     Services.obs.removeObserver(this, kLinkStatusChangedTopic);
     Services.obs.removeObserver(this, kConnectivityTopic);
     this._heuristicsAreEnabled = false;
   },
 
   async rollback() {
-    await this.setState("rollback");
-    await this.disableHeuristics();
+    await this.disableHeuristics("rollback");
   },
 
   async runTRRSelection() {
     // If persisting the selection is disabled, clear the existing
     // selection.
-    if (!Preferences.get(TRR_SELECT_COMMIT_RESULT_PREF, false)) {
+    if (!Config.trrSelection.commitResult) {
       Preferences.reset(ROLLOUT_URI_PREF);
     }
 
-    if (!Preferences.get(TRR_SELECT_ENABLED_PREF, false)) {
+    if (!Config.trrSelection.enabled) {
       return;
     }
 
@@ -371,7 +471,7 @@ const DoHController = {
     await this.runTRRSelectionDryRun();
 
     // If persisting the selection is disabled, don't commit the value.
-    if (!Preferences.get(TRR_SELECT_COMMIT_RESULT_PREF, false)) {
+    if (!Config.trrSelection.commitResult) {
       return;
     }
 
@@ -439,28 +539,57 @@ const DoHController = {
       case kPrefChangedTopic:
         this.onPrefChanged(data);
         break;
+      case Config.kConfigUpdateTopic:
+        this.reset();
+        break;
     }
   },
 
   async onPrefChanged(pref) {
     switch (pref) {
-      case ENABLED_PREF:
-        if (Preferences.get(ENABLED_PREF, false)) {
-          await this.maybeEnableHeuristics();
-        } else {
-          await this.rollback();
-        }
-        break;
       case NETWORK_TRR_URI_PREF:
       case NETWORK_TRR_MODE_PREF:
-        await this.setState("manuallyDisabled");
         Preferences.set(DISABLED_PREF, true);
-        await this.disableHeuristics();
+        await this.disableHeuristics("manuallyDisabled");
         break;
     }
   },
 
-  async onConnectionChanged() {
+  // Connection change events are debounced to allow the network to settle.
+  // We wait for the network to be up for a period of kDebounceTimeout before
+  // handling the change. The timer is canceled when the network goes down and
+  // restarted the first time we learn that it went back up.
+  _debounceTimer: null,
+  _cancelDebounce() {
+    if (!this._debounceTimer) {
+      return;
+    }
+
+    clearTimeout(this._debounceTimer);
+    this._debounceTimer = null;
+  },
+
+  _lastDebounceTimestamp: 0,
+  onConnectionChanged() {
+    if (!gNetworkLinkService.isLinkUp) {
+      // Network is down - reset debounce timer.
+      this._cancelDebounce();
+      return;
+    }
+
+    if (this._debounceTimer) {
+      // Already debouncing - nothing to do.
+      return;
+    }
+
+    this._lastDebounceTimestamp = Date.now();
+    this._debounceTimer = setTimeout(() => {
+      this._cancelDebounce();
+      this.onConnectionChangedDebounced();
+    }, kDebounceTimeout);
+  },
+
+  async onConnectionChangedDebounced() {
     if (!gNetworkLinkService.isLinkUp) {
       return;
     }
@@ -476,6 +605,11 @@ const DoHController = {
   },
 
   async onConnectivityAvailable() {
+    if (this._debounceTimer) {
+      // Already debouncing - nothing to do.
+      return;
+    }
+
     await this.runHeuristics("connectivity");
   },
 };

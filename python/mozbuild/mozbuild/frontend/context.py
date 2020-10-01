@@ -621,6 +621,8 @@ class WasmFlags(TargetCompileFlags):
             ('WASM_DEFINES', None, ('WASM_CFLAGS', 'WASM_CXXFLAGS')),
             ('MOZBUILD_WASM_CFLAGS', None, ('WASM_CFLAGS',)),
             ('MOZBUILD_WASM_CXXFLAGS', None, ('WASM_CXXFLAGS',)),
+            ('NEWPM', context.config.substs.get('MOZ_NEW_PASS_MANAGER_FLAGS'),
+             ('WASM_CFLAGS', 'WASM_CXXFLAGS')),
         )
 
         TargetCompileFlags.__init__(self, context)
@@ -769,11 +771,6 @@ class SourcePath(Path):
 
         if value.startswith('/'):
             path = None
-            # If the path starts with a '/' and is actually relative to an
-            # external source dir, use that as base instead of topsrcdir.
-            if context.config.external_source_dir:
-                path = mozpath.join(context.config.external_source_dir,
-                                    value[1:])
             if not path or not os.path.exists(path):
                 path = mozpath.join(context.config.topsrcdir,
                                     value[1:])
@@ -1706,12 +1703,6 @@ VARIABLES = {
         This variable can only be used on Windows.
         """),
 
-    'RESFILE': (six.text_type, six.text_type,
-                """The program .res file.
-
-        This variable can only be used on Windows.
-        """),
-
     'RCINCLUDE': (Path, six.text_type,
                   """The resource script file to be included in the default .res file.
 
@@ -2007,6 +1998,10 @@ VARIABLES = {
 
     'PYTHON_UNITTEST_MANIFESTS': (ManifestparserManifestList, list,
                                   """List of manifest files defining python unit tests.
+        """),
+
+    'PERFTESTS_MANIFESTS': (ManifestparserManifestList, list,
+                            """List of manifest files defining MozPerftest performance tests.
         """),
 
     'CRAMTEST_MANIFESTS': (ManifestparserManifestList, list,

@@ -37,6 +37,7 @@
 #include "nsIAppShell.h"
 #include "nsIXULRuntime.h"
 #include "nsIScriptError.h"
+#include "nsSubDocumentFrame.h"
 
 #include "nsError.h"
 
@@ -48,6 +49,7 @@
 #include "nsContentPolicyUtils.h"
 #include "nsContentUtils.h"
 #include "nsDocShellCID.h"
+#include "nsDocShellLoadState.h"
 #include "nsGkAtoms.h"
 #include "nsThreadUtils.h"
 #include "nsNetUtil.h"
@@ -56,6 +58,7 @@
 #include "nsUnicharUtils.h"
 #include "mozilla/Preferences.h"
 #include "nsSandboxFlags.h"
+#include "nsQueryObject.h"
 
 // Concrete classes
 #include "nsFrameLoader.h"
@@ -66,6 +69,7 @@
 #include "nsPluginFrame.h"
 #include "nsWrapperCacheInlines.h"
 #include "nsDOMJSUtils.h"
+#include "js/Object.h"  // JS::GetClass
 
 #include "nsWidgetsCID.h"
 #include "nsContentCID.h"
@@ -88,6 +92,7 @@
 #include "mozilla/dom/HTMLObjectElement.h"
 #include "mozilla/dom/UserActivation.h"
 #include "mozilla/dom/nsCSPContext.h"
+#include "mozilla/net/DocumentChannel.h"
 #include "mozilla/net/UrlClassifierFeatureFactory.h"
 #include "mozilla/LoadInfo.h"
 #include "mozilla/PresShell.h"
@@ -640,7 +645,7 @@ nsObjectLoadingContent::~nsObjectLoadingContent() {
         "Should not be tearing down a plugin at this point!");
     StopPluginInstance();
   }
-  DestroyImageLoadingContent();
+  nsImageLoadingContent::Destroy();
 }
 
 nsresult nsObjectLoadingContent::InstantiatePluginInstance(bool aIsLoading) {
@@ -953,6 +958,46 @@ nsObjectLoadingContent::OnStartRequest(nsIRequest* aRequest) {
     return NS_BINDING_ABORTED;
   }
 
+  nsCOMPtr<nsIChannel> chan(do_QueryInterface(aRequest));
+  NS_ASSERTION(chan, "Why is our request not a channel?");
+
+  nsresult status = NS_OK;
+  bool success = IsSuccessfulRequest(aRequest, &status);
+
+  // If we have already switched to type document, we're doing a
+  // process-switching DocumentChannel load. We should be able to pass down the
+  // load to our inner listener, but should also make sure to update our local
+  // state.
+  if (mType == eType_Document) {
+    if (!mFinalListener) {
+      MOZ_ASSERT_UNREACHABLE(
+          "Already are eType_Document, but don't have final listener yet?");
+      return NS_BINDING_ABORTED;
+    }
+
+    // If the load looks successful, fix up some of our local state before
+    // forwarding the request to the final URI loader.
+    //
+    // Forward load errors down to the document loader, so we don't tear down
+    // the nsDocShell ourselves.
+    if (success) {
+      LOG(("OBJLC [%p]: OnStartRequest: DocumentChannel request succeeded\n",
+           this));
+      nsCString channelType;
+      MOZ_ALWAYS_SUCCEEDS(mChannel->GetContentType(channelType));
+
+      if (GetTypeOfContent(channelType, mSkipFakePlugins) != eType_Document) {
+        MOZ_CRASH("DocumentChannel request with non-document MIME");
+      }
+      mContentType = channelType;
+
+      MOZ_ALWAYS_SUCCEEDS(
+          NS_GetFinalChannelURI(mChannel, getter_AddRefs(mURI)));
+    }
+
+    return mFinalListener->OnStartRequest(aRequest);
+  }
+
   // Otherwise we should be state loading, and call LoadObject with the channel
   if (mType != eType_Loading) {
     MOZ_ASSERT_UNREACHABLE("Should be type loading at this point");
@@ -962,12 +1007,6 @@ nsObjectLoadingContent::OnStartRequest(nsIRequest* aRequest) {
   NS_ASSERTION(!mFinalListener, "mFinalListener exists already?");
 
   mChannelLoaded = true;
-
-  nsCOMPtr<nsIChannel> chan(do_QueryInterface(aRequest));
-  NS_ASSERTION(chan, "Why is our request not a channel?");
-
-  nsresult status = NS_OK;
-  bool success = IsSuccessfulRequest(aRequest, &status);
 
   if (status == NS_ERROR_BLOCKED_URI) {
     nsCOMPtr<nsIConsoleService> console(
@@ -1181,6 +1220,12 @@ ObjectInterfaceRequestorShim::GetInterface(const nsIID& aIID, void** aResult) {
     NS_ADDREF(sink);
     return NS_OK;
   }
+  if (aIID.Equals(NS_GET_IID(nsIObjectLoadingContent))) {
+    nsIObjectLoadingContent* olc = mContent;
+    *aResult = olc;
+    NS_ADDREF(olc);
+    return NS_OK;
+  }
   return NS_NOINTERFACE;
 }
 
@@ -1196,6 +1241,20 @@ nsObjectLoadingContent::AsyncOnChannelRedirect(
   }
 
   mChannel = aNewChannel;
+
+  if (mFinalListener) {
+    nsCOMPtr<nsIChannelEventSink> sink(do_QueryInterface(mFinalListener));
+    MOZ_RELEASE_ASSERT(sink, "mFinalListener isn't nsIChannelEventSink?");
+    if (mType != eType_Document) {
+      MOZ_ASSERT_UNREACHABLE(
+          "Not a DocumentChannel load, but we're getting a "
+          "AsyncOnChannelRedirect with a mFinalListener?");
+      return NS_BINDING_ABORTED;
+    }
+
+    return sink->AsyncOnChannelRedirect(aOldChannel, aNewChannel, aFlags, cb);
+  }
+
   cb->OnRedirectVerifyCallback(NS_OK);
   return NS_OK;
 }
@@ -1216,10 +1275,6 @@ EventStates nsObjectLoadingContent::ObjectState() const {
       return EventStates();
     case eType_Null:
       switch (mFallbackType) {
-        case eFallbackSuppressed:
-          return NS_EVENT_STATE_SUPPRESSED;
-        case eFallbackUserDisabled:
-          return NS_EVENT_STATE_USERDISABLED;
         case eFallbackClickToPlay:
         case eFallbackClickToPlayQuiet:
           return NS_EVENT_STATE_TYPE_CLICK_TO_PLAY;
@@ -1583,7 +1638,20 @@ nsObjectLoadingContent::UpdateObjectParameters() {
   // channel for a previous load.
   bool newChannel = useChannel && mType == eType_Loading;
 
-  if (newChannel && mChannel) {
+  RefPtr<DocumentChannel> documentChannel = do_QueryObject(mChannel);
+  if (newChannel && documentChannel) {
+    // If we've got a DocumentChannel which is marked as loaded using
+    // `mChannelLoaded`, we are currently in the middle of a
+    // `UpgradeLoadToDocument`.
+    //
+    // As we don't have the real mime-type from the channel, handle this by
+    // using `newMime`.
+    newMime = TEXT_HTML;
+
+    MOZ_DIAGNOSTIC_ASSERT(
+        GetTypeOfContent(newMime, mSkipFakePlugins) == eType_Document,
+        "How is text/html not eType_Document?");
+  } else if (newChannel && mChannel) {
     nsCString channelType;
     rv = mChannel->GetContentType(channelType);
     if (NS_FAILED(rv)) {
@@ -1835,8 +1903,19 @@ nsresult nsObjectLoadingContent::LoadObject(bool aNotify, bool aForceLoad,
   // XXX(johns): In these cases, we refuse to touch our content and just
   //   remain unloaded, as per legacy behavior. It would make more sense to
   //   load fallback content initially and refuse to ever change state again.
-  if (doc->IsBeingUsedAsImage() || doc->IsLoadedAsData()) {
+  if (doc->IsBeingUsedAsImage()) {
     return NS_OK;
+  }
+
+  if (doc->IsLoadedAsData() && !doc->IsStaticDocument()) {
+    return NS_OK;
+  }
+  if (doc->IsStaticDocument()) {
+    // We only allow image loads in static documents, but we need to let the
+    // eType_Loading state go through too while we do so.
+    if (mType != eType_Image && mType != eType_Loading) {
+      return NS_OK;
+    }
   }
 
   LOG(("OBJLC [%p]: LoadObject called, notify %u, forceload %u, channel %p",
@@ -1960,15 +2039,11 @@ nsresult nsObjectLoadingContent::LoadObject(bool aNotify, bool aForceLoad,
       return NS_OK;
     }
 
-    // Load denied, switch to fallback and set disabled/suppressed if applicable
+    // Load denied, switch to fallback and set disabled if applicable
     if (!allowLoad) {
       LOG(("OBJLC [%p]: Load denied by policy", this));
       mType = eType_Null;
-      if (contentPolicy == nsIContentPolicy::REJECT_TYPE) {
-        fallbackType = eFallbackUserDisabled;
-      } else {
-        fallbackType = eFallbackSuppressed;
-      }
+      fallbackType = eFallbackDisabled;
     }
   }
 
@@ -2121,7 +2196,9 @@ nsresult nsObjectLoadingContent::LoadObject(bool aNotify, bool aForceLoad,
 
       rv = uriLoader->OpenChannel(mChannel, nsIURILoader::DONT_RETARGET, req,
                                   getter_AddRefs(finalListener));
-      // finalListener will receive OnStartRequest below
+      // finalListener will receive OnStartRequest either below, or if
+      // `mChannel` is a `DocumentChannel`, it will be received after
+      // RedirectToRealChannel.
     } break;
     case eType_Loading:
       // If our type remains Loading, we need a channel to proceed
@@ -2211,7 +2288,17 @@ nsresult nsObjectLoadingContent::LoadObject(bool aNotify, bool aForceLoad,
     NS_ASSERTION(mType != eType_Null && mType != eType_Loading,
                  "We should not have a final listener with a non-loaded type");
     mFinalListener = finalListener;
-    rv = finalListener->OnStartRequest(mChannel);
+
+    // If we're a DocumentChannel load, hold off on firing the `OnStartRequest`
+    // callback, as we haven't received it yet from our caller.
+    RefPtr<DocumentChannel> documentChannel = do_QueryObject(mChannel);
+    if (documentChannel) {
+      MOZ_ASSERT(
+          mType == eType_Document,
+          "We have a DocumentChannel here but aren't loading a document?");
+    } else {
+      rv = finalListener->OnStartRequest(mChannel);
+    }
   }
 
   if (NS_FAILED(rv) && mIsLoading) {
@@ -2267,38 +2354,28 @@ nsresult nsObjectLoadingContent::OpenChannel() {
   RefPtr<ObjectInterfaceRequestorShim> shim =
       new ObjectInterfaceRequestorShim(this);
 
-  bool inherit = nsContentUtils::ChannelShouldInheritPrincipal(
-      thisContent->NodePrincipal(), mURI,
-      true,    // aInheritForAboutBlank
-      false);  // aForceInherit
-  nsSecurityFlags securityFlags =
-      nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL;
+  bool inheritAttrs = nsContentUtils::ChannelShouldInheritPrincipal(
+      thisContent->NodePrincipal(),  // aLoadState->PrincipalToInherit()
+      mURI,                          // aLoadState->URI()
+      true,                          // aInheritForAboutBlank
+      false);                        // aForceInherit
 
   bool isURIUniqueOrigin =
       StaticPrefs::security_data_uri_unique_opaque_origin() &&
-      mURI->SchemeIs("data");
+      SchemeIsData(mURI);
+  bool inheritPrincipal = inheritAttrs && !isURIUniqueOrigin;
 
-  if (inherit && !isURIUniqueOrigin) {
+  nsSecurityFlags securityFlags =
+      nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL;
+  if (inheritPrincipal) {
     securityFlags |= nsILoadInfo::SEC_FORCE_INHERIT_PRINCIPAL;
   }
 
   nsContentPolicyType contentPolicyType = GetContentPolicyType();
-
-  rv = NS_NewChannel(getter_AddRefs(chan), mURI, thisContent, securityFlags,
-                     contentPolicyType,
-                     nullptr,  // aPerformanceStorage
-                     group,    // aLoadGroup
-                     shim,     // aCallbacks
-                     nsIChannel::LOAD_CALL_CONTENT_SNIFFERS |
-                         nsIChannel::LOAD_BYPASS_SERVICE_WORKER |
-                         nsIRequest::LOAD_HTML_OBJECT_DATA,
-                     nullptr,  // aIoService
-                     doc->GetSandboxFlags());
-  NS_ENSURE_SUCCESS(rv, rv);
-  if (inherit) {
-    nsCOMPtr<nsILoadInfo> loadinfo = chan->LoadInfo();
-    loadinfo->SetPrincipalToInherit(thisContent->NodePrincipal());
-  }
+  nsLoadFlags loadFlags = nsIChannel::LOAD_CALL_CONTENT_SNIFFERS |
+                          nsIChannel::LOAD_BYPASS_SERVICE_WORKER |
+                          nsIRequest::LOAD_HTML_OBJECT_DATA;
+  uint32_t sandboxFlags = doc->GetSandboxFlags();
 
   // For object loads we store the CSP that potentially needs to
   // be inherited, e.g. in case we are loading an opaque origin
@@ -2307,13 +2384,78 @@ nsresult nsObjectLoadingContent::OpenChannel() {
   // (do not share the same reference) otherwise a Meta CSP of an
   // opaque origin will incorrectly be propagated to the embedding
   // document.
-  nsCOMPtr<nsIContentSecurityPolicy> csp = doc->GetCsp();
-  if (csp) {
-    RefPtr<nsCSPContext> cspToInherit = new nsCSPContext();
+  RefPtr<nsCSPContext> cspToInherit;
+  if (nsCOMPtr<nsIContentSecurityPolicy> csp = doc->GetCsp()) {
+    cspToInherit = new nsCSPContext();
     cspToInherit->InitFromOther(static_cast<nsCSPContext*>(csp.get()));
-    nsCOMPtr<nsILoadInfo> loadinfo = chan->LoadInfo();
-    static_cast<LoadInfo*>(loadinfo.get())->SetCSPToInherit(cspToInherit);
   }
+
+  // --- Create LoadInfo
+  RefPtr<LoadInfo> loadInfo = new LoadInfo(
+      /*aLoadingPrincipal = aLoadingContext->NodePrincipal() */ nullptr,
+      /*aTriggeringPrincipal = aLoadingPrincipal */ nullptr,
+      /*aLoadingContext = */ thisContent,
+      /*aSecurityFlags = */ securityFlags,
+      /*aContentPolicyType = */ contentPolicyType,
+      /*aLoadingClientInfo = */ Nothing(),
+      /*aController = */ Nothing(),
+      /*aSandboxFlags = */ sandboxFlags);
+
+  if (inheritAttrs) {
+    loadInfo->SetPrincipalToInherit(thisContent->NodePrincipal());
+  }
+
+  if (cspToInherit) {
+    loadInfo->SetCSPToInherit(cspToInherit);
+  }
+
+  if (DocumentChannel::CanUseDocumentChannel(mURI)) {
+    // --- Create LoadState
+    RefPtr<nsDocShellLoadState> loadState = new nsDocShellLoadState(mURI);
+    loadState->SetPrincipalToInherit(thisContent->NodePrincipal());
+    loadState->SetTriggeringPrincipal(loadInfo->TriggeringPrincipal());
+    if (cspToInherit) {
+      loadState->SetCsp(cspToInherit);
+    }
+    // TODO(djg): This was httpChan->SetReferrerInfoWithoutClone(referrerInfo);
+    // Is the ...WithoutClone(...) important?
+    auto referrerInfo = MakeRefPtr<ReferrerInfo>(*doc);
+    loadState->SetReferrerInfo(referrerInfo);
+
+    chan =
+        DocumentChannel::CreateForObject(loadState, loadInfo, loadFlags, shim);
+    MOZ_ASSERT(chan);
+    // NS_NewChannel sets the group on the channel.  CreateDocumentChannel does
+    // not.
+    chan->SetLoadGroup(group);
+  } else {
+    rv = NS_NewChannelInternal(getter_AddRefs(chan),  // outChannel
+                               mURI,                  // aUri
+                               loadInfo,              // aLoadInfo
+                               nullptr,               // aPerformanceStorage
+                               group,                 // aLoadGroup
+                               shim,                  // aCallbacks
+                               loadFlags,             // aLoadFlags
+                               nullptr);              // aIoService
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    if (inheritAttrs) {
+      nsCOMPtr<nsILoadInfo> loadinfo = chan->LoadInfo();
+      loadinfo->SetPrincipalToInherit(thisContent->NodePrincipal());
+    }
+
+    // For object loads we store the CSP that potentially needs to
+    // be inherited, e.g. in case we are loading an opaque origin
+    // like a data: URI. The actual inheritance check happens within
+    // Document::InitCSP(). Please create an actual copy of the CSP
+    // (do not share the same reference) otherwise a Meta CSP of an
+    // opaque origin will incorrectly be propagated to the embedding
+    // document.
+    if (cspToInherit) {
+      nsCOMPtr<nsILoadInfo> loadinfo = chan->LoadInfo();
+      static_cast<LoadInfo*>(loadinfo.get())->SetCSPToInherit(cspToInherit);
+    }
+  };
 
   // Referrer
   nsCOMPtr<nsIHttpChannel> httpChan(do_QueryInterface(chan));
@@ -2353,7 +2495,7 @@ uint32_t nsObjectLoadingContent::GetCapabilities() const {
   return eSupportImages | eSupportPlugins | eSupportDocuments;
 }
 
-void nsObjectLoadingContent::DestroyContent() {
+void nsObjectLoadingContent::Destroy() {
   if (mFrameLoader) {
     mFrameLoader->Destroy();
     mFrameLoader = nullptr;
@@ -2362,6 +2504,12 @@ void nsObjectLoadingContent::DestroyContent() {
   if (mInstanceOwner || mInstantiating) {
     QueueCheckPluginStopEvent();
   }
+
+  // Reset state so that if the element is re-appended to tree again (e.g.
+  // adopting to another document), it will reload resource again.
+  UnloadObject();
+
+  nsImageLoadingContent::Destroy();
 }
 
 /* static */
@@ -2472,7 +2620,6 @@ void nsObjectLoadingContent::NotifyStateChanged(ObjectType aOldType,
       thisEl->NotifyUAWidgetTeardown();
     } else if (!hadProblemState && hasProblemState) {
       thisEl->AttachAndSetUAShadowRoot();
-      thisEl->NotifyUAWidgetSetupOrChange();
     }
   } else if (aOldType != mType) {
     // If our state changed, then we already recreated frames
@@ -2526,8 +2673,6 @@ nsPluginFrame* nsObjectLoadingContent::GetExistingFrame() {
 
 void nsObjectLoadingContent::CreateStaticClone(
     nsObjectLoadingContent* aDest) const {
-  nsImageLoadingContent::CreateStaticImageClone(aDest);
-
   aDest->mType = mType;
   nsObjectLoadingContent* thisObj = const_cast<nsObjectLoadingContent*>(this);
   if (thisObj->mPrintFrame.IsAlive()) {
@@ -2925,6 +3070,49 @@ nsObjectLoadingContent::SkipFakePlugins() {
   return NS_OK;
 }
 
+NS_IMETHODIMP
+nsObjectLoadingContent::UpgradeLoadToDocument(
+    nsIChannel* aRequest, BrowsingContext** aBrowsingContext) {
+  AUTO_PROFILER_LABEL("nsObjectLoadingContent::UpgradeLoadToDocument", NETWORK);
+
+  LOG(("OBJLC [%p]: UpgradeLoadToDocument", this));
+
+  if (aRequest != mChannel || !aRequest) {
+    // happens when a new load starts before the previous one got here.
+    return NS_BINDING_ABORTED;
+  }
+
+  // We should be state loading.
+  if (mType != eType_Loading) {
+    MOZ_ASSERT_UNREACHABLE("Should be type loading at this point");
+    return NS_BINDING_ABORTED;
+  }
+  MOZ_ASSERT(!mChannelLoaded, "mChannelLoaded set already?");
+  MOZ_ASSERT(!mFinalListener, "mFinalListener exists already?");
+
+  mChannelLoaded = true;
+
+  // We don't need to check for errors here, unlike in `OnStartRequest`, as
+  // `UpgradeLoadToDocument` is only called when the load is going to become a
+  // process-switching load. As we never process switch for failed object loads,
+  // we know our channel status is successful.
+
+  // Call `LoadObject` to trigger our nsObjectLoadingContext to switch into the
+  // specified new state.
+  nsresult rv = LoadObject(true, false, aRequest);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+
+  RefPtr<BrowsingContext> bc = GetBrowsingContext();
+  if (!bc) {
+    return NS_ERROR_FAILURE;
+  }
+
+  bc.forget(aBrowsingContext);
+  return NS_OK;
+}
+
 uint32_t nsObjectLoadingContent::GetRunID(SystemCallerGuarantee,
                                           ErrorResult& aRv) {
   if (!mHasRunID) {
@@ -3018,7 +3206,7 @@ bool nsObjectLoadingContent::ShouldPlay(FallbackType& aReason) {
     documentClassification = ownerDoc->DocumentFlashClassification();
   }
   if (documentClassification == FlashClassification::Denied) {
-    aReason = eFallbackSuppressed;
+    aReason = eFallbackDisabled;
     return false;
   }
 
@@ -3311,7 +3499,7 @@ void nsObjectLoadingContent::SetupProtoChain(JSContext* aCx,
     return;
   }
 
-  if (pi_proto && js::GetObjectClass(pi_proto) != js::ObjectClassPtr) {
+  if (pi_proto && JS::GetClass(pi_proto) != js::ObjectClassPtr) {
     // The plugin wrapper has a proto that's not Object.prototype, set
     // 'pi.__proto__.__proto__' to the original 'this.__proto__'
     if (pi_proto != my_proto && !::JS_SetPrototype(aCx, pi_proto, my_proto)) {

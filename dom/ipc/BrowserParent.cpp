@@ -14,9 +14,12 @@
 #  include "mozilla/a11y/ProxyAccessibleBase.h"
 #  include "nsAccessibilityService.h"
 #endif
+#include "mozilla/dom/BrowserHost.h"
+#include "mozilla/dom/BrowsingContextGroup.h"
 #include "mozilla/dom/CancelContentJSOptionsBinding.h"
 #include "mozilla/dom/ChromeMessageSender.h"
 #include "mozilla/dom/ContentParent.h"
+#include "mozilla/dom/ContentProcessManager.h"
 #include "mozilla/dom/DataTransfer.h"
 #include "mozilla/dom/DataTransferItemList.h"
 #include "mozilla/dom/Event.h"
@@ -71,9 +74,11 @@
 #include "nsIURI.h"
 #include "nsIWebBrowserChrome.h"
 #include "nsIWebProtocolHandlerRegistrar.h"
+#include "nsIWindowWatcher.h"
 #include "nsIXPConnect.h"
 #include "nsIXULBrowserWindow.h"
 #include "nsIAppWindow.h"
+#include "nsQueryActor.h"
 #include "nsSHistory.h"
 #include "nsViewManager.h"
 #include "nsVariant.h"
@@ -117,6 +122,7 @@
 #include "SessionStoreFunctions.h"
 #include "mozilla/dom/CrashReport.h"
 #include "nsISecureBrowserUI.h"
+#include "nsIXULRuntime.h"
 
 #ifdef XP_WIN
 #  include "mozilla/plugins/PluginWidgetParent.h"
@@ -156,6 +162,8 @@ BrowserParent* BrowserParent::sFocus = nullptr;
 BrowserParent* BrowserParent::sTopLevelWebFocus = nullptr;
 /* static */
 BrowserParent* BrowserParent::sLastMouseRemoteTarget = nullptr;
+/* static */
+BrowserParent* BrowserParent::sPointerLockedRemoteTarget = nullptr;
 
 // The flags passed by the webProgress notifications are 16 bits shifted
 // from the ones registered by webProgressListeners.
@@ -205,7 +213,6 @@ BrowserParent::BrowserParent(ContentParent* aManager, const TabId& aTabId,
       mClientOffset{},
       mChromeOffset{},
       mCreatingWindow(false),
-      mDelayedURL{},
       mDelayedFrameScripts{},
       mCursor(eCursorInvalid),
       mCustomCursor{},
@@ -234,14 +241,16 @@ BrowserParent::BrowserParent(ContentParent* aManager, const TabId& aTabId,
 BrowserParent::~BrowserParent() = default;
 
 /* static */
-void BrowserParent::InitializeStatics() { MOZ_ASSERT(XRE_IsParentProcess()); }
-
-/* static */
 BrowserParent* BrowserParent::GetFocused() { return sFocus; }
 
 /* static */
 BrowserParent* BrowserParent::GetLastMouseRemoteTarget() {
   return sLastMouseRemoteTarget;
+}
+
+/* static */
+BrowserParent* BrowserParent::GetPointerLockedRemoteTarget() {
+  return sPointerLockedRemoteTarget;
 }
 
 /*static*/
@@ -462,7 +471,7 @@ ParentShowInfo BrowserParent::GetShowInfo() {
                           mDefaultScale.scale);
   }
 
-  return ParentShowInfo(EmptyString(), false, false, mDPI, mRounding,
+  return ParentShowInfo(u""_ns, false, false, mDPI, mRounding,
                         mDefaultScale.scale);
 }
 
@@ -591,6 +600,7 @@ void BrowserParent::RemoveWindowListeners() {
 void BrowserParent::DestroyInternal() {
   UnsetTopLevelWebFocus(this);
   UnsetLastMouseRemoteTarget(this);
+  UnsetPointerLockedRemoteTarget(this);
 
   RemoveWindowListeners();
 
@@ -633,6 +643,14 @@ void BrowserParent::Destroy() {
 
   Manager()->NotifyTabDestroying();
 
+  // This `AddKeepAlive` will be cleared if `mMarkedDestroying` is set in
+  // `ActorDestroy`. Out of caution, we don't add the `KeepAlive` if our IPC
+  // actor has somehow already been destroyed, as that would mean `ActorDestroy`
+  // won't be called.
+  if (CanRecv()) {
+    mBrowsingContext->Group()->AddKeepAlive();
+  }
+
   mMarkedDestroying = true;
 }
 
@@ -645,7 +663,6 @@ mozilla::ipc::IPCResult BrowserParent::RecvEnsureLayersConnected(
 }
 
 mozilla::ipc::IPCResult BrowserParent::Recv__delete__() {
-  MOZ_RELEASE_ASSERT(XRE_IsParentProcess());
   Manager()->NotifyTabDestroyed(mTabId, mMarkedDestroying);
   return IPC_OK();
 }
@@ -665,6 +682,7 @@ void BrowserParent::ActorDestroy(ActorDestroyReason why) {
   // case of a crash.
   BrowserParent::UnsetTopLevelWebFocus(this);
   BrowserParent::UnsetLastMouseRemoteTarget(this);
+  BrowserParent::UnsetPointerLockedRemoteTarget(this);
 
   if (why == AbnormalShutdown) {
     // dom_reporting_header must also be enabled for the report to be sent.
@@ -690,20 +708,11 @@ void BrowserParent::ActorDestroy(ActorDestroyReason why) {
     }
   }
 
-  // Prevent executing ContentParent::NotifyTabDestroying in
-  // BrowserParent::Destroy() called by frameLoader->DestroyComplete() below
-  // when tab crashes in contentprocess because ContentParent::ActorDestroy()
-  // in main process will be triggered before this function
-  // and remove the process information that
-  // ContentParent::NotifyTabDestroying need from mContentParentMap.
-
-  // When tab crashes in content process,
-  // there is no need to call ContentParent::NotifyTabDestroying
-  // because the jobs in ContentParent::NotifyTabDestroying
-  // will be done by ContentParent::ActorDestroy.
-  if (XRE_IsContentProcess() && why == AbnormalShutdown && !mIsDestroyed) {
-    DestroyInternal();
-    mIsDestroyed = true;
+  // If we were shutting down normally, we held a reference to our
+  // BrowsingContextGroup in `BrowserParent::Destroy`. Clear that reference
+  // here.
+  if (mMarkedDestroying) {
+    mBrowsingContext->Group()->RemoveKeepAlive();
   }
 
   // Tell our embedder that the tab is now going away unless we're an
@@ -732,7 +741,7 @@ void BrowserParent::ActorDestroy(ActorDestroyReason why) {
         // page in that process.
         mBrowsingContext->SetOwnerProcessId(
             bridge->Manager()->Manager()->ChildID());
-        mBrowsingContext->SetCurrentInnerWindowId(0);
+        MOZ_ALWAYS_SUCCEEDS(mBrowsingContext->SetCurrentInnerWindowId(0));
 
         // Tell the browser bridge to show the subframe crashed page.
         Unused << bridge->SendSubFrameCrashed();
@@ -754,7 +763,7 @@ mozilla::ipc::IPCResult BrowserParent::RecvMoveFocus(
     return IPC_OK();
   }
 
-  nsCOMPtr<nsIFocusManager> fm = nsFocusManager::GetFocusManager();
+  RefPtr<nsFocusManager> fm = nsFocusManager::GetFocusManager();
   if (fm) {
     RefPtr<Element> dummy;
 
@@ -863,25 +872,20 @@ bool BrowserParent::SendLoadRemoteScript(const nsString& aURL,
   return PBrowserParent::SendLoadRemoteScript(aURL, aRunInGlobalScope);
 }
 
-void BrowserParent::LoadURL(nsIURI* aURI, nsIPrincipal* aTriggeringPrincipal) {
-  MOZ_ASSERT(aURI);
-  MOZ_ASSERT(aTriggeringPrincipal);
-
+void BrowserParent::LoadURL(nsDocShellLoadState* aLoadState) {
+  MOZ_ASSERT(aLoadState);
+  MOZ_ASSERT(aLoadState->URI());
   if (mIsDestroyed) {
     return;
   }
-
   nsCString spec;
-  aURI->GetSpec(spec);
-
+  aLoadState->URI()->GetSpec(spec);
   if (mCreatingWindow) {
     // Don't send the message if the child wants to load its own URL.
-    MOZ_ASSERT(mDelayedURL.IsEmpty());
-    mDelayedURL = spec;
     return;
   }
 
-  Unused << SendLoadURL(spec, aTriggeringPrincipal, GetShowInfo());
+  Unused << SendLoadURL(aLoadState, GetShowInfo());
 }
 
 void BrowserParent::ResumeLoad(uint64_t aPendingSwitchID) {
@@ -924,12 +928,10 @@ void BrowserParent::InitRendering() {
   }
 
 #if defined(MOZ_WIDGET_ANDROID)
-  if (XRE_IsParentProcess()) {
-    MOZ_ASSERT(widget);
+  MOZ_ASSERT(widget);
 
-    Unused << SendDynamicToolbarMaxHeightChanged(
-        widget->GetDynamicToolbarMaxHeight());
-  }
+  Unused << SendDynamicToolbarMaxHeightChanged(
+      widget->GetDynamicToolbarMaxHeight());
 #endif
 }
 
@@ -1981,7 +1983,7 @@ bool BrowserParent::SendHandleTap(TapType aType,
     return false;
   }
   if ((aType == TapType::eSingleTap || aType == TapType::eSecondTap)) {
-    nsIFocusManager* fm = nsFocusManager::GetFocusManager();
+    nsFocusManager* fm = nsFocusManager::GetFocusManager();
     if (fm) {
       RefPtr<nsFrameLoader> frameLoader = GetFrameLoader();
       if (frameLoader) {
@@ -2304,8 +2306,8 @@ mozilla::ipc::IPCResult BrowserParent::RecvEnableDisableCommands(
     return IPC_OK();
   }
 
-  nsCOMPtr<nsIBrowserController> browserController =
-      do_QueryActor("Controllers", aContext.get_canonical());
+  nsCOMPtr<nsIBrowserController> browserController = do_QueryActor(
+      "Controllers", aContext.get_canonical()->GetCurrentWindowGlobal());
   if (browserController) {
     browserController->EnableDisableCommands(aAction, aEnabledCommands,
                                              aDisabledCommands);
@@ -2888,6 +2890,20 @@ mozilla::ipc::IPCResult BrowserParent::RecvSessionStoreUpdate(
   return IPC_OK();
 }
 
+mozilla::ipc::IPCResult BrowserParent::RecvIntrinsicSizeOrRatioChanged(
+    const Maybe<IntrinsicSize>& aIntrinsicSize,
+    const Maybe<AspectRatio>& aIntrinsicRatio) {
+  BrowserBridgeParent* bridge = GetBrowserBridgeParent();
+  if (!bridge || !bridge->CanSend()) {
+    return IPC_OK();
+  }
+
+  Unused << bridge->SendIntrinsicSizeOrRatioChanged(aIntrinsicSize,
+                                                    aIntrinsicRatio);
+
+  return IPC_OK();
+}
+
 bool BrowserParent::HandleQueryContentEvent(WidgetQueryContentEvent& aEvent) {
   nsCOMPtr<nsIWidget> textInputHandlingWidget = GetTextInputHandlingWidget();
   if (!textInputHandlingWidget) {
@@ -3060,6 +3076,14 @@ void BrowserParent::UnsetTopLevelWebFocusAll() {
 void BrowserParent::UnsetLastMouseRemoteTarget(BrowserParent* aBrowserParent) {
   if (sLastMouseRemoteTarget == aBrowserParent) {
     sLastMouseRemoteTarget = nullptr;
+  }
+}
+
+/* static */
+void BrowserParent::UnsetPointerLockedRemoteTarget(
+    BrowserParent* aBrowserParent) {
+  if (sPointerLockedRemoteTarget == aBrowserParent) {
+    sPointerLockedRemoteTarget = nullptr;
   }
 }
 
@@ -3491,6 +3515,103 @@ void BrowserParent::StopApzAutoscroll(nsViewID aScrollId,
   }
 }
 
+bool BrowserParent::CanCancelContentJS(
+    nsIRemoteTab::NavigationType aNavigationType, int32_t aNavigationIndex,
+    nsIURI* aNavigationURI) const {
+  // Pre-checking if we can cancel content js in the parent is only
+  // supported when session history in the parent is enabled.
+  if (!mozilla::SessionHistoryInParent()) {
+    // If session history in the parent isn't enabled, this check will
+    // be fully done in BrowserChild::CanCancelContentJS
+    return true;
+  }
+
+  nsCOMPtr<nsISHistory> history = mBrowsingContext->GetSessionHistory();
+
+  if (!history) {
+    // If there is no history we can't possibly know if it's ok to
+    // cancel content js.
+    return false;
+  }
+
+  int32_t current;
+  NS_ENSURE_SUCCESS(history->GetIndex(&current), false);
+
+  if (current == -1) {
+    // This tab has no history! Just return.
+    return false;
+  }
+
+  nsCOMPtr<nsISHEntry> entry;
+  NS_ENSURE_SUCCESS(history->GetEntryAtIndex(current, getter_AddRefs(entry)),
+                    false);
+
+  nsCOMPtr<nsIURI> currentURI = entry->GetURI();
+  if (!currentURI->SchemeIs("http") && !currentURI->SchemeIs("https") &&
+      !currentURI->SchemeIs("file")) {
+    // Only cancel content JS for http(s) and file URIs. Other URIs are probably
+    // internal and we should just let them run to completion.
+    return false;
+  }
+
+  if (aNavigationType == nsIRemoteTab::NAVIGATE_BACK) {
+    aNavigationIndex = current - 1;
+  } else if (aNavigationType == nsIRemoteTab::NAVIGATE_FORWARD) {
+    aNavigationIndex = current + 1;
+  } else if (aNavigationType == nsIRemoteTab::NAVIGATE_URL) {
+    if (!aNavigationURI) {
+      return false;
+    }
+
+    if (aNavigationURI->SchemeIs("javascript")) {
+      // "javascript:" URIs don't (necessarily) trigger navigation to a
+      // different page, so don't allow the current page's JS to terminate.
+      return false;
+    }
+
+    // If navigating directly to a URL (e.g. via hitting Enter in the location
+    // bar), then we can cancel anytime the next URL is different from the
+    // current, *excluding* the ref ("#").
+    bool equals;
+    NS_ENSURE_SUCCESS(currentURI->EqualsExceptRef(aNavigationURI, &equals),
+                      false);
+    return !equals;
+  }
+  // Note: aNavigationType may also be NAVIGATE_INDEX, in which case we don't
+  // need to do anything special.
+
+  int32_t delta = aNavigationIndex > current ? 1 : -1;
+  for (int32_t i = current + delta; i != aNavigationIndex + delta; i += delta) {
+    nsCOMPtr<nsISHEntry> nextEntry;
+    // If `i` happens to be negative, this call will fail (which is what we
+    // would want to happen).
+    NS_ENSURE_SUCCESS(history->GetEntryAtIndex(i, getter_AddRefs(nextEntry)),
+                      false);
+
+    nsCOMPtr<nsISHEntry> laterEntry = delta == 1 ? nextEntry : entry;
+    nsCOMPtr<nsIURI> thisURI = entry->GetURI();
+    nsCOMPtr<nsIURI> nextURI = nextEntry->GetURI();
+
+    // If we changed origin and the load wasn't in a subframe, we know it was
+    // a full document load, so we can cancel the content JS safely.
+    if (!laterEntry->GetIsSubFrame()) {
+      nsAutoCString thisHost;
+      NS_ENSURE_SUCCESS(thisURI->GetPrePath(thisHost), false);
+
+      nsAutoCString nextHost;
+      NS_ENSURE_SUCCESS(nextURI->GetPrePath(nextHost), false);
+
+      if (!thisHost.Equals(nextHost)) {
+        return true;
+      }
+    }
+
+    entry = nextEntry;
+  }
+
+  return false;
+}
+
 void BrowserParent::SuppressDisplayport(bool aEnabled) {
   if (IsDestroyed()) {
     return;
@@ -3769,7 +3890,7 @@ mozilla::ipc::IPCResult BrowserParent::RecvAsyncAuthPrompt(
   uint32_t promptFlags = nsIAuthInformation::AUTH_HOST;
 
   RefPtr<nsAuthInformationHolder> holder =
-      new nsAuthInformationHolder(promptFlags, aRealm, EmptyCString());
+      new nsAuthInformationHolder(promptFlags, aRealm, ""_ns);
 
   uint32_t level = nsIAuthPrompt2::LEVEL_NONE;
   nsCOMPtr<nsICancelable> dummy;
@@ -4033,6 +4154,31 @@ mozilla::ipc::IPCResult BrowserParent::RecvIsWindowSupportingWebVR(
   aResolve(true);
 #endif
 
+  return IPC_OK();
+}
+
+bool BrowserParent::SetPointerLock() {
+  if (sPointerLockedRemoteTarget) {
+    return sPointerLockedRemoteTarget == this;
+  }
+
+  sPointerLockedRemoteTarget = this;
+  return true;
+}
+
+mozilla::ipc::IPCResult BrowserParent::RecvRequestPointerLock(
+    RequestPointerLockResolver&& aResolve) {
+  nsCString error;
+  if (!SetPointerLock()) {
+    error = "PointerLockDeniedInUse";
+  }
+  aResolve(error);
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult BrowserParent::RecvReleasePointerLock() {
+  MOZ_ASSERT_IF(sPointerLockedRemoteTarget, sPointerLockedRemoteTarget == this);
+  UnsetPointerLockedRemoteTarget(this);
   return IPC_OK();
 }
 

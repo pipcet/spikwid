@@ -2038,10 +2038,12 @@ void Selection::CollapseJS(nsINode* aContainer, uint32_t aOffset,
     RemoveAllRanges(aRv);
     return;
   }
-  Collapse(RawRangeBoundary(aContainer, aOffset), aRv);
+  CollapseInternal(InLimiter::eNo, RawRangeBoundary(aContainer, aOffset), aRv);
 }
 
-void Selection::Collapse(const RawRangeBoundary& aPoint, ErrorResult& aRv) {
+void Selection::CollapseInternal(InLimiter aInLimiter,
+                                 const RawRangeBoundary& aPoint,
+                                 ErrorResult& aRv) {
   if (!mFrameSelection) {
     aRv.Throw(NS_ERROR_NOT_INITIALIZED);  // Can't do selection
     return;
@@ -2073,7 +2075,8 @@ void Selection::Collapse(const RawRangeBoundary& aPoint, ErrorResult& aRv) {
 
   RefPtr<nsFrameSelection> frameSelection = mFrameSelection;
   frameSelection->InvalidateDesiredCaretPos();
-  if (!frameSelection->IsValidSelectionPoint(aPoint.Container())) {
+  if (aInLimiter == InLimiter::eYes &&
+      !frameSelection->IsValidSelectionPoint(aPoint.Container())) {
     aRv.Throw(NS_ERROR_FAILURE);
     return;
   }
@@ -2183,7 +2186,8 @@ void Selection::CollapseToStart(ErrorResult& aRv) {
     aRv.Throw(NS_ERROR_FAILURE);
     return;
   }
-  Collapse(*container, firstRange->StartOffset(), aRv);
+  CollapseInternal(InLimiter::eNo,
+                   RawRangeBoundary(container, firstRange->StartOffset()), aRv);
 }
 
 /*
@@ -2219,7 +2223,8 @@ void Selection::CollapseToEnd(ErrorResult& aRv) {
     aRv.Throw(NS_ERROR_FAILURE);
     return;
   }
-  Collapse(*container, lastRange->EndOffset(), aRv);
+  CollapseInternal(InLimiter::eNo,
+                   RawRangeBoundary(container, lastRange->EndOffset()), aRv);
 }
 
 void Selection::GetType(nsAString& aOutType) const {
@@ -2700,7 +2705,7 @@ bool Selection::ContainsNode(nsINode& aNode, bool aAllowPartial,
   return false;
 }
 
-class PointInRectChecker : public nsLayoutUtils::RectCallback {
+class PointInRectChecker : public mozilla::RectCallback {
  public:
   explicit PointInRectChecker(const nsPoint& aPoint)
       : mPoint(aPoint), mMatchFound(false) {}
@@ -3195,7 +3200,7 @@ void Selection::DeleteFromDocument(ErrorResult& aRv) {
   // If we deleted one character, then we move back one element.
   // FIXME  We don't know how to do this past frame boundaries yet.
   if (AnchorOffset() > 0) {
-    Collapse(GetAnchorNode(), AnchorOffset());
+    CollapseInLimiter(GetAnchorNode(), AnchorOffset());
   }
 #ifdef DEBUG
   else {
@@ -3227,6 +3232,11 @@ void Selection::Modify(const nsAString& aAlter, const nsAString& aDirection,
       !aDirection.LowerCaseEqualsLiteral("right")) {
     aRv.Throw(NS_ERROR_DOM_SYNTAX_ERR);
     return;
+  }
+
+  // Make sure the layout is up to date as we access bidi information below.
+  if (RefPtr<Document> doc = GetDocument()) {
+    doc->FlushPendingNotifications(FlushType::Layout);
   }
 
   // Line moves are always visual.
@@ -3272,13 +3282,12 @@ void Selection::Modify(const nsAString& aAlter, const nsAString& aDirection,
       return;
     }
     uint32_t focusOffset = FocusOffset();
-    Collapse(focusNode, focusOffset);
+    CollapseInLimiter(focusNode, focusOffset);
   }
 
   // If the paragraph direction of the focused frame is right-to-left,
   // we may have to swap the direction of movement.
-  nsIFrame* frame = GetPrimaryFrameForFocusNode(visual);
-  if (frame) {
+  if (nsIFrame* frame = GetPrimaryFrameForFocusNode(visual)) {
     nsBidiDirection paraDir = nsBidiPresUtils::ParagraphDirection(frame);
 
     if (paraDir == NSBIDI_RTL && visual) {

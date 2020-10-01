@@ -25,12 +25,13 @@ from .parameters import Parameters, get_version, get_app_version
 from .taskgraph import TaskGraph
 from taskgraph.util.python_path import find_object
 from .try_option_syntax import parse_message
+from .util.backstop import is_backstop
 from .util.bugbug import push_schedules
 from .util.chunking import resolver
 from .util.hg import get_hg_revision_branch, get_hg_commit_message
 from .util.partials import populate_release_history
 from .util.schema import validate_schema, Schema
-from .util.taskcluster import get_artifact
+from .util.taskcluster import get_artifact, insert_index
 from .util.taskgraph import find_decision_task, find_existing_tasks_from_previous_kinds
 from .util.yaml import load_yaml
 from voluptuous import Required, Optional
@@ -72,8 +73,14 @@ PER_PROJECT_PARAMETERS = {
         'target_tasks_method': 'graphics_tasks',
     },
 
+    'autoland': {
+        'optimize_strategies': 'taskgraph.optimize:project.autoland',
+        'target_tasks_method': 'autoland_tasks',
+        'test_manifest_loader': 'bugbug',  # Remove this line to disable "manifest scheduling".
+    },
+
     'mozilla-central': {
-        'target_tasks_method': 'default',
+        'target_tasks_method': 'mozilla_central_tasks',
         'release_type': 'nightly',
     },
 
@@ -85,11 +92,6 @@ PER_PROJECT_PARAMETERS = {
     'mozilla-release': {
         'target_tasks_method': 'mozilla_release_tasks',
         'release_type': 'release',
-    },
-
-    'mozilla-esr68': {
-        'target_tasks_method': 'mozilla_esr68_tasks',
-        'release_type': 'esr68',
     },
 
     'mozilla-esr78': {
@@ -105,11 +107,6 @@ PER_PROJECT_PARAMETERS = {
     'comm-beta': {
         'target_tasks_method': 'mozilla_beta_tasks',
         'release_type': 'beta',
-    },
-
-    'comm-esr68': {
-        'target_tasks_method': 'mozilla_esr68_tasks',
-        'release_type': 'release',
     },
 
     'comm-esr78': {
@@ -167,7 +164,7 @@ try_task_config_schema_v2 = Schema({
 
 def full_task_graph_to_runnable_jobs(full_task_json):
     runnable_jobs = {}
-    for label, node in full_task_json.iteritems():
+    for label, node in six.iteritems(full_task_json):
         if not ('extra' in node['task'] and 'treeherder' in node['task']['extra']):
             continue
 
@@ -186,7 +183,7 @@ def full_task_graph_to_runnable_jobs(full_task_json):
 
 def full_task_graph_to_manifests_by_task(full_task_json):
     manifests_by_task = defaultdict(list)
-    for label, node in full_task_json.iteritems():
+    for label, node in six.iteritems(full_task_json):
         manifests = node['attributes'].get('test_manifests')
         if not manifests:
             continue
@@ -232,6 +229,9 @@ def taskgraph_decision(options, parameters=None):
         write_artifacts=True,
     )
 
+    # set additional index paths for the decision task
+    set_decision_indexes(decision_task_id, tgg.parameters, tgg.graph_config)
+
     # write out the parameters used to generate this graph
     write_artifact('parameters.yml', dict(**tgg.parameters))
 
@@ -259,7 +259,7 @@ def taskgraph_decision(options, parameters=None):
     _, _ = TaskGraph.from_json(full_task_json)
 
     # write out the target task set to allow reproducing this as input
-    write_artifact('target-tasks.json', tgg.target_task_set.tasks.keys())
+    write_artifact('target-tasks.json', list(tgg.target_task_set.tasks.keys()))
 
     # write out the optimized task graph to describe what will actually happen,
     # and the map of labels to taskids
@@ -318,7 +318,6 @@ def get_decision_parameters(graph_config, options):
     parameters['filters'] = [
         'target_tasks_method',
     ]
-    parameters['optimize_target_tasks'] = True
     parameters['existing_tasks'] = {}
     parameters['do_not_optimize'] = []
     parameters['build_number'] = 1
@@ -327,10 +326,13 @@ def get_decision_parameters(graph_config, options):
     parameters['message'] = try_syntax_from_message(commit_message)
     parameters['hg_branch'] = get_hg_revision_branch(GECKO, revision=parameters['head_rev'])
     parameters['next_version'] = None
+    parameters['optimize_strategies'] = None
+    parameters['optimize_target_tasks'] = True
     parameters['phabricator_diff'] = None
     parameters['release_type'] = ''
     parameters['release_eta'] = ''
-    parameters['release_enable_partners'] = False
+    parameters['release_enable_partner_repack'] = False
+    parameters['release_enable_partner_attribution'] = False
     parameters['release_partners'] = []
     parameters['release_partner_config'] = {}
     parameters['release_partner_build_number'] = 1
@@ -400,6 +402,9 @@ def get_decision_parameters(graph_config, options):
         find_object(graph_config['taskgraph']['decision-parameters'])(graph_config,
                                                                       parameters)
 
+    # Determine if this should be a backstop push.
+    parameters['backstop'] = is_backstop(parameters)
+
     result = Parameters(**parameters)
     result.check()
     return result
@@ -468,6 +473,19 @@ def set_try_config(parameters, task_config_file):
         parameters['optimize_target_tasks'] = True
 
 
+def set_decision_indexes(decision_task_id, params, graph_config):
+    index_paths = []
+    if params["backstop"]:
+        index_paths.append("{trust-domain}.v2.{project}.latest.taskgraph.backstop")
+
+    subs = params.copy()
+    subs["trust-domain"] = graph_config["trust-domain"]
+
+    index_paths = [i.format(**subs) for i in index_paths]
+    for index_path in index_paths:
+        insert_index(index_path, decision_task_id, use_proxy=True)
+
+
 def write_artifact(filename, data):
     logger.info('writing artifact file `{}`'.format(filename))
     if not os.path.isdir(ARTIFACTS_DIR):
@@ -479,10 +497,10 @@ def write_artifact(filename, data):
     elif filename.endswith('.json'):
         with open(path, 'w') as f:
             json.dump(data, f, sort_keys=True, indent=2, separators=(',', ': '))
-    elif filename.endswith('.gz'):
+    elif filename.endswith('.json.gz'):
         import gzip
         with gzip.open(path, 'wb') as f:
-            f.write(json.dumps(data))
+            f.write(json.dumps(data).encode('utf-8'))
     else:
         raise TypeError("Don't know how to write to {}".format(filename))
 
@@ -494,10 +512,10 @@ def read_artifact(filename):
     elif filename.endswith('.json'):
         with open(path, 'r') as f:
             return json.load(f)
-    elif filename.endswith('.gz'):
+    elif filename.endswith('.json.gz'):
         import gzip
         with gzip.open(path, 'rb') as f:
-            return json.load(f)
+            return json.load(f.decode('utf-8'))
     else:
         raise TypeError("Don't know how to read {}".format(filename))
 

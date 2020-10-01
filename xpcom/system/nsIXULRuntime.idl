@@ -22,6 +22,10 @@ uint32_t GetMaxWebProcessCount();
 // environment variable MOZ_FORCE_ENABLE_FISSION, used by mach run to
 // enable fission regardless of pref settings.
 bool FissionAutostart();
+
+// Returns true if fission.sessionHistoryInParent is true
+// (and will return true also when FissionAutostart() is true).
+bool SessionHistoryInParent();
 }
 
 %}
@@ -40,6 +44,52 @@ interface nsIXULRuntime : nsISupports
    * Whether the application was launched in safe mode.
    */
   readonly attribute boolean inSafeMode;
+
+  /**
+   * The status of a given experiment, as stored in a preference by Normandy.
+   */
+  cenum ExperimentStatus : 8 {
+    // The experiment status is unknown, and behavior should not be modified.
+    eUnknown = 0,
+    // The user is enrolled in the control group, and should see the default
+    // behavior.
+    eEnrolledControl = 1,
+    // The user is enrolled in the treatment group, and should see the
+    // experimental behavior which is being tested.
+    eEnrolledTreatment = 2,
+    eExperimentStatusMax = 2,
+  };
+
+  /**
+   * Whether Fission should be automatically enabled for new browser windows.
+   *
+   * This value is guaranteed to remain constant for the length of a browser
+   * session.
+   */
+  readonly attribute boolean fissionAutostart;
+
+  /**
+   * The user's enrollment status in the Fission rollout experiment. May be
+   * one of:
+   *
+   *  - eUnknown: The user's enrollment status is unknown, and the experiment
+   *    should be ignored.
+   *
+   *  - eEnrolledControl: The user is enrolled in the control group, and Fission
+   *    should be disabled.
+   *
+   *  - eEnrolledTreatment: The user is enrolled in the treatment group, and
+   *    Fission should be enabled.
+   *
+   * This value is guaranteed to remain constant for the length of a browser
+   * session.
+   */
+  readonly attribute nsIXULRuntime_ExperimentStatus fissionExperimentStatus;
+
+  /**
+   * Whether session history is stored in the parent process.
+   */
+  readonly attribute boolean sessionHistoryInParent;
 
   /**
    * Whether to write console errors to a log file. If a component

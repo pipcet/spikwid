@@ -13,6 +13,8 @@
 
 #  include <gdk/gdkwayland.h>
 
+using namespace mozilla::widget;
+
 namespace mozilla {
 
 static void WaylandVsyncSourceCallbackHandler(void* data,
@@ -37,7 +39,7 @@ WaylandVsyncSource::WaylandDisplay::WaylandDisplay(MozContainer* container)
 
   // We store the display here so all the frame callbacks won't have to look it
   // up all the time.
-  mDisplay = widget::WaylandDisplayGet()->GetDisplay();
+  mDisplay = WaylandDisplayGetWLDisplay();
 }
 
 void WaylandVsyncSource::WaylandDisplay::ClearFrameCallback() {
@@ -72,7 +74,9 @@ void WaylandVsyncSource::WaylandDisplay::Refresh() {
   // Vsync is enabled, but we don't have a callback configured. Set one up so
   // we can get to work.
   SetupFrameCallback();
-  NotifyVsync(TimeStamp::Now());
+  TimeStamp vsyncTimestamp = TimeStamp::Now();
+  TimeStamp outputTimestamp = vsyncTimestamp + GetVsyncRate();
+  NotifyVsync(vsyncTimestamp, outputTimestamp);
 }
 
 void WaylandVsyncSource::WaylandDisplay::EnableMonitor() {
@@ -127,7 +131,9 @@ void WaylandVsyncSource::WaylandDisplay::FrameCallback() {
     SetupFrameCallback();
   }
 
-  NotifyVsync(TimeStamp::Now());
+  TimeStamp vsyncTimestamp = TimeStamp::Now();
+  TimeStamp outputTimestamp = vsyncTimestamp + GetVsyncRate();
+  NotifyVsync(vsyncTimestamp, outputTimestamp);
 }
 
 void WaylandVsyncSource::WaylandDisplay::EnableVsync() {

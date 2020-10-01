@@ -47,8 +47,7 @@ struct PrintData {
   bool shrinkToFit;
   bool showPrintProgress;
 
-  nsString paperName;
-  short paperData;
+  nsString paperId;
   double paperWidth;
   double paperHeight;
   short paperSizeUnit;
@@ -70,10 +69,6 @@ struct PrintData {
   /* Windows-specific things */
   nsString driverName;
   nsString deviceName;
-  double printableWidthInInches;
-  double printableHeightInInches;
-  bool isIFrameSelected;
-  bool isRangeSelection;
   uint8_t[] devModeData;
 
   /**

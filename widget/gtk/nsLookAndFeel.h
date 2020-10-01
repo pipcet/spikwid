@@ -31,9 +31,8 @@ class nsLookAndFeel final : public nsXPLookAndFeel {
   char16_t GetPasswordCharacterImpl() override;
   bool GetEchoPasswordImpl() override;
 
-  nsTArray<LookAndFeelInt> GetIntCacheImpl() override;
-  void SetIntCacheImpl(
-      const nsTArray<LookAndFeelInt>& aLookAndFeelIntCache) override;
+  LookAndFeelCache GetCacheImpl() override;
+  void SetCacheImpl(const LookAndFeelCache& aCache) override;
 
   bool IsCSDAvailable() const { return mCSDAvailable; }
 
@@ -42,10 +41,6 @@ class nsLookAndFeel final : public nsXPLookAndFeel {
 
  protected:
   // Cached fonts
-  bool mDefaultFontCached = false;
-  bool mButtonFontCached = false;
-  bool mFieldFontCached = false;
-  bool mMenuFontCached = false;
   nsString mDefaultFontName;
   nsString mButtonFontName;
   nsString mFieldFontName;

@@ -19,6 +19,7 @@ use std::process::Command;
 use std::sync::mpsc::Receiver;
 use webrender::RenderResults;
 use webrender::api::*;
+use webrender::render_api::*;
 use webrender::api::units::*;
 use crate::wrench::{Wrench, WrenchThing};
 use crate::yaml_frame_reader::YamlFrameReader;
@@ -746,7 +747,9 @@ impl<'a> ReftestHarness<'a> {
     }
 
     fn run_reftest(&mut self, t: &Reftest) -> bool {
-        println!("REFTEST {}", t);
+        let test_name = t.to_string();
+        println!("REFTEST {}", test_name);
+        profile_scope!("wrench reftest", text: &test_name);
 
         self.wrench
             .api
@@ -843,7 +846,14 @@ impl<'a> ReftestHarness<'a> {
         }
 
         let reference = match reference_image {
-            Some(image) => image,
+            Some(image) => {
+                let save_all_png = false; // flip to true to update all the tests!
+                if save_all_png {
+                    let img = images.last().unwrap();
+                    save_flipped(&t.reference, img.data.clone(), img.size);
+                }
+                image
+            }
             None => {
                 let output = self.render_yaml(
                     &t.reference,

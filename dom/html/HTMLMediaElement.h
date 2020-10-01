@@ -50,6 +50,7 @@ class ChannelMediaDecoder;
 class DecoderDoctorDiagnostics;
 class DOMMediaStream;
 class ErrorResult;
+class FirstFrameVideoOutput;
 class MediaResource;
 class MediaDecoder;
 class MediaInputPort;
@@ -58,6 +59,7 @@ class MediaTrackGraph;
 class MediaStreamWindowCapturer;
 struct SharedDummyTrack;
 class VideoFrameContainer;
+class VideoOutput;
 namespace dom {
 class MediaKeys;
 class TextTrack;
@@ -103,7 +105,7 @@ enum class StreamCaptureBehavior : uint8_t {
 class HTMLMediaElement : public nsGenericHTMLElement,
                          public MediaDecoderOwner,
                          public PrincipalChangeObserver<MediaStreamTrack>,
-                         public SupportsWeakPtr<HTMLMediaElement>,
+                         public SupportsWeakPtr,
                          public nsStubMutationObserver {
  public:
   typedef mozilla::TimeStamp TimeStamp;
@@ -134,7 +136,6 @@ class HTMLMediaElement : public nsGenericHTMLElement,
     RefPtr<DOMMediaStream> mFinishWhenEndedAttrStream;
   };
 
-  MOZ_DECLARE_WEAKREFERENCE_TYPENAME(HTMLMediaElement)
   NS_DECL_NSIMUTATIONOBSERVER_CONTENTREMOVED
 
   CORSMode GetCORSMode() { return mCORSMode; }
@@ -258,6 +259,11 @@ class HTMLMediaElement : public nsGenericHTMLElement,
    * document being active, inactive, visible or hidden.
    */
   void NotifyOwnerDocumentActivityChanged();
+
+  // Called when the media element enters or leaves the fullscreen.
+  void NotifyFullScreenChanged();
+
+  bool IsInFullScreen() const;
 
   // From PrincipalChangeObserver<MediaStreamTrack>.
   void PrincipalChanged(MediaStreamTrack* aTrack) override;
@@ -762,7 +768,6 @@ class HTMLMediaElement : public nsGenericHTMLElement,
   class MediaLoadListener;
   class MediaStreamRenderer;
   class MediaStreamTrackListener;
-  class FirstFrameListener;
   class ShutdownObserver;
   class MediaControlKeyListener;
 
@@ -1314,23 +1319,6 @@ class HTMLMediaElement : public nsGenericHTMLElement,
 
   WatchManager<HTMLMediaElement> mWatchManager;
 
-  // Update the silence range of the audio track when the audible status of
-  // silent audio track changes or seeking to the new position where the audio
-  // track is silent.
-  void UpdateAudioTrackSilenceRange(bool aAudible);
-
-  // When silent audio track becomes audible or seeking to new place, we would
-  // end the current silence range and accumulate it to the total silence
-  // proportion of audio track and update current silence range.
-  void AccumulateAudioTrackSilence();
-
-  // True when the media element's audio track is containing silence now.
-  bool IsAudioTrackCurrentlySilent() const;
-
-  // Calculate the audio track silence proportion and then report the telemetry
-  // result. we would report the result when decoder is destroyed.
-  void ReportAudioTrackSilenceProportionTelemetry();
-
   // When the play is not allowed, dispatch related events which are used for
   // testing or changing control UI.
   void DispatchEventsWhenPlayWasNotAllowed();
@@ -1346,6 +1334,15 @@ class HTMLMediaElement : public nsGenericHTMLElement,
   // Clear the timer when we want to continue listening to the media control
   // key events.
   void ClearStopMediaControlTimerIfNeeded();
+
+  // Sets a secondary renderer for mSrcStream, so this media element can be
+  // rendered in Picture-in-Picture mode when playing a MediaStream. A null
+  // aContainer will unset the secondary renderer. aFirstFrameOutput allows
+  // for injecting a listener of the callers choice for rendering the first
+  // frame.
+  void SetSecondaryMediaStreamRenderer(
+      VideoFrameContainer* aContainer,
+      FirstFrameVideoOutput* aFirstFrameOutput = nullptr);
 
   // This function is used to update the status of media control when the media
   // changes its status of being used in the Picture-in-Picture mode.
@@ -1381,6 +1378,10 @@ class HTMLMediaElement : public nsGenericHTMLElement,
   // enabled audio tracks, while mSrcStream is set.
   RefPtr<MediaStreamRenderer> mMediaStreamRenderer;
 
+  // The secondary MediaStreamRenderer handles rendering of our selected video
+  // track to a secondary VideoFrameContainer, while mSrcStream is set.
+  RefPtr<MediaStreamRenderer> mSecondaryMediaStreamRenderer;
+
   // True once PlaybackEnded() is called and we're playing a MediaStream.
   // Reset to false if we start playing mSrcStream again.
   Watchable<bool> mSrcStreamPlaybackEnded = {
@@ -1406,9 +1407,6 @@ class HTMLMediaElement : public nsGenericHTMLElement,
   nsRefPtrHashtable<nsStringHashKey, MediaElementTrackSource>
       mOutputTrackSources;
 
-  // Holds a reference to the first-frame-getting track listener attached to
-  // mSelectedVideoStreamTrack.
-  RefPtr<FirstFrameListener> mFirstFrameListener;
   // The currently selected video stream track.
   RefPtr<VideoStreamTrack> mSelectedVideoStreamTrack;
 
@@ -1476,17 +1474,6 @@ class HTMLMediaElement : public nsGenericHTMLElement,
 
   // True if the audio track is not silent.
   bool mIsAudioTrackAudible = false;
-
-  // Used to mark the start of the silence range of audio track.
-  double mAudioTrackSilenceStartedTime = 0.0;
-
-  // Save all the silence ranges, all ranges would be normalized. That means
-  // intervals won't overlap or touch each other.
-  media::TimeIntervals mSilenceTimeRanges;
-
-  // True if we have calculated silence range before SeekEnd(). This attribute
-  // would be reset after seeking completed.
-  bool mHasAccumulatedSilenceRangeBeforeSeekEnd = false;
 
   enum MutedReasons {
     MUTED_BY_CONTENT = 0x01,
@@ -1809,8 +1796,6 @@ class HTMLMediaElement : public nsGenericHTMLElement,
  private:
   already_AddRefed<PlayPromise> CreatePlayPromise(ErrorResult& aRv) const;
 
-  void UpdateHadAudibleAutoplayState();
-
   virtual void MaybeBeginCloningVisually(){};
 
   uint32_t GetPreloadDefault() const;
@@ -1839,13 +1824,6 @@ class HTMLMediaElement : public nsGenericHTMLElement,
   // when media aborts the current load; be paused when the docuemt enters the
   // bf-cache and be resumed when the docuemt leaves the bf-cache.
   TimeDurationAccumulator mCurrentLoadPlayTime;
-
-  // True if media has ever been blocked by autoplay policy before.
-  bool mHasPlayEverBeenBlocked = false;
-
-  // Report the Telemetry about whether media played over the specific time
-  // threshold.
-  void ReportPlayedTimeAfterBlockedTelemetry();
 
   // True if Init() has been called after construction
   bool mInitialized = false;
@@ -1928,10 +1906,20 @@ class HTMLMediaElement : public nsGenericHTMLElement,
   MozPromiseRequestHolder<ResumeDelayedPlaybackAgent::ResumePromise>
       mResumePlaybackRequest;
 
-  // We use MediaControlKeyListener to listen media control key, by which we
-  // would play or pause media element.
-  void StartListeningMediaControlKeyIfNeeded();
-  void StopListeningMediaControlKeyIfNeeded();
+  // Return true if we have already a decoder or a src stream and don't have any
+  // error.
+  bool IsPlayable() const;
+
+  // Return true if the media qualifies for being controlled by media control
+  // keys.
+  bool ShouldStartMediaControlKeyListener() const;
+
+  // Start the listener if media fits the requirement of being able to be
+  // controlled be media control keys.
+  void StartMediaControlKeyListenerIfNeeded();
+
+  // It's used to listen media control key, by which we would play or pause
+  // media element.
   RefPtr<MediaControlKeyListener> mMediaControlKeyListener;
 
   // Return true if the media element is being used in picture in picture mode.

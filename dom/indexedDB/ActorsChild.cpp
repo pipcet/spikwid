@@ -20,6 +20,7 @@
 #include "IDBTransaction.h"
 #include "IndexedDatabase.h"
 #include "IndexedDatabaseInlines.h"
+#include "IndexedDBCommon.h"
 #include "js/Array.h"  // JS::NewArrayObject, JS::SetArrayLength
 #include "js/Date.h"   // JS::NewDateObject, JS::TimeClip
 #include <mozIRemoteLazyInputStream.h>
@@ -27,6 +28,7 @@
 #include "mozilla/BasicEvents.h"
 #include "mozilla/CycleCollectedJSRuntime.h"
 #include "mozilla/Maybe.h"
+#include "mozilla/ResultExtensions.h"
 #include "mozilla/SnappyUncompressInputStream.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/Event.h"
@@ -782,13 +784,8 @@ class WorkerPermissionChallenge final : public Runnable {
       return true;
     }
 
-    auto principalOrErr =
-        mozilla::ipc::PrincipalInfoToPrincipal(mPrincipalInfo);
-    if (NS_WARN_IF(principalOrErr.isErr())) {
-      return true;
-    }
-
-    const nsCOMPtr<nsIPrincipal> principal = principalOrErr.unwrap();
+    IDB_TRY_VAR(auto principal,
+                mozilla::ipc::PrincipalInfoToPrincipal(mPrincipalInfo), true);
 
     if (XRE_IsParentProcess()) {
       const nsCOMPtr<Element> ownerElement =
@@ -1040,18 +1037,18 @@ template <typename T>
 class DelayedActionRunnable final : public CancelableRunnable {
   using ActionFunc = void (T::*)();
 
-  T* mActor;
+  SafeRefPtr<T> mActor;
   RefPtr<IDBRequest> mRequest;
   ActionFunc mActionFunc;
 
  public:
-  explicit DelayedActionRunnable(T* aActor, ActionFunc aActionFunc)
+  explicit DelayedActionRunnable(SafeRefPtr<T> aActor, ActionFunc aActionFunc)
       : CancelableRunnable("indexedDB::DelayedActionRunnable"),
-        mActor(aActor),
-        mRequest(aActor->GetRequest()),
+        mActor(std::move(aActor)),
+        mRequest(mActor->GetRequest()),
         mActionFunc(aActionFunc) {
-    MOZ_ASSERT(aActor);
-    aActor->AssertIsOnOwningThread();
+    MOZ_ASSERT(mActor);
+    mActor->AssertIsOnOwningThread();
     MOZ_ASSERT(mRequest);
     MOZ_ASSERT(mActionFunc);
   }
@@ -1469,11 +1466,9 @@ mozilla::ipc::IPCResult BackgroundFactoryRequestChild::RecvPermissionChallenge(
     return IPC_OK();
   }
 
-  auto principalOrErr = mozilla::ipc::PrincipalInfoToPrincipal(aPrincipalInfo);
-  if (NS_WARN_IF(principalOrErr.isErr())) {
-    return IPC_FAIL_NO_REASON(this);
-  }
-  nsCOMPtr<nsIPrincipal> principal = principalOrErr.unwrap();
+  IDB_TRY_VAR(auto principal,
+              mozilla::ipc::PrincipalInfoToPrincipal(aPrincipalInfo),
+              IPC_FAIL_NO_REASON(this));
 
   if (XRE_IsParentProcess()) {
     nsCOMPtr<nsIGlobalObject> global = mFactory->GetParentObject();
@@ -1786,11 +1781,8 @@ mozilla::ipc::IPCResult BackgroundDatabaseChild::RecvVersionChange(
 
     // Anything in the bfcache has to be evicted and then we have to close the
     // database also.
-    if (nsCOMPtr<Document> doc = owner->GetExtantDoc()) {
-      if (nsCOMPtr<nsIBFCacheEntry> bfCacheEntry = doc->GetBFCacheEntry()) {
-        bfCacheEntry->RemoveFromBFCacheSync();
-        shouldAbortAndClose = true;
-      }
+    if (owner->RemoveFromBFCacheSync()) {
+      shouldAbortAndClose = true;
     }
 
     if (shouldAbortAndClose) {
@@ -2925,6 +2917,13 @@ BackgroundCursorChild<CursorType>::~BackgroundCursorChild() {
 }
 
 template <IDBCursorType CursorType>
+SafeRefPtr<BackgroundCursorChild<CursorType>>
+BackgroundCursorChild<CursorType>::SafeRefPtrFromThis() {
+  return BackgroundCursorChildBase::SafeRefPtrFromThis()
+      .template downcast<BackgroundCursorChild>();
+}
+
+template <IDBCursorType CursorType>
 void BackgroundCursorChild<CursorType>::SendContinueInternal(
     const CursorRequestParams& aParams,
     const CursorData<CursorType>& aCurrentData) {
@@ -3101,7 +3100,8 @@ void BackgroundCursorChild<CursorType>::SendContinueInternal(
     // 1580499.
     MOZ_ALWAYS_SUCCEEDS(NS_DispatchToCurrentThread(
         MakeAndAddRef<DelayedActionRunnable<BackgroundCursorChild<CursorType>>>(
-            this, &BackgroundCursorChild::CompleteContinueRequestFromCache)));
+            SafeRefPtrFromThis(),
+            &BackgroundCursorChild::CompleteContinueRequestFromCache)));
 
     // TODO: Could we preload further entries in the background when the size of
     // mCachedResponses falls under some threshold? Or does the response
@@ -3214,6 +3214,8 @@ void BackgroundCursorChild<CursorType>::DiscardCachedResponses(
       mCachedResponses.size());
 }
 
+BackgroundCursorChildBase::~BackgroundCursorChildBase() = default;
+
 void BackgroundCursorChildBase::HandleResponse(nsresult aResponse) {
   AssertIsOnOwningThread();
   MOZ_ASSERT(NS_FAILED(aResponse));
@@ -3251,7 +3253,7 @@ void BackgroundCursorChild<CursorType>::HandleResponse(
   if (!mCursor) {
     MOZ_ALWAYS_SUCCEEDS(this->GetActorEventTarget()->Dispatch(
         MakeAndAddRef<DelayedActionRunnable<BackgroundCursorChild<CursorType>>>(
-            this, &BackgroundCursorChild::SendDeleteMeInternal),
+            SafeRefPtrFromThis(), &BackgroundCursorChild::SendDeleteMeInternal),
         NS_DISPATCH_NORMAL));
   }
 }
@@ -3506,7 +3508,7 @@ NS_IMETHODIMP DelayedActionRunnable<T>::Run() {
   MOZ_ASSERT(mRequest);
   MOZ_ASSERT(mActionFunc);
 
-  (mActor->*mActionFunc)();
+  ((*mActor).*mActionFunc)();
 
   mActor = nullptr;
   mRequest = nullptr;

@@ -277,7 +277,11 @@ void LoadContextOptions(const char* aPrefName, void* /* aClosure */) {
 #ifdef ENABLE_WASM_SIMD
       .setWasmSimd(GetWorkerPref<bool>("wasm_simd"_ns))
 #endif
-#ifdef ENABLE_WASM_REFTYPES
+#ifdef ENABLE_WASM_FUNCTION_REFERENCES
+      .setWasmFunctionReferences(
+          GetWorkerPref<bool>("wasm_function_references"_ns))
+#endif
+#ifdef ENABLE_WASM_GC
       .setWasmGc(GetWorkerPref<bool>("wasm_gc"_ns))
 #endif
       .setWasmVerbose(GetWorkerPref<bool>("wasm_verbose"_ns))
@@ -286,7 +290,11 @@ void LoadContextOptions(const char* aPrefName, void* /* aClosure */) {
       .setSourcePragmas(GetWorkerPref<bool>("source_pragmas"_ns))
       .setAsyncStack(GetWorkerPref<bool>("asyncstack"_ns))
       .setAsyncStackCaptureDebuggeeOnly(
-          GetWorkerPref<bool>("asyncstack_capture_debuggee_only"_ns));
+          GetWorkerPref<bool>("asyncstack_capture_debuggee_only"_ns))
+      .setPrivateClassFields(
+          GetWorkerPref<bool>("experimental.private_fields"_ns))
+      .setPrivateClassMethods(
+          GetWorkerPref<bool>("experimental.private_methods"_ns));
 
   nsCOMPtr<nsIXULRuntime> xr = do_GetService("@mozilla.org/xre/runtime;1");
   if (xr) {
@@ -541,7 +549,7 @@ bool ContentSecurityPolicyAllows(JSContext* aCx, JS::HandleString aCode) {
     JS::AutoFilename file;
     if (JS::DescribeScriptedCaller(aCx, &file, &lineNum, &columnNum) &&
         file.get()) {
-      fileName = NS_ConvertUTF8toUTF16(file.get());
+      CopyUTF8toUTF16(MakeStringSpan(file.get()), fileName);
     } else {
       MOZ_ASSERT(!JS_IsExceptionPending(aCx));
     }
@@ -2123,8 +2131,8 @@ bool LogViolationDetailsRunnable::MainThreadRun() {
       csp->LogViolationDetails(nsIContentSecurityPolicy::VIOLATION_TYPE_EVAL,
                                nullptr,  // triggering element
                                mWorkerPrivate->CSPEventListener(), mFileName,
-                               mScriptSample, mLineNum, mColumnNum,
-                               EmptyString(), EmptyString());
+                               mScriptSample, mLineNum, mColumnNum, u""_ns,
+                               u""_ns);
     }
   }
 

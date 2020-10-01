@@ -76,13 +76,16 @@ EXPORTS.mozilla.dom += [
 
 # Canvas 2D and common sources
 UNIFIED_SOURCES += [
+    'CanvasGradient.cpp',
     'CanvasImageCache.cpp',
+    'CanvasPattern.cpp',
     'CanvasRenderingContext2D.cpp',
     'CanvasRenderingContextHelper.cpp',
     'CanvasUtils.cpp',
     'ImageBitmap.cpp',
     'ImageBitmapRenderingContext.cpp',
     'ImageData.cpp',
+    'nsICanvasRenderingContextInternal.cpp',
     'OffscreenCanvas.cpp',
     'XRWebGLLayer.cpp',
 ]

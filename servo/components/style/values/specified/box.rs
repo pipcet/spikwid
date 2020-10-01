@@ -1845,31 +1845,6 @@ pub enum Appearance {
     Count,
 }
 
-/// The effect of `appearance: button` on an element.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    Hash,
-    MallocSizeOf,
-    Parse,
-    PartialEq,
-    SpecifiedValueInfo,
-    ToCss,
-    ToComputedValue,
-    ToResolvedValue,
-    ToShmem,
-)]
-#[repr(u8)]
-pub enum ButtonAppearance {
-    /// `appearance: button` means the element is rendered with button
-    /// appearance.
-    Allow,
-    /// `appearance: button` is treated like `appearance: auto`.
-    Disallow,
-}
-
 /// A kind of break between two boxes.
 ///
 /// https://drafts.csswg.org/css-break/#break-between
@@ -1992,5 +1967,25 @@ pub enum Overflow {
     Scroll,
     Auto,
     #[cfg(feature = "gecko")]
-    MozHiddenUnscrollable,
+    #[parse(aliases = "-moz-hidden-unscrollable")]
+    Clip,
+}
+
+impl Overflow {
+    /// Return true if the value will create a scrollable box.
+    #[inline]
+    pub fn is_scrollable(&self) -> bool {
+        matches!(*self, Self::Hidden | Self::Scroll | Self::Auto)
+    }
+    /// Convert the value to a scrollable value if it's not already scrollable.
+    /// This maps `visible` to `auto` and `clip` to `hidden`.
+    #[inline]
+    pub fn to_scrollable(&self) -> Self {
+        match *self {
+            Self::Hidden | Self::Scroll | Self::Auto => *self,
+            Self::Visible => Self::Auto,
+            #[cfg(feature = "gecko")]
+            Self::Clip => Self::Hidden,
+        }
+    }
 }

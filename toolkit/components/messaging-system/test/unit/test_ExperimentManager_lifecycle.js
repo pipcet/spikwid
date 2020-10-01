@@ -9,6 +9,9 @@ const { ExperimentStore } = ChromeUtils.import(
 const { ExperimentFakes } = ChromeUtils.import(
   "resource://testing-common/MSTestUtils.jsm"
 );
+const { Sampling } = ChromeUtils.import(
+  "resource://gre/modules/components-utils/Sampling.jsm"
+);
 
 /**
  * onStartup()
@@ -78,11 +81,15 @@ add_task(async function test_onRecipe_track_slug() {
 add_task(async function test_onRecipe_enroll() {
   const manager = ExperimentFakes.manager();
   const sandbox = sinon.createSandbox();
+  sandbox.stub(manager, "isInBucketAllocation").resolves(true);
+  sandbox.stub(Sampling, "bucketSample").resolves(true);
   sandbox.spy(manager, "enroll");
   sandbox.spy(manager, "updateEnrollment");
 
   const fooRecipe = ExperimentFakes.recipe("foo");
-
+  const experimentUpdate = new Promise(resolve =>
+    manager.store.on(`update:${fooRecipe.slug}`, resolve)
+  );
   await manager.onStartup();
   await manager.onRecipe(fooRecipe, "test");
 
@@ -91,6 +98,7 @@ add_task(async function test_onRecipe_enroll() {
     true,
     "should call .enroll() the first time a recipe is seen"
   );
+  await experimentUpdate;
   Assert.equal(
     manager.store.has("foo"),
     true,
@@ -103,11 +111,18 @@ add_task(async function test_onRecipe_update() {
   const sandbox = sinon.createSandbox();
   sandbox.spy(manager, "enroll");
   sandbox.spy(manager, "updateEnrollment");
+  sandbox.stub(manager, "isInBucketAllocation").resolves(true);
 
   const fooRecipe = ExperimentFakes.recipe("foo");
+  const experimentUpdate = new Promise(resolve =>
+    manager.store.on(`update:${fooRecipe.slug}`, resolve)
+  );
 
   await manager.onStartup();
   await manager.onRecipe(fooRecipe, "test");
+  // onRecipe calls enroll which saves the experiment in the store
+  // but none of them wait on disk operations to finish
+  await experimentUpdate;
   // Call again after recipe has already been enrolled
   await manager.onRecipe(fooRecipe, "test");
 
@@ -172,8 +187,15 @@ add_task(async function test_onFinalize_unenroll() {
 
   // Simulate adding some other recipes
   await manager.onStartup();
-  await manager.onRecipe(ExperimentFakes.recipe("bar"), "test");
-  await manager.onRecipe(ExperimentFakes.recipe("baz"), "test");
+  const recipe1 = ExperimentFakes.recipe("bar");
+  // Unique features to prevent overlap
+  recipe1.branches[0].feature.featureId = "red";
+  recipe1.branches[1].feature.featureId = "red";
+  await manager.onRecipe(recipe1, "test");
+  const recipe2 = ExperimentFakes.recipe("baz");
+  recipe2.branches[0].feature.featureId = "green";
+  recipe2.branches[1].feature.featureId = "green";
+  await manager.onRecipe(recipe2, "test");
 
   // Finalize
   manager.onFinalize("test");

@@ -1,14 +1,21 @@
+/* clang-format off */
 /* -*- Mode: Objective-C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:expandtab:shiftwidth=2:tabstop=2:
- */
+/* clang-format on */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #import "mozTableAccessible.h"
 #import "nsCocoaUtils.h"
-#import "AccIterator.h"
-#import "TableAccessible.h"
+#import "MacUtils.h"
+
+#include "AccIterator.h"
+#include "Accessible.h"
+#include "TableAccessible.h"
+#include "TableCellAccessible.h"
+
+using namespace mozilla;
+using namespace mozilla::a11y;
 
 @implementation mozColumnContainer
 
@@ -31,7 +38,7 @@
   return mParent;
 }
 
-- (NSArray*)moxChildren {
+- (NSArray*)moxUnignoredChildren {
   if (mChildren) return mChildren;
 
   mChildren = [[NSMutableArray alloc] init];
@@ -43,7 +50,8 @@
 
     for (uint32_t j = 0; j < numRows; j++) {
       Accessible* cell = table->CellAt(j, mIndex);
-      mozAccessible* nativeCell = cell ? GetNativeFromGeckoAccessible(cell) : nil;
+      mozAccessible* nativeCell =
+          cell ? GetNativeFromGeckoAccessible(cell) : nil;
       if ([nativeCell isAccessibilityElement]) {
         [mChildren addObject:nativeCell];
       }
@@ -54,7 +62,8 @@
 
     for (uint32_t j = 0; j < numRows; j++) {
       ProxyAccessible* cell = proxy->TableCellAt(j, mIndex);
-      mozAccessible* nativeCell = cell ? GetNativeFromGeckoAccessible(cell) : nil;
+      mozAccessible* nativeCell =
+          cell ? GetNativeFromGeckoAccessible(cell) : nil;
       if ([nativeCell isAccessibilityElement]) {
         [mChildren addObject:nativeCell];
       }
@@ -162,22 +171,25 @@
 - (NSNumber*)moxRowCount {
   MOZ_ASSERT(!mGeckoAccessible.IsNull());
 
-  return mGeckoAccessible.IsAccessible() ? @(mGeckoAccessible.AsAccessible()->AsTable()->RowCount())
-                                         : @(mGeckoAccessible.AsProxy()->TableRowCount());
+  return mGeckoAccessible.IsAccessible()
+             ? @(mGeckoAccessible.AsAccessible()->AsTable()->RowCount())
+             : @(mGeckoAccessible.AsProxy()->TableRowCount());
 }
 
 - (NSNumber*)moxColumnCount {
   MOZ_ASSERT(!mGeckoAccessible.IsNull());
 
-  return mGeckoAccessible.IsAccessible() ? @(mGeckoAccessible.AsAccessible()->AsTable()->ColCount())
-                                         : @(mGeckoAccessible.AsProxy()->TableColumnCount());
+  return mGeckoAccessible.IsAccessible()
+             ? @(mGeckoAccessible.AsAccessible()->AsTable()->ColCount())
+             : @(mGeckoAccessible.AsProxy()->TableColumnCount());
 }
 
 - (NSArray*)moxRows {
   // Create a new array with the list of table rows.
   return [[self moxChildren]
-      filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(mozAccessible* child,
-                                                                        NSDictionary* bindings) {
+      filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(
+                                                   mozAccessible* child,
+                                                   NSDictionary* bindings) {
         return [child isKindOfClass:[mozTableRowAccessible class]];
       }]];
 }
@@ -199,15 +211,74 @@
   }
 
   for (uint32_t i = 0; i < numCols; i++) {
-    mozColumnContainer* container = [[mozColumnContainer alloc] initWithIndex:i andParent:self];
+    mozColumnContainer* container =
+        [[mozColumnContainer alloc] initWithIndex:i andParent:self];
     [mColContainers addObject:container];
   }
 
   return mColContainers;
 }
 
-- (NSArray*)moxChildren {
-  return [[super moxChildren] arrayByAddingObjectsFromArray:[self moxColumns]];
+- (NSArray*)moxUnignoredChildren {
+  return [[super moxUnignoredChildren]
+      arrayByAddingObjectsFromArray:[self moxColumns]];
+}
+
+- (NSArray*)moxColumnHeaderUIElements {
+  MOZ_ASSERT(!mGeckoAccessible.IsNull());
+
+  uint32_t numCols = 0;
+  TableAccessible* table = nullptr;
+
+  if (Accessible* acc = mGeckoAccessible.AsAccessible()) {
+    table = mGeckoAccessible.AsAccessible()->AsTable();
+    numCols = table->ColCount();
+  } else {
+    numCols = mGeckoAccessible.AsProxy()->TableColumnCount();
+  }
+
+  NSMutableArray* colHeaders =
+      [[NSMutableArray alloc] initWithCapacity:numCols];
+
+  for (uint32_t i = 0; i < numCols; i++) {
+    AccessibleOrProxy cell;
+    if (table) {
+      cell = table->CellAt(0, i);
+    } else {
+      cell = mGeckoAccessible.AsProxy()->TableCellAt(0, i);
+    }
+
+    if (!cell.IsNull() && cell.Role() == roles::COLUMNHEADER) {
+      mozAccessible* colHeader = GetNativeFromGeckoAccessible(cell);
+      [colHeaders addObject:colHeader];
+    }
+  }
+
+  return colHeaders;
+}
+
+- (id)moxCellForColumnAndRow:(NSArray*)columnAndRow {
+  if (columnAndRow == nil || [columnAndRow count] != 2) {
+    return nil;
+  }
+
+  uint32_t col = [[columnAndRow objectAtIndex:0] unsignedIntValue];
+  uint32_t row = [[columnAndRow objectAtIndex:1] unsignedIntValue];
+
+  MOZ_ASSERT(!mGeckoAccessible.IsNull());
+
+  AccessibleOrProxy cell;
+  if (mGeckoAccessible.IsAccessible()) {
+    cell = mGeckoAccessible.AsAccessible()->AsTable()->CellAt(row, col);
+  } else {
+    cell = mGeckoAccessible.AsProxy()->TableCellAt(row, col);
+  }
+
+  if (cell.IsNull()) {
+    return nil;
+  }
+
+  return GetNativeFromGeckoAccessible(cell);
 }
 
 - (void)invalidateColumns {
@@ -248,10 +319,12 @@
 
   if (mGeckoAccessible.IsAccessible()) {
     TableCellAccessible* cell = mGeckoAccessible.AsAccessible()->AsTableCell();
-    return [NSValue valueWithRange:NSMakeRange(cell->RowIdx(), cell->RowExtent())];
+    return
+        [NSValue valueWithRange:NSMakeRange(cell->RowIdx(), cell->RowExtent())];
   } else {
     ProxyAccessible* proxy = mGeckoAccessible.AsProxy();
-    return [NSValue valueWithRange:NSMakeRange(proxy->RowIdx(), proxy->RowExtent())];
+    return [NSValue
+        valueWithRange:NSMakeRange(proxy->RowIdx(), proxy->RowExtent())];
   }
 }
 
@@ -260,10 +333,12 @@
 
   if (mGeckoAccessible.IsAccessible()) {
     TableCellAccessible* cell = mGeckoAccessible.AsAccessible()->AsTableCell();
-    return [NSValue valueWithRange:NSMakeRange(cell->ColIdx(), cell->ColExtent())];
+    return
+        [NSValue valueWithRange:NSMakeRange(cell->ColIdx(), cell->ColExtent())];
   } else {
     ProxyAccessible* proxy = mGeckoAccessible.AsProxy();
-    return [NSValue valueWithRange:NSMakeRange(proxy->ColIdx(), proxy->ColExtent())];
+    return [NSValue
+        valueWithRange:NSMakeRange(proxy->ColIdx(), proxy->ColExtent())];
   }
 }
 

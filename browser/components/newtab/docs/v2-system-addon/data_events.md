@@ -1353,23 +1353,6 @@ This reports a failure in the Remote Settings loader to load messages for Activi
 }
 ```
 
-## Trailhead experiment enrollment ping
-
-This reports an enrollment ping when a user gets enrolled in a Trailhead experiment. Note that this ping is only collected through the Mozilla Events telemetry pipeline.
-
-```js
-{
-  "category": "activity_stream",
-  "method": "enroll",
-  "object": "preference_study"
-  "value": "activity-stream-firstup-trailhead-interrupts",
-  "extra_keys": {
-    "experimentType": "as-firstrun",
-    "branch": ["supercharge" | "join" | "sync" | "privacy" ...]
-  }
-}
-```
-
 ## Feature Callouts interaction pings
 
 This reports when a user has seen or clicked a badge/notification in the browser toolbar in a non-PBM window
@@ -1481,4 +1464,24 @@ Unlike other Activity Stream pings, this is a Firefox Events telemetry event, an
     "branches": "control;variant_1;variant_2"
   }
 }
+```
+
+### Experiment attribute errors
+
+This records whether issues were encountered with any of the targeting attributes used in the experiment enrollment or message targeting.
+Two different types of events are sent: `attribute_error` and `attribute_timeout` along with the attribute that caused it.
+
+```js
+[
+  "messaging_experiments",
+  "targeting",
+  "attribute_error", // event
+  "foo" // attribute
+],
+[
+  "messaging_experiments",
+  "targeting",
+  "attribute_timeout", // event
+  "bar" // attribute
+]
 ```

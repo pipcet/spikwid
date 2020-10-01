@@ -46,11 +46,11 @@ UrlClassifierFeatureFlash::UrlClassifierFeatureFlash(
           nsDependentCString(aFlashFeature.mName),
           nsDependentCString(aFlashFeature.mBlocklistPrefTables),
           nsDependentCString(aFlashFeature.mEntitylistPrefTables),
-          EmptyCString(),  // aPrefBlocklistHosts
-          EmptyCString(),  // aPrefEntitylistHosts
-          EmptyCString(),  // aPrefBlocklistTableName
-          EmptyCString(),  // aPrefEntitylistTableName
-          EmptyCString())  // aPrefExceptionHosts
+          ""_ns,  // aPrefBlocklistHosts
+          ""_ns,  // aPrefEntitylistHosts
+          ""_ns,  // aPrefBlocklistTableName
+          ""_ns,  // aPrefEntitylistTableName
+          ""_ns)  // aPrefExceptionHosts
       ,
       mFlashPluginState(aFlashFeature.mFlashPluginState) {
   static_assert(nsIHttpChannel::FlashPluginDeniedInSubdocuments ==
@@ -162,7 +162,7 @@ UrlClassifierFeatureFlash::ProcessChannel(nsIChannel* aChannel,
   // This is not a blocking feature.
   *aShouldContinue = true;
 
-  UC_LOG(("UrlClassifierFeatureFlash::ProcessChannel, annotating channel[%p]",
+  UC_LOG(("UrlClassifierFeatureFlash::ProcessChannel - annotating channel %p",
           aChannel));
 
   nsCOMPtr<nsIParentChannel> parentChannel;

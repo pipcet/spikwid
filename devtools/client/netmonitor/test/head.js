@@ -101,6 +101,7 @@ const PAUSE_URL = EXAMPLE_URL + "html_pause-test-page.html";
 const OPEN_REQUEST_IN_TAB_URL = EXAMPLE_URL + "html_open-request-in-tab.html";
 const CSP_URL = EXAMPLE_URL + "html_csp-test-page.html";
 const CSP_RESEND_URL = EXAMPLE_URL + "html_csp-resend-test-page.html";
+const SLOW_REQUESTS_URL = EXAMPLE_URL + "html_slow-requests-test-page.html";
 
 const SIMPLE_SJS = EXAMPLE_URL + "sjs_simple-test-server.sjs";
 const SIMPLE_UNSORTED_COOKIES_SJS =
@@ -286,7 +287,10 @@ async function waitForAllNetworkUpdateEvents() {
   finishedQueue = {};
 }
 
-function initNetMonitor(url, { requestCount, enableCache = false }) {
+function initNetMonitor(
+  url,
+  { requestCount, expectedEventTimings, enableCache = false }
+) {
   info("Initializing a network monitor pane.");
 
   if (!requestCount) {
@@ -326,7 +330,9 @@ function initNetMonitor(url, { requestCount, enableCache = false }) {
 
       info("Disabling cache and reloading page.");
 
-      const requestsDone = waitForNetworkEvents(monitor, requestCount);
+      const requestsDone = waitForNetworkEvents(monitor, requestCount, {
+        expectedEventTimings,
+      });
       const markersDone = waitForTimelineMarkers(monitor);
       await toggleCache(target, true);
       await Promise.all([requestsDone, markersDone]);
@@ -370,21 +376,24 @@ function teardown(monitor) {
   })();
 }
 
-function isFiltering(monitor) {
-  const doc = monitor.panelWin.document;
-  return !!doc.querySelector(
-    ".requests-list-filter-buttons button[aria-pressed]"
-  );
-}
-
-function waitForNetworkEvents(monitor, getRequests) {
+/**
+ * Wait for the request(s) to be fully notified to the frontend.
+ *
+ * @param {Object} monitor
+ *        The netmonitor instance used for retrieving a context menu element.
+ * @param {Number} getRequests
+ *        The number of request to wait for
+ * @param {Object} options (optional)
+ *        - expectedEventTimings {Number} Number of EVENT_TIMINGS events to wait for.
+ *        In case of filtering, we get less of such events.
+ */
+function waitForNetworkEvents(monitor, getRequests, options = {}) {
   return new Promise(resolve => {
     const panel = monitor.panelWin;
     let networkEvent = 0;
     let nonBlockedNetworkEvent = 0;
     let payloadReady = 0;
     let eventTimings = 0;
-    const filtering = isFiltering(monitor);
 
     function onNetworkEvent(resource) {
       networkEvent++;
@@ -403,8 +412,18 @@ function waitForNetworkEvents(monitor, getRequests) {
       eventTimings++;
       maybeResolve(EVENTS.RECEIVED_EVENT_TIMINGS, response.from);
     }
-
     function maybeResolve(event, actor) {
+      const { document } = monitor.panelWin;
+      // Wait until networkEvent, payloadReady and event timings finish for each request.
+      // The UI won't fetch timings when:
+      // * hidden in background,
+      // * for any blocked request,
+      let expectedEventTimings =
+        document.visibilityState == "hidden" ? 0 : nonBlockedNetworkEvent;
+      // Typically ignore this option if it is undefined or null
+      if (typeof options?.expectedEventTimings == "number") {
+        expectedEventTimings = options.expectedEventTimings;
+      }
       info(
         "> Network event progress: " +
           "NetworkEvent: " +
@@ -416,10 +435,11 @@ function waitForNetworkEvents(monitor, getRequests) {
           payloadReady +
           "/" +
           getRequests +
+          ", " +
           "EventTimings: " +
           eventTimings +
           "/" +
-          getRequests +
+          expectedEventTimings +
           ", " +
           "got " +
           event +
@@ -427,18 +447,10 @@ function waitForNetworkEvents(monitor, getRequests) {
           actor
       );
 
-      const { document } = monitor.panelWin;
-      // Wait until networkEvent, payloadReady and event timings finish for each request.
-      // The UI won't fetch timings when:
-      // * hidden in background,
-      // * for any blocked request,
-      // * when filtering.
       if (
         networkEvent >= getRequests &&
         payloadReady >= getRequests &&
-        (eventTimings >= nonBlockedNetworkEvent ||
-          document.visibilityState == "hidden" ||
-          filtering)
+        eventTimings >= expectedEventTimings
       ) {
         panel.api.off(TEST_EVENTS.NETWORK_EVENT, onNetworkEvent);
         panel.api.off(EVENTS.PAYLOAD_READY, onPayloadReady);
@@ -643,11 +655,11 @@ function verifyRequestItemTarget(
     info("Displayed code: " + codeValue);
     info("Tooltip status: " + tooltip);
     is(
-      value,
-      displayedStatus ? displayedStatus : status,
+      `${value}`,
+      displayedStatus ? `${displayedStatus}` : `${status}`,
       "The displayed status is correct."
     );
-    is(codeValue, status, "The displayed status code is correct.");
+    is(`${codeValue}`, `${status}`, "The displayed status code is correct.");
     is(tooltip, status + " " + statusText, "The tooltip status is correct.");
   }
   if (cause !== undefined) {
@@ -667,12 +679,15 @@ function verifyRequestItemTarget(
   }
   if (type !== undefined) {
     const value = target.querySelector(".requests-list-type").textContent;
-    const tooltip = target
+    let tooltip = target
       .querySelector(".requests-list-type")
       .getAttribute("title");
     info("Displayed type: " + value);
     info("Tooltip type: " + tooltip);
     is(value, type, "The displayed type is correct.");
+    if (Object.is(tooltip, null)) {
+      tooltip = undefined;
+    }
     is(tooltip, fullMimeType, "The tooltip type is correct.");
   }
   if (transferred !== undefined) {
@@ -720,23 +735,6 @@ function verifyRequestItemTarget(
       ok(target.classList.contains("odd"), "Item should have 'odd' class.");
     }
   }
-}
-
-/**
- * Helper function for waiting for an event to fire before resolving a promise.
- * Example: waitFor(aMonitor.panelWin.api, EVENT_NAME);
- *
- * @param object subject
- *        The event emitter object that is being listened to.
- * @param string eventName
- *        The name of the event to listen to.
- * @return object
- *        Returns a promise that resolves upon firing of the event.
- */
-function waitFor(subject, eventName) {
-  return new Promise(resolve => {
-    subject.once(eventName, resolve);
-  });
 }
 
 /**
@@ -1174,8 +1172,12 @@ function validateRequests(requests, monitor) {
           if (frame.file.startsWith("resource:///")) {
             todo(false, "Requests from chrome resource should not be included");
           } else {
+            let value = stacktrace[j].functionName;
+            if (Object.is(value, null)) {
+              value = undefined;
+            }
             is(
-              stacktrace[j].functionName,
+              value,
               frame.fn,
               `Request #${i} has the correct function on JS stack frame #${j}`
             );
@@ -1189,8 +1191,12 @@ function validateRequests(requests, monitor) {
               frame.line,
               `Request #${i} has the correct line number on JS stack frame #${j}`
             );
+            value = stacktrace[j].asyncCause;
+            if (Object.is(value, null)) {
+              value = undefined;
+            }
             is(
-              stacktrace[j].asyncCause,
+              value,
               frame.asyncCause,
               `Request #${i} has the correct async cause on JS stack frame #${j}`
             );

@@ -319,6 +319,7 @@ function openWebLinkIn(url, where, params) {
  * Instead of aAllowThirdPartyFixup, you may also pass an object with any of
  * these properties:
  *   allowThirdPartyFixup (boolean)
+ *   fromChrome           (boolean)
  *   postData             (nsIInputStream)
  *   referrerInfo         (nsIReferrerInfo)
  *   relatedToCurrent     (boolean)
@@ -346,7 +347,7 @@ function openUILinkIn(
     );
   }
 
-  params.fromChrome = true;
+  params.fromChrome = params.fromChrome ?? true;
 
   openLinkIn(url, where, params);
 }
@@ -731,6 +732,11 @@ function checkForMiddleClick(node, event) {
       event.mozInputSource
     );
     node.dispatchEvent(cmdEvent);
+
+    // Stop the propagation of the click event, to prevent the event from being
+    // handled more than once.
+    // E.g. see https://bugzilla.mozilla.org/show_bug.cgi?id=1657992#c4
+    event.stopPropagation();
 
     // If the middle-click was on part of a menu, close the menu.
     // (Menus close automatically with left-click but not with middle-click.)

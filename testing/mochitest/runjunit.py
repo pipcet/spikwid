@@ -9,6 +9,7 @@ import os
 import posixpath
 import re
 import shutil
+import six
 import sys
 import tempfile
 import traceback
@@ -17,7 +18,7 @@ import mozcrash
 import mozinfo
 import mozlog
 import moznetwork
-from mozdevice import ADBDevice, ADBError, ADBTimeoutError
+from mozdevice import ADBDeviceFactory, ADBError, ADBTimeoutError
 from mozprofile import Profile, DEFAULT_PORTS
 from mozprofile.cli import parse_preferences
 from mozprofile.permissions import ServerLocations
@@ -30,10 +31,12 @@ try:
         MozbuildObject,
         MachCommandConditions as conditions,
     )
+    from mach.util import UserError
     build_obj = MozbuildObject.from_environment(cwd=here)
 except ImportError:
     build_obj = None
     conditions = None
+    UserError = Exception
 
 
 class JavaTestHarnessException(Exception):
@@ -50,10 +53,11 @@ class JUnitTestRunner(MochitestDesktop):
         verbose = False
         if options.log_tbpl_level == 'debug' or options.log_mach_level == 'debug':
             verbose = True
-        self.device = ADBDevice(adb=options.adbPath or 'adb',
-                                device=options.deviceSerial,
-                                test_root=options.remoteTestRoot,
-                                verbose=verbose)
+        self.device = ADBDeviceFactory(adb=options.adbPath or 'adb',
+                                       device=options.deviceSerial,
+                                       test_root=options.remoteTestRoot,
+                                       verbose=verbose,
+                                       run_as_package=options.app)
         self.options = options
         self.log.debug("options=%s" % vars(options))
         update_mozinfo()
@@ -61,7 +65,7 @@ class JUnitTestRunner(MochitestDesktop):
         self.remote_filter_list = posixpath.join(self.device.test_root, 'junit-filters.list')
 
         if self.options.coverage and not self.options.coverage_output_dir:
-            raise Exception("--coverage-output-dir is required when using --enable-coverage")
+            raise UserError("--coverage-output-dir is required when using --enable-coverage")
         if self.options.coverage:
             self.remote_coverage_output_file = posixpath.join(self.device.test_root,
                                                               'junit-coverage.ec')
@@ -92,7 +96,7 @@ class JUnitTestRunner(MochitestDesktop):
             if os.name != "nt":
                 self.options.remoteWebServer = moznetwork.get_ip()
             else:
-                raise Exception("--remote-webserver must be specified")
+                raise UserError("--remote-webserver must be specified")
         self.options.webServer = self.options.remoteWebServer
         self.options.webSocketPort = '9988'
         self.options.httpdPath = None
@@ -136,10 +140,10 @@ class JUnitTestRunner(MochitestDesktop):
             self.stopServers()
             self.log.debug("Servers stopped")
             self.device.stop_application(self.options.app)
-            self.device.rm(self.remote_profile, force=True, recursive=True, root=True)
+            self.device.rm(self.remote_profile, force=True, recursive=True)
             if hasattr(self, 'profile'):
                 del self.profile
-            self.device.rm(self.remote_filter_list, force=True, root=True)
+            self.device.rm(self.remote_filter_list, force=True)
         except Exception:
             traceback.print_exc()
             self.log.info("Caught and ignored an exception during cleanup")
@@ -213,7 +217,7 @@ class JUnitTestRunner(MochitestDesktop):
         for [key, value] in [p.split('=', 1) for p in self.options.add_env]:
             env[key] = value
 
-        for (env_count, (env_key, env_val)) in enumerate(env.iteritems()):
+        for (env_count, (env_key, env_val)) in enumerate(six.iteritems(env)):
             cmd = cmd + " -e env%d %s=%s" % (env_count, env_key, env_val)
         # runner
         cmd = cmd + " %s/%s" % (self.options.app, self.options.runner)
@@ -239,14 +243,14 @@ class JUnitTestRunner(MochitestDesktop):
            Run the tests.
         """
         if not self.device.is_app_installed(self.options.app):
-            raise Exception("%s is not installed" %
+            raise UserError("%s is not installed" %
                             self.options.app)
         if self.device.process_exist(self.options.app):
-            raise Exception("%s already running before starting tests" %
+            raise UserError("%s already running before starting tests" %
                             self.options.app)
         # test_filters_file and test_filters must be mutually-exclusive
         if test_filters_file and test_filters:
-            raise Exception("Test filters may not be specified when test-filters-file is provided")
+            raise UserError("Test filters may not be specified when test-filters-file is provided")
 
         self.test_started = False
         self.pass_count = 0
@@ -258,6 +262,7 @@ class JUnitTestRunner(MochitestDesktop):
             # Output callback: Parse the raw junit log messages, translating into
             # treeherder-friendly test start/pass/fail messages.
 
+            line = six.ensure_str(line)
             self.log.process_output(self.options.app, str(line))
             # Expect per-test info like: "INSTRUMENTATION_STATUS: class=something"
             match = re.match(r'INSTRUMENTATION_STATUS:\s*class=(.*)', line)
@@ -408,7 +413,7 @@ class JunitArgumentParser(argparse.ArgumentParser):
                           type=str,
                           dest="remoteTestRoot",
                           help="Remote directory to use as test root "
-                               "(eg. /mnt/sdcard/tests or /data/local/tests).")
+                               "(eg. /data/local/tmp/test_root).")
         self.add_argument("--disable-e10s",
                           action="store_false",
                           dest="e10s",

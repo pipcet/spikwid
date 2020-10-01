@@ -184,7 +184,7 @@ MOZ_ALWAYS_INLINE bool js::AtomHasher::match(const AtomStateEntry& entry,
 inline JSAtom* js::AtomStateEntry::asPtr(JSContext* cx) const {
   JSAtom* atom = asPtrUnbarriered();
   if (!cx->isHelperThreadContext()) {
-    JSString::readBarrier(atom);
+    gc::ReadBarrier(atom);
   }
   return atom;
 }
@@ -972,17 +972,32 @@ JSAtom* js::AtomizeString(JSContext* cx, JSString* str,
     return nullptr;
   }
 
+  if (cx->isMainThreadContext() && pin == DoNotPinAtom) {
+    if (JSAtom* atom = cx->caches().stringToAtomCache.lookup(linear)) {
+      return atom;
+    }
+  }
+
   Maybe<uint32_t> indexValue;
   if (str->hasIndexValue()) {
     indexValue.emplace(str->getIndexValue());
   }
 
   JS::AutoCheckCannotGC nogc;
-  return linear->hasLatin1Chars()
-             ? AtomizeAndCopyChars(cx, linear->latin1Chars(nogc),
-                                   linear->length(), pin, indexValue)
-             : AtomizeAndCopyChars(cx, linear->twoByteChars(nogc),
-                                   linear->length(), pin, indexValue);
+  JSAtom* atom = linear->hasLatin1Chars()
+                     ? AtomizeAndCopyChars(cx, linear->latin1Chars(nogc),
+                                           linear->length(), pin, indexValue)
+                     : AtomizeAndCopyChars(cx, linear->twoByteChars(nogc),
+                                           linear->length(), pin, indexValue);
+  if (!atom) {
+    return nullptr;
+  }
+
+  if (cx->isMainThreadContext() && pin == DoNotPinAtom) {
+    cx->caches().stringToAtomCache.maybePut(linear, atom);
+  }
+
+  return atom;
 }
 
 bool js::AtomIsPinned(JSContext* cx, JSAtom* atom) {
@@ -1033,8 +1048,6 @@ void AtomsTable::maybePinExistingAtom(JSContext* cx, JSAtom* atom) {
 
 JSAtom* js::Atomize(JSContext* cx, const char* bytes, size_t length,
                     PinningBehavior pin, const Maybe<uint32_t>& indexValue) {
-  CHECK_THREAD(cx);
-
   const Latin1Char* chars = reinterpret_cast<const Latin1Char*>(bytes);
   return AtomizeAndCopyChars(cx, chars, length, pin, indexValue);
 }
@@ -1042,7 +1055,6 @@ JSAtom* js::Atomize(JSContext* cx, const char* bytes, size_t length,
 template <typename CharT>
 JSAtom* js::AtomizeChars(JSContext* cx, const CharT* chars, size_t length,
                          PinningBehavior pin) {
-  CHECK_THREAD(cx);
   return AtomizeAndCopyChars(cx, chars, length, pin, Nothing());
 }
 
@@ -1227,8 +1239,6 @@ template JSAtom* js::ToAtom<NoGC>(JSContext* cx, const Value& v);
 static JSAtom* AtomizeLittleEndianTwoByteChars(JSContext* cx,
                                                const uint8_t* leTwoByte,
                                                size_t length) {
-  CHECK_THREAD(cx);
-
   LittleEndianChars chars(leTwoByte);
 
   if (JSAtom* s = cx->staticStrings().lookup(chars, length)) {

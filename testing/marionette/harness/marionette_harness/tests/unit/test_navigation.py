@@ -62,7 +62,6 @@ class BaseNavigationTestCase(WindowManagerMixin, MarionetteTestCase):
 
     def tearDown(self):
         self.marionette.timeout.reset()
-        self.marionette.switch_to_parent_frame()
 
         self.close_all_tabs()
 
@@ -162,6 +161,27 @@ class TestNavigate(BaseNavigationTestCase):
 
         self.marionette.navigate(self.test_page_frameset)
         self.marionette.find_element(By.NAME, "third")
+
+    def test_navigate_top_frame_from_nested_context(self):
+        sub_frame = inline("""
+          <title>bar</title>
+          <a href="{}" target="_top">consume top frame</a>
+        """.format(self.test_page_remote))
+        top_frame = inline("""
+          <title>foo</title>
+          <iframe src="{}">
+        """.format(sub_frame))
+
+        self.marionette.navigate(top_frame)
+        frame = self.marionette.find_element(By.TAG_NAME, "iframe")
+        self.marionette.switch_to_frame(frame)
+
+        link = self.marionette.find_element(By.TAG_NAME, "a")
+        link.click()
+
+        Wait(self.marionette, timeout=self.marionette.timeout.page_load).until(
+            lambda mn: mn.get_url() == self.test_page_remote,
+            message="{} hasn't been loaded".format(self.test_page_remote))
 
     def test_invalid_url(self):
         with self.assertRaises(errors.MarionetteException):
@@ -274,6 +294,13 @@ class TestNavigate(BaseNavigationTestCase):
 
         self.marionette.navigate("about:blank")
 
+    def test_about_newtab(self):
+        with self.marionette.using_prefs({"browser.newtabpage.enabled": True}):
+            self.marionette.navigate("about:newtab")
+
+            self.marionette.navigate(self.test_page_remote)
+            self.marionette.find_element(By.ID, "testDiv")
+
     @run_if_manage_instance("Only runnable if Marionette manages the instance")
     def test_focus_after_navigation(self):
         self.marionette.restart()
@@ -334,7 +361,7 @@ class TestBackForwardNavigation(BaseNavigationTestCase):
                 else:
                     self.assertEqual(Alert(self.marionette).text, page["alert_text"])
 
-            self.assertEqual(page["url"], self.marionette.get_url())
+            self.assertEqual(self.marionette.get_url(), page["url"])
             self.assertEqual(self.history_length, expected_history_length)
 
             if "is_remote" in page:
@@ -362,7 +389,6 @@ class TestBackForwardNavigation(BaseNavigationTestCase):
                     self.marionette.go_back()
             else:
                 self.marionette.go_back()
-            self.assertEqual(page["url"], self.marionette.get_url())
 
             check_page_status(page, len(test_pages))
 
@@ -373,7 +399,6 @@ class TestBackForwardNavigation(BaseNavigationTestCase):
                     self.marionette.go_forward()
             else:
                 self.marionette.go_forward()
-            self.assertEqual(page["url"], self.marionette.get_url())
 
             check_page_status(page, len(test_pages))
 
@@ -671,13 +696,13 @@ class TestRefresh(BaseNavigationTestCase):
     def test_insecure_error(self):
         with self.assertRaises(errors.InsecureCertificateException):
             self.marionette.navigate(self.test_page_insecure)
-        self.assertEqual(self.test_page_insecure, self.marionette.get_url())
+        self.assertEqual(self.marionette.get_url(), self.test_page_insecure)
 
         with self.assertRaises(errors.InsecureCertificateException):
             self.marionette.refresh()
 
 
-class TestTLSNavigation(MarionetteTestCase):
+class TestTLSNavigation(BaseNavigationTestCase):
     insecure_tls = {"acceptInsecureCerts": True}
     secure_tls = {"acceptInsecureCerts": False}
 
@@ -692,6 +717,7 @@ class TestTLSNavigation(MarionetteTestCase):
     def tearDown(self):
         try:
             self.marionette.delete_session()
+            self.marionette.start_session()
         except:
             pass
 
@@ -702,8 +728,15 @@ class TestTLSNavigation(MarionetteTestCase):
         try:
             self.capabilities = self.marionette.start_session(self.secure_tls)
             self.assertFalse(self.capabilities["acceptInsecureCerts"])
+            # Always use a blank new tab for an empty history
+            self.new_tab = self.open_tab()
+            self.marionette.switch_to_window(self.new_tab)
+            Wait(self.marionette, timeout=self.marionette.timeout.page_load).until(
+                lambda _: self.history_length == 1,
+                message="The newly opened tab doesn't have a browser history length of 1")
             yield self.marionette
         finally:
+            self.close_all_tabs()
             self.marionette.delete_session()
 
     @contextlib.contextmanager
@@ -711,8 +744,15 @@ class TestTLSNavigation(MarionetteTestCase):
         try:
             self.capabilities = self.marionette.start_session(self.insecure_tls)
             self.assertTrue(self.capabilities["acceptInsecureCerts"])
+            # Always use a blank new tab for an empty history
+            self.new_tab = self.open_tab()
+            self.marionette.switch_to_window(self.new_tab)
+            Wait(self.marionette, timeout=self.marionette.timeout.page_load).until(
+                lambda _: self.history_length == 1,
+                message="The newly opened tab doesn't have a browser history length of 1")
             yield self.marionette
         finally:
+            self.close_all_tabs()
             self.marionette.delete_session()
 
     def test_navigate_by_command(self):
@@ -756,9 +796,12 @@ class TestPageLoadStrategy(BaseNavigationTestCase):
         self.marionette.delete_session()
         self.marionette.start_session({"pageLoadStrategy": "none"})
 
-        # With a strategy of "none" there should be no wait for the page load, and the
-        # current load state is unknown. So only test that the command executes successfully.
         self.marionette.navigate(self.test_page_slow_resource)
+        Wait(self.marionette, timeout=self.marionette.timeout.page_load).until(
+            lambda _: self.marionette.get_url() == self.test_page_slow_resource,
+            message="Target page has not been loaded"
+        )
+        self.marionette.find_element(By.ID, "slow")
 
     def test_eager(self):
         self.marionette.delete_session()

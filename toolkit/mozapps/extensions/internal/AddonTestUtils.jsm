@@ -947,8 +947,12 @@ var AddonTestUtils = {
    * @param {string} [newVersion]
    *        If provided, the application version is changed to this string
    *        before the AddonManager is started.
+   * @param {string} [newPlatformVersion]
+   *        If provided, the platform version is changed to this string
+   *        before the AddonManager is started.  It will default to the appVersion
+   *        as that is how Firefox currently builds (app === platform).
    */
-  async promiseStartupManager(newVersion) {
+  async promiseStartupManager(newVersion, newPlatformVersion = newVersion) {
     if (this.addonIntegrationService) {
       throw new Error(
         "Attempting to startup manager that was already started."
@@ -958,6 +962,11 @@ var AddonTestUtils = {
     if (newVersion) {
       this.appInfo.version = newVersion;
     }
+
+    if (newPlatformVersion) {
+      this.appInfo.platformVersion = newPlatformVersion;
+    }
+
     // AddonListeners are removed when the addonManager is shutdown,
     // ensure the Extension observer is added.  We call uninit in
     // promiseShutdown to allow re-initialization.
@@ -1434,7 +1443,7 @@ var AddonTestUtils = {
   },
 
   async promiseSetExtensionModifiedTime(path, time) {
-    await OS.File.setDates(path, time, time);
+    await IOUtils.touch(path, time);
 
     let iterator = new OS.File.DirectoryIterator(path);
     try {
@@ -1483,14 +1492,22 @@ var AddonTestUtils = {
    * @param {string} event
    *        The name of the AddonListener event handler method for which
    *        an event is expected.
+   * @param {function} checkFn [optional]
+   *        A function to check if this is the right event. Should return true
+   *        for the event that it wants, false otherwise. Will be passed
+   *        all the relevant arguments.
+   *        If not passed, any event will do to resolve the promise.
    * @returns {Promise<Array>}
    *        Resolves to an array containing the event handler's
    *        arguments the first time it is called.
    */
-  promiseAddonEvent(event) {
+  promiseAddonEvent(event, checkFn) {
     return new Promise(resolve => {
       let listener = {
         [event](...args) {
+          if (typeof checkFn == "function" && !checkFn(...args)) {
+            return;
+          }
           AddonManager.removeAddonListener(listener);
           resolve(args);
         },

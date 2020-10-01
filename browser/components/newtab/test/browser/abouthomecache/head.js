@@ -79,8 +79,7 @@ async function simulateRestart(
   }
 ) {
   info("Simulating restart of the browser");
-  let processManager = browser.messageManager.processMessageManager;
-  if (processManager.remoteType !== E10SUtils.PRIVILEGEDABOUT_REMOTE_TYPE) {
+  if (browser.remoteType !== E10SUtils.PRIVILEGEDABOUT_REMOTE_TYPE) {
     throw new Error(
       "prepareLoadFromCache should only be called on a browser " +
         "loaded in the privileged about content process."
@@ -109,7 +108,9 @@ async function simulateRestart(
   AboutHomeStartupCache.init();
 
   if (AboutHomeStartupCache.initted) {
-    AboutHomeStartupCache.sendCacheInputStreams(processManager);
+    let processManager = browser.messageManager.processMessageManager;
+    let pp = browser.browsingContext.currentWindowGlobal.domProcess;
+    AboutHomeStartupCache.sendCacheInputStreams(processManager, pp);
 
     info("Waiting for AboutHomeStartupCache cache entry");
     await AboutHomeStartupCache.ensureCacheEntry();

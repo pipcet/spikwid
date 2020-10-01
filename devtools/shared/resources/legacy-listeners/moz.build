@@ -7,8 +7,10 @@ DevToolsModules(
     'css-changes.js',
     'css-messages.js',
     'error-messages.js',
+    'network-event-stacktraces.js',
     'network-events.js',
     'platform-messages.js',
     'root-node.js',
     'stylesheet.js',
+    'websocket.js',
 )

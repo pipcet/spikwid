@@ -26,7 +26,10 @@
 #include "nsHttpConnectionMgr.h"
 #include "nsHttpHandler.h"
 #include "nsIClassOfService.h"
+#include "nsIDNSByTypeRecord.h"
 #include "nsIDNSRecord.h"
+#include "nsIDNSListener.h"
+#include "nsIDNSService.h"
 #include "nsIHttpChannelInternal.h"
 #include "nsIRequestContext.h"
 #include "nsISocketTransport.h"
@@ -839,13 +842,22 @@ void nsHttpConnectionMgr::UpdateCoalescingForNewConn(
   HttpConnectionBase* existingConn =
       FindCoalescableConnection(ent, true, false);
   if (existingConn) {
-    LOG(
-        ("UpdateCoalescingForNewConn() found existing active conn that could "
-         "have served newConn "
-         "graceful close of newConn=%p to migrate to existingConn %p\n",
-         newConn, existingConn));
-    newConn->DontReuse();
-    return;
+    // Prefer http3 connection.
+    if (newConn->UsingHttp3() && existingConn->UsingSpdy()) {
+      LOG(
+          ("UpdateCoalescingForNewConn() found existing active H2 conn that "
+           "could have served newConn, but new connection is H3, therefore "
+           "close the H2 conncetion"));
+      existingConn->DontReuse();
+    } else {
+      LOG(
+          ("UpdateCoalescingForNewConn() found existing active conn that could "
+           "have served newConn "
+           "graceful close of newConn=%p to migrate to existingConn %p\n",
+           newConn, existingConn));
+      newConn->DontReuse();
+      return;
+    }
   }
 
   // This connection might go into the mCoalescingHash for new transactions to
@@ -953,6 +965,35 @@ void nsHttpConnectionMgr::ReportSpdyConnection(nsHttpConnection* conn,
   if (NS_FAILED(rv)) {
     LOG(
         ("ReportSpdyConnection conn=%p ent=%p "
+         "failed to post event (%08x)\n",
+         conn, ent, static_cast<uint32_t>(rv)));
+  }
+}
+
+void nsHttpConnectionMgr::ReportHttp3Connection(HttpConnectionBase* conn) {
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
+  if (!conn->ConnectionInfo()) {
+    return;
+  }
+  nsConnectionEntry* ent = mCT.GetWeak(conn->ConnectionInfo()->HashKey());
+  if (!ent) {
+    return;
+  }
+
+  mNumSpdyHttp3ActiveConns++;
+
+  UpdateCoalescingForNewConn(conn, ent);
+  nsresult rv = ProcessPendingQ(ent->mConnInfo);
+  if (NS_FAILED(rv)) {
+    LOG(
+        ("ReportHttp3Connection conn=%p ent=%p "
+         "failed to process pending queue (%08x)\n",
+         conn, ent, static_cast<uint32_t>(rv)));
+  }
+  rv = PostEvent(&nsHttpConnectionMgr::OnMsgProcessAllSpdyPendingQ);
+  if (NS_FAILED(rv)) {
+    LOG(
+        ("ReportHttp3Connection conn=%p ent=%p "
          "failed to post event (%08x)\n",
          conn, ent, static_cast<uint32_t>(rv)));
   }
@@ -1678,6 +1719,12 @@ nsresult nsHttpConnectionMgr::TryDispatchTransaction(
   // consider pipelining scripts and revalidations
   // h1 pipelining has been removed
 
+  // Don't dispatch if this transaction is waiting for HTTPS RR.
+  // Note that this is only used in test currently.
+  if (caps & NS_HTTP_WAIT_HTTPSSVC_RESULT) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+
   // step 4
   if (!onlyReusedConnection) {
     nsresult rv = MakeNewConnection(ent, pendingTransInfo);
@@ -2013,7 +2060,7 @@ nsresult nsHttpConnectionMgr::ProcessNewTransaction(nsHttpTransaction* trans) {
     trans->SetConnection(nullptr);
     rv = DispatchTransaction(ent, trans, conn);
   } else {
-    if (!ent->AllowSpdy()) {
+    if (!ent->AllowHttp2()) {
       trans->DisableSpdy();
     }
     pendingTransInfo = new PendingTransactionInfo(trans);
@@ -2178,8 +2225,7 @@ void nsHttpConnectionMgr::DispatchSpdyPendingQ(
 
   // Put the leftovers back in the pending queue and get rid of the
   // transactions we dispatched
-  leftovers.SwapElements(pendingQ);
-  leftovers.Clear();
+  pendingQ = std::move(leftovers);
 }
 
 // This function tries to dispatch the pending h2 or h3 transactions on
@@ -4200,6 +4246,26 @@ nsresult nsHttpConnectionMgr::nsHalfOpenSocket::SetupStreams(
     tmpFlags |= nsISocketTransport::BE_CONSERVATIVE;
   }
 
+  if (ci->HasIPHintAddress()) {
+    nsCOMPtr<nsIDNSService> dns =
+        do_GetService("@mozilla.org/network/dns-service;1", &rv);
+    if (NS_FAILED(rv)) {
+      return rv;
+    }
+
+    // The spec says: "If A and AAAA records for TargetName are locally
+    // available, the client SHOULD ignore these hints.", so we check if the DNS
+    // record is in cache before setting USE_IP_HINT_ADDRESS.
+    nsCOMPtr<nsIDNSRecord> record;
+    rv = dns->ResolveNative(ci->GetRoutedHost(), nsIDNSService::RESOLVE_OFFLINE,
+                            mEnt->mConnInfo->GetOriginAttributes(),
+                            getter_AddRefs(record));
+    if (NS_FAILED(rv) || !record) {
+      LOG(("Setting Socket to use IP hint address"));
+      tmpFlags |= nsISocketTransport::USE_IP_HINT_ADDRESS;
+    }
+  }
+
   if (mCaps & NS_HTTP_DISABLE_IPV4) {
     tmpFlags |= nsISocketTransport::DISABLE_IPV4;
   } else if (mCaps & NS_HTTP_DISABLE_IPV6) {
@@ -5217,9 +5283,9 @@ nsHttpConnectionMgr::nsHalfOpenSocket::OnTransportStatus(nsITransport* trans,
 
   if (status == NS_NET_STATUS_CONNECTING_TO && gHttpHandler->IsSpdyEnabled() &&
       gHttpHandler->CoalesceSpdy() && mEnt && mEnt->mConnInfo &&
-      mEnt->mConnInfo->EndToEndSSL() && mEnt->AllowSpdy() &&
+      mEnt->mConnInfo->EndToEndSSL() && mEnt->AllowHttp2() &&
       !mEnt->mConnInfo->UsingProxy() && mEnt->mCoalescingKeys.IsEmpty()) {
-    nsCOMPtr<nsIDNSRecord> dnsRecord(do_GetInterface(mSocketTransport));
+    nsCOMPtr<nsIDNSAddrRecord> dnsRecord(do_GetInterface(mSocketTransport));
     nsTArray<NetAddr> addressSet;
     nsresult rv = NS_ERROR_NOT_AVAILABLE;
     if (dnsRecord) {
@@ -5230,8 +5296,7 @@ nsHttpConnectionMgr::nsHalfOpenSocket::OnTransportStatus(nsITransport* trans,
       for (uint32_t i = 0; i < addressSet.Length(); ++i) {
         nsCString* newKey = mEnt->mCoalescingKeys.AppendElement(nsCString());
         newKey->SetLength(kIPv6CStrBufSize + 26);
-        NetAddrToString(&addressSet[i], newKey->BeginWriting(),
-                        kIPv6CStrBufSize);
+        addressSet[i].ToStringBuffer(newKey->BeginWriting(), kIPv6CStrBufSize);
         newKey->SetLength(strlen(newKey->BeginReading()));
         if (mEnt->mConnInfo->GetAnonymous()) {
           newKey->AppendLiteral("~A:");
@@ -5498,19 +5563,31 @@ void nsHttpConnectionMgr::nsConnectionEntry::RemoveHalfOpen(
   }
 }
 
-void nsHttpConnectionMgr::BlacklistSpdy(const nsHttpConnectionInfo* ci) {
-  LOG(("nsHttpConnectionMgr::BlacklistSpdy blacklisting ci %s",
+void nsHttpConnectionMgr::ExcludeHttp2(const nsHttpConnectionInfo* ci) {
+  LOG(("nsHttpConnectionMgr::ExcludeHttp2 excluding ci %s",
        ci->HashKey().BeginReading()));
   nsConnectionEntry* ent = mCT.GetWeak(ci->HashKey());
   if (!ent) {
-    LOG(("nsHttpConnectionMgr::BlacklistSpdy no entry found?!"));
+    LOG(("nsHttpConnectionMgr::ExcludeHttp2 no entry found?!"));
     return;
   }
 
-  ent->DisallowSpdy();
+  ent->DisallowHttp2();
 }
 
-void nsHttpConnectionMgr::nsConnectionEntry::DisallowSpdy() {
+void nsHttpConnectionMgr::ExcludeHttp3(const nsHttpConnectionInfo* ci) {
+  LOG(("nsHttpConnectionMgr::ExcludeHttp3 exclude ci %s",
+       ci->HashKey().BeginReading()));
+  nsConnectionEntry* ent = mCT.GetWeak(ci->HashKey());
+  if (!ent) {
+    LOG(("nsHttpConnectionMgr::ExcludeHttp3 no entry found?!"));
+    return;
+  }
+
+  ent->DontReuseHttp3Conn();
+}
+
+void nsHttpConnectionMgr::nsConnectionEntry::DisallowHttp2() {
   mCanUseSpdy = false;
 
   // If we have any spdy connections, we want to go ahead and close them when
@@ -5527,6 +5604,19 @@ void nsHttpConnectionMgr::nsConnectionEntry::DisallowSpdy() {
   }
 
   // Can't coalesce if we're not using spdy
+  mCoalescingKeys.Clear();
+}
+
+void nsHttpConnectionMgr::nsConnectionEntry::DontReuseHttp3Conn() {
+  MOZ_ASSERT(mConnInfo->IsHttp3());
+
+  // If we have any spdy connections, we want to go ahead and close them when
+  // they're done so we can free up some connections.
+  for (uint32_t i = 0; i < mActiveConns.Length(); ++i) {
+    mActiveConns[i]->DontReuse();
+  }
+
+  // Can't coalesce if we're not using http3
   mCoalescingKeys.Clear();
 }
 
@@ -5723,6 +5813,62 @@ void nsHttpConnectionMgr::MoveToWildCardConnEntry(
       }
     }
   }
+}
+
+bool nsHttpConnectionMgr::MoveTransToHTTPSSVCConnEntry(
+    nsHttpTransaction* aTrans, nsHttpConnectionInfo* aNewCI) {
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
+
+  LOG(("nsHttpConnectionMgr::MoveTransToHTTPSSVCConnEntry: trans=%p aNewCI=%s",
+       aTrans, aNewCI->HashKey().get()));
+
+  bool prohibitWildCard = !!aTrans->TunnelProvider();
+  bool noHttp3 = aTrans->Caps() & NS_HTTP_DISALLOW_HTTP3;
+  // Step 1: Check if the new entry is the same as the old one.
+  nsConnectionEntry* oldEntry = GetOrCreateConnectionEntry(
+      aTrans->ConnectionInfo(), prohibitWildCard, noHttp3);
+
+  nsConnectionEntry* newEntry =
+      GetOrCreateConnectionEntry(aNewCI, prohibitWildCard, noHttp3);
+
+  if (oldEntry == newEntry) {
+    return true;
+  }
+
+  // Step 2: Try to find the undispatched transaction.
+  int32_t transIndex;
+  // We will abandon all half-open sockets belonging to the given
+  // transaction.
+  nsTArray<RefPtr<PendingTransactionInfo>>* infoArray =
+      GetTransactionPendingQHelper(oldEntry, aTrans);
+
+  RefPtr<PendingTransactionInfo> pendingTransInfo;
+  transIndex =
+      infoArray ? infoArray->IndexOf(aTrans, 0, PendingComparator()) : -1;
+  if (transIndex >= 0) {
+    pendingTransInfo = (*infoArray)[transIndex];
+    infoArray->RemoveElementAt(transIndex);
+  }
+
+  // It's fine we can't find the transaction. The transaction may not be added.
+  if (!pendingTransInfo) {
+    return false;
+  }
+
+  MOZ_ASSERT(pendingTransInfo->mTransaction == aTrans);
+
+  // Abandon all half-open sockets belonging to the given transaction.
+  RefPtr<nsHalfOpenSocket> half = do_QueryReferent(pendingTransInfo->mHalfOpen);
+  if (half) {
+    half->Abandon();
+  }
+  pendingTransInfo->mHalfOpen = nullptr;
+  pendingTransInfo->mActiveConn = nullptr;
+
+  // Step 3: Add the transaction to the new entry.
+  aTrans->UpdateConnectionInfo(aNewCI);
+  Unused << ProcessNewTransaction(aTrans);
+  return true;
 }
 
 nsHttpConnectionMgr* nsHttpConnectionMgr::AsHttpConnectionMgr() { return this; }

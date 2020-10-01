@@ -21,7 +21,7 @@ parent:
   async OnUpgradeFailed(nsresult aReason);
 
 child:
-  async EnqueueOutgoingData(uint8_t[] aHeader, uint8_t[] aPayload);
+  async EnqueueOutgoingData(uint8_t[] aData);
   async StartReading();
   async DrainSocketData();
 

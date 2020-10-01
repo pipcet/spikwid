@@ -364,9 +364,13 @@ var webrtcUI = {
         // presume that it's exempt from the tab switch warning.
         //
         // We use the permanentKey here so that the allowing of
-        // the tab survives tab tear-in and tear-out.
+        // the tab survives tab tear-in and tear-out. We ignore
+        // browsers that don't have permanentKey, since those aren't
+        // tabbrowser browsers.
         let browser = stream.topBrowsingContext.embedderElement;
-        this.allowedSharedBrowsers.add(browser.permanentKey);
+        if (browser.permanentKey) {
+          this.allowedSharedBrowsers.add(browser.permanentKey);
+        }
       }
     }
 
@@ -836,10 +840,6 @@ var webrtcUI = {
       !this.allowTabSwitchesForSession &&
       !this.allowedSharedBrowsers.has(browser.permanentKey);
 
-    if (shouldShow) {
-      this.recordEvent("tab_switch_warning", "tab_switch_warning");
-    }
-
     return shouldShow;
   },
 
@@ -849,10 +849,6 @@ var webrtcUI = {
     this.allowedSharedBrowsers.add(browser.permanentKey);
     gBrowser.selectedTab = tab;
     this.allowTabSwitchesForSession = allowForSession;
-
-    if (allowForSession) {
-      this.recordEvent("allow_all_tabs", "allow_all_tabs");
-    }
   },
 
   recordEvent(type, object, args = {}) {
@@ -867,6 +863,8 @@ var webrtcUI = {
 };
 
 function getGlobalIndicator() {
+  webrtcUI.recordEvent("show_indicator", "show_indicator");
+
   if (!webrtcUI.useLegacyGlobalIndicator) {
     const INDICATOR_CHROME_URI =
       "chrome://browser/content/webrtcIndicator.xhtml";
@@ -919,7 +917,7 @@ class MacOSWebRTCStatusbarIndicator {
     this._screen = null;
 
     this._hiddenDoc = Services.appShell.hiddenDOMWindow.document;
-    this._statusBar = Cc["@mozilla.org/widget/macsystemstatusbar;1"].getService(
+    this._statusBar = Cc["@mozilla.org/widget/systemstatusbar;1"].getService(
       Ci.nsISystemStatusBar
     );
 

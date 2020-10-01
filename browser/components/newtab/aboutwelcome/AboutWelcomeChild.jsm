@@ -11,8 +11,10 @@ const { XPCOMUtils } = ChromeUtils.import(
 );
 
 XPCOMUtils.defineLazyModuleGetters(this, {
+  DEFAULT_SITES: "resource://activity-stream/lib/DefaultSites.jsm",
   ExperimentAPI: "resource://messaging-system/experiments/ExperimentAPI.jsm",
   shortURL: "resource://activity-stream/lib/ShortURL.jsm",
+  Services: "resource://gre/modules/Services.jsm",
   TippyTopProvider: "resource://activity-stream/lib/TippyTopProvider.jsm",
 });
 
@@ -22,6 +24,14 @@ XPCOMUtils.defineLazyGetter(this, "log", () => {
   );
   return new Logger("AboutWelcomeChild");
 });
+
+XPCOMUtils.defineLazyGetter(this, "tippyTopProvider", () =>
+  (async () => {
+    const provider = new TippyTopProvider();
+    await provider.init();
+    return provider;
+  })()
+);
 
 function _parseOverrideContent(value) {
   let result = {};
@@ -42,6 +52,15 @@ XPCOMUtils.defineLazyPreferenceGetter(
   _parseOverrideContent
 );
 
+const SEARCH_REGION_PREF = "browser.search.region";
+
+XPCOMUtils.defineLazyPreferenceGetter(
+  this,
+  "searchRegion",
+  SEARCH_REGION_PREF,
+  ""
+);
+
 /**
  * Lazily get importable sites from parent or reuse cached ones.
  */
@@ -50,9 +69,7 @@ function getImportableSites(child) {
     getImportableSites.cache ??
     (getImportableSites.cache = (async () => {
       // Use tippy top to get packaged rich icons
-      const tippyTop = new TippyTopProvider();
-      await tippyTop.init();
-
+      const tippyTop = await tippyTopProvider;
       // Remove duplicate entries if they would appear the same
       return `[${[
         ...new Set(
@@ -69,6 +86,30 @@ function getImportableSites(child) {
       ]}]`;
     })())
   );
+}
+
+async function getDefaultSites(child) {
+  // Get default TopSites by region
+  let sites = DEFAULT_SITES.get(
+    DEFAULT_SITES.has(searchRegion) ? searchRegion : ""
+  );
+
+  // Use tippy top to get packaged rich icons
+  const tippyTop = await tippyTopProvider;
+  let defaultSites = sites.split(",").map(link => {
+    let site = { url: link };
+    tippyTop.processSite(site);
+    return {
+      icon: site.tippyTopIcon,
+      title: shortURL(site),
+    };
+  });
+  return Cu.cloneInto(defaultSites, child.contentWindow);
+}
+
+async function getSelectedTheme(child) {
+  let activeThemeId = await child.sendQuery("AWPage:GET_SELECTED_THEME");
+  return activeThemeId;
 }
 
 class AboutWelcomeChild extends JSWindowActorChild {
@@ -137,6 +178,18 @@ class AboutWelcomeChild extends JSWindowActorChild {
       defineAs: "AWGetImportableSites",
     });
 
+    Cu.exportFunction(this.AWGetDefaultSites.bind(this), window, {
+      defineAs: "AWGetDefaultSites",
+    });
+
+    Cu.exportFunction(this.AWGetSelectedTheme.bind(this), window, {
+      defineAs: "AWGetSelectedTheme",
+    });
+
+    Cu.exportFunction(this.AWWaitForRegionChange.bind(this), window, {
+      defineAs: "AWWaitForRegionChange",
+    });
+
     Cu.exportFunction(this.AWSelectTheme.bind(this), window, {
       defineAs: "AWSelectTheme",
     });
@@ -185,16 +238,16 @@ class AboutWelcomeChild extends JSWindowActorChild {
   AWGetStartupData() {
     let experimentData;
     try {
-      // Note that we speciifically don't wait for experiments to be loaded from disk so if
+      // Note that we specifically don't wait for experiments to be loaded from disk so if
       // about:welcome loads outside of the "FirstStartup" scenario this will likely not be ready
       experimentData = ExperimentAPI.getExperiment({
-        group: "aboutwelcome",
+        featureId: "aboutwelcome",
       });
     } catch (e) {
       Cu.reportError(e);
     }
 
-    if (experimentData && experimentData.slug) {
+    if (experimentData?.slug) {
       log.debug(
         `Loading about:welcome with experiment: ${experimentData.slug}`
       );
@@ -210,6 +263,14 @@ class AboutWelcomeChild extends JSWindowActorChild {
 
   AWGetImportableSites() {
     return this.wrapPromise(getImportableSites(this));
+  }
+
+  AWGetDefaultSites() {
+    return this.wrapPromise(getDefaultSites(this));
+  }
+
+  AWGetSelectedTheme() {
+    return this.wrapPromise(getSelectedTheme(this));
   }
 
   /**
@@ -237,6 +298,23 @@ class AboutWelcomeChild extends JSWindowActorChild {
 
   AWWaitForMigrationClose() {
     return this.wrapPromise(this.sendQuery("AWPage:WAIT_FOR_MIGRATION_CLOSE"));
+  }
+
+  AWWaitForRegionChange() {
+    return this.wrapPromise(
+      new Promise(resolve =>
+        Services.prefs.addObserver(SEARCH_REGION_PREF, function observer(
+          subject,
+          topic,
+          data
+        ) {
+          if (data === SEARCH_REGION_PREF && topic === "nsPref:changed") {
+            Services.prefs.removeObserver(SEARCH_REGION_PREF, observer);
+            resolve(searchRegion);
+          }
+        })
+      )
+    );
   }
 
   /**

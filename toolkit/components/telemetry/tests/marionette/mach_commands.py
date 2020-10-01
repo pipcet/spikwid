@@ -53,6 +53,8 @@ def run_telemetry(tests, binary=None, topsrcdir=None, **kwargs):
 
     parser.verify_usage(args)
 
+    os.environ['MOZ_IGNORE_NSS_SHUTDOWN_LEAKS'] = '1'
+
     if not args.logger:
         args.logger = commandline.setup_logging(
             "Telemetry Client Tests", args, {"mach": sys.stdout}
@@ -60,8 +62,7 @@ def run_telemetry(tests, binary=None, topsrcdir=None, **kwargs):
     failed = MarionetteHarness(TelemetryTestRunner, args=vars(args)).run()
     if failed > 0:
         return 1
-    else:
-        return 0
+    return 0
 
 
 @CommandProvider

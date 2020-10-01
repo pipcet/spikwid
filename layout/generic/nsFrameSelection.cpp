@@ -211,10 +211,7 @@ bool nsFrameSelection::IsValidSelectionPoint(nsINode* aNode) const {
 namespace mozilla {
 struct MOZ_RAII AutoPrepareFocusRange {
   AutoPrepareFocusRange(Selection* aSelection,
-                        const bool aMultiRangeSelection
-                            MOZ_GUARD_OBJECT_NOTIFIER_PARAM) {
-    MOZ_GUARD_OBJECT_NOTIFIER_INIT;
-
+                        const bool aMultiRangeSelection) {
     MOZ_ASSERT(aSelection);
     MOZ_ASSERT(aSelection->GetType() == SelectionType::eNormal);
 
@@ -321,7 +318,6 @@ struct MOZ_RAII AutoPrepareFocusRange {
   }
 
   Maybe<Selection::AutoUserInitiated> mUserSelect;
-  MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
 };
 
 }  // namespace mozilla
@@ -793,7 +789,7 @@ nsresult nsFrameSelection::MoveCaret(nsDirection aDirection,
         node = anchorFocusRange->GetEndContainer();
         offset = anchorFocusRange->EndOffset();
       }
-      sel->Collapse(node, offset);
+      sel->CollapseInLimiter(node, offset);
     }
     sel->ScrollIntoView(nsISelectionController::SELECTION_FOCUS_REGION,
                         ScrollAxis(), ScrollAxis(), scrollFlags);
@@ -877,7 +873,7 @@ nsresult nsFrameSelection::MoveCaret(nsDirection aDirection,
     //  1. bumped into the BRFrame, bug 207623
     //  2. had select-all in a text input (DIV range), bug 352759.
     bool isBRFrame = frame->IsBrFrame();
-    sel->Collapse(sel->GetFocusNode(), sel->FocusOffset());
+    sel->CollapseInLimiter(sel->GetFocusNode(), sel->FocusOffset());
     // Note: 'frame' might be dead here.
     if (!isBRFrame) {
       mCaret.mHint = CARET_ASSOCIATE_BEFORE;  // We're now at the end of the
@@ -971,13 +967,10 @@ nsPrevNextBidiLevels nsFrameSelection::GetPrevNextBidiLevels(
     return levels;
   }
 
-  nsIFrame* newFrame;
-  int32_t offset;
-  bool jumpedLine, movedOverNonSelectableText;
-  nsresult rv = currentFrame->GetFrameFromDirection(
-      direction, false, aJumpLines, true, false, &newFrame, &offset,
-      &jumpedLine, &movedOverNonSelectableText);
-  if (NS_FAILED(rv)) newFrame = nullptr;
+  nsIFrame* newFrame =
+      currentFrame
+          ->GetFrameFromDirection(direction, false, aJumpLines, true, false)
+          .mFrame;
 
   FrameBidiData currentBidi = currentFrame->GetBidiData();
   nsBidiLevel currentLevel = currentBidi.embeddingLevel;
@@ -1426,7 +1419,7 @@ nsresult nsFrameSelection::TakeFocus(nsIContent* const aNewFocus,
         bool oldDesiredPosSet =
             mDesiredCaretPos.mIsSet;  // need to keep old desired
                                       // position if it was set.
-        mDomSelections[index]->Collapse(aNewFocus, aContentOffset);
+        mDomSelections[index]->CollapseInLimiter(aNewFocus, aContentOffset);
         mDesiredCaretPos.mIsSet =
             oldDesiredPosSet;  // now reset desired pos back.
         mBatching = saveBatching;
@@ -2581,7 +2574,7 @@ nsresult nsFrameSelection::TableSelection::HandleMouseUpOrDown(
             // Even better, should we collapse to just after the LAST deepest
             // child
             //  (i.e., at the end of the cell's contents)?
-            return aNormalSelection.Collapse(aChildContent, 0);
+            return aNormalSelection.CollapseInLimiter(aChildContent, 0);
           }
 #ifdef DEBUG_TABLE_SELECTION
           printf(

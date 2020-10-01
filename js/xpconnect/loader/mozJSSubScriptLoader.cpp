@@ -18,13 +18,13 @@
 #include "jsapi.h"
 #include "jsfriendapi.h"
 #include "xpcprivate.h"                   // xpc::OptionsBase
-#include "js/CompilationAndEvaluation.h"  // JS::Compile{,ForNonSyntacticScope}
-#include "js/SourceText.h"                // JS::Source{Ownership,Text}
+#include "js/CompilationAndEvaluation.h"  // JS::Compile
+#include "js/friend/JSMEnvironment.h"  // JS::ExecuteInJSMEnvironment, JS::IsJSMEnvironment
+#include "js/SourceText.h"             // JS::Source{Ownership,Text}
 #include "js/Wrapper.h"
 
 #include "mozilla/ContentPrincipal.h"
 #include "mozilla/dom/ScriptLoader.h"
-#include "mozilla/Omnijar.h"
 #include "mozilla/ScriptPreloader.h"
 #include "mozilla/SystemPrincipal.h"
 #include "mozilla/scache/StartupCache.h"
@@ -137,15 +137,16 @@ static JSScript* PrepareScript(nsIURI* uri, JSContext* cx,
   // pass through here, we may need to disable lazy source for them.
   options.setSourceIsLazy(true);
 
+  if (!wantGlobalScript) {
+    options.setNonSyntacticScope(true);
+  }
+
   JS::SourceText<Utf8Unit> srcBuf;
   if (!srcBuf.init(cx, buf, len, JS::SourceOwnership::Borrowed)) {
     return nullptr;
   }
 
-  if (wantGlobalScript) {
-    return JS::Compile(cx, options, srcBuf);
-  }
-  return JS::CompileForNonSyntacticScope(cx, options, srcBuf);
+  return JS::Compile(cx, options, srcBuf);
 }
 
 static bool EvalScript(JSContext* cx, HandleObject targetObj,
@@ -158,8 +159,8 @@ static bool EvalScript(JSContext* cx, HandleObject targetObj,
     if (!JS::CloneAndExecuteScript(cx, script, retval)) {
       return false;
     }
-  } else if (js::IsJSMEnvironment(targetObj)) {
-    if (!ExecuteInJSMEnvironment(cx, script, targetObj)) {
+  } else if (JS::IsJSMEnvironment(targetObj)) {
+    if (!JS::ExecuteInJSMEnvironment(cx, script, targetObj)) {
       return false;
     }
     retval.setUndefined();
@@ -190,8 +191,8 @@ static bool EvalScript(JSContext* cx, HandleObject targetObj,
         return false;
       }
     } else {
-      MOZ_ASSERT(js::IsJSMEnvironment(loadScope));
-      if (!js::ExecuteInJSMEnvironment(cx, script, loadScope, envChain)) {
+      MOZ_ASSERT(JS::IsJSMEnvironment(loadScope));
+      if (!JS::ExecuteInJSMEnvironment(cx, script, loadScope, envChain)) {
         return false;
       }
       retval.setUndefined();
@@ -249,10 +250,6 @@ bool mozJSSubScriptLoader::ReadScript(JS::MutableHandle<JSScript*> script,
                                       const char* uriStr, nsIIOService* serv,
                                       bool wantReturnValue,
                                       bool useCompilationScope) {
-  // We're going to cache the XDR encoded script data - suspend writes via the
-  // CacheAwareZipReader, otherwise we'll end up redundantly caching scripts.
-  AutoSuspendStartupCacheWrites suspendScache;
-
   // We create a channel and call SetContentType, to avoid expensive MIME type
   // lookups (bug 632490).
   nsCOMPtr<nsIChannel> chan;
@@ -281,7 +278,7 @@ bool mozJSSubScriptLoader::ReadScript(JS::MutableHandle<JSScript*> script,
   int64_t len = -1;
 
   rv = chan->GetContentLength(&len);
-  if (NS_FAILED(rv) || len == -1) {
+  if (NS_FAILED(rv)) {
     ReportError(cx, LOAD_ERROR_NOCONTENT, uri);
     return false;
   }
@@ -294,6 +291,21 @@ bool mozJSSubScriptLoader::ReadScript(JS::MutableHandle<JSScript*> script,
   nsCString buf;
   rv = NS_ReadInputStreamToString(instream, buf, len);
   NS_ENSURE_SUCCESS(rv, false);
+
+  if (len < 0) {
+    len = buf.Length();
+  }
+
+#ifdef DEBUG
+  int64_t currentLength = -1;
+  // if getting content length succeeded above, it should not fail now
+  MOZ_ASSERT(chan->GetContentLength(&currentLength) == NS_OK);
+  // if content length was not known when GetContentLength() was called before,
+  // 'len' would be set to -1 until NS_ReadInputStreamToString() set its correct
+  // value. Every subsequent call to GetContentLength() should return the same
+  // length as that value.
+  MOZ_ASSERT(currentLength == len);
+#endif
 
   Maybe<JSAutoRealm> ar;
 
@@ -404,8 +416,8 @@ nsresult mozJSSubScriptLoader::DoLoadSubScriptWithOptions(
   }
 
   NS_LossyConvertUTF16toASCII asciiUrl(url);
-  AUTO_PROFILER_TEXT_MARKER_CAUSE("SubScript", asciiUrl, JS, Nothing(),
-                                  profiler_get_backtrace());
+  AUTO_PROFILER_MARKER_TEXT("SubScript", JS.WithOptions(MarkerStack::Capture()),
+                            asciiUrl);
   AUTO_PROFILER_LABEL_DYNAMIC_NSCSTRING_NONSENSITIVE(
       "mozJSSubScriptLoader::DoLoadSubScriptWithOptions", OTHER, asciiUrl);
 
@@ -455,15 +467,7 @@ nsresult mozJSSubScriptLoader::DoLoadSubScriptWithOptions(
   bool ignoreCache =
       options.ignoreCache || !isSystem || scheme.EqualsLiteral("blob");
 
-  // Since we are intending to cache these buffers in the script preloader
-  // already, caching them in the StartupCache tends to be redundant. This
-  // ought to be addressed, but as in bug 1627075 we extended the
-  // StartupCache to be multi-process, we just didn't want to propagate
-  // this problem into yet more processes, so we pretend the StartupCache
-  // doesn't exist if we're not the parent process.
-  StartupCache* cache = (ignoreCache || !XRE_IsParentProcess())
-                            ? nullptr
-                            : StartupCache::GetSingleton();
+  StartupCache* cache = ignoreCache ? nullptr : StartupCache::GetSingleton();
 
   nsAutoCString cachePath;
   SubscriptCachePath(cx, uri, targetObj, cachePath);

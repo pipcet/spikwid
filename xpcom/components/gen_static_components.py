@@ -63,6 +63,8 @@ class ProcessSelector:
     ALLOW_IN_VR_PROCESS = 0x8
     ALLOW_IN_SOCKET_PROCESS = 0x10
     ALLOW_IN_RDD_PROCESS = 0x20
+    ALLOW_IN_GPU_AND_MAIN_PROCESS = (ALLOW_IN_GPU_PROCESS |
+                                     MAIN_PROCESS_ONLY)
     ALLOW_IN_GPU_AND_SOCKET_PROCESS = (ALLOW_IN_GPU_PROCESS |
                                        ALLOW_IN_SOCKET_PROCESS)
     ALLOW_IN_GPU_AND_VR_PROCESS = ALLOW_IN_GPU_PROCESS | ALLOW_IN_VR_PROCESS
@@ -90,6 +92,7 @@ PROCESSES = {
     ProcessSelector.ALLOW_IN_VR_PROCESS: 'ALLOW_IN_VR_PROCESS',
     ProcessSelector.ALLOW_IN_SOCKET_PROCESS: 'ALLOW_IN_SOCKET_PROCESS',
     ProcessSelector.ALLOW_IN_RDD_PROCESS: 'ALLOW_IN_RDD_PROCESS',
+    ProcessSelector.ALLOW_IN_GPU_AND_MAIN_PROCESS: 'ALLOW_IN_GPU_AND_MAIN_PROCESS',
     ProcessSelector.ALLOW_IN_GPU_AND_SOCKET_PROCESS: 'ALLOW_IN_GPU_AND_SOCKET_PROCESS',
     ProcessSelector.ALLOW_IN_GPU_AND_VR_PROCESS: 'ALLOW_IN_GPU_AND_VR_PROCESS',
     ProcessSelector.ALLOW_IN_GPU_VR_AND_SOCKET_PROCESS: 'ALLOW_IN_GPU_VR_AND_SOCKET_PROCESS',
@@ -602,6 +605,7 @@ def gen_substs(manifests):
     headers = set()
 
     modules = []
+    categories = defaultdict(list)
 
     for manifest in manifests:
         headers |= set(manifest.get('Headers', []))
@@ -616,9 +620,17 @@ def gen_substs(manifests):
         for clas in manifest['Classes']:
             modules.append(ModuleEntry(clas, init_idx))
 
+        for category, entries in manifest.get('Categories', {}).items():
+            for key, entry in entries.items():
+                if isinstance(entry, tuple):
+                    value, process = entry
+                else:
+                    value, process = entry, 0
+                categories[category].append((key, value, process))
+
+    cids = set()
     contracts = []
     contract_map = {}
-    categories = defaultdict(list)
     js_services = {}
 
     jsms = set()
@@ -651,6 +663,10 @@ def gen_substs(manifests):
             if mod.js_name in js_services:
                 raise Exception('Duplicate JS service name: %s' % mod.js_name)
             js_services[mod.js_name] = mod
+
+        if str(mod.cid) in cids:
+            raise Exception('Duplicate cid: %s' % str(mod.cid))
+        cids.add(str(mod.cid))
 
     cid_phf = PerfectHash(modules, PHF_SIZE,
                           key=lambda module: module.cid.bytes)

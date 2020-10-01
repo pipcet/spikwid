@@ -456,15 +456,54 @@ const GfxDeviceFamily* GfxDriverInfo::GetDeviceFamily(DeviceFamily id) {
       APPEND_RANGE(0x06c0, INT32_MAX);
       break;
     case DeviceFamily::IntelRolloutWebRender:
-      // broadwell gt1 (gen8)
-      APPEND_DEVICE(0x1602);
-      APPEND_DEVICE(0x1606);
-      APPEND_DEVICE(0x160a);
-      APPEND_DEVICE(0x160b);
-      APPEND_DEVICE(0x160d);
-      APPEND_DEVICE(0x160e);
+#ifdef EARLY_BETA_OR_EARLIER
+      // sandybridge gen6 gt1
+      APPEND_DEVICE(0x0102);
+      APPEND_DEVICE(0x0106);
+      APPEND_DEVICE(0x010a);
+#endif
 
-      // gen7.5 gt2
+      [[fallthrough]];
+    case DeviceFamily::IntelModernRolloutWebRender:
+      // sandybridge gen6 gt2
+      APPEND_DEVICE(0x0112);
+      APPEND_DEVICE(0x0116);
+      APPEND_DEVICE(0x0122);
+      APPEND_DEVICE(0x0126);
+
+      // ivybridge gen7 gt1
+      APPEND_DEVICE(0x0152);
+      APPEND_DEVICE(0x0156);
+      APPEND_DEVICE(0x015a);
+
+      // ivybridge gen7 gt2
+      APPEND_DEVICE(0x0162);
+      APPEND_DEVICE(0x0166);
+      APPEND_DEVICE(0x016a);
+
+      // haswell gen7.5 gt1
+      APPEND_DEVICE(0x0402);
+      APPEND_DEVICE(0x0406);
+      APPEND_DEVICE(0x040a);
+      APPEND_DEVICE(0x040b);
+      APPEND_DEVICE(0x040e);
+      APPEND_DEVICE(0x0a02);
+      APPEND_DEVICE(0x0a06);
+      APPEND_DEVICE(0x0a0a);
+      APPEND_DEVICE(0x0a0b);
+      APPEND_DEVICE(0x0a0e);
+      APPEND_DEVICE(0x0c02);
+      APPEND_DEVICE(0x0c06);
+      APPEND_DEVICE(0x0c0c);
+      APPEND_DEVICE(0x0c0b);
+      APPEND_DEVICE(0x0c0e);
+      APPEND_DEVICE(0x0d02);
+      APPEND_DEVICE(0x0d06);
+      APPEND_DEVICE(0x0d0a);
+      APPEND_DEVICE(0x0d0b);
+      APPEND_DEVICE(0x0d0e);
+
+      // haswell gen7.5 gt2
       APPEND_DEVICE(0x0412);
       APPEND_DEVICE(0x0416);
       APPEND_DEVICE(0x041a);
@@ -476,7 +515,7 @@ const GfxDeviceFamily* GfxDriverInfo::GetDeviceFamily(DeviceFamily id) {
       APPEND_DEVICE(0x0a1b);
       APPEND_DEVICE(0x0a1e);
 
-      // gen7.5 gt3
+      // haswell gen7.5 gt3
       APPEND_DEVICE(0x0422);
       APPEND_DEVICE(0x0426);
       APPEND_DEVICE(0x042a);
@@ -500,50 +539,6 @@ const GfxDeviceFamily* GfxDriverInfo::GetDeviceFamily(DeviceFamily id) {
       APPEND_DEVICE(0x0d2e);
 
 #ifdef EARLY_BETA_OR_EARLIER
-      // gen7 gt2
-      APPEND_DEVICE(0x0162);
-      APPEND_DEVICE(0x0166);
-      APPEND_DEVICE(0x016a);
-
-      // gen6 gt2
-      APPEND_DEVICE(0x0112);
-      APPEND_DEVICE(0x0116);
-      APPEND_DEVICE(0x0122);
-      APPEND_DEVICE(0x0126);
-#endif
-
-#if defined(MOZ_WIDGET_GTK) || defined(NIGHTLY_BUILD)
-      // Gen7.5 not allowed until bug 1576637 is resolved.
-      // gen7.5 gt1
-      APPEND_DEVICE(0x0402);
-      APPEND_DEVICE(0x0406);
-      APPEND_DEVICE(0x040a);
-      APPEND_DEVICE(0x040b);
-      APPEND_DEVICE(0x040e);
-      APPEND_DEVICE(0x0a02);
-      APPEND_DEVICE(0x0a06);
-      APPEND_DEVICE(0x0a0a);
-      APPEND_DEVICE(0x0a0b);
-      APPEND_DEVICE(0x0a0e);
-      APPEND_DEVICE(0x0c02);
-      APPEND_DEVICE(0x0c06);
-      APPEND_DEVICE(0x0c0c);
-      APPEND_DEVICE(0x0c0b);
-      APPEND_DEVICE(0x0c0e);
-      APPEND_DEVICE(0x0d02);
-      APPEND_DEVICE(0x0d06);
-      APPEND_DEVICE(0x0d0a);
-      APPEND_DEVICE(0x0d0b);
-      APPEND_DEVICE(0x0d0e);
-
-      // gen7 gt1
-      APPEND_DEVICE(0x0152);
-      APPEND_DEVICE(0x0156);
-      APPEND_DEVICE(0x015a);
-#endif
-      [[fallthrough]];
-    case DeviceFamily::IntelModernRolloutWebRender:
-#ifdef NIGHTLY_BUILD
       // broxton (apollolake)
       APPEND_DEVICE(0x0a84);
       APPEND_DEVICE(0x1a84);
@@ -555,6 +550,14 @@ const GfxDeviceFamily* GfxDriverInfo::GetDeviceFamily(DeviceFamily id) {
       APPEND_DEVICE(0x3184);
       APPEND_DEVICE(0x3185);
 #endif
+      // broadwell gt1 (gen8)
+      APPEND_DEVICE(0x1602);
+      APPEND_DEVICE(0x1606);
+      APPEND_DEVICE(0x160a);
+      APPEND_DEVICE(0x160b);
+      APPEND_DEVICE(0x160d);
+      APPEND_DEVICE(0x160e);
+
       // broadwell gt2+ (gen8)
       APPEND_DEVICE(0x1612);
       APPEND_DEVICE(0x1616);
@@ -626,6 +629,7 @@ const GfxDeviceFamily* GfxDriverInfo::GetDeviceFamily(DeviceFamily id) {
       APPEND_DEVICE(0x5923);
       APPEND_DEVICE(0x5927);
       APPEND_DEVICE(0x593b);
+      APPEND_DEVICE(0x87c0);
 
       // coffeelake gt1
       APPEND_DEVICE(0x3e90);
@@ -663,6 +667,12 @@ const GfxDeviceFamily* GfxDriverInfo::GetDeviceFamily(DeviceFamily id) {
 
       // icelake gt1,gt1.5,gt2
       APPEND_RANGE(0x8a50, 0x8a5d);
+
+      // rocketlake
+      APPEND_RANGE(0x4c8a, 0x4c9a);
+
+      // tigerlake
+      APPEND_RANGE(0x9a40, 0x9af8);
       break;
     case DeviceFamily::AtiRolloutWebRender:
       APPEND_RANGE(0x6600, 0x66af);
@@ -683,9 +693,7 @@ const GfxDeviceFamily* GfxDriverInfo::GetDeviceFamily(DeviceFamily id) {
 #ifdef EARLY_BETA_OR_EARLIER
       // Stoney
       APPEND_DEVICE(0x98e4);
-#endif
 
-#if defined(NIGHTLY_BUILD)
       // Evergreen
       APPEND_RANGE(0x6840, 0x684b);
       APPEND_RANGE(0x6850, 0x685f);

@@ -92,6 +92,9 @@ class AboutLoginsChild extends JSWindowActorChild {
 
             return masterPasswordPromise;
           },
+          fileImportEnabled: Services.prefs.getBoolPref(
+            "signon.management.page.fileImport.enabled"
+          ),
           // Default to enabled just in case a search is attempted before we get a response.
           masterPasswordEnabled: true,
           passwordRevealVisible: true,
@@ -103,10 +106,6 @@ class AboutLoginsChild extends JSWindowActorChild {
             cloneFunctions: true,
           }
         );
-        let aboutLoginsUtilsReadyEvent = new win.CustomEvent(
-          "AboutLoginsUtilsReady"
-        );
-        win.dispatchEvent(aboutLoginsUtilsReadyEvent);
         break;
       }
       case "AboutLoginsCopyLoginDetail": {

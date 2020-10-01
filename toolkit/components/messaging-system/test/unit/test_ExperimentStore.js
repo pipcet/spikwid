@@ -4,10 +4,84 @@ const { ExperimentFakes } = ChromeUtils.import(
   "resource://testing-common/MSTestUtils.jsm"
 );
 
+add_task(async function test_usageBeforeInitialization() {
+  const store = ExperimentFakes.store();
+  const experiment = ExperimentFakes.experiment("foo", {
+    branch: {
+      slug: "variant",
+      feature: { featureId: "purple", enabled: true },
+    },
+  });
+
+  Assert.equal(store.getAll().length, 0, "It should not fail");
+
+  await store.init();
+  store.addExperiment(experiment);
+
+  Assert.equal(
+    store.getExperimentForFeature("purple"),
+    experiment,
+    "should return a matching experiment for the given feature"
+  );
+});
+
+add_task(async function test_addExperiment_eventEmit() {
+  const store = ExperimentFakes.store();
+  const slugStub = sinon.stub();
+  const featureStub = sinon.stub();
+  const experiment = ExperimentFakes.experiment("foo", {
+    branch: {
+      slug: "variant",
+      feature: { featureId: "purple", enabled: true },
+    },
+  });
+
+  await store.init();
+
+  store.on("update:foo", slugStub);
+  store.on("update:purple", featureStub);
+
+  store.addExperiment(experiment);
+
+  Assert.equal(slugStub.callCount, 1);
+  Assert.equal(slugStub.firstCall.args[1].slug, experiment.slug);
+  Assert.equal(featureStub.callCount, 1);
+  Assert.equal(featureStub.firstCall.args[1].slug, experiment.slug);
+});
+
+add_task(async function test_updateExperiment_eventEmit() {
+  const store = ExperimentFakes.store();
+  const slugStub = sinon.stub();
+  const featureStub = sinon.stub();
+  const experiment = ExperimentFakes.experiment("foo", {
+    branch: {
+      slug: "variant",
+      feature: { featureId: "purple", enabled: true },
+    },
+  });
+
+  await store.init();
+
+  store.addExperiment(experiment);
+
+  store.on("update:foo", slugStub);
+  store.on("update:purple", featureStub);
+
+  store.updateExperiment(experiment.slug, experiment);
+
+  Assert.equal(slugStub.callCount, 1);
+  Assert.equal(slugStub.firstCall.args[1].slug, experiment.slug);
+  Assert.equal(featureStub.callCount, 1);
+  Assert.equal(featureStub.firstCall.args[1].slug, experiment.slug);
+});
+
 add_task(async function test_getExperimentForGroup() {
   const store = ExperimentFakes.store();
   const experiment = ExperimentFakes.experiment("foo", {
-    branch: { slug: "variant", groups: ["green"] },
+    branch: {
+      slug: "variant",
+      feature: { featureId: "purple", enabled: true },
+    },
   });
 
   await store.init();
@@ -15,60 +89,82 @@ add_task(async function test_getExperimentForGroup() {
   store.addExperiment(experiment);
 
   Assert.equal(
-    store.getExperimentForGroup("green"),
+    store.getExperimentForFeature("purple"),
     experiment,
-    "should return a matching experiment for the given group"
+    "should return a matching experiment for the given feature"
   );
 });
 
-add_task(async function test_hasExperimentForGroups() {
+add_task(async function test_getFeature() {
+  const store = ExperimentFakes.store();
+  const experiment = ExperimentFakes.experiment("foo", {
+    branch: {
+      slug: "variant",
+      feature: { featureId: "green", enabled: true },
+    },
+  });
+
+  await store.init();
+  store.addExperiment(experiment);
+
+  Assert.equal(
+    store.getFeature("green"),
+    experiment.branch.feature,
+    "Should return feature of active experiment"
+  );
+});
+
+add_task(async function test_hasExperimentForFeature() {
   const store = ExperimentFakes.store();
 
   await store.init();
   store.addExperiment(
     ExperimentFakes.experiment("foo", {
-      branch: { slug: "variant", groups: ["green"] },
+      branch: {
+        slug: "variant",
+        feature: { featureId: "green", enabled: true },
+      },
     })
   );
   store.addExperiment(
     ExperimentFakes.experiment("foo2", {
-      branch: { slug: "variant", groups: ["yellow", "orange"] },
+      branch: {
+        slug: "variant",
+        feature: { featureId: "yellow", enabled: true },
+      },
     })
   );
   store.addExperiment(
     ExperimentFakes.experiment("bar_expired", {
       active: false,
-      branch: { slug: "variant", groups: ["purple"] },
+      branch: {
+        slug: "variant",
+        feature: { featureId: "purple", enabled: true },
+      },
     })
   );
   Assert.equal(
-    store.hasExperimentForGroups([]),
+    store.hasExperimentForFeature(),
     false,
-    "should return false if the input is an empty array"
+    "should return false if the input is empty"
   );
 
   Assert.equal(
-    store.hasExperimentForGroups(["green", "blue"]),
+    store.hasExperimentForFeature(undefined),
+    false,
+    "should return false if the input is undefined"
+  );
+
+  Assert.equal(
+    store.hasExperimentForFeature("green"),
     true,
     "should return true if there is an experiment with any of the given groups"
   );
 
   Assert.equal(
-    store.hasExperimentForGroups(["black", "yellow"]),
-    true,
-    "should return true if there is one of an experiment's multiple groups matches any of the given groups"
-  );
-
-  Assert.equal(
-    store.hasExperimentForGroups(["purple"]),
+    store.hasExperimentForFeature("purple"),
     false,
     "should return false if there is a non-active experiment with the given groups"
-  );
-
-  Assert.equal(
-    store.hasExperimentForGroups(["blue", "red"]),
-    false,
-    "should return false if none of the experiments have the given groups"
   );
 });
 
@@ -104,8 +200,9 @@ add_task(async function test_addExperiment() {
 });
 
 add_task(async function test_updateExperiment() {
+  const feature = { featureId: "cfr", enabled: true };
   const experiment = Object.freeze(
-    ExperimentFakes.experiment("foo", { value: true, active: true })
+    ExperimentFakes.experiment("foo", { feature, active: true })
   );
   const store = ExperimentFakes.store();
 
@@ -115,5 +212,9 @@ add_task(async function test_updateExperiment() {
 
   const actual = store.get("foo");
   Assert.equal(actual.active, false, "should change updated props");
-  Assert.equal(actual.value, true, "should not update other props");
+  Assert.deepEqual(
+    actual.branch.feature,
+    feature,
+    "should not update other props"
+  );
 });

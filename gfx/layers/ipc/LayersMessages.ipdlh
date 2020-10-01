@@ -44,6 +44,8 @@ using mozilla::LayerIntRegion from "Units.h";
 using mozilla::ParentLayerIntRect from "Units.h";
 using mozilla::ParentLayerRect from "Units.h";
 using mozilla::LayoutDeviceIntRect from "Units.h";
+using mozilla::LayoutDevicePoint from "Units.h";
+using mozilla::LayoutDeviceRect from "Units.h";
 using mozilla::layers::ScaleMode from "mozilla/layers/LayersTypes.h";
 using mozilla::layers::EventRegions from "mozilla/layers/LayersTypes.h";
 using mozilla::layers::EventRegionsOverride from "mozilla/layers/LayersTypes.h";
@@ -124,7 +126,7 @@ union TimingFunction {
 
 struct LayerColor { DeviceColor value; };
 
-union Animatable {
+comparable union Animatable {
   null_t;
   float;
   nscolor;
@@ -148,7 +150,7 @@ struct AnimationSegment {
   TimingFunction sampleFn;
 };
 
-struct MotionPathData {
+comparable struct MotionPathData {
   // the transform-origin property for motion in css pixels
   CSSPoint origin;
   // the adjustment for the anchor point of motion path.
@@ -156,8 +158,8 @@ struct MotionPathData {
   RayReferenceData rayReferenceData;
 };
 
-struct PartialPrerenderData {
-  LayoutDeviceIntRect rect;
+comparable struct PartialPrerenderData {
+  LayoutDeviceRect rect;
   SideBits overflowedSides;
   // the scroll id of the nearest scrollable frame of this partial prerender
   // data.
@@ -165,11 +167,17 @@ struct PartialPrerenderData {
   // The clip rectangle of the nearest scrollable frame.
   // NOTE: This should be used only for fallback cases where APZ is not enabled.
   ParentLayerRect clipRect;
+  // a transform from the coordinate space of the animated element to a
+  // coordinate space where the `clipRect` can be applied.
+  Matrix4x4 transformInClip; // Used only for WebRender.
+  // the position relative to the reference frame of the animated transform
+  // element in the element coordinate space.
+  LayoutDevicePoint position; // Used only for WebRender.
 };
 
 // Transforms need extra information to correctly convert the list of transform
 // functions to a Matrix4x4 that can be applied directly to the layer.
-struct TransformData {
+comparable struct TransformData {
   // the origin of the frame being transformed in app units
   nsPoint origin;
   // the transform-origin property for the transform in device pixels
@@ -302,7 +310,7 @@ struct LayerAttributes {
 };
 
 // See nsIWidget Configurations
-struct PluginWindowData {
+comparable struct PluginWindowData {
   uintptr_t windowId;
   LayoutDeviceIntRect[] clip;
   LayoutDeviceIntRect bounds;
@@ -429,6 +437,18 @@ struct OpNotifyNotUsed {
   uint64_t fwdTransactionId;
 };
 
+struct OpDeliverAcquireFence {
+  PTexture texture;
+  FileDescriptor fenceFd;
+};
+
+struct OpDeliverReleaseFence {
+  FileDescriptor? fenceFd;
+  uint64_t bufferId;
+  uint64_t fwdTransactionId;
+  bool usesImageBridge;
+};
+
 union CompositableOperationDetail {
   OpPaintTextureRegion;
 
@@ -438,6 +458,8 @@ union CompositableOperationDetail {
 
   OpUseTexture;
   OpUseComponentAlphaTextures;
+
+  OpDeliverAcquireFence;
 };
 
 struct CompositableOperation {
@@ -499,6 +521,7 @@ struct ImageCompositeNotification {
 
 union AsyncParentMessageData {
   OpNotifyNotUsed;
+  OpDeliverReleaseFence;
 };
 
 struct PaintTiming {

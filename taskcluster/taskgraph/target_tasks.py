@@ -13,6 +13,7 @@ import six
 from taskgraph import try_option_syntax
 from taskgraph.parameters import Parameters
 from taskgraph.util.attributes import match_run_on_projects, match_run_on_hg_branches
+from taskgraph.util.platforms import platform_family
 
 _target_task_methods = {}
 
@@ -33,18 +34,13 @@ UNCOMMON_TRY_TASK_LABELS = [
     # Linux tasks
     r'linux-',  # hide all linux32 tasks by default - bug 1599197
     r'linux1804-32',  # hide linux32 tests - bug 1599197
-    r'linux.*web-platform-tests.*-fis-',  # hide wpt linux fission tests - bug 1610879
     # Test tasks
     r'web-platform-tests.*backlog',  # hide wpt jobs that are not implemented yet - bug 1572820
     r'-ccov/',
     r'-profiling-',  # talos/raptor profiling jobs are run too often
-    # Generally, we don't want shippable builds or tests to run, unless they're needed
-    # for performance tests _or_ on OS X, where we run all tests against shippable
-    # builds (not opt).
-    # The negative lookbehind assertion looks weird here because it has to be fixed
-    # width, and we have two platforms (build & test) to catch.
-    # The full version of the first platform is macosx1014-64
-    r'(?<!(x1014-64|macosx64))-shippable(?!.*(awsy|browsertime|marionette-headless|raptor|talos|web-platform-tests-wdspec-headless))',  # noqa - too long
+    # Hide shippable versions of tests we have opt versions of because the non-shippable
+    # versions are faster to run. This is mostly perf tests.
+    r'-shippable(?!.*(awsy|browsertime|marionette-headless|mochitest-devtools-chrome-fis|raptor|talos|web-platform-tests-wdspec-headless))',  # noqa - too long
 ]
 
 
@@ -127,7 +123,7 @@ def filter_on_platforms(task, platforms):
 
 
 def filter_by_uncommon_try_tasks(task, optional_filters=None):
-    """Filters tasks based on blacklist rules.
+    """Filters tasks that should not be commonly run on try.
 
     Args:
         task (str): String representing the task name.
@@ -171,6 +167,38 @@ def filter_release_tasks(task, parameters):
     if task.attributes.get('shipping_phase') not in (None, 'build'):
         return False
 
+    """ No debug on beta/release, keep on ESR with 4 week cycles, beta/release
+    will not be too different from central, but ESR will live for a long time.
+
+    From June 2019 -> June 2020, we found 1 unique regression on ESR debug
+    and 5 unique regressions on beta/release.  Keeping spidermonkey and linux
+    debug finds all but 1 unique regressions (windows found on try) for beta/release.
+    """
+    if parameters['release_type'].startswith('esr'):
+        return True
+
+    # code below here is intended to reduce beta/release debug tasks
+    build_type = task.attributes.get('build_type', '')
+    build_platform = task.attributes.get('build_platform', '')
+    test_platform = task.attributes.get('test_platform', '')
+    if task.kind == 'hazard' or 'toolchain' in build_platform:
+        # keep hazard and toolchain builds around
+        return True
+
+    if build_type == 'debug':
+        if 'linux' not in build_platform:
+            # filter out windows/mac/android
+            return False
+        elif task.kind not in ['spidermonkey'] and '-qr' in test_platform:
+            # filter out linux-qr tests, leave spidermonkey
+            return False
+        elif '64' not in build_platform:
+            # filter out linux32 builds
+            return False
+
+    # webrender-android-*-debug doesn't have attributes to find 'debug', using task.label.
+    if task.kind == 'webrender' and 'debug' in task.label:
+        return False
     return True
 
 
@@ -182,10 +210,32 @@ def filter_out_missing_signoffs(task, parameters):
     return True
 
 
+def filter_tests_without_manifests(task, parameters):
+    """Remove test tasks that have an empty 'test_manifests' attribute.
+
+    This situation can arise when the test loader (e.g bugbug) decided there
+    weren't any important manifests to run for the given push. We filter tasks
+    out here rather than in the transforms so that the full task graph is still
+    aware that the task exists (which is needed by the backfill action).
+    """
+    if (
+        task.kind == "test"
+        and "test_manifests" in task.attributes
+        and not task.attributes["test_manifests"]
+    ):
+        return False
+    return True
+
+
 def standard_filter(task, parameters):
     return all(
         filter_func(task, parameters) for filter_func in
-        (filter_out_cron, filter_for_project, filter_for_hg_branch)
+        (
+            filter_out_cron,
+            filter_for_project,
+            filter_for_hg_branch,
+            filter_tests_without_manifests,
+        )
     )
 
 
@@ -236,7 +286,8 @@ def _try_option_syntax(full_task_graph, parameters, graph_config):
             task.attributes['task_duplicates'] = options.talos_trigger_tests
 
         # If the developer wants test raptor jobs to be rebuilt N times we add that value here
-        if options.raptor_trigger_tests > 1 and task.attributes.get('unittest_suite') == 'raptor':
+        if options.raptor_trigger_tests and options.raptor_trigger_tests > 1 and \
+                task.attributes.get('unittest_suite') == 'raptor':
             task.attributes['task_duplicates'] = options.raptor_trigger_tests
 
         task.attributes.update(attributes)
@@ -268,6 +319,36 @@ def target_tasks_try(full_task_graph, parameters, graph_config):
         return []
 
 
+@_target_task('try_select_tasks')
+def target_tasks_try_select(full_task_graph, parameters, graph_config):
+    tasks = set()
+    for project in ('autoland', 'mozilla-central'):
+        params = dict(parameters)
+        params['project'] = project
+        parameters = Parameters(**params)
+        tasks.update([l for l, t in six.iteritems(full_task_graph.tasks)
+                      if standard_filter(t, parameters)
+                      and filter_out_shipping_phase(t, parameters)
+                      and filter_out_devedition(t, parameters)])
+
+    return [l for l in tasks if filter_by_uncommon_try_tasks(l)]
+
+
+@_target_task('try_select_tasks_uncommon')
+def target_tasks_try_select_uncommon(full_task_graph, parameters, graph_config):
+    tasks = set()
+    for project in ('autoland', 'mozilla-central'):
+        params = dict(parameters)
+        params['project'] = project
+        parameters = Parameters(**params)
+        tasks.update([l for l, t in six.iteritems(full_task_graph.tasks)
+                      if standard_filter(t, parameters)
+                      and filter_out_shipping_phase(t, parameters)
+                      and filter_out_devedition(t, parameters)])
+
+    return [l for l in tasks]
+
+
 @_target_task('try_auto')
 def target_tasks_try_auto(full_task_graph, parameters, graph_config):
     """Target the tasks which have indicated they should be run on autoland
@@ -293,6 +374,67 @@ def target_tasks_default(full_task_graph, parameters, graph_config):
             if standard_filter(t, parameters)
             and filter_out_shipping_phase(t, parameters)
             and filter_out_devedition(t, parameters)]
+
+
+@_target_task('autoland_tasks')
+def target_tasks_autoland(full_task_graph, parameters, graph_config):
+    """In addition to doing the filtering by project that the 'default'
+       filter does, also remove any tests running against shippable builds
+       for non-backstop pushes."""
+    filtered_for_project = target_tasks_default(full_task_graph, parameters, graph_config)
+
+    def filter(task):
+        if task.kind != "test":
+            return True
+
+        if parameters["backstop"]:
+            return True
+
+        build_type = task.attributes.get('build_type')
+        shippable = task.attributes.get('shippable', False)
+
+        if not build_type or build_type != 'opt' or not shippable:
+            return True
+
+        return False
+
+    return [l for l in filtered_for_project if filter(full_task_graph[l])]
+
+
+@_target_task('mozilla_central_tasks')
+def target_tasks_mozilla_central(full_task_graph, parameters, graph_config):
+    """In addition to doing the filtering by project that the 'default'
+       filter does, also remove any tests running against regular (aka not shippable,
+       asan, etc.) opt builds."""
+    filtered_for_project = target_tasks_default(full_task_graph, parameters, graph_config)
+
+    def filter(task):
+        if task.kind != "test":
+            return True
+
+        build_platform = task.attributes.get('build_platform')
+        build_type = task.attributes.get('build_type')
+        shippable = task.attributes.get('shippable', False)
+
+        if not build_platform or not build_type:
+            return True
+
+        family = platform_family(build_platform)
+        # We need to know whether this test is against a "regular" opt build
+        # (which is to say, not shippable, asan, tsan, or any other opt build
+        # with other properties). There's no positive test for this, so we have to
+        # do it somewhat hackily. Android doesn't have variants other than shippable
+        # so it is pretty straightforward to check for. Other platforms have many
+        # variants, but none of the regular opt builds we're looking for have a "-"
+        # in their platform name, so this works (for now).
+        is_regular_opt = (family == 'android' and not shippable) or '-' not in build_platform
+
+        if build_type != "opt" or not is_regular_opt:
+            return True
+
+        return False
+
+    return [l for l in filtered_for_project if filter(full_task_graph[l])]
 
 
 @_target_task('graphics_tasks')
@@ -345,32 +487,6 @@ def target_tasks_mozilla_release(full_task_graph, parameters, graph_config):
     return [l for l, t in six.iteritems(full_task_graph.tasks)
             if filter_release_tasks(t, parameters)
             and standard_filter(t, parameters)]
-
-
-@_target_task('mozilla_esr68_tasks')
-def target_tasks_mozilla_esr68(full_task_graph, parameters, graph_config):
-    """Select the set of tasks required for a promotable beta or release build
-    of desktop, plus android CI. The candidates build process involves a pipeline
-    of builds and signing, but does not include beetmover or balrog jobs."""
-
-    def filter(task):
-        if not filter_release_tasks(task, parameters):
-            return False
-
-        if not standard_filter(task, parameters):
-            return False
-
-        platform = task.attributes.get('test_platform')
-
-        # Don't run QuantumRender tests on esr68.
-        if platform and '-qr/' in platform:
-            return False
-
-        # Unlike esr60, we do want all kinds of fennec builds on esr68.
-
-        return True
-
-    return [l for l, t in six.iteritems(full_task_graph.tasks) if filter(t)]
 
 
 @_target_task('mozilla_esr78_tasks')
@@ -563,9 +679,7 @@ def target_tasks_fennec_v68(full_task_graph, parameters, graph_config):
             return False
 
         if '-fennec' in try_name:
-            if 'raptor-scn-power-idle' in try_name:
-                return True
-            if 'raptor-speedometer' in try_name and 'power' in try_name:
+            if '-power' in try_name:
                 return True
             if 'browsertime' in try_name:
                 if 'tp6m' in try_name:
@@ -664,9 +778,6 @@ def target_tasks_general_perf_testing(full_task_graph, parameters, graph_config)
                     if 'tp6' in try_name and 'amazon' in try_name:
                         return True
             else:
-                # Bug 1652451 - Perma-failing due to server issues
-                if 'youtube-playback' in try_name and 'youtube-playback-chrome' not in try_name:
-                    return False
                 # Run tests on all chrome variants
                 if '-chrome' in try_name:
                     return True
@@ -682,9 +793,7 @@ def target_tasks_general_perf_testing(full_task_graph, parameters, graph_config)
                 return _run_live_site()
             # Select fenix resource usage tests
             if 'fenix' in try_name:
-                if 'raptor-scn-power-idle' in try_name:
-                    return True
-                if 'raptor-speedometer' in try_name and 'power' in try_name:
+                if '-power' in try_name:
                     return True
             # Select geckoview resource usage tests
             if 'geckoview' in try_name:
@@ -694,11 +803,13 @@ def target_tasks_general_perf_testing(full_task_graph, parameters, graph_config)
                 # Ignore cpu+memory+power tests
                 if power_task and cpu_n_memory_task:
                     return False
-                if power_task or cpu_n_memory_task:
+                if cpu_n_memory_task:
                     if '-speedometer-' in try_name:
                         return True
                     if '-scn' in try_name and '-idle' in try_name:
                         return True
+                if power_task:
+                    return 'browsertime' in try_name
             # Select browsertime-specific tests
             if 'browsertime' in try_name:
                 if 'speedometer' in try_name:
@@ -823,7 +934,9 @@ def target_tasks_searchfox(full_task_graph, parameters, graph_config):
             'searchfox-macosx64-searchfox/debug',
             'searchfox-win64-searchfox/debug',
             'searchfox-android-armv7-searchfox/debug',
-            'source-test-file-metadata-bugzilla-components']
+            'source-test-file-metadata-bugzilla-components',
+            'source-test-file-metadata-test-info-all',
+            'source-test-wpt-metadata-summary']
 
 
 # Run Coverity Static Analysis once daily.
@@ -941,7 +1054,7 @@ def target_tasks_release_simulation(full_task_graph, parameters, graph_config):
         'nightly': 'mozilla-central',
         'beta': 'mozilla-beta',
         'release': 'mozilla-release',
-        'esr68': 'mozilla-esr68',
+        'esr78': 'mozilla-esr78',
     }
     target_project = project_by_release.get(parameters['release_type'])
     if target_project is None:
@@ -1004,13 +1117,37 @@ def target_tasks_raptor_tp6m(full_task_graph, parameters, graph_config):
             return False
         try_name = attributes.get('raptor_try_name')
         if '-cold' in try_name and 'shippable' in platform:
-            if '-1-refbrow-' in try_name:
-                return True
             # Get browsertime amazon smoke tests
             if 'browsertime' in try_name and \
                'amazon' in try_name and 'search' not in try_name and \
                'fenix' in try_name:
                 return True
+
+    return [l for l, t in six.iteritems(full_task_graph.tasks) if filter(t)]
+
+
+@_target_task('raptor_tp6_windows10_64_ref_hw_2017')
+def target_tasks_raptor_tp6_windows10_64_ref_hw_2017(full_task_graph, parameters, graph_config):
+    """
+    Select tasks required for running raptor cold tests on raptor_tp6_windows10_64_ref_hw_2017
+    """
+    def filter(task):
+        platform = task.attributes.get('test_platform')
+        attributes = task.attributes
+
+        if attributes.get('unittest_suite') != 'raptor':
+            return False
+
+        if 'windows10-64-ref-hw-2017/opt' not in platform:
+            return False
+
+        try_name = attributes.get('raptor_try_name')
+        if 'raptor' in try_name:
+            if '-tp6' in try_name:
+                if '-cold' in try_name:
+                    return True
+                return False
+            return True
 
     return [l for l, t in six.iteritems(full_task_graph.tasks) if filter(t)]
 
@@ -1044,4 +1181,17 @@ def target_tasks_perftest(full_task_graph, parameters, graph_config):
         if task.kind != "perftest":
             continue
         if task.attributes.get('cron', False):
+            yield name
+
+
+@_target_task('perftest-on-autoland')
+def target_tasks_perftest_autoland(full_task_graph, parameters, graph_config):
+    """
+    Select perftest tasks we want to run daily
+    """
+    for name, task in six.iteritems(full_task_graph.tasks):
+        if task.kind != "perftest":
+            continue
+        if task.attributes.get('cron', False) and \
+                any(test_name in name for test_name in ["view", "main"]):
             yield name

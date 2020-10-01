@@ -28,6 +28,8 @@
 
 #include "util/Memory.h"
 #include "util/Text.h"
+#include "vm/HelperThreadState.h"
+#include "vm/Time.h"
 #include "wasm/WasmBaselineCompile.h"
 #include "wasm/WasmCompile.h"
 #include "wasm/WasmCraneliftCompile.h"
@@ -84,7 +86,6 @@ ModuleGenerator::ModuleGenerator(const CompileArgs& args,
       env_(env),
       linkData_(nullptr),
       metadataTier_(nullptr),
-      taskState_(mutexid::WasmCompileTaskState),
       lifo_(GENERATOR_LIFO_DEFAULT_CHUNK_SIZE),
       masmAlloc_(&lifo_),
       masm_(masmAlloc_, /* limitedSize= */ false),
@@ -105,37 +106,28 @@ ModuleGenerator::~ModuleGenerator() {
 
   if (parallel_) {
     if (outstanding_) {
+      AutoLockHelperThreadState lock;
+
       // Remove any pending compilation tasks from the worklist.
-      {
-        AutoLockHelperThreadState lock;
-        CompileTaskPtrFifo& worklist =
-            HelperThreadState().wasmWorklist(lock, mode());
-        auto pred = [this](CompileTask* task) {
-          return &task->state == &taskState_;
-        };
-        size_t removed = worklist.eraseIf(pred);
-        MOZ_ASSERT(outstanding_ >= removed);
-        outstanding_ -= removed;
-      }
+      size_t removed = RemovePendingWasmCompileTasks(taskState_, mode(), lock);
+      MOZ_ASSERT(outstanding_ >= removed);
+      outstanding_ -= removed;
 
       // Wait until all active compilation tasks have finished.
-      {
-        auto taskState = taskState_.lock();
-        while (true) {
-          MOZ_ASSERT(outstanding_ >= taskState->finished.length());
-          outstanding_ -= taskState->finished.length();
-          taskState->finished.clear();
+      while (true) {
+        MOZ_ASSERT(outstanding_ >= taskState_.finished().length());
+        outstanding_ -= taskState_.finished().length();
+        taskState_.finished().clear();
 
-          MOZ_ASSERT(outstanding_ >= taskState->numFailed);
-          outstanding_ -= taskState->numFailed;
-          taskState->numFailed = 0;
+        MOZ_ASSERT(outstanding_ >= taskState_.numFailed());
+        outstanding_ -= taskState_.numFailed();
+        taskState_.numFailed() = 0;
 
-          if (!outstanding_) {
-            break;
-          }
-
-          taskState.wait(/* failed or finished */);
+        if (!outstanding_) {
+          break;
         }
+
+        taskState_.condVar().wait(lock); /* failed or finished */
       }
     }
   } else {
@@ -144,7 +136,8 @@ ModuleGenerator::~ModuleGenerator() {
 
   // Propagate error state.
   if (error_ && !*error_) {
-    *error_ = std::move(taskState_.lock()->errorMessage);
+    AutoLockHelperThreadState lock;
+    *error_ = std::move(taskState_.errorMessage());
   }
 }
 
@@ -169,8 +162,11 @@ bool ModuleGenerator::allocateGlobalBytes(uint32_t bytes, uint32_t align,
   return true;
 }
 
-bool ModuleGenerator::init(Metadata* maybeAsmJSMetadata) {
+bool ModuleGenerator::init(Metadata* maybeAsmJSMetadata,
+                           JSTelemetrySender telemetrySender) {
   // Perform fallible metadata, linkdata, assumption allocations.
+
+  telemetrySender_ = telemetrySender;
 
   MOZ_ASSERT(isAsmJS() == !!maybeAsmJSMetadata);
   if (maybeAsmJSMetadata) {
@@ -379,13 +375,12 @@ bool ModuleGenerator::init(Metadata* maybeAsmJSMetadata) {
   for (const ElemSegment* seg : env_->elemSegments) {
     // For now, the segments always carry function indices regardless of the
     // segment's declared element type; this works because the only legal
-    // element types are funcref and anyref and the only legal values are
+    // element types are funcref and externref and the only legal values are
     // functions and null.  We always add functions in segments as exported
     // functions, regardless of the segment's type.  In the future, if we make
     // the representation of AnyRef segments different, we will have to consider
     // function values in those segments specially.
-    bool isAsmJS =
-        seg->active() && env_->tables[seg->tableIndex].kind == TableKind::AsmJS;
+    bool isAsmJS = seg->active() && env_->tables[seg->tableIndex].isAsmJS;
     if (!isAsmJS) {
       for (uint32_t funcIndex : seg->elemFuncIndices) {
         if (funcIndex != NullFuncIndex) {
@@ -439,7 +434,8 @@ bool ModuleGenerator::init(Metadata* maybeAsmJSMetadata) {
   }
   for (size_t i = 0; i < numTasks; i++) {
     tasks_.infallibleEmplaceBack(*env_, taskState_,
-                                 COMPILATION_LIFO_DEFAULT_CHUNK_SIZE);
+                                 COMPILATION_LIFO_DEFAULT_CHUNK_SIZE,
+                                 telemetrySender);
   }
 
   if (!freeTasks_.reserve(numTasks)) {
@@ -736,6 +732,11 @@ static bool ExecuteCompileTask(CompileTask* task, UniqueChars* error) {
   MOZ_ASSERT(task->lifo.isEmpty());
   MOZ_ASSERT(task->output.empty());
 
+#ifdef ENABLE_SPIDERMONKEY_TELEMETRY
+  int64_t startTime = PRMJ_Now();
+  int compileTimeTelemetryID;
+#endif
+
   switch (task->env.tier()) {
     case Tier::Optimized:
       switch (task->env.optimizedBackend()) {
@@ -744,12 +745,18 @@ static bool ExecuteCompileTask(CompileTask* task, UniqueChars* error) {
                                          &task->output, error)) {
             return false;
           }
+#ifdef ENABLE_SPIDERMONKEY_TELEMETRY
+          compileTimeTelemetryID = JS_TELEMETRY_WASM_COMPILE_TIME_CRANELIFT_US;
+#endif
           break;
         case OptimizedBackend::Ion:
           if (!IonCompileFunctions(task->env, task->lifo, task->inputs,
                                    &task->output, error)) {
             return false;
           }
+#ifdef ENABLE_SPIDERMONKEY_TELEMETRY
+          compileTimeTelemetryID = JS_TELEMETRY_WASM_COMPILE_TIME_ION_US;
+#endif
           break;
       }
       break;
@@ -758,8 +765,18 @@ static bool ExecuteCompileTask(CompileTask* task, UniqueChars* error) {
                                     &task->output, error)) {
         return false;
       }
+#ifdef ENABLE_SPIDERMONKEY_TELEMETRY
+      compileTimeTelemetryID = JS_TELEMETRY_WASM_COMPILE_TIME_BASELINE_US;
+#endif
       break;
   }
+
+#ifdef ENABLE_SPIDERMONKEY_TELEMETRY
+  int64_t endTime = PRMJ_Now();
+  int64_t compileTimeMicros = endTime - startTime;
+
+  task->telemetrySender.addTelemetry(compileTimeTelemetryID, compileTimeMicros);
+#endif
 
   MOZ_ASSERT(task->lifo.isEmpty());
   MOZ_ASSERT(task->inputs.length() == task->output.codeRanges.length());
@@ -767,23 +784,29 @@ static bool ExecuteCompileTask(CompileTask* task, UniqueChars* error) {
   return true;
 }
 
-void wasm::ExecuteCompileTaskFromHelperThread(CompileTask* task) {
+void CompileTask::runHelperThreadTask(AutoLockHelperThreadState& lock) {
   TraceLoggerThread* logger = TraceLoggerForCurrentThread();
   AutoTraceLog logCompile(logger, TraceLogger_WasmCompilation);
 
   UniqueChars error;
-  bool ok = ExecuteCompileTask(task, &error);
+  bool ok;
 
-  auto taskState = task->state.lock();
+  {
+    AutoUnlockHelperThreadState unlock(lock);
+    ok = ExecuteCompileTask(this, &error);
+  }
 
-  if (!ok || !taskState->finished.append(task)) {
-    taskState->numFailed++;
-    if (!taskState->errorMessage) {
-      taskState->errorMessage = std::move(error);
+  // Don't release the lock between updating our state and returning from this
+  // method.
+
+  if (!ok || !state.finished().append(this)) {
+    state.numFailed()++;
+    if (!state.errorMessage()) {
+      state.errorMessage() = std::move(error);
     }
   }
 
-  taskState.notify_one(/* failed or finished */);
+  state.condVar().notify_one(); /* failed or finished */
 }
 
 bool ModuleGenerator::locallyCompileCurrentTask() {
@@ -839,21 +862,21 @@ bool ModuleGenerator::finishOutstandingTask() {
 
   CompileTask* task = nullptr;
   {
-    auto taskState = taskState_.lock();
+    AutoLockHelperThreadState lock;
     while (true) {
       MOZ_ASSERT(outstanding_ > 0);
 
-      if (taskState->numFailed > 0) {
+      if (taskState_.numFailed() > 0) {
         return false;
       }
 
-      if (!taskState->finished.empty()) {
+      if (!taskState_.finished().empty()) {
         outstanding_--;
-        task = taskState->finished.popCopy();
+        task = taskState_.finished().popCopy();
         break;
       }
 
-      taskState.wait(/* failed or finished */);
+      taskState_.condVar().wait(lock); /* failed or finished */
     }
   }
 
@@ -1257,7 +1280,8 @@ SharedModule ModuleGenerator::finishModule(
   }
 
   if (mode() == CompileMode::Tier1) {
-    module->startTier2(*compileArgs_, bytecode, maybeTier2Listener);
+    module->startTier2(*compileArgs_, bytecode, maybeTier2Listener,
+                       telemetrySender_);
   } else if (tier() == Tier::Serialized && maybeTier2Listener) {
     module->serialize(*linkData_, *maybeTier2Listener);
   }
@@ -1287,8 +1311,6 @@ bool ModuleGenerator::finishTier2(const Module& module) {
 
   return module.finishTier2(*linkData_, std::move(codeTier));
 }
-
-void CompileTask::runTask() { ExecuteCompileTaskFromHelperThread(this); }
 
 size_t CompiledCode::sizeOfExcludingThis(
     mozilla::MallocSizeOf mallocSizeOf) const {

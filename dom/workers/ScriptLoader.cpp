@@ -1117,11 +1117,7 @@ class ScriptLoaderRunnable final : public nsIRunnable, public nsINamed {
         respectedCOEP = mWorkerPrivate->GetOwnerEmbedderPolicy();
       }
 
-      nsCOMPtr<nsILoadInfo> channelLoadInfo;
-      rv = channel->GetLoadInfo(getter_AddRefs(channelLoadInfo));
-      if (NS_WARN_IF(NS_FAILED(rv))) {
-        return rv;
-      }
+      nsCOMPtr<nsILoadInfo> channelLoadInfo = channel->LoadInfo();
       channelLoadInfo->SetLoadingEmbedderPolicy(respectedCOEP);
     }
 
@@ -1289,14 +1285,20 @@ class ScriptLoaderRunnable final : public nsIRunnable, public nsINamed {
     rv = NS_GetFinalChannelURI(channel, getter_AddRefs(finalURI));
     NS_ENSURE_SUCCESS(rv, rv);
 
-    nsCString filename;
-    rv = finalURI->GetSpec(filename);
+    bool isSameOrigin = false;
+    rv = principal->IsSameOrigin(finalURI, false, &isSameOrigin);
     NS_ENSURE_SUCCESS(rv, rv);
 
-    if (!filename.IsEmpty()) {
-      // This will help callers figure out what their script url resolved to in
-      // case of errors.
-      aLoadInfo.mURL.Assign(NS_ConvertUTF8toUTF16(filename));
+    if (isSameOrigin) {
+      nsCString filename;
+      rv = finalURI->GetSpec(filename);
+      NS_ENSURE_SUCCESS(rv, rv);
+
+      if (!filename.IsEmpty()) {
+        // This will help callers figure out what their script url resolved to
+        // in case of errors.
+        aLoadInfo.mURL.Assign(NS_ConvertUTF8toUTF16(filename));
+      }
     }
 
     // Update the principal of the worker and its base URI if we just loaded the
@@ -1898,7 +1900,7 @@ void CacheScriptLoader::ResolvedCallback(JSContext* aCx,
     return;
   }
 
-  rv = mPump->AsyncRead(loader, nullptr);
+  rv = mPump->AsyncRead(loader);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     mPump = nullptr;
     Fail(rv);

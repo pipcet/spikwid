@@ -9,11 +9,12 @@ add_task(async function test_SHOW_FIREFOX_ACCOUNTS() {
     let loaded = BrowserTestUtils.browserLoaded(browser);
     await SMATestUtils.executeAndValidateAction({
       type: "SHOW_FIREFOX_ACCOUNTS",
+      data: { entrypoint: "snippets" },
     });
     Assert.equal(
       await loaded,
       "https://example.com/?context=fx_desktop_v3&entrypoint=snippets&action=email&service=sync",
-      "should load fxa with endpoint=snippets by default"
+      "should load fxa with endpoint=snippets"
     );
 
     // Open a URL
@@ -27,6 +28,19 @@ add_task(async function test_SHOW_FIREFOX_ACCOUNTS() {
       await loaded,
       "https://example.com/?context=fx_desktop_v3&entrypoint=aboutwelcome&action=email&service=sync",
       "should load fxa with a custom endpoint"
+    );
+
+    // Open a URL with extra parameters
+    loaded = BrowserTestUtils.browserLoaded(browser);
+    await SMATestUtils.executeAndValidateAction({
+      type: "SHOW_FIREFOX_ACCOUNTS",
+      data: { entrypoint: "test", extraParams: { foo: "bar" } },
+    });
+
+    Assert.equal(
+      await loaded,
+      "https://example.com/?context=fx_desktop_v3&entrypoint=test&action=email&service=sync&foo=bar",
+      "should load fxa with a custom endpoint and extra parameters in url"
     );
   });
 });

@@ -256,7 +256,7 @@ nsresult CacheEntry::HashingKeyWithStorage(nsACString& aResult) const {
 }
 
 nsresult CacheEntry::HashingKey(nsACString& aResult) const {
-  return HashingKey(EmptyCString(), mEnhanceID, mURI, aResult);
+  return HashingKey(""_ns, mEnhanceID, mURI, aResult);
 }
 
 // static
@@ -817,7 +817,11 @@ void CacheEntry::InvokeAvailableCallback(Callback const& aCallback) {
 
   nsresult rv;
 
-  uint32_t const state = mState;
+  uint32_t state;
+  {
+    mozilla::MutexAutoLock lock(mLock);
+    state = mState;
+  }
 
   // When we are here, the entry must be loaded from disk
   MOZ_ASSERT(state > LOADING || mIsDoomed);

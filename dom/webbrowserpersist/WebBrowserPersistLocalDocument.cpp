@@ -149,22 +149,25 @@ WebBrowserPersistLocalDocument::GetContentDisposition(nsAString& aCD) {
 
 NS_IMETHODIMP
 WebBrowserPersistLocalDocument::GetCacheKey(uint32_t* aKey) {
-  *aKey = 0;
-  nsCOMPtr<nsISHEntry> history = GetHistory();
-  if (history) {
-    history->GetCacheKey(aKey);
+  Maybe<uint32_t> cacheKey;
+
+  if (nsDocShell* docShell = nsDocShell::Cast(mDocument->GetDocShell())) {
+    cacheKey = docShell->GetCacheKeyFromCurrentEntry();
   }
+  *aKey = cacheKey.valueOr(0);
+
   return NS_OK;
 }
 
 NS_IMETHODIMP
 WebBrowserPersistLocalDocument::GetPostData(nsIInputStream** aStream) {
-  nsCOMPtr<nsISHEntry> history = GetHistory();
-  if (!history) {
-    *aStream = nullptr;
-    return NS_OK;
+  nsCOMPtr<nsIInputStream> postData;
+  if (nsDocShell* docShell = nsDocShell::Cast(mDocument->GetDocShell())) {
+    postData = docShell->GetPostDataFromCurrentEntry();
   }
-  return history->GetPostData(aStream);
+
+  postData.forget(aStream);
+  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -619,7 +622,7 @@ nsresult PersistNodeFixup::FixupURI(nsAString& aURI) {
     return NS_ERROR_FAILURE;
   }
   if (!replacement->IsEmpty()) {
-    aURI = NS_ConvertUTF8toUTF16(*replacement);
+    CopyUTF8toUTF16(*replacement, aURI);
   }
   return NS_OK;
 }
@@ -688,8 +691,7 @@ nsresult PersistNodeFixup::FixupAnchor(nsINode* aNode) {
     nsresult rv = NS_NewURI(getter_AddRefs(newURI), oldCValue,
                             mParent->GetCharacterSet(), relativeURI);
     if (NS_SUCCEEDED(rv) && newURI) {
-      Unused
-          << NS_MutateURI(newURI).SetUserPass(EmptyCString()).Finalize(newURI);
+      Unused << NS_MutateURI(newURI).SetUserPass(""_ns).Finalize(newURI);
       nsAutoCString uriSpec;
       rv = newURI->GetSpec(uriSpec);
       NS_ENSURE_SUCCESS(rv, rv);

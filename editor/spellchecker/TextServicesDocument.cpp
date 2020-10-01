@@ -1188,8 +1188,8 @@ nsresult TextServicesDocument::InsertText(const nsAString& aText) {
       return rv;
     }
 
-    rv = selection->Collapse(itEntry->mNode,
-                             itEntry->mNodeOffset + itEntry->mLength);
+    rv = selection->CollapseInLimiter(itEntry->mNode,
+                                      itEntry->mNodeOffset + itEntry->mLength);
 
     if (NS_FAILED(rv)) {
       return rv;
@@ -1757,7 +1757,7 @@ nsresult TextServicesDocument::SetSelectionInternal(int32_t aOffset,
 
   if (!aLength) {
     if (aDoUpdate) {
-      nsresult rv = selection->Collapse(startNode, startNodeOffset);
+      nsresult rv = selection->CollapseInLimiter(startNode, startNodeOffset);
       if (NS_WARN_IF(NS_FAILED(rv))) {
         return rv;
       }
@@ -1801,7 +1801,7 @@ nsresult TextServicesDocument::SetSelectionInternal(int32_t aOffset,
   }
 
   if (!endNode) {
-    nsresult rv = selection->Collapse(startNode, startNodeOffset);
+    nsresult rv = selection->CollapseInLimiter(startNode, startNodeOffset);
     NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "Failed to collapse selection");
     return rv;
   }
@@ -2874,22 +2874,11 @@ nsresult TextServicesDocument::FindWordBounds(
  */
 
 NS_IMETHODIMP
-TextServicesDocument::DidInsertNode(nsINode* aNode, nsresult aResult) {
-  return NS_OK;
-}
-
-NS_IMETHODIMP
 TextServicesDocument::DidDeleteNode(nsINode* aChild, nsresult aResult) {
   if (NS_WARN_IF(NS_FAILED(aResult))) {
     return NS_OK;
   }
   DidDeleteNode(aChild);
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-TextServicesDocument::DidSplitNode(nsINode* aExistingRightNode,
-                                   nsINode* aNewLeftNode) {
   return NS_OK;
 }
 
@@ -2907,12 +2896,6 @@ TextServicesDocument::DidJoinNodes(nsINode* aLeftNode, nsINode* aRightNode,
 }
 
 NS_IMETHODIMP
-TextServicesDocument::DidCreateNode(const nsAString& aTag, nsINode* aNewNode,
-                                    nsresult aResult) {
-  return NS_OK;
-}
-
-NS_IMETHODIMP
 TextServicesDocument::DidInsertText(CharacterData* aTextNode, int32_t aOffset,
                                     const nsAString& aString,
                                     nsresult aResult) {
@@ -2926,12 +2909,8 @@ TextServicesDocument::WillDeleteText(CharacterData* aTextNode, int32_t aOffset,
 }
 
 NS_IMETHODIMP
-TextServicesDocument::WillDeleteSelection(Selection* aSelection) {
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-TextServicesDocument::DidDeleteSelection(Selection* aSelection) {
+TextServicesDocument::WillDeleteRanges(
+    const nsTArray<RefPtr<nsRange>>& aRangesToDelete) {
   return NS_OK;
 }
 

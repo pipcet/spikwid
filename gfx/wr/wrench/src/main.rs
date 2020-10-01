@@ -8,6 +8,8 @@ extern crate clap;
 extern crate log;
 #[macro_use]
 extern crate serde;
+#[macro_use]
+extern crate tracy_rs;
 
 mod angle;
 mod blob;
@@ -44,6 +46,7 @@ use std::slice;
 use std::sync::mpsc::{channel, Sender, Receiver};
 use webrender::DebugFlags;
 use webrender::api::*;
+use webrender::render_api::*;
 use webrender::api::units::*;
 use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::VirtualKeyCode;
@@ -690,7 +693,7 @@ fn main() {
             Some("gpu-cache") => png::ReadSurface::GpuCache,
             _ => panic!("Unknown surface argument value")
         };
-        let output_path = subargs.value_of("OUTPUT").map(|s| PathBuf::from(s));
+        let output_path = subargs.value_of("OUTPUT").map(PathBuf::from);
         let reader = YamlFrameReader::new_from_args(subargs);
         png::png(&mut wrench, surface, &mut window, reader, rx.unwrap(), output_path);
     } else if let Some(subargs) = args.subcommand_matches("reftest") {
@@ -926,21 +929,6 @@ fn render<'a>(
                             let path = PathBuf::from("../captures/wrench");
                             wrench.api.save_capture(path, CaptureBits::all());
                         }
-                        VirtualKeyCode::Up | VirtualKeyCode::Down => {
-                            let mut txn = Transaction::new();
-
-                            let offset = match vk {
-                                winit::VirtualKeyCode::Up => LayoutVector2D::new(0.0, 10.0),
-                                winit::VirtualKeyCode::Down => LayoutVector2D::new(0.0, -10.0),
-                                _ => unreachable!("Should not see non directional keys here.")
-                            };
-
-                            txn.scroll(ScrollLocation::Delta(offset), cursor_position);
-                            txn.generate_frame();
-                            wrench.api.send_transaction(wrench.document_id, txn);
-
-                            do_frame = true;
-                        }
                         VirtualKeyCode::Add => {
                             let current_zoom = wrench.get_page_zoom();
                             let new_zoom_factor = ZoomFactor::new(current_zoom.get() + 0.1);
@@ -958,7 +946,6 @@ fn render<'a>(
                                 wrench.document_id,
                                 None,
                                 cursor_position,
-                                HitTestFlags::FIND_ALL
                             );
 
                             println!("Hit test results:");

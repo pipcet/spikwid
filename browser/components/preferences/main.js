@@ -26,6 +26,15 @@ ChromeUtils.defineModuleGetter(
   "CloudStorage",
   "resource://gre/modules/CloudStorage.jsm"
 );
+var { Integration } = ChromeUtils.import(
+  "resource://gre/modules/Integration.jsm"
+);
+/* global DownloadIntegration */
+Integration.downloads.defineModuleGetter(
+  this,
+  "DownloadIntegration",
+  "resource://gre/modules/DownloadIntegration.jsm"
+);
 ChromeUtils.defineModuleGetter(
   this,
   "SelectionChangedMenulist",
@@ -1146,9 +1155,8 @@ var gMainPane = {
     let opts = { selected: gMainPane.selectedLocales, search, telemetryId };
     gSubDialog.open(
       "chrome://browser/content/preferences/dialogs/browserLanguages.xhtml",
-      null,
-      opts,
-      this.browserLanguagesClosed
+      { closingCallback: this.browserLanguagesClosed },
+      opts
     );
   },
 
@@ -1220,7 +1228,7 @@ var gMainPane = {
   configureFonts() {
     gSubDialog.open(
       "chrome://browser/content/preferences/dialogs/fonts.xhtml",
-      "resizable=no"
+      { features: "resizable=no" }
     );
   },
 
@@ -1231,7 +1239,7 @@ var gMainPane = {
   configureColors() {
     gSubDialog.open(
       "chrome://browser/content/preferences/dialogs/colors.xhtml",
-      "resizable=no"
+      { features: "resizable=no" }
     );
   },
 
@@ -1242,9 +1250,7 @@ var gMainPane = {
   showConnections() {
     gSubDialog.open(
       "chrome://browser/content/preferences/dialogs/connection.xhtml",
-      null,
-      null,
-      this.updateProxySettingsUI.bind(this)
+      { closingCallback: this.updateProxySettingsUI.bind(this) }
     );
   },
 
@@ -1659,7 +1665,18 @@ var gMainPane = {
    * applications menu.
    */
   _loadInternalHandlers() {
-    var internalHandlers = [new PDFHandlerInfoWrapper()];
+    let internalHandlers = [new PDFHandlerInfoWrapper()];
+
+    let enabledHandlers = Services.prefs
+      .getCharPref("browser.download.viewableInternally.enabledTypes", "")
+      .trim();
+    if (enabledHandlers) {
+      for (let ext of enabledHandlers.split(",")) {
+        internalHandlers.push(
+          new ViewableInternallyHandlerInfoWrapper(ext.trim())
+        );
+      }
+    }
     for (let internalHandler of internalHandlers) {
       if (internalHandler.enabled) {
         this._handledTypes[internalHandler.type] = internalHandler;
@@ -2252,7 +2269,7 @@ var gMainPane = {
    * Filter the list when the user enters a filter term into the filter field.
    */
   filter() {
-    this._rebuildView();
+    this._rebuildView(); // FIXME: Should this be await since bug 1508156?
   },
 
   focusFilterBox() {
@@ -2341,9 +2358,8 @@ var gMainPane = {
 
     gSubDialog.open(
       "chrome://browser/content/preferences/dialogs/applicationManager.xhtml",
-      "resizable=no",
-      handlerInfo,
-      onComplete
+      { features: "resizable=no", closingCallback: onComplete },
+      handlerInfo
     );
   },
 
@@ -2407,9 +2423,8 @@ var gMainPane = {
 
       gSubDialog.open(
         "chrome://global/content/appPicker.xhtml",
-        null,
-        params,
-        onAppSelected
+        { closingCallback: onAppSelected },
+        params
       );
     } else {
       let winTitle = await document.l10n.formatValue(
@@ -3342,8 +3357,9 @@ class HandlerInfoWrapper {
  * menu.
  */
 class InternalHandlerInfoWrapper extends HandlerInfoWrapper {
-  constructor(mimeType) {
-    super(mimeType, gMIMEService.getFromTypeAndExtension(mimeType, null));
+  constructor(mimeType, extension) {
+    let type = gMIMEService.getFromTypeAndExtension(mimeType, extension);
+    super(mimeType || type.type, type);
   }
 
   // Override store so we so we can notify any code listening for registration
@@ -3355,22 +3371,24 @@ class InternalHandlerInfoWrapper extends HandlerInfoWrapper {
   get enabled() {
     throw Components.Exception("", Cr.NS_ERROR_NOT_IMPLEMENTED);
   }
-
-  get description() {
-    return { id: this._appPrefLabel };
-  }
 }
 
 class PDFHandlerInfoWrapper extends InternalHandlerInfoWrapper {
   constructor() {
-    super(TYPE_PDF);
-  }
-
-  get _appPrefLabel() {
-    return "applications-type-pdf";
+    super(TYPE_PDF, null);
   }
 
   get enabled() {
     return !Services.prefs.getBoolPref(PREF_PDFJS_DISABLED);
+  }
+}
+
+class ViewableInternallyHandlerInfoWrapper extends InternalHandlerInfoWrapper {
+  constructor(extension) {
+    super(null, extension);
+  }
+
+  get enabled() {
+    return DownloadIntegration.shouldViewDownloadInternally(this.type);
   }
 }

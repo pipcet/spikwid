@@ -22,8 +22,10 @@
 #include "mozilla/dom/Selection.h"
 #include "mozilla/dom/WorkerRef.h"
 #include "mozilla/ArrayUtils.h"
+#include "mozilla/Attributes.h"
 #include "mozilla/Base64.h"
 #include "mozilla/BasicEvents.h"
+#include "mozilla/DebugOnly.h"
 #include "mozilla/EditAction.h"
 #include "mozilla/EditorDOMPoint.h"
 #include "mozilla/EditorUtils.h"
@@ -83,7 +85,8 @@ using namespace dom;
 #define kInsertCookie "_moz_Insert Here_moz_"
 
 // some little helpers
-static bool FindIntegerAfterString(const char* aLeadingString, nsCString& aCStr,
+static bool FindIntegerAfterString(const char* aLeadingString,
+                                   const nsCString& aCStr,
                                    int32_t& foundNumber);
 static void RemoveFragComments(nsCString& aStr);
 
@@ -102,7 +105,8 @@ nsresult HTMLEditor::LoadHTML(const nsAString& aInputString) {
     return NS_ERROR_EDITOR_DESTROYED;
   }
 
-  AutoPlaceholderBatch treatAsOneTransaction(*this);
+  AutoPlaceholderBatch treatAsOneTransaction(*this,
+                                             ScrollSelectionIntoView::Yes);
   IgnoredErrorResult ignoredError;
   AutoEditSubActionNotifier startToHandleEditSubAction(
       *this, EditSubAction::eInsertHTMLSource, nsIEditor::eNext, ignoredError);
@@ -191,9 +195,8 @@ nsresult HTMLEditor::InsertHTMLAsAction(const nsAString& aInString,
     return EditorBase::ToGenericNSResult(rv);
   }
 
-  rv = DoInsertHTMLWithContext(aInString, EmptyString(), EmptyString(),
-                               EmptyString(), nullptr, EditorDOMPoint(), true,
-                               true, false);
+  rv = DoInsertHTMLWithContext(aInString, u""_ns, u""_ns, u""_ns, nullptr,
+                               EditorDOMPoint(), true, true, false);
   NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
                        "HTMLEditor::DoInsertHTMLWithContext() failed");
   return EditorBase::ToGenericNSResult(rv);
@@ -276,17 +279,17 @@ class MOZ_STACK_CLASS HTMLEditor::HTMLWithContextInserter final {
 class MOZ_STACK_CLASS
     HTMLEditor::HTMLWithContextInserter::FragmentFromPasteCreator final {
  public:
-  explicit FragmentFromPasteCreator(HTMLEditor& aHTMLEditor);
-
-  nsresult Run(const nsAString& aInputString, const nsAString& aContextStr,
-               const nsAString& aInfoStr, nsCOMPtr<nsINode>* aOutFragNode,
+  nsresult Run(const Document& aDocument, const nsAString& aInputString,
+               const nsAString& aContextStr, const nsAString& aInfoStr,
+               nsCOMPtr<nsINode>* aOutFragNode,
                nsCOMPtr<nsINode>* aOutStartNode, nsCOMPtr<nsINode>* aOutEndNode,
                bool aTrustedInput) const;
 
  private:
   nsresult CreateDocumentFragmentAndGetParentOfPastedHTMLInContext(
-      const nsAString& aInputString, const nsAString& aContextStr,
-      bool aTrustedInput, nsCOMPtr<nsINode>& aParentNodeOfPastedHTMLInContext,
+      const Document& aDocument, const nsAString& aInputString,
+      const nsAString& aContextStr, bool aTrustedInput,
+      nsCOMPtr<nsINode>& aParentNodeOfPastedHTMLInContext,
       RefPtr<DocumentFragment>& aDocumentFragmentToInsert) const;
 
   static nsAtom* DetermineContextLocalNameForParsingPastedHTML(
@@ -294,6 +297,8 @@ class MOZ_STACK_CLASS
 
   static bool FindTargetNodeOfContextForPastedHTMLAndRemoveInsertionCookie(
       nsINode& aStart, nsCOMPtr<nsINode>& aResult);
+
+  static bool IsInsertionCookie(const nsIContent& aContent);
 
   /**
    * @param aDocumentFragmentForContext contains the merged result.
@@ -326,8 +331,6 @@ class MOZ_STACK_CLASS
   static nsresult
   RemoveNonPreWhiteSpaceOnlyTextNodesForIgnoringInvisibleWhiteSpaces(
       nsIContent& aNode, NodesToRemove aNodesToRemove);
-
-  HTMLEditor& mHTMLEditor;
 };
 
 HTMLBRElement*
@@ -450,7 +453,8 @@ nsresult HTMLEditor::HTMLWithContextInserter::Run(
 
   // force IME commit; set up rules sniffing and batching
   mHTMLEditor.CommitComposition();
-  AutoPlaceholderBatch treatAsOneTransaction(mHTMLEditor);
+  AutoPlaceholderBatch treatAsOneTransaction(mHTMLEditor,
+                                             ScrollSelectionIntoView::Yes);
   IgnoredErrorResult ignoredError;
   AutoEditSubActionNotifier startToHandleEditSubAction(
       MOZ_KnownLive(mHTMLEditor), EditSubAction::ePasteHTMLContent,
@@ -1059,10 +1063,34 @@ nsresult HTMLEditor::PrepareTransferable(nsITransferable** aTransferable) {
   return NS_OK;
 }
 
-nsresult HTMLEditor::PrepareHTMLTransferable(nsITransferable** aTransferable) {
-  MOZ_ASSERT(aTransferable);
-  MOZ_ASSERT(!*aTransferable);
+class MOZ_STACK_CLASS HTMLEditor::HTMLTransferablePreparer {
+ public:
+  HTMLTransferablePreparer(const HTMLEditor& aHTMLEditor,
+                           nsITransferable** aTransferable);
 
+  nsresult Run();
+
+ private:
+  void AddDataFlavorsInBestOrder(nsITransferable& aTransferable) const;
+
+  const HTMLEditor& mHTMLEditor;
+  nsITransferable** mTransferable;
+};
+
+HTMLEditor::HTMLTransferablePreparer::HTMLTransferablePreparer(
+    const HTMLEditor& aHTMLEditor, nsITransferable** aTransferable)
+    : mHTMLEditor{aHTMLEditor}, mTransferable{aTransferable} {
+  MOZ_ASSERT(mTransferable);
+  MOZ_ASSERT(!*mTransferable);
+}
+
+nsresult HTMLEditor::PrepareHTMLTransferable(
+    nsITransferable** aTransferable) const {
+  HTMLTransferablePreparer htmlTransferablePreparer{*this, aTransferable};
+  return htmlTransferablePreparer.Run();
+}
+
+nsresult HTMLEditor::HTMLTransferablePreparer::Run() {
   // Create generic Transferable for getting the data
   nsresult rv;
   RefPtr<nsITransferable> transferable =
@@ -1078,102 +1106,109 @@ nsresult HTMLEditor::PrepareHTMLTransferable(nsITransferable** aTransferable) {
   }
 
   // Get the nsITransferable interface for getting the data from the clipboard
-  RefPtr<Document> destdoc = GetDocument();
+  RefPtr<Document> destdoc = mHTMLEditor.GetDocument();
   nsILoadContext* loadContext = destdoc ? destdoc->GetLoadContext() : nullptr;
   DebugOnly<nsresult> rvIgnored = transferable->Init(loadContext);
-  NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+  NS_WARNING_ASSERTION(NS_SUCCEEDED(rvIgnored),
                        "nsITransferable::Init() failed, but ignored");
 
+  // See `HTMLEditor::InsertFromTransferable`.
+  AddDataFlavorsInBestOrder(*transferable);
+
+  transferable.forget(mTransferable);
+
+  return NS_OK;
+}
+
+void HTMLEditor::HTMLTransferablePreparer::AddDataFlavorsInBestOrder(
+    nsITransferable& aTransferable) const {
   // Create the desired DataFlavor for the type of data
   // we want to get out of the transferable
   // This should only happen in html editors, not plaintext
-  if (!IsPlaintextEditor()) {
-    rvIgnored = transferable->AddDataFlavor(kNativeHTMLMime);
+  if (!mHTMLEditor.IsPlaintextEditor()) {
+    DebugOnly<nsresult> rvIgnored =
+        aTransferable.AddDataFlavor(kNativeHTMLMime);
     NS_WARNING_ASSERTION(
-        NS_SUCCEEDED(rv),
+        NS_SUCCEEDED(rvIgnored),
         "nsITransferable::AddDataFlavor(kNativeHTMLMime) failed, but ignored");
-    rvIgnored = transferable->AddDataFlavor(kHTMLMime);
+    rvIgnored = aTransferable.AddDataFlavor(kHTMLMime);
     NS_WARNING_ASSERTION(
-        NS_SUCCEEDED(rv),
+        NS_SUCCEEDED(rvIgnored),
         "nsITransferable::AddDataFlavor(kHTMLMime) failed, but ignored");
-    rvIgnored = transferable->AddDataFlavor(kFileMime);
+    rvIgnored = aTransferable.AddDataFlavor(kFileMime);
     NS_WARNING_ASSERTION(
-        NS_SUCCEEDED(rv),
+        NS_SUCCEEDED(rvIgnored),
         "nsITransferable::AddDataFlavor(kFileMime) failed, but ignored");
 
     switch (Preferences::GetInt("clipboard.paste_image_type", 1)) {
       case 0:  // prefer JPEG over PNG over GIF encoding
-        rvIgnored = transferable->AddDataFlavor(kJPEGImageMime);
-        NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+        rvIgnored = aTransferable.AddDataFlavor(kJPEGImageMime);
+        NS_WARNING_ASSERTION(NS_SUCCEEDED(rvIgnored),
                              "nsITransferable::AddDataFlavor(kJPEGImageMime) "
                              "failed, but ignored");
-        rvIgnored = transferable->AddDataFlavor(kJPGImageMime);
-        NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+        rvIgnored = aTransferable.AddDataFlavor(kJPGImageMime);
+        NS_WARNING_ASSERTION(NS_SUCCEEDED(rvIgnored),
                              "nsITransferable::AddDataFlavor(kJPGImageMime) "
                              "failed, but ignored");
-        rvIgnored = transferable->AddDataFlavor(kPNGImageMime);
-        NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+        rvIgnored = aTransferable.AddDataFlavor(kPNGImageMime);
+        NS_WARNING_ASSERTION(NS_SUCCEEDED(rvIgnored),
                              "nsITransferable::AddDataFlavor(kPNGImageMime) "
                              "failed, but ignored");
-        rvIgnored = transferable->AddDataFlavor(kGIFImageMime);
-        NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+        rvIgnored = aTransferable.AddDataFlavor(kGIFImageMime);
+        NS_WARNING_ASSERTION(NS_SUCCEEDED(rvIgnored),
                              "nsITransferable::AddDataFlavor(kGIFImageMime) "
                              "failed, but ignored");
         break;
       case 1:  // prefer PNG over JPEG over GIF encoding (default)
       default:
-        rvIgnored = transferable->AddDataFlavor(kPNGImageMime);
-        NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+        rvIgnored = aTransferable.AddDataFlavor(kPNGImageMime);
+        NS_WARNING_ASSERTION(NS_SUCCEEDED(rvIgnored),
                              "nsITransferable::AddDataFlavor(kPNGImageMime) "
                              "failed, but ignored");
-        rvIgnored = transferable->AddDataFlavor(kJPEGImageMime);
-        NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+        rvIgnored = aTransferable.AddDataFlavor(kJPEGImageMime);
+        NS_WARNING_ASSERTION(NS_SUCCEEDED(rvIgnored),
                              "nsITransferable::AddDataFlavor(kJPEGImageMime) "
                              "failed, but ignored");
-        rvIgnored = transferable->AddDataFlavor(kJPGImageMime);
-        NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+        rvIgnored = aTransferable.AddDataFlavor(kJPGImageMime);
+        NS_WARNING_ASSERTION(NS_SUCCEEDED(rvIgnored),
                              "nsITransferable::AddDataFlavor(kJPGImageMime) "
                              "failed, but ignored");
-        rvIgnored = transferable->AddDataFlavor(kGIFImageMime);
-        NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+        rvIgnored = aTransferable.AddDataFlavor(kGIFImageMime);
+        NS_WARNING_ASSERTION(NS_SUCCEEDED(rvIgnored),
                              "nsITransferable::AddDataFlavor(kGIFImageMime) "
                              "failed, but ignored");
         break;
       case 2:  // prefer GIF over JPEG over PNG encoding
-        rvIgnored = transferable->AddDataFlavor(kGIFImageMime);
-        NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+        rvIgnored = aTransferable.AddDataFlavor(kGIFImageMime);
+        NS_WARNING_ASSERTION(NS_SUCCEEDED(rvIgnored),
                              "nsITransferable::AddDataFlavor(kGIFImageMime) "
                              "failed, but ignored");
-        rvIgnored = transferable->AddDataFlavor(kJPEGImageMime);
-        NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+        rvIgnored = aTransferable.AddDataFlavor(kJPEGImageMime);
+        NS_WARNING_ASSERTION(NS_SUCCEEDED(rvIgnored),
                              "nsITransferable::AddDataFlavor(kJPEGImageMime) "
                              "failed, but ignored");
-        rvIgnored = transferable->AddDataFlavor(kJPGImageMime);
-        NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+        rvIgnored = aTransferable.AddDataFlavor(kJPGImageMime);
+        NS_WARNING_ASSERTION(NS_SUCCEEDED(rvIgnored),
                              "nsITransferable::AddDataFlavor(kJPGImageMime) "
                              "failed, but ignored");
-        rvIgnored = transferable->AddDataFlavor(kPNGImageMime);
-        NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+        rvIgnored = aTransferable.AddDataFlavor(kPNGImageMime);
+        NS_WARNING_ASSERTION(NS_SUCCEEDED(rvIgnored),
                              "nsITransferable::AddDataFlavor(kPNGImageMime) "
                              "failed, but ignored");
         break;
     }
   }
-  rvIgnored = transferable->AddDataFlavor(kUnicodeMime);
+  DebugOnly<nsresult> rvIgnored = aTransferable.AddDataFlavor(kUnicodeMime);
   NS_WARNING_ASSERTION(
-      NS_SUCCEEDED(rv),
+      NS_SUCCEEDED(rvIgnored),
       "nsITransferable::AddDataFlavor(kUnicodeMime) failed, but ignored");
-  rvIgnored = transferable->AddDataFlavor(kMozTextInternal);
+  rvIgnored = aTransferable.AddDataFlavor(kMozTextInternal);
   NS_WARNING_ASSERTION(
-      NS_SUCCEEDED(rv),
+      NS_SUCCEEDED(rvIgnored),
       "nsITransferable::AddDataFlavor(kMozTextInternal) failed, but ignored");
-
-  transferable.forget(aTransferable);
-
-  return NS_OK;
 }
 
-bool FindIntegerAfterString(const char* aLeadingString, nsCString& aCStr,
+bool FindIntegerAfterString(const char* aLeadingString, const nsCString& aCStr,
                             int32_t& foundNumber) {
   // first obtain offsets from cfhtml str
   int32_t numFront = aCStr.Find(aLeadingString);
@@ -1211,7 +1246,8 @@ void RemoveFragComments(nsCString& aStr) {
   }
 }
 
-nsresult HTMLEditor::ParseCFHTML(nsCString& aCfhtml, char16_t** aStuffToPaste,
+nsresult HTMLEditor::ParseCFHTML(const nsCString& aCfhtml,
+                                 char16_t** aStuffToPaste,
                                  char16_t** aCfcontext) {
   // First obtain offsets from cfhtml str.
   int32_t startHTML, endHTML, startFragment, endFragment;
@@ -1325,18 +1361,13 @@ nsresult HTMLEditor::ParseCFHTML(nsCString& aCfhtml, char16_t** aStuffToPaste,
 
 static nsresult ImgFromData(const nsACString& aType, const nsACString& aData,
                             nsString& aOutput) {
-  nsAutoCString data64;
-  nsresult rv = Base64Encode(aData, data64);
-  if (NS_FAILED(rv)) {
-    NS_WARNING("Base64Encode() failed");
-    return rv;
-  }
-
   aOutput.AssignLiteral("<IMG src=\"data:");
   AppendUTF8toUTF16(aType, aOutput);
   aOutput.AppendLiteral(";base64,");
-  if (!AppendASCIItoUTF16(data64, aOutput, fallible_t())) {
-    return NS_ERROR_OUT_OF_MEMORY;
+  nsresult rv = Base64EncodeAppend(aData, aOutput);
+  if (NS_FAILED(rv)) {
+    NS_WARNING("Base64Encode() failed");
+    return rv;
   }
   aOutput.AppendLiteral("\" alt=\"\" >");
   return NS_OK;
@@ -1421,11 +1452,12 @@ nsresult HTMLEditor::BlobReader::OnResult(const nsACString& aResult) {
     return EditorBase::ToGenericNSResult(rv);
   }
 
-  AutoPlaceholderBatch treatAsOneTransaction(*mHTMLEditor);
+  AutoPlaceholderBatch treatAsOneTransaction(*mHTMLEditor,
+                                             ScrollSelectionIntoView::Yes);
   RefPtr<Document> sourceDocument(mSourceDoc);
   EditorDOMPoint pointToInsert(mPointToInsert);
   rv = MOZ_KnownLive(mHTMLEditor)
-           ->DoInsertHTMLWithContext(stuffToPaste, EmptyString(), EmptyString(),
+           ->DoInsertHTMLWithContext(stuffToPaste, u""_ns, u""_ns,
                                      NS_LITERAL_STRING_FROM_CSTRING(kFileMime),
                                      sourceDocument, pointToInsert,
                                      mDoDeleteSelection, mIsSafe, false);
@@ -1623,11 +1655,11 @@ nsresult HTMLEditor::InsertObject(const nsACString& aType, nsISupports* aObject,
       return rv;
     }
 
-    AutoPlaceholderBatch treatAsOneTransaction(*this);
-    rv = DoInsertHTMLWithContext(stuffToPaste, EmptyString(), EmptyString(),
-                                 NS_LITERAL_STRING_FROM_CSTRING(kFileMime),
-                                 aSourceDoc, aPointToInsert, aDoDeleteSelection,
-                                 aIsSafe, false);
+    AutoPlaceholderBatch treatAsOneTransaction(*this,
+                                               ScrollSelectionIntoView::Yes);
+    rv = DoInsertHTMLWithContext(
+        stuffToPaste, u""_ns, u""_ns, NS_LITERAL_STRING_FROM_CSTRING(kFileMime),
+        aSourceDoc, aPointToInsert, aDoDeleteSelection, aIsSafe, false);
     NS_WARNING_ASSERTION(
         NS_SUCCEEDED(rv),
         "HTMLEditor::DoInsertHTMLWithContext() failed, but ignored");
@@ -1666,6 +1698,8 @@ nsresult HTMLEditor::InsertFromTransferable(nsITransferable* aTransferable,
                                             bool aDoDeleteSelection) {
   nsAutoCString bestFlavor;
   nsCOMPtr<nsISupports> genericDataObj;
+
+  // See `HTMLTransferablePreparer::AddDataFlavorsInBestOrder`.
   nsresult rv = aTransferable->GetAnyTransferData(
       bestFlavor, getter_AddRefs(genericDataObj));
   NS_WARNING_ASSERTION(
@@ -1697,7 +1731,8 @@ nsresult HTMLEditor::InsertFromTransferable(nsITransferable* aTransferable,
         nsresult rv = ParseCFHTML(cfhtml, getter_Copies(cffragment),
                                   getter_Copies(cfcontext));
         if (NS_SUCCEEDED(rv) && !cffragment.IsEmpty()) {
-          AutoPlaceholderBatch treatAsOneTransaction(*this);
+          AutoPlaceholderBatch treatAsOneTransaction(
+              *this, ScrollSelectionIntoView::Yes);
           // If we have our private HTML flavor, we will only use the fragment
           // from the CF_HTML. The rest comes from the clipboard.
           if (aHavePrivateHTMLFlavor) {
@@ -1740,7 +1775,8 @@ nsresult HTMLEditor::InsertFromTransferable(nsITransferable* aTransferable,
       }
 
       if (!stuffToPaste.IsEmpty()) {
-        AutoPlaceholderBatch treatAsOneTransaction(*this);
+        AutoPlaceholderBatch treatAsOneTransaction(
+            *this, ScrollSelectionIntoView::Yes);
         if (bestFlavor.EqualsLiteral(kHTMLMime)) {
           nsresult rv = DoInsertHTMLWithContext(
               stuffToPaste, aContextStr, aInfoStr, flavor, aSourceDoc,
@@ -1768,7 +1804,7 @@ nsresult HTMLEditor::InsertFromTransferable(nsITransferable* aTransferable,
   return NS_OK;
 }
 
-static void GetStringFromDataTransfer(DataTransfer* aDataTransfer,
+static void GetStringFromDataTransfer(const DataTransfer* aDataTransfer,
                                       const nsAString& aType, int32_t aIndex,
                                       nsString& aOutputString) {
   nsCOMPtr<nsIVariant> variant;
@@ -1785,7 +1821,7 @@ static void GetStringFromDataTransfer(DataTransfer* aDataTransfer,
   nsContentUtils::PlatformToDOMLineBreaks(aOutputString);
 }
 
-nsresult HTMLEditor::InsertFromDataTransfer(DataTransfer* aDataTransfer,
+nsresult HTMLEditor::InsertFromDataTransfer(const DataTransfer* aDataTransfer,
                                             int32_t aIndex,
                                             Document* aSourceDoc,
                                             const EditorDOMPoint& aDroppedAt,
@@ -1910,6 +1946,7 @@ nsresult HTMLEditor::InsertFromDataTransfer(DataTransfer* aDataTransfer,
   return NS_OK;
 }
 
+// static
 bool HTMLEditor::HavePrivateHTMLFlavor(nsIClipboard* aClipboard) {
   if (NS_WARN_IF(!aClipboard)) {
     return false;
@@ -2143,7 +2180,7 @@ nsresult HTMLEditor::PasteNoFormattingAsAction(int32_t aSelectionType,
     return rv;
   }
 
-  const nsString& empty = EmptyString();
+  const nsString& empty = u""_ns;
   rv = InsertFromTransferable(transferable, nullptr, empty, empty, false, true);
   NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
                        "HTMLEditor::InsertFromTransferable() failed");
@@ -2159,11 +2196,7 @@ static const char* textHtmlEditorFlavors[] = {kUnicodeMime,   kHTMLMime,
                                               kPNGImageMime,  kGIFImageMime};
 
 bool HTMLEditor::CanPaste(int32_t aClipboardType) const {
-  // Always enable the paste command when inside of a HTML or XHTML document,
-  // but if the document is chrome, let it control it.
-  Document* document = GetDocument();
-  if (document && document->IsHTMLOrXHTML() &&
-      !nsContentUtils::IsChromeDoc(document)) {
+  if (AreClipboardCommandsUnconditionallyEnabled()) {
     return true;
   }
 
@@ -2286,7 +2319,8 @@ nsresult HTMLEditor::PasteAsQuotationAsAction(int32_t aClipboardType,
 
   UndefineCaretBidiLevel();
 
-  AutoPlaceholderBatch treatAsOneTransaction(*this);
+  AutoPlaceholderBatch treatAsOneTransaction(*this,
+                                             ScrollSelectionIntoView::Yes);
   IgnoredErrorResult ignoredError;
   AutoEditSubActionNotifier startToHandleEditSubAction(
       *this, EditSubAction::eInsertQuotation, nsIEditor::eNext, ignoredError);
@@ -2415,7 +2449,8 @@ nsresult HTMLEditor::PasteAsPlaintextQuotation(int32_t aSelectionType) {
     return NS_OK;
   }
 
-  AutoPlaceholderBatch treatAsOneTransaction(*this);
+  AutoPlaceholderBatch treatAsOneTransaction(*this,
+                                             ScrollSelectionIntoView::Yes);
   rv = InsertAsPlaintextQuotation(stuffToPaste, true, 0);
   NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
                        "HTMLEditor::InsertAsPlaintextQuotation() failed");
@@ -2511,7 +2546,8 @@ nsresult HTMLEditor::InsertTextWithQuotations(
   // The whole operation should be undoable in one transaction:
   // XXX Why isn't enough to use only AutoPlaceholderBatch here?
   AutoTransactionBatch bundleAllTransactions(*this);
-  AutoPlaceholderBatch treatAsOneTransaction(*this);
+  AutoPlaceholderBatch treatAsOneTransaction(*this,
+                                             ScrollSelectionIntoView::Yes);
 
   rv = InsertTextWithQuotationsInternal(aStringToInsert);
   NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
@@ -2631,7 +2667,8 @@ nsresult HTMLEditor::InsertAsQuotation(const nsAString& aQuotedText,
           "CanHandleAndMaybeDispatchBeforeInputEvent(), failed");
       return EditorBase::ToGenericNSResult(rv);
     }
-    AutoPlaceholderBatch treatAsOneTransaction(*this);
+    AutoPlaceholderBatch treatAsOneTransaction(*this,
+                                               ScrollSelectionIntoView::Yes);
     rv = InsertAsPlaintextQuotation(aQuotedText, true, aNodeInserted);
     NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
                          "HTMLEditor::InsertAsPlaintextQuotation() failed");
@@ -2647,7 +2684,8 @@ nsresult HTMLEditor::InsertAsQuotation(const nsAString& aQuotedText,
     return EditorBase::ToGenericNSResult(rv);
   }
 
-  AutoPlaceholderBatch treatAsOneTransaction(*this);
+  AutoPlaceholderBatch treatAsOneTransaction(*this,
+                                             ScrollSelectionIntoView::Yes);
   nsAutoString citation;
   rv = InsertAsCitedQuotationInternal(aQuotedText, citation, false,
                                       aNodeInserted);
@@ -2861,7 +2899,8 @@ NS_IMETHODIMP HTMLEditor::Rewrap(bool aRespectNewlines) {
   // undoable in one transaction.
   // XXX Why isn't enough to use only AutoPlaceholderBatch here?
   AutoTransactionBatch bundleAllTransactions(*this);
-  AutoPlaceholderBatch treatAsOneTransaction(*this);
+  AutoPlaceholderBatch treatAsOneTransaction(*this,
+                                             ScrollSelectionIntoView::Yes);
   rv = InsertTextWithQuotationsInternal(wrapped);
   NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
                        "HTMLEditor::InsertTextWithQuotationsInternal() failed");
@@ -2889,7 +2928,8 @@ NS_IMETHODIMP HTMLEditor::InsertAsCitedQuotation(const nsAString& aQuotedText,
       return EditorBase::ToGenericNSResult(rv);
     }
 
-    AutoPlaceholderBatch treatAsOneTransaction(*this);
+    AutoPlaceholderBatch treatAsOneTransaction(*this,
+                                               ScrollSelectionIntoView::Yes);
     rv = InsertAsPlaintextQuotation(aQuotedText, true, aNodeInserted);
     NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
                          "HTMLEditor::InsertAsPlaintextQuotation() failed");
@@ -2905,7 +2945,8 @@ NS_IMETHODIMP HTMLEditor::InsertAsCitedQuotation(const nsAString& aQuotedText,
     return EditorBase::ToGenericNSResult(rv);
   }
 
-  AutoPlaceholderBatch treatAsOneTransaction(*this);
+  AutoPlaceholderBatch treatAsOneTransaction(*this,
+                                             ScrollSelectionIntoView::Yes);
   rv = InsertAsCitedQuotationInternal(aQuotedText, aCitation, aInsertHTML,
                                       aNodeInserted);
   NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
@@ -3088,6 +3129,20 @@ void HTMLEditor::HTMLWithContextInserter::FragmentFromPasteCreator::
   }
 }
 
+// static
+bool HTMLEditor::HTMLWithContextInserter::FragmentFromPasteCreator::
+    IsInsertionCookie(const nsIContent& aContent) {
+  // Is this child the magical cookie?
+  if (const auto* comment = Comment::FromNode(&aContent)) {
+    nsAutoString data;
+    comment->GetData(data);
+
+    return data.EqualsLiteral(kInsertCookie);
+  }
+
+  return false;
+}
+
 /**
  * This function finds the target node that we will be pasting into. aStart is
  * the context that we're given and aResult will be the target. Initially,
@@ -3112,20 +3167,14 @@ bool HTMLEditor::HTMLWithContextInserter::FragmentFromPasteCreator::
 
   for (nsCOMPtr<nsIContent> child = firstChild; child;
        child = child->GetNextSibling()) {
-    // Is this child the magical cookie?
-    if (auto* comment = Comment::FromNode(child)) {
-      nsAutoString data;
-      comment->GetData(data);
+    if (FragmentFromPasteCreator::IsInsertionCookie(*child)) {
+      // Yes it is! Return an error so we bubble out and short-circuit the
+      // search.
+      aResult = &aStart;
 
-      if (data.EqualsLiteral(kInsertCookie)) {
-        // Yes it is! Return an error so we bubble out and short-circuit the
-        // search.
-        aResult = &aStart;
+      child->Remove();
 
-        child->Remove();
-
-        return true;
-      }
+      return true;
     }
 
     if (FindTargetNodeOfContextForPastedHTMLAndRemoveInsertionCookie(*child,
@@ -3140,7 +3189,7 @@ bool HTMLEditor::HTMLWithContextInserter::FragmentFromPasteCreator::
 class MOZ_STACK_CLASS HTMLEditor::HTMLWithContextInserter::FragmentParser
     final {
  public:
-  FragmentParser(Document& aDocument, bool aTrustedInput);
+  FragmentParser(const Document& aDocument, bool aTrustedInput);
 
   [[nodiscard]] nsresult ParseContext(const nsAString& aContextString,
                                       DocumentFragment** aFragment);
@@ -3151,16 +3200,17 @@ class MOZ_STACK_CLASS HTMLEditor::HTMLWithContextInserter::FragmentParser
 
  private:
   static nsresult ParseFragment(const nsAString& aStr,
-                                nsAtom* aContextLocalName, Document* aTargetDoc,
+                                nsAtom* aContextLocalName,
+                                const Document* aTargetDoc,
                                 dom::DocumentFragment** aFragment,
                                 bool aTrustedInput);
 
-  Document& mDocument;
+  const Document& mDocument;
   const bool mTrustedInput;
 };
 
 HTMLEditor::HTMLWithContextInserter::FragmentParser::FragmentParser(
-    Document& aDocument, bool aTrustedInput)
+    const Document& aDocument, bool aTrustedInput)
     : mDocument{aDocument}, mTrustedInput{aTrustedInput} {}
 
 nsresult HTMLEditor::HTMLWithContextInserter::FragmentParser::ParseContext(
@@ -3176,10 +3226,6 @@ nsresult HTMLEditor::HTMLWithContextInserter::FragmentParser::ParsePastedHTML(
                                        &mDocument, aFragment, mTrustedInput);
 }
 
-HTMLEditor::HTMLWithContextInserter::FragmentFromPasteCreator::
-    FragmentFromPasteCreator(HTMLEditor& aHTMLEditor)
-    : mHTMLEditor{aHTMLEditor} {}
-
 nsresult HTMLEditor::HTMLWithContextInserter::CreateDOMFragmentFromPaste(
     const nsAString& aInputString, const nsAString& aContextStr,
     const nsAString& aInfoStr, nsCOMPtr<nsINode>* aOutFragNode,
@@ -3192,11 +3238,16 @@ nsresult HTMLEditor::HTMLWithContextInserter::CreateDOMFragmentFromPaste(
     return NS_ERROR_INVALID_ARG;
   }
 
-  FragmentFromPasteCreator fragmentFromPasteCreator{mHTMLEditor};
+  RefPtr<const Document> document = mHTMLEditor.GetDocument();
+  if (NS_WARN_IF(!document)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  FragmentFromPasteCreator fragmentFromPasteCreator;
 
   const nsresult rv = fragmentFromPasteCreator.Run(
-      aInputString, aContextStr, aInfoStr, aOutFragNode, aOutStartNode,
-      aOutEndNode, aTrustedInput);
+      *document, aInputString, aContextStr, aInfoStr, aOutFragNode,
+      aOutStartNode, aOutEndNode, aTrustedInput);
 
   *aOutStartOffset = 0;
   *aOutEndOffset = (*aOutEndNode)->Length();
@@ -3298,18 +3349,14 @@ nsresult HTMLEditor::HTMLWithContextInserter::FragmentFromPasteCreator::
 
 nsresult HTMLEditor::HTMLWithContextInserter::FragmentFromPasteCreator::
     CreateDocumentFragmentAndGetParentOfPastedHTMLInContext(
-        const nsAString& aInputString, const nsAString& aContextStr,
-        bool aTrustedInput, nsCOMPtr<nsINode>& aParentNodeOfPastedHTMLInContext,
+        const Document& aDocument, const nsAString& aInputString,
+        const nsAString& aContextStr, bool aTrustedInput,
+        nsCOMPtr<nsINode>& aParentNodeOfPastedHTMLInContext,
         RefPtr<DocumentFragment>& aDocumentFragmentToInsert) const {
-  RefPtr<Document> document = mHTMLEditor.GetDocument();
-  if (NS_WARN_IF(!document)) {
-    return NS_ERROR_FAILURE;
-  }
-
   // if we have context info, create a fragment for that
   RefPtr<DocumentFragment> documentFragmentForContext;
 
-  FragmentParser fragmentParser{*document, aTrustedInput};
+  FragmentParser fragmentParser{aDocument, aTrustedInput};
   if (!aContextStr.IsEmpty()) {
     nsresult rv = fragmentParser.ParseContext(
         aContextStr, getter_AddRefs(documentFragmentForContext));
@@ -3338,6 +3385,7 @@ nsresult HTMLEditor::HTMLWithContextInserter::FragmentFromPasteCreator::
     FragmentFromPasteCreator::
         FindTargetNodeOfContextForPastedHTMLAndRemoveInsertionCookie(
             *documentFragmentForContext, aParentNodeOfPastedHTMLInContext);
+    MOZ_ASSERT(aParentNodeOfPastedHTMLInContext);
   }
 
   nsCOMPtr<nsIContent> parentContentOfPastedHTMLInContext =
@@ -3394,10 +3442,10 @@ nsresult HTMLEditor::HTMLWithContextInserter::FragmentFromPasteCreator::
 }
 
 nsresult HTMLEditor::HTMLWithContextInserter::FragmentFromPasteCreator::Run(
-    const nsAString& aInputString, const nsAString& aContextStr,
-    const nsAString& aInfoStr, nsCOMPtr<nsINode>* aOutFragNode,
-    nsCOMPtr<nsINode>* aOutStartNode, nsCOMPtr<nsINode>* aOutEndNode,
-    bool aTrustedInput) const {
+    const Document& aDocument, const nsAString& aInputString,
+    const nsAString& aContextStr, const nsAString& aInfoStr,
+    nsCOMPtr<nsINode>* aOutFragNode, nsCOMPtr<nsINode>* aOutStartNode,
+    nsCOMPtr<nsINode>* aOutEndNode, bool aTrustedInput) const {
   MOZ_ASSERT(aOutFragNode);
   MOZ_ASSERT(aOutStartNode);
   MOZ_ASSERT(aOutEndNode);
@@ -3405,8 +3453,8 @@ nsresult HTMLEditor::HTMLWithContextInserter::FragmentFromPasteCreator::Run(
   nsCOMPtr<nsINode> parentNodeOfPastedHTMLInContext;
   RefPtr<DocumentFragment> documentFragmentToInsert;
   nsresult rv = CreateDocumentFragmentAndGetParentOfPastedHTMLInContext(
-      aInputString, aContextStr, aTrustedInput, parentNodeOfPastedHTMLInContext,
-      documentFragmentToInsert);
+      aDocument, aInputString, aContextStr, aTrustedInput,
+      parentNodeOfPastedHTMLInContext, documentFragmentToInsert);
   if (NS_FAILED(rv)) {
     NS_WARNING(
         "HTMLEditor::HTMLWithContextInserter::FragmentFromPasteCreator::"
@@ -3479,7 +3527,7 @@ nsresult HTMLEditor::HTMLWithContextInserter::FragmentFromPasteCreator::
 // static
 nsresult HTMLEditor::HTMLWithContextInserter::FragmentParser::ParseFragment(
     const nsAString& aFragStr, nsAtom* aContextLocalName,
-    Document* aTargetDocument, DocumentFragment** aFragment,
+    const Document* aTargetDocument, DocumentFragment** aFragment,
     bool aTrustedInput) {
   nsAutoScriptBlockerSuppressNodeRemoved autoBlocker;
 

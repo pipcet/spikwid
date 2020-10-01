@@ -168,7 +168,6 @@ class nsHttpHandler final : public nsIHttpProtocolHandler,
     return mCriticalRequestPrioritization;
   }
 
-  bool IsDocumentNosniffEnabled() { return mRespectDocumentNoSniff; }
   bool UseH2Deps() { return mUseH2Deps; }
   bool IsH2WebsocketsEnabled() { return mEnableH2Websockets; }
 
@@ -348,13 +347,22 @@ class nsHttpHandler final : public nsIHttpProtocolHandler,
                                           originAttributes);
   }
 
+  void UpdateAltServiceMappingWithoutValidation(
+      AltSvcMapping* map, nsProxyInfo* proxyInfo,
+      nsIInterfaceRequestor* callbacks, uint32_t caps,
+      const OriginAttributes& originAttributes) {
+    mAltSvcCache->UpdateAltServiceMappingWithoutValidation(
+        map, proxyInfo, callbacks, caps, originAttributes);
+  }
+
   already_AddRefed<AltSvcMapping> GetAltServiceMapping(
       const nsACString& scheme, const nsACString& host, int32_t port, bool pb,
       bool isolated, const nsACString& topWindowOrigin,
-      const OriginAttributes& originAttributes, bool aHttp3Allowed) {
+      const OriginAttributes& originAttributes, bool aHttp2Allowed,
+      bool aHttp3Allowed) {
     return mAltSvcCache->GetAltServiceMapping(scheme, host, port, pb, isolated,
                                               topWindowOrigin, originAttributes,
-                                              aHttp3Allowed);
+                                              aHttp2Allowed, aHttp3Allowed);
   }
 
   //
@@ -462,6 +470,8 @@ class nsHttpHandler final : public nsIHttpProtocolHandler,
     return mMaxHttpResponseHeaderSize;
   }
 
+  const nsCString& Http3QlogDir();
+
   float FocusedWindowTransactionRatio() const {
     return mFocusedWindowTransactionRatio;
   }
@@ -487,6 +497,14 @@ class nsHttpHandler final : public nsIHttpProtocolHandler,
 
   nsresult DoShiftReloadConnectionCleanupWithConnInfo(
       nsHttpConnectionInfo* aCI);
+
+  void MaybeAddAltSvcForTesting(nsIURI* aUri, const nsACString& aUsername,
+                                const nsACString& aTopWindowOrigin,
+                                bool aPrivateBrowsing, bool aIsolated,
+                                nsIInterfaceRequestor* aCallbacks,
+                                const OriginAttributes& aOriginAttributes);
+
+  bool UseHTTPSRRAsAltSvcEnabled() const;
 
  private:
   nsHttpHandler();
@@ -699,9 +717,6 @@ class nsHttpHandler final : public nsIHttpProtocolHandler,
   // while those elements load.
   bool mCriticalRequestPrioritization;
 
-  // Whether to respect X-Content-Type nosniff on Page loads
-  bool mRespectDocumentNoSniff;
-
   // TCP Keepalive configuration values.
 
   // True if TCP keepalive is enabled for short-lived conns.
@@ -736,6 +751,7 @@ class nsHttpHandler final : public nsIHttpProtocolHandler,
   Atomic<uint32_t, Relaxed>
       mHttp3MaxBlockedStreams;  // uint16_t is enough here, but Atomic only
                                 // supports uint32_t or uint64_t.
+  nsCString mHttp3QlogDir;
 
   // The max size (in bytes) for received Http response header.
   uint32_t mMaxHttpResponseHeaderSize;
@@ -817,7 +833,7 @@ class nsHttpHandler final : public nsIHttpProtocolHandler,
   Mutex mLastActiveTabLoadOptimizationLock;
   TimeStamp mLastActiveTabLoadOptimizationHit;
 
-  Mutex mSpdyBlacklistLock;
+  Mutex mHttpExclusionLock;
 
  public:
   [[nodiscard]] nsresult NewChannelId(uint64_t& channelId);
@@ -825,16 +841,24 @@ class nsHttpHandler final : public nsIHttpProtocolHandler,
   void RemoveHttpChannel(uint64_t aId);
   nsWeakPtr GetWeakHttpChannel(uint64_t aId);
 
-  void BlacklistSpdy(const nsHttpConnectionInfo* ci);
-  [[nodiscard]] bool IsSpdyBlacklisted(const nsHttpConnectionInfo* ci);
+  void ExcludeHttp2(const nsHttpConnectionInfo* ci);
+  [[nodiscard]] bool IsHttp2Excluded(const nsHttpConnectionInfo* ci);
+  void ExcludeHttp3(const nsHttpConnectionInfo* ci);
+  [[nodiscard]] bool IsHttp3Excluded(const nsHttpConnectionInfo* ci);
 
  private:
-  nsTHashtable<nsCStringHashKey> mBlacklistedSpdyOrigins;
+  nsTHashtable<nsCStringHashKey> mExcludedHttp2Origins;
+  nsTHashtable<nsCStringHashKey> mExcludedHttp3Origins;
 
   bool mThroughCaptivePortal;
 
   // The mapping of channel id and the weak pointer of nsHttpChannel.
   nsDataHashtable<nsUint64HashKey, nsWeakPtr> mIDToHttpChannelMap;
+
+  // This is parsed pref network.http.http3.alt-svc-mapping-for-testing.
+  // The pref set artificial altSvc-s for origin for testing.
+  // This maps an origin to an altSvc.
+  nsClassHashtable<nsCStringHashKey, nsCString> mAltSvcMappingTemptativeMap;
 };
 
 extern StaticRefPtr<nsHttpHandler> gHttpHandler;

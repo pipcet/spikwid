@@ -21,9 +21,10 @@ from __future__ import absolute_import, print_function, unicode_literals
 
 import copy
 import logging
-from six import string_types, text_type
+import re
 
 from mozbuild.schedules import INCLUSIVE_COMPONENTS
+from six import string_types, text_type
 from voluptuous import (
     Any,
     Optional,
@@ -35,19 +36,22 @@ import taskgraph
 from taskgraph.transforms.base import TransformSequence
 from taskgraph.util.attributes import match_run_on_projects, keymatch
 from taskgraph.util.keyed_by import evaluate_keyed_by
-from taskgraph.util.schema import resolve_keyed_by, OptimizationSchema
 from taskgraph.util.templates import merge
 from taskgraph.util.treeherder import split_symbol, join_symbol
 from taskgraph.util.platforms import platform_family
 from taskgraph.util.schema import (
+    resolve_keyed_by,
     optionally_keyed_by,
     Schema,
 )
+from taskgraph.optimize.schema import OptimizationSchema
 from taskgraph.util.chunking import (
     chunk_manifests,
+    get_manifest_loader,
     get_runtimes,
     guess_mozinfo_from_task,
     manifest_loaders,
+    DefaultLoader,
 )
 from taskgraph.util.taskcluster import (
     get_artifact_path,
@@ -68,27 +72,32 @@ WINDOWS_WORKER_TYPES = {
     'windows7-32': {
       'virtual': 't-win7-32',
       'virtual-with-gpu': 't-win7-32-gpu',
-      'hardware': 't-win10-64-hw',
+      'hardware': 't-win10-64-1803-hw',
     },
     'windows7-32-shippable': {
       'virtual': 't-win7-32',
       'virtual-with-gpu': 't-win7-32-gpu',
-      'hardware': 't-win10-64-hw',
+      'hardware': 't-win10-64-1803-hw',
     },
-    'windows7-32-devedition': {
+    'windows7-32-devedition': {  # build only, tests have no value
       'virtual': 't-win7-32',
       'virtual-with-gpu': 't-win7-32-gpu',
-      'hardware': 't-win10-64-hw',
+      'hardware': 't-win10-64-1803-hw',
     },
     'windows7-32-mingwclang': {
       'virtual': 't-win7-32',
       'virtual-with-gpu': 't-win7-32-gpu',
-      'hardware': 't-win10-64-hw',
+      'hardware': 't-win10-64-1803-hw',
+    },
+    'windows7-32-qr': {
+      'virtual': 't-win7-32',
+      'virtual-with-gpu': 't-win7-32-gpu',
+      'hardware': 't-win10-64-1803-hw',
     },
     'windows10-64': {
       'virtual': 't-win10-64',
       'virtual-with-gpu': 't-win10-64-gpu-s',
-      'hardware': 't-win10-64-hw',
+      'hardware': 't-win10-64-1803-hw',
     },
     'windows10-aarch64': {
       'virtual': 't-win64-aarch64-laptop',
@@ -98,37 +107,37 @@ WINDOWS_WORKER_TYPES = {
     'windows10-64-ccov': {
       'virtual': 't-win10-64',
       'virtual-with-gpu': 't-win10-64-gpu-s',
-      'hardware': 't-win10-64-hw',
+      'hardware': 't-win10-64-1803-hw',
     },
     'windows10-64-devedition': {
       'virtual': 't-win10-64',
       'virtual-with-gpu': 't-win10-64-gpu-s',
-      'hardware': 't-win10-64-hw',
+      'hardware': 't-win10-64-1803-hw',
     },
     'windows10-64-shippable': {
       'virtual': 't-win10-64',
       'virtual-with-gpu': 't-win10-64-gpu-s',
-      'hardware': 't-win10-64-hw',
+      'hardware': 't-win10-64-1803-hw',
     },
     'windows10-64-asan': {
       'virtual': 't-win10-64',
       'virtual-with-gpu': 't-win10-64-gpu-s',
-      'hardware': 't-win10-64-hw',
+      'hardware': 't-win10-64-1803-hw',
     },
     'windows10-64-qr': {
       'virtual': 't-win10-64',
       'virtual-with-gpu': 't-win10-64-gpu-s',
-      'hardware': 't-win10-64-hw',
+      'hardware': 't-win10-64-1803-hw',
     },
     'windows10-64-shippable-qr': {
       'virtual': 't-win10-64',
       'virtual-with-gpu': 't-win10-64-gpu-s',
-      'hardware': 't-win10-64-hw',
+      'hardware': 't-win10-64-1803-hw',
     },
     'windows10-64-mingwclang': {
       'virtual': 't-win10-64',
       'virtual-with-gpu': 't-win10-64-gpu-s',
-      'hardware': 't-win10-64-hw',
+      'hardware': 't-win10-64-1803-hw',
     },
     'windows10-64-ref-hw-2017': {
       'virtual': 't-win10-64',
@@ -191,8 +200,24 @@ TEST_VARIANTS = {
             'fission-run-on-projects': [],
             'mozharness': {
                 'extra-options': ['--setpref=fission.autostart=true',
+                                  '--setpref=dom.serviceWorkers.parent_intercept=true'],
+            },
+        },
+    },
+    'fission-xorigin': {
+        'description': "{description} with cross-origin and fission enabled",
+        'filterfn': fission_filter,
+        'suffix': 'fis-xorig',
+        'replace': {
+            'e10s': True,
+        },
+        'merge': {
+            # Ensures the default state is to not run anywhere.
+            'fission-run-on-projects': [],
+            'mozharness': {
+                'extra-options': ['--setpref=fission.autostart=true',
                                   '--setpref=dom.serviceWorkers.parent_intercept=true',
-                                  '--setpref=browser.tabs.documentchannel=true'],
+                                  '--enable-xorigin-tests'],
             },
         },
     },
@@ -227,46 +252,41 @@ TEST_VARIANTS = {
         'merge': {
             'webrender': True,
         }
+    },
+    'webrender-sw': {
+        'description': "{description} with software webrender enabled",
+        'suffix': 'swr',
+        'merge': {
+            'webrender': True,
+            'mozharness': {
+                'extra-options': [
+                    '--setpref=gfx.webrender.software=true',
+                ],
+            }
+        }
+    },
+    'webgl-ipc': {
+        # TODO: After November 1st 2020, verify this variant is still needed.
+        'description': "{description} with WebGL IPC process enabled",
+        'suffix': 'gli',
+        'replace': {
+            'run-on-projects': {
+                'by-test-platform': {
+                    'mac.*': ['trunk'],
+                    'default': [],
+                }
+            }
+        },
+        'merge': {
+            'mozharness': {
+                'extra-options': [
+                    '--setpref=webgl.out-of-process=true',
+                ],
+            },
+            'tier': 2
+        }
     }
 }
-
-
-CHUNK_SUITES_BLACKLIST = (
-    'awsy',
-    'cppunittest',
-    'crashtest',
-    'crashtest-qr',
-    'firefox-ui-functional-local',
-    'firefox-ui-functional-remote',
-    'geckoview-junit',
-    'gtest',
-    'jittest',
-    'jsreftest',
-    'marionette',
-    'mochitest-browser-chrome-screenshots',
-    'mochitest-browser-chrome-thunderbird',
-    'mochitest-valgrind-plain',
-    'mochitest-webgl1-core',
-    'mochitest-webgl1-ext',
-    'mochitest-webgl2-core',
-    'mochitest-webgl2-ext',
-    'raptor',
-    'reftest',
-    'reftest-qr',
-    'reftest-gpu',
-    'reftest-no-accel',
-    'talos',
-    'telemetry-tests-client',
-    'test-coverage',
-    'test-coverage-wpt',
-    'test-verify',
-    'test-verify-gpu',
-    'test-verify-wpt',
-    'web-platform-tests-backlog',
-    'web-platform-tests-print-reftest',
-    'web-platform-tests-reftest-backlog',
-)
-"""These suites will be chunked at test runtime rather than here in the taskgraph."""
 
 
 DYNAMIC_CHUNK_DURATION = 20 * 60  # seconds
@@ -343,6 +363,7 @@ test_description_schema = Schema({
     Optional('run-on-projects'): optionally_keyed_by(
         'test-platform',
         'test-name',
+        'variant',
         Any([text_type], 'built-projects')),
 
     # When set only run on projects where the build would already be running.
@@ -374,6 +395,12 @@ test_description_schema = Schema({
     Required('chunks'): optionally_keyed_by(
         'test-platform',
         Any(int, 'dynamic')),
+
+
+    # Custom 'test_manifest_loader' to use, overriding the one configured in the
+    # parameters. When 'null', no test chunking will be performed. Can also
+    # be used to disable "manifest scheduling".
+    Optional('test-manifest-loader'): Any(None, *list(manifest_loaders)),
 
     # the time (with unit) after which this task is deleted; default depends on
     # the branch (see below)
@@ -944,9 +971,11 @@ def set_tier(config, tasks):
                 'macosx1014-64-qr/debug',
                 'android-em-7.0-x86_64-shippable/opt',
                 'android-em-7.0-x86_64/debug',
+                'android-em-7.0-x86_64/opt',
                 'android-em-7.0-x86-shippable/opt',
                 'android-em-7.0-x86_64-shippable-qr/opt',
-                'android-em-7.0-x86_64-qr/debug'
+                'android-em-7.0-x86_64-qr/debug',
+                'android-em-7.0-x86_64-qr/opt',
             ]:
                 task['tier'] = 1
             else:
@@ -1010,7 +1039,7 @@ def handle_keyed_by(config, tasks):
     ]
     for task in tasks:
         for field in fields:
-            resolve_keyed_by(task, field, item_name=task['test-name'],
+            resolve_keyed_by(task, field, item_name=task['test-name'], defer=['variant'],
                              project=config.params['project'])
         yield task
 
@@ -1064,33 +1093,34 @@ def setup_browsertime(config, tasks):
 
         cd_fetches = {
             'android.*': [
-                'linux64-chromedriver-80',
-                'linux64-chromedriver-81'
+                'linux64-chromedriver-81',
+                'linux64-chromedriver-84',
+                'linux64-chromedriver-85'
             ],
             'linux.*': [
-                'linux64-chromedriver-79',
-                'linux64-chromedriver-80',
-                'linux64-chromedriver-81'
+                'linux64-chromedriver-81',
+                'linux64-chromedriver-84',
+                'linux64-chromedriver-85'
             ],
             'macosx.*': [
-                'mac64-chromedriver-79',
-                'mac64-chromedriver-80',
-                'mac64-chromedriver-81'
+                'mac64-chromedriver-81',
+                'mac64-chromedriver-84',
+                'mac64-chromedriver-85'
             ],
             'windows.*aarch64.*': [
-                'win32-chromedriver-79',
-                'win32-chromedriver-80',
-                'win32-chromedriver-81'
+                'win32-chromedriver-81',
+                'win32-chromedriver-84',
+                'win32-chromedriver-85'
             ],
             'windows.*-32.*': [
-                'win32-chromedriver-79',
-                'win32-chromedriver-80',
-                'win32-chromedriver-81'
+                'win32-chromedriver-81',
+                'win32-chromedriver-84',
+                'win32-chromedriver-85'
             ],
             'windows.*-64.*': [
-                'win32-chromedriver-79',
-                'win32-chromedriver-80',
-                'win32-chromedriver-81'
+                'win32-chromedriver-81',
+                'win32-chromedriver-84',
+                'win32-chromedriver-85'
             ],
         }
 
@@ -1322,17 +1352,45 @@ def split_variants(config, tasks):
 
 
 @transforms.add
+def handle_keyed_by_variant(config, tasks):
+    """Resolve fields that can be keyed by platform, etc."""
+    fields = [
+        'run-on-projects',
+    ]
+    for task in tasks:
+        for field in fields:
+            resolve_keyed_by(task, field, item_name=task['test-name'],
+                             variant=task['attributes'].get('unittest_variant'))
+        yield task
+
+
+@transforms.add
 def handle_fission_attributes(config, tasks):
     """Handle run_on_projects for fission tasks."""
     for task in tasks:
         for attr in ('run-on-projects', 'tier'):
             fission_attr = task.pop('fission-{}'.format(attr), None)
 
-            if task['attributes'].get('unittest_variant') != 'fission' or fission_attr is None:
+            if (task['attributes'].get('unittest_variant') != 'fission-xorigin' and
+                task['attributes'].get('unittest_variant') != 'fission') or fission_attr is None:
                 continue
 
             task[attr] = fission_attr
 
+        yield task
+
+
+@transforms.add
+def disable_try_only_platforms(config, tasks):
+    """Turns off platforms that should only run on try."""
+    try_only_platforms = (
+        "windows7-32-qr/.*",
+    )
+    for task in tasks:
+        if any(re.match(k + "$", task["test-platform"]) for k in try_only_platforms):
+            task["run-on-projects"] = []
+            if "fission-run-on-projects" in task:
+                task["fission-run-on-projects"] = []
         yield task
 
 
@@ -1408,13 +1466,16 @@ def set_test_verify_chunks(config, tasks):
 def set_test_manifests(config, tasks):
     """Determine the set of test manifests that should run in this task."""
 
-    loader_cls = manifest_loaders[config.params['test_manifest_loader']]
-    loader = loader_cls(config.params)
-
     for task in tasks:
-        if task['suite'] in CHUNK_SUITES_BLACKLIST:
+        # When a task explicitly requests no 'test_manifest_loader', test
+        # resolving will happen at test runtime rather than in the taskgraph.
+        if 'test-manifest-loader' in task and task['test-manifest-loader'] is None:
             yield task
             continue
+
+        # Set 'tests_grouped' to "1", so we can differentiate between suites that are
+        # chunked at the test runtime and those that are chunked in the taskgraph.
+        task.setdefault("tags", {})["tests_grouped"] = "1"
 
         if taskgraph.fast:
             # We want to avoid evaluating manifests when taskgraph.fast is set. But
@@ -1434,21 +1495,19 @@ def set_test_manifests(config, tasks):
 
         mozinfo = guess_mozinfo_from_task(task)
 
+        loader_name = task.pop('test-manifest-loader', config.params['test_manifest_loader'])
+        loader = get_manifest_loader(loader_name, config.params)
+
         task['test-manifests'] = loader.get_manifests(
             task['suite'],
             frozenset(mozinfo.items()),
         )
 
-        # Skip the task if the loader doesn't return any manifests for the
-        # associated suite.
-        if not task['test-manifests']['active'] and not task['test-manifests']['skipped']:
-            continue
-
         # The default loader loads all manifests. If we use a non-default
         # loader, we'll only run some subset of manifests and the hardcoded
         # chunk numbers will no longer be valid. Dynamic chunking should yield
         # better results.
-        if config.params['test_manifest_loader'] != 'default':
+        if not isinstance(loader, DefaultLoader):
             task['chunks'] = "dynamic"
 
         yield task
@@ -1521,9 +1580,12 @@ def split_chunks(config, tasks):
                 manifests['active'],
             )
 
-            # Add all skipped manifests to the first chunk so they still show up in the
-            # logs. They won't impact runtime much.
-            chunked_manifests[0].extend(manifests['skipped'])
+            # Add all skipped manifests to the first chunk of backstop pushes
+            # so they still show up in the logs. They won't impact runtime much
+            # and this way tools like ActiveData are still aware that they
+            # exist.
+            if config.params["backstop"] and manifests["active"]:
+                chunked_manifests[0].extend(manifests['skipped'])
 
         for i in range(task['chunks']):
             this_chunk = i + 1
@@ -1533,12 +1595,7 @@ def split_chunks(config, tasks):
             chunked['this-chunk'] = this_chunk
 
             if chunked_manifests is not None:
-                manifests = sorted(chunked_manifests[i])
-                if not manifests:
-                    raise Exception(
-                        'Chunking algorithm yielded no manifests for chunk {} of {} on {}'.format(
-                            this_chunk, task['test-name'], task['test-platform']))
-                chunked['test-manifests'] = manifests
+                chunked['test-manifests'] = sorted(chunked_manifests[i])
 
             group, symbol = split_symbol(chunked['treeherder-symbol'])
             if task['chunks'] > 1 or not symbol:
@@ -1757,9 +1814,11 @@ def make_job_description(config, tasks):
             'build_type': attr_build_type,
             'test_platform': task['test-platform'],
             'test_chunk': str(task['this-chunk']),
-            'test_manifests': task.get('test-manifests'),
             attr_try_name: try_name,
         })
+
+        if 'test-manifests' in task:
+            attributes['test_manifests'] = task['test-manifests']
 
         jobdesc = {}
         name = '{}-{}'.format(task['test-platform'], task['test-name'])
@@ -1801,17 +1860,10 @@ def make_job_description(config, tasks):
             jobdesc['when'] = task['when']
         elif 'optimization' in task:
             jobdesc['optimization'] = task['optimization']
-        # Pushes generated by `mach try auto` should use the non-try optimizations.
-        elif config.params.is_try() and config.params['try_mode'] != 'try_auto':
-            jobdesc['optimization'] = {'test-try': schedules}
         elif set(schedules) & set(INCLUSIVE_COMPONENTS):
             jobdesc['optimization'] = {'test-inclusive': schedules}
         else:
-            # First arg goes to 'skip-unless-schedules', second goes to the
-            # main test strategy. Using an empty dict allows earlier
-            # substrategies (of a CompositeStrategy) to pass values by reference
-            # to later substrategies.
-            jobdesc['optimization'] = {'test': (schedules, {})}
+            jobdesc['optimization'] = {'test': schedules}
 
         run = jobdesc['run'] = {}
         run['using'] = 'mozharness-test'

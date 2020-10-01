@@ -39,6 +39,7 @@ import {
   getThreadContext,
   getSkipPausing,
   getInlinePreview,
+  getEditorWrapping,
   getHighlightedCalls,
 } from "../../selectors";
 
@@ -126,6 +127,7 @@ export type Props = {
   isPaused: boolean,
   skipPausing: boolean,
   inlinePreviewEnabled: boolean,
+  editorWrappingEnabled: boolean,
   highlightedCalls: ?highlightedCallsType,
 
   // Actions
@@ -254,16 +256,19 @@ class Editor extends PureComponent<Props, State> {
       L10N.getStr("toggleCondPanel.logPoint.key"),
       this.onToggleConditionalPanel
     );
-    shortcuts.on(L10N.getStr("sourceTabs.closeTab.key"), this.onClosePress);
+    shortcuts.on(
+      L10N.getStr("sourceTabs.closeTab.key"),
+      this.onCloseShortcutPress
+    );
     shortcuts.on("Esc", this.onEscape);
   }
 
-  onClosePress = (key: mixed, e: KeyboardEvent) => {
+  onCloseShortcutPress = (key: mixed, e: KeyboardEvent) => {
     const { cx, selectedSource } = this.props;
     if (selectedSource) {
       e.preventDefault();
       e.stopPropagation();
-      this.props.closeTab(cx, selectedSource);
+      this.props.closeTab(cx, selectedSource, "shortcut");
     }
   };
 
@@ -654,6 +659,7 @@ class Editor extends PureComponent<Props, State> {
       conditionalPanelLocation,
       isPaused,
       inlinePreviewEnabled,
+      editorWrappingEnabled,
     } = this.props;
     const { editor, contextMenu } = this.state;
 
@@ -677,6 +683,7 @@ class Editor extends PureComponent<Props, State> {
             contextMenu={contextMenu}
             clearContextMenu={this.clearContextMenu}
             selectedSource={selectedSource}
+            editorWrappingEnabled={editorWrappingEnabled}
           />
         }
         {conditionalPanelLocation ? <ConditionalPanel editor={editor} /> : null}
@@ -738,6 +745,7 @@ const mapStateToProps = state => {
     isPaused: getIsPaused(state, getCurrentThread(state)),
     skipPausing: getSkipPausing(state),
     inlinePreviewEnabled: getInlinePreview(state),
+    editorWrappingEnabled: getEditorWrapping(state),
     highlightedCalls: getHighlightedCalls(state, getCurrentThread(state)),
   };
 };

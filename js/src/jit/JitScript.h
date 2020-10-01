@@ -14,6 +14,7 @@
 #include "jit/TrialInlining.h"
 #include "js/UniquePtr.h"
 #include "util/TrailingArray.h"
+#include "vm/EnvironmentObject.h"
 #include "vm/TypeInference.h"
 
 class JS_PUBLIC_API JSScript;
@@ -92,14 +93,14 @@ class InliningRoot;
 
 class alignas(uintptr_t) ICScript final : public TrailingArray {
  public:
-  ICScript(JitScript* jitScript, uint32_t warmUpCount, Offset endOffset,
+  ICScript(uint32_t warmUpCount, Offset endOffset, uint32_t depth,
            InliningRoot* inliningRoot = nullptr)
-      : jitScript_(jitScript),
-        inliningRoot_(inliningRoot),
+      : inliningRoot_(inliningRoot),
         warmUpCount_(warmUpCount),
-        endOffset_(endOffset) {}
+        endOffset_(endOffset),
+        depth_(depth) {}
 
-  JitScript* jitScript() { return jitScript_; }
+  bool isInlined() const { return depth_ > 0; }
 
   MOZ_MUST_USE bool initICEntries(JSContext* cx, JSScript* script);
 
@@ -109,6 +110,9 @@ class alignas(uintptr_t) ICScript final : public TrailingArray {
   }
 
   InliningRoot* inliningRoot() const { return inliningRoot_; }
+  uint32_t depth() const { return depth_; }
+
+  void resetWarmUpCount(uint32_t count) { warmUpCount_ = count; }
 
   static constexpr size_t offsetOfFirstStub(uint32_t entryIndex) {
     return sizeof(ICScript) + entryIndex * sizeof(ICEntry) +
@@ -118,6 +122,7 @@ class alignas(uintptr_t) ICScript final : public TrailingArray {
   static constexpr Offset offsetOfWarmUpCount() {
     return offsetof(ICScript, warmUpCount_);
   }
+  static constexpr Offset offsetOfDepth() { return offsetof(ICScript, depth_); }
 
   static constexpr Offset offsetOfICEntries() { return sizeof(ICScript); }
   uint32_t numICEntries() const {
@@ -133,20 +138,34 @@ class alignas(uintptr_t) ICScript final : public TrailingArray {
   ICEntry& icEntryFromPCOffset(uint32_t pcOffset);
   ICEntry& icEntryFromPCOffset(uint32_t pcOffset, ICEntry* prevLookedUpEntry);
 
+  MOZ_MUST_USE bool addInlinedChild(JSContext* cx,
+                                    js::UniquePtr<ICScript> child,
+                                    uint32_t pcOffset);
+  ICScript* findInlinedChild(uint32_t pcOffset);
+  void removeInlinedChild(uint32_t pcOffset);
+  bool hasInlinedChild(uint32_t pcOffset);
+
   FallbackICStubSpace* fallbackStubSpace();
   void purgeOptimizedStubs(Zone* zone);
 
   void trace(JSTracer* trc);
 
  private:
-  // Pointer to the owning JitScript. If this ICScript is not
-  // a clone for inlining, `this->jitScript_ + JitScript::offsetOfICScript()`
-  // should equal `this`.
-  JitScript* jitScript_;
+  class CallSite {
+   public:
+    CallSite(ICScript* callee, uint32_t pcOffset)
+        : callee_(callee), pcOffset_(pcOffset) {}
+    ICScript* callee_;
+    uint32_t pcOffset_;
+  };
 
-  // If this ICScript was created for trial inlining, a pointer to the
-  // root of the inlining tree. Otherwise, nullptr.
+  // If this ICScript was created for trial inlining or has another
+  // ICScript inlined into it, a pointer to the root of the inlining
+  // tree. Otherwise, nullptr.
   InliningRoot* inliningRoot_ = nullptr;
+
+  // ICScripts that have been inlined into this ICScript.
+  js::UniquePtr<Vector<CallSite>> inlinedChildren_;
 
   // Number of times this copy of the script has been called or has had
   // backedges taken.  Reset if the script's JIT code is forcibly discarded.
@@ -156,10 +175,15 @@ class alignas(uintptr_t) ICScript final : public TrailingArray {
   // The size of this allocation.
   Offset endOffset_;
 
+  // The inlining depth of this ICScript. 0 for the inlining root.
+  uint32_t depth_;
+
   Offset icEntriesOffset() const { return offsetOfICEntries(); }
   Offset endOffset() const { return endOffset_; }
 
   ICEntry* icEntries() { return offsetToPointer<ICEntry>(icEntriesOffset()); }
+
+  JitScript* outerJitScript();
 
   friend class JitScript;
 };
@@ -322,6 +346,9 @@ class alignas(uintptr_t) JitScript final : public TrailingArray {
     // inlined into another script. This is cleared when the script's type
     // information or caches are cleared.
     bool ionCompiledOrInlined : 1;
+
+    // True if this script entered Ion via OSR at a loop header.
+    bool hadIonOSR : 1;
   };
   Flags flags_ = {};  // Zero-initialize flags.
 
@@ -395,6 +422,9 @@ class alignas(uintptr_t) JitScript final : public TrailingArray {
   void setIonCompiledOrInlined() { flags_.ionCompiledOrInlined = true; }
   void clearIonCompiledOrInlined() { flags_.ionCompiledOrInlined = false; }
   bool ionCompiledOrInlined() const { return flags_.ionCompiledOrInlined; }
+
+  void setHadIonOSR() { flags_.hadIonOSR = true; }
+  bool hadIonOSR() const { return flags_.hadIonOSR; }
 
   RecompileInfoVector* maybeInlinedCompilations(
       const js::AutoSweepJitScript& sweep) {
@@ -531,7 +561,7 @@ class alignas(uintptr_t) JitScript final : public TrailingArray {
 
   uint32_t warmUpCount() const { return icScript_.warmUpCount_; }
   void incWarmUpCount(uint32_t amount) { icScript_.warmUpCount_ += amount; }
-  void resetWarmUpCount(uint32_t count) { icScript_.warmUpCount_ = count; }
+  void resetWarmUpCount(uint32_t count);
 
 #ifdef DEBUG
   void printTypes(JSContext* cx, HandleScript script);
@@ -706,7 +736,7 @@ class alignas(uintptr_t) JitScript final : public TrailingArray {
 
   bool hasInliningRoot() const { return !!inliningRoot_; }
   InliningRoot* inliningRoot() const { return inliningRoot_.get(); }
-  InliningRoot* getOrCreateInliningRoot(JSContext* cx);
+  InliningRoot* getOrCreateInliningRoot(JSContext* cx, JSScript* script);
   void clearInliningRoot() { inliningRoot_.reset(); }
 };
 

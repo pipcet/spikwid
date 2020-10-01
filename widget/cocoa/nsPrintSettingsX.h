@@ -22,21 +22,24 @@ class nsPrintSettingsX : public nsPrintSettings {
   NS_DECL_ISUPPORTS_INHERITED
 
   nsPrintSettingsX();
+  explicit nsPrintSettingsX(const PrintSettingsInitializer& aSettings);
   nsresult Init();
   NSPrintInfo* GetCocoaPrintInfo() { return mPrintInfo; }
   void SetCocoaPrintInfo(NSPrintInfo* aPrintInfo);
-  virtual nsresult ReadPageFormatFromPrefs();
-  virtual nsresult WritePageFormatToPrefs();
-  virtual nsresult GetEffectivePageSize(double* aWidth,
-                                        double* aHeight) override;
+  nsresult ReadPageFormatFromPrefs();
+  nsresult WritePageFormatToPrefs();
+  nsresult GetEffectivePageSize(double* aWidth, double* aHeight) override;
   void GetFilePageSize(double* aWidth, double* aHeight);
+
+  nsresult GetPaperWidth(double* aPaperWidth) override;
+  nsresult GetPaperHeight(double* aPaperWidth) override;
 
   // In addition to setting the paper width and height, these
   // overrides set the adjusted width and height returned from
   // GetEffectivePageSize. This is needed when a paper size is
   // set manually without using a print dialog a la reftest-paged.
-  virtual nsresult SetPaperWidth(double aPaperWidth) override;
-  virtual nsresult SetPaperHeight(double aPaperWidth) override;
+  nsresult SetPaperWidth(double aPaperWidth) override;
+  nsresult SetPaperHeight(double aPaperWidth) override;
 
   PMPrintSettings GetPMPrintSettings();
   PMPrintSession GetPMPrintSession();
@@ -58,6 +61,12 @@ class nsPrintSettingsX : public nsPrintSettings {
   // nsPrintSettings::SetPrintRange.
   NS_IMETHOD SetPrintRange(int16_t aPrintRange) final;
 
+  // Override SetPrinterName to update the macOS printInfo in the parent,
+  // in addition to storing the string in the base class, but we do *not*
+  // override GetPrinterName because the macOS printer objects cannot actually
+  // represent the pseudo-printer destination for Save to PDF.
+  NS_IMETHOD SetPrinterName(const nsAString& aName) override;
+
   NS_IMETHOD GetStartPageRange(int32_t* aStartPageRange) final;
   NS_IMETHOD SetStartPageRange(int32_t aStartPageRange) final;
 
@@ -72,6 +81,12 @@ class nsPrintSettingsX : public nsPrintSettings {
   NS_IMETHOD GetOrientation(int32_t* aOrientation) override;
   NS_IMETHOD SetOrientation(int32_t aOrientation) override;
 
+  NS_IMETHOD GetNumCopies(int32_t* aCopies) override;
+  NS_IMETHOD SetNumCopies(int32_t aCopies) override;
+
+  NS_IMETHOD GetDuplex(int32_t* aDuplex) override;
+  NS_IMETHOD SetDuplex(int32_t aDuplex) override;
+
   NS_IMETHOD SetUnwriteableMarginTop(double aUnwriteableMarginTop) override;
   NS_IMETHOD SetUnwriteableMarginLeft(double aUnwriteableMarginLeft) override;
   NS_IMETHOD SetUnwriteableMarginBottom(
@@ -85,10 +100,11 @@ class nsPrintSettingsX : public nsPrintSettings {
   // Set the printer name using the native PrintInfo data.
   void SetPrinterNameFromPrintInfo();
 
+  void SetDispositionSaveToFile();
+
  protected:
   virtual ~nsPrintSettingsX();
 
-  nsPrintSettingsX(const nsPrintSettingsX& src);
   nsPrintSettingsX& operator=(const nsPrintSettingsX& rhs);
 
   nsresult _Clone(nsIPrintSettings** _retval) override;

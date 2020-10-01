@@ -34,13 +34,14 @@
 #include "DOMMediaStream.h"
 
 #ifdef MOZ_WEBRTC
-#  include "mtransport/runnable_utils.h"
+#  include "transport/runnable_utils.h"
 #endif
 
 class nsIPrefBranch;
 
 namespace mozilla {
 class TaskQueue;
+class MediaTimer;
 namespace dom {
 struct MediaStreamConstraints;
 struct MediaTrackConstraints;
@@ -254,6 +255,8 @@ class MediaManager final : public nsIMediaManagerService, public nsIObserver {
                                         const nsString& aDeviceId);
 
   void OnNavigation(uint64_t aWindowID);
+  void OnCameraMute(bool aMute);
+  void OnMicrophoneMute(bool aMute);
   bool IsActivelyCapturingOrHasAPermission(uint64_t aWindowId);
 
   MediaEventSource<void>& DeviceListChangeEvent() {
@@ -341,6 +344,9 @@ class MediaManager final : public nsIMediaManagerService, public nsIObserver {
   nsRefPtrHashtable<nsStringHashKey, GetUserMediaTask> mActiveCallbacks;
   nsClassHashtable<nsUint64HashKey, nsTArray<nsString>> mCallIds;
   nsTArray<RefPtr<dom::GetUserMediaRequest>> mPendingGUMRequest;
+  RefPtr<MediaTimer> mDeviceChangeTimer;
+  bool mCamerasMuted = false;
+  bool mMicrophonesMuted = false;
 
   // Always exists
   const RefPtr<TaskQueue> mMediaThread;
@@ -352,7 +358,21 @@ class MediaManager final : public nsIMediaManagerService, public nsIObserver {
   static StaticRefPtr<MediaManager> sSingleton;
   static StaticMutex sSingletonMutex;
 
-  nsTArray<nsString> mDeviceIDs;
+  struct nsStringHasher {
+    using Key = nsString;
+    using Lookup = nsString;
+
+    static HashNumber hash(const Lookup& aLookup) {
+      return HashString(aLookup.get());
+    }
+
+    static bool match(const Key& aKey, const Lookup& aLookup) {
+      return aKey == aLookup;
+    }
+  };
+
+  using DeviceIdSet = HashSet<nsString, nsStringHasher, InfallibleAllocPolicy>;
+  DeviceIdSet mDeviceIDs;
 
   // Connect/Disconnect on media thread only
   MediaEventListener mDeviceListChangeListener;

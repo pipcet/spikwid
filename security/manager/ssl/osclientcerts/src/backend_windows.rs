@@ -17,6 +17,7 @@ use winapi::um::errhandlingapi::GetLastError;
 use winapi::um::ncrypt::*;
 use winapi::um::wincrypt::{HCRYPTHASH, HCRYPTPROV, *};
 
+use crate::manager::SlotType;
 use crate::util::*;
 
 // winapi has some support for ncrypt.h, but not for this function.
@@ -64,6 +65,17 @@ fn get_cert_subject_dn(cert_info: &CERT_INFO) -> Result<Vec<u8>, ()> {
     Ok(subject_dn_string_bytes)
 }
 
+/// Helper function to determine which slot to expose a certificate/key on.
+/// Certificates with keys that are available via the CNG APIs are exposed on the modern slot.
+/// Certificates with keys that are only available via the CryptoAPI APIs are exposed on the legacy
+/// slot.
+fn get_slot_type_for_cert(cert: &CertContext) -> Result<SlotType, ()> {
+    match KeyHandle::from_cert_no_ui(cert)? {
+        KeyHandle::NCrypt(_) => Ok(SlotType::Modern),
+        KeyHandle::CryptoAPI(_, _) => Ok(SlotType::Legacy),
+    }
+}
+
 /// Represents a certificate for which there exists a corresponding private key.
 pub struct Cert {
     /// PKCS #11 object class. Will be `CKO_CERTIFICATE`.
@@ -82,11 +94,13 @@ pub struct Cert {
     serial_number: Vec<u8>,
     /// The DER bytes of the subject distinguished name of the certificate.
     subject: Vec<u8>,
+    /// Which slot this certificate should be exposed on.
+    slot_type: SlotType,
 }
 
 impl Cert {
-    fn new(cert: PCCERT_CONTEXT) -> Result<Cert, ()> {
-        let cert = unsafe { &*cert };
+    fn new(cert_context: PCCERT_CONTEXT, slot_type: SlotType) -> Result<Cert, ()> {
+        let cert = unsafe { &*cert_context };
         let cert_info = unsafe { &*cert.pCertInfo };
         let value =
             unsafe { slice::from_raw_parts(cert.pbCertEncoded, cert.cbCertEncoded as usize) };
@@ -111,6 +125,7 @@ impl Cert {
             issuer,
             serial_number,
             subject,
+            slot_type,
         })
     }
 
@@ -146,7 +161,10 @@ impl Cert {
         &self.subject
     }
 
-    fn matches(&self, attrs: &[(CK_ATTRIBUTE_TYPE, Vec<u8>)]) -> bool {
+    fn matches(&self, slot_type: SlotType, attrs: &[(CK_ATTRIBUTE_TYPE, Vec<u8>)]) -> bool {
+        if slot_type != self.slot_type {
+            return false;
+        }
         for (attr_type, attr_value) in attrs {
             let comparison = match *attr_type {
                 CKA_CLASS => self.class(),
@@ -213,13 +231,21 @@ enum KeyHandle {
 
 impl KeyHandle {
     fn from_cert(cert: &CertContext) -> Result<KeyHandle, ()> {
+        KeyHandle::from_cert_common(cert, 0)
+    }
+
+    fn from_cert_no_ui(cert: &CertContext) -> Result<KeyHandle, ()> {
+        KeyHandle::from_cert_common(cert, CRYPT_ACQUIRE_SILENT_FLAG)
+    }
+
+    fn from_cert_common(cert: &CertContext, extra_flags: DWORD) -> Result<KeyHandle, ()> {
         let mut key_handle = 0;
         let mut key_spec = 0;
         let mut must_free = 0;
         unsafe {
             if CryptAcquireCertificatePrivateKey(
                 **cert,
-                CRYPT_ACQUIRE_PREFER_NCRYPT_KEY_FLAG,
+                CRYPT_ACQUIRE_PREFER_NCRYPT_KEY_FLAG | extra_flags,
                 std::ptr::null_mut(),
                 &mut key_handle,
                 &mut key_spec,
@@ -563,6 +589,8 @@ pub struct Key {
     ec_params: Option<Vec<u8>>,
     /// An enum identifying this key's type.
     key_type_enum: KeyType,
+    /// Which slot this key should be exposed on.
+    slot_type: SlotType,
 }
 
 impl Key {
@@ -599,8 +627,10 @@ impl Key {
         } else {
             return Err(());
         };
+        let cert = CertContext::new(cert_context);
+        let slot_type = get_slot_type_for_cert(&cert)?;
         Ok(Key {
-            cert: CertContext::new(cert_context),
+            cert,
             class: serialize_uint(CKO_PRIVATE_KEY)?,
             token: serialize_uint(CK_TRUE)?,
             id,
@@ -609,6 +639,7 @@ impl Key {
             modulus,
             ec_params,
             key_type_enum,
+            slot_type,
         })
     }
 
@@ -646,7 +677,10 @@ impl Key {
         }
     }
 
-    fn matches(&self, attrs: &[(CK_ATTRIBUTE_TYPE, Vec<u8>)]) -> bool {
+    fn matches(&self, slot_type: SlotType, attrs: &[(CK_ATTRIBUTE_TYPE, Vec<u8>)]) -> bool {
+        if slot_type != self.slot_type {
+            return false;
+        }
         for (attr_type, attr_value) in attrs {
             let comparison = match *attr_type {
                 CKA_CLASS => self.class(),
@@ -733,10 +767,10 @@ pub enum Object {
 }
 
 impl Object {
-    pub fn matches(&self, attrs: &[(CK_ATTRIBUTE_TYPE, Vec<u8>)]) -> bool {
+    pub fn matches(&self, slot_type: SlotType, attrs: &[(CK_ATTRIBUTE_TYPE, Vec<u8>)]) -> bool {
         match self {
-            Object::Cert(cert) => cert.matches(attrs),
-            Object::Key(key) => key.matches(attrs),
+            Object::Cert(cert) => cert.matches(slot_type, attrs),
+            Object::Key(key) => key.matches(slot_type, attrs),
         }
     }
 
@@ -896,12 +930,12 @@ pub fn list_objects() -> Vec<Object> {
         // after).
         match cert_contexts.get(0) {
             Some(cert_context) => {
-                let cert = match Cert::new(*cert_context) {
-                    Ok(cert) => cert,
-                    Err(()) => continue,
-                };
                 let key = match Key::new(*cert_context) {
                     Ok(key) => key,
+                    Err(()) => continue,
+                };
+                let cert = match Cert::new(*cert_context, key.slot_type) {
+                    Ok(cert) => cert,
                     Err(()) => continue,
                 };
                 objects.push(Object::Cert(cert));
@@ -910,7 +944,7 @@ pub fn list_objects() -> Vec<Object> {
             None => {}
         };
         for cert_context in cert_contexts.iter().skip(1) {
-            if let Ok(cert) = Cert::new(*cert_context) {
+            if let Ok(cert) = Cert::new(*cert_context, SlotType::Legacy) {
                 objects.push(Object::Cert(cert));
             }
         }

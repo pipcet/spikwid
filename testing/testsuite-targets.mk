@@ -83,7 +83,7 @@ GARBAGE += $(addsuffix .log,$(MOCHITESTS) reftest crashtest jstestbrowser)
 REMOTE_CPPUNITTESTS = \
 	$(PYTHON3) -u $(topsrcdir)/testing/remotecppunittests.py \
 	  --xre-path=$(DEPTH)/dist/bin \
-	  --localLib=$(DEPTH)/dist/fennec \
+	  --localLib=$(DEPTH)/dist/geckoview \
 	  --deviceIP=${TEST_DEVICE} \
 	  $(TEST_PATH) $(EXTRA_TEST_ARGS)
 
@@ -196,7 +196,7 @@ stage-jstests: make-stage-dir
 
 ifdef OBJCOPY
 ifneq ($(OBJCOPY), :) # see build/autoconf/toolchain.m4:102 for why this is necessary
-ifndef PKG_SKIP_STRIP
+ifdef PKG_STRIP
 STRIP_COMPILED_TESTS := 1
 endif
 endif
@@ -257,16 +257,6 @@ TEST_EXTENSIONS := \
 stage-extensions: make-stage-dir
 	$(NSINSTALL) -D $(PKG_STAGE)/extensions/
 	@$(foreach ext,$(TEST_EXTENSIONS), cp -RL $(DIST)/xpi-stage/$(ext) $(PKG_STAGE)/extensions;)
-
-
-check::
-	$(eval cores=$(shell $(PYTHON3) -c 'import multiprocessing; print(multiprocessing.cpu_count())'))
-	@echo "Starting 'mach python-test' with -j$(cores)"
-	@$(topsrcdir)/mach --log-no-times python-test -j$(cores) --subsuite default
-	@echo "Finished 'mach python-test' successfully"
-	@echo "Starting 'mach python-test' with --python $(PYTHON3) -j$(cores)"
-	@$(topsrcdir)/mach --log-no-times python-test --python python3 -j$(cores) --subsuite default
-	@echo "Finished 'mach python-test' with py3 successfully"
 
 
 .PHONY: \

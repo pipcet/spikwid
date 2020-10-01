@@ -10,6 +10,7 @@
 #include "mozilla/LinkedList.h"
 #include "mozilla/Variant.h"
 
+#include "builtin/ModuleObject.h"
 #include "gc/Policy.h"
 #include "jit/JitAllocPolicy.h"
 #include "jit/JitContext.h"
@@ -29,7 +30,7 @@ class WarpScriptSnapshot;
 #define WARP_OP_SNAPSHOT_LIST(_) \
   _(WarpArguments)               \
   _(WarpRegExp)                  \
-  _(WarpFunctionProto)           \
+  _(WarpBuiltinObject)           \
   _(WarpGetIntrinsic)            \
   _(WarpGetImport)               \
   _(WarpLambda)                  \
@@ -147,18 +148,18 @@ class WarpRegExp : public WarpOpSnapshot {
 #endif
 };
 
-// The proto for JSOp::FunctionProto if it exists at compile-time.
-class WarpFunctionProto : public WarpOpSnapshot {
-  WarpGCPtr<JSObject*> proto_;
+// The object for JSOp::BuiltinObject if it exists at compile-time.
+class WarpBuiltinObject : public WarpOpSnapshot {
+  WarpGCPtr<JSObject*> builtin_;
 
  public:
-  static constexpr Kind ThisKind = Kind::WarpFunctionProto;
+  static constexpr Kind ThisKind = Kind::WarpBuiltinObject;
 
-  WarpFunctionProto(uint32_t offset, JSObject* proto)
-      : WarpOpSnapshot(ThisKind, offset), proto_(proto) {
-    MOZ_ASSERT(proto);
+  WarpBuiltinObject(uint32_t offset, JSObject* builtin)
+      : WarpOpSnapshot(ThisKind, offset), builtin_(builtin) {
+    MOZ_ASSERT(builtin);
   }
-  JSObject* proto() const { return proto_; }
+  JSObject* builtin() const { return builtin_; }
 
   void traceData(JSTracer* trc);
 
@@ -374,14 +375,19 @@ class WarpInlinedCall : public WarpOpSnapshot {
 // Template object for JSOp::Rest.
 class WarpRest : public WarpOpSnapshot {
   WarpGCPtr<ArrayObject*> templateObject_;
+  size_t maxInlineElements_;
 
  public:
   static constexpr Kind ThisKind = Kind::WarpRest;
 
-  WarpRest(uint32_t offset, ArrayObject* templateObject)
-      : WarpOpSnapshot(ThisKind, offset), templateObject_(templateObject) {}
+  WarpRest(uint32_t offset, ArrayObject* templateObject,
+           size_t maxInlineElements)
+      : WarpOpSnapshot(ThisKind, offset),
+        templateObject_(templateObject),
+        maxInlineElements_(maxInlineElements) {}
 
   ArrayObject* templateObject() const { return templateObject_; }
+  size_t maxInlineElements() const { return maxInlineElements_; }
 
   void traceData(JSTracer* trc);
 
@@ -481,8 +487,9 @@ using WarpEnvironment =
                      FunctionEnvironment>;
 
 // Snapshot data for a single JSScript.
-class WarpScriptSnapshot : public TempObject,
-                           public mozilla::LinkedListElement<WarpScriptSnapshot> {
+class WarpScriptSnapshot
+    : public TempObject,
+      public mozilla::LinkedListElement<WarpScriptSnapshot> {
   WarpGCPtr<JSScript*> script_;
   WarpEnvironment environment_;
   WarpOpSnapshotList opSnapshots_;
@@ -575,6 +582,7 @@ class WarpSnapshot : public TempObject {
                         const WarpBailoutInfo& bailoutInfo);
 
   WarpScriptSnapshot* rootScript() { return scriptSnapshots_.getFirst(); }
+  const WarpScriptSnapshotList& scripts() const { return scriptSnapshots_; }
 
   LexicalEnvironmentObject* globalLexicalEnv() const {
     return globalLexicalEnv_;

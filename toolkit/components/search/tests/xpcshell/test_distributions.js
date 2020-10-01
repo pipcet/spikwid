@@ -65,6 +65,105 @@ tests.push({
     hasEnginesFirst(engines, ["Bing"]),
 });
 
+for (let canonicalId of ["canonical", "canonical-001", "canonical-002"]) {
+  tests.push({
+    locale: "en-US",
+    region: "US",
+    distribution: canonicalId,
+    test: engines =>
+      hasParams(engines, "Google", "searchbar", "client=ubuntu") &&
+      hasParams(engines, "Google", "searchbar", "channel=fs"),
+  });
+
+  tests.push({
+    locale: "en-US",
+    region: "GB",
+    distribution: canonicalId,
+    test: engines =>
+      hasParams(engines, "Google", "searchbar", "client=ubuntu") &&
+      hasParams(engines, "Google", "searchbar", "channel=fs"),
+  });
+
+  tests.push({
+    distribution: canonicalId,
+    test: engines =>
+      hasParams(engines, "DuckDuckGo", "searchbar", "t=canonical"),
+  });
+
+  tests.push({
+    locale: "en-US",
+    region: "US",
+    distribution: canonicalId,
+    test: engines =>
+      hasParams(engines, "Amazon.com", "searchbar", "tag=wwwcanoniccom-20"),
+  });
+
+  tests.push({
+    locale: "de",
+    region: "DE",
+    distribution: canonicalId,
+    test: engines =>
+      hasParams(engines, "Amazon.de", "searchbar", "tag=wwwcanoniccom-20"),
+  });
+
+  tests.push({
+    locale: "en-GB",
+    region: "GB",
+    distribution: canonicalId,
+    test: engines =>
+      hasParams(engines, "Amazon.co.uk", "searchbar", "tag=wwwcanoniccom-20"),
+  });
+
+  tests.push({
+    locale: "fr",
+    region: "FR",
+    distribution: canonicalId,
+    test: engines =>
+      hasParams(engines, "Amazon.fr", "searchbar", "tag=wwwcanoniccom-20"),
+  });
+
+  tests.push({
+    locale: "it",
+    region: "IT",
+    distribution: canonicalId,
+    test: engines =>
+      hasParams(engines, "Amazon.it", "searchbar", "tag=wwwcanoniccom-20"),
+  });
+
+  tests.push({
+    locale: "ja",
+    region: "JP",
+    distribution: canonicalId,
+    test: engines =>
+      hasParams(engines, "Amazon.co.jp", "searchbar", "tag=wwwcanoniccom-20"),
+  });
+
+  tests.push({
+    locale: "ur",
+    region: "IN",
+    distribution: canonicalId,
+    test: engines =>
+      hasParams(engines, "Amazon.in", "searchbar", "tag=wwwcanoniccom-20"),
+  });
+
+  tests.push({
+    locale: "zh-CN",
+    region: "CN",
+    distribution: canonicalId,
+    test: engines =>
+      hasParams(engines, "亚马逊", "searchbar", "tag=wwwcanoniccom-20"),
+  });
+
+  tests.push({
+    locale: "zh-CN",
+    region: "CN",
+    distribution: canonicalId,
+    test: engines =>
+      hasParams(engines, "百度", "searchbar", "tn=ubuntuu_cb") &&
+      hasParams(engines, "百度", "suggestions", "tn=ubuntuu_cb"),
+  });
+}
+
 tests.push({
   locale: "ru",
   distribution: "mailru-001",
@@ -416,6 +515,48 @@ for (const locale of ["en-US", "de"]) {
 }
 
 tests.push({
+  locale: "en-GB",
+  distribution: "gmxcouk",
+  test: engines =>
+    hasURLs(
+      engines,
+      "GMX Search",
+      "https://go.gmx.co.uk/br/moz_search_web/?enc=UTF-8&q=test",
+      "https://suggestplugin.gmx.co.uk/s?q=test&brand=gmxcouk&origin=moz_splugin_ff&enc=UTF-8"
+    ) &&
+    hasDefault(engines, "GMX Search") &&
+    hasEnginesFirst(engines, ["GMX Search"]),
+});
+
+tests.push({
+  locale: "es",
+  distribution: "gmxes",
+  test: engines =>
+    hasURLs(
+      engines,
+      "GMX - Búsqueda web",
+      "https://go.gmx.es/br/moz_search_web/?enc=UTF-8&q=test",
+      "https://suggestplugin.gmx.es/s?q=test&brand=gmxes&origin=moz_splugin_ff&enc=UTF-8"
+    ) &&
+    hasDefault(engines, "GMX Search") &&
+    hasEnginesFirst(engines, ["GMX Search"]),
+});
+
+tests.push({
+  locale: "fr",
+  distribution: "gmxfr",
+  test: engines =>
+    hasURLs(
+      engines,
+      "GMX - Recherche web",
+      "https://go.gmx.fr/br/moz_search_web/?enc=UTF-8&q=test",
+      "https://suggestplugin.gmx.fr/s?q=test&brand=gmxfr&origin=moz_splugin_ff&enc=UTF-8"
+    ) &&
+    hasDefault(engines, "GMX Search") &&
+    hasEnginesFirst(engines, ["GMX Search"]),
+});
+
+tests.push({
   locale: "ru",
   distribution: "yandex-drp",
   test: engines =>
@@ -498,6 +639,25 @@ tests.push({
     hasEnginesFirst(engines, ["Яндекс"]),
 });
 
+function hasURLs(engines, engineName, url, suggestURL) {
+  let engine = engines.find(e => e._name === engineName);
+  Assert.ok(engine, `Should be able to find ${engineName}`);
+
+  let submission = engine.getSubmission("test", "text/html");
+  Assert.equal(
+    submission.uri.spec,
+    url,
+    `Should have the correct submission url for ${engineName}`
+  );
+
+  submission = engine.getSubmission("test", "application/x-suggestions+json");
+  Assert.equal(
+    submission.uri.spec,
+    suggestURL,
+    `Should have the correct suggestion url for ${engineName}`
+  );
+}
+
 function hasParams(engines, engineName, purpose, param) {
   let engine = engines.find(e => e._name === engineName);
   Assert.ok(engine, `Should be able to find ${engineName}`);
@@ -510,7 +670,7 @@ function hasParams(engines, engineName, purpose, param) {
     let queryParam = query.split("=")[0];
     Assert.ok(
       !paramNames.has(queryParam),
-      `Should not have a duplicate ${param}`
+      `Should not have a duplicate ${queryParam} param`
     );
     paramNames.add(queryParam);
   }
@@ -548,12 +708,11 @@ add_task(async function setup() {
 add_task(async function test_expected_distribution_engines() {
   let searchService = new SearchService();
   for (const { distribution, locale = "en-US", region = "US", test } of tests) {
-    let config = await engineSelector.fetchEngineConfiguration(
+    let config = await engineSelector.fetchEngineConfiguration({
       locale,
       region,
-      null,
-      distribution
-    );
+      distroID: distribution,
+    });
     let engines = await SearchTestUtils.searchConfigToEngines(config.engines);
     searchService._engines = engines;
     searchService._searchDefault = {

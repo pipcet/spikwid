@@ -181,7 +181,8 @@ class RequestedFrameRefreshObserver : public nsARefreshObserver {
 
     MOZ_ASSERT(mRefreshDriver);
     if (mRefreshDriver) {
-      mRefreshDriver->AddRefreshObserver(this, FlushType::Display);
+      mRefreshDriver->AddRefreshObserver(this, FlushType::Display,
+                                         "Canvas frame capture listeners");
       mRegistered = true;
     }
   }
@@ -497,6 +498,12 @@ nsresult HTMLCanvasElement::DispatchPrintCallback(nsITimerCallback* aCallback) {
 
 MOZ_CAN_RUN_SCRIPT
 void HTMLCanvasElement::CallPrintCallback() {
+  if (!mPrintState) {
+    // `mPrintState` might have been destroyed by cancelling the previous
+    // printing (especially the canvas frame destruction) during processing
+    // event loops in the printing.
+    return;
+  }
   RefPtr<PrintCallback> callback = GetMozPrintCallback();
   RefPtr<HTMLCanvasPrintState> state = mPrintState;
   callback->Call(*state);
@@ -523,10 +530,15 @@ HTMLCanvasElement* HTMLCanvasElement::GetOriginalCanvas() {
 nsresult HTMLCanvasElement::CopyInnerTo(HTMLCanvasElement* aDest) {
   nsresult rv = nsGenericHTMLElement::CopyInnerTo(aDest);
   NS_ENSURE_SUCCESS(rv, rv);
-  if (aDest->OwnerDoc()->IsStaticDocument()) {
+  Document* destDoc = aDest->OwnerDoc();
+  if (destDoc->IsStaticDocument()) {
     // The Firefox print preview code can create a static clone from an
     // existing static clone, so we may not be the original 'canvas' element.
     aDest->mOriginalCanvas = GetOriginalCanvas();
+
+    if (GetMozPrintCallback()) {
+      destDoc->SetHasPrintCallbacks();
+    }
 
     // We make sure that the canvas is not zero sized since that would cause
     // the DrawImage call below to return an error, which would cause printing
@@ -756,7 +768,7 @@ nsresult HTMLCanvasElement::ToDataURLImpl(JSContext* aCx,
   // If there are unrecognized custom parse options, we should fall back to
   // the default values for the encoder without any options at all.
   if (rv == NS_ERROR_INVALID_ARG && usingCustomParseOptions) {
-    rv = ExtractData(aCx, aSubjectPrincipal, type, EmptyString(),
+    rv = ExtractData(aCx, aSubjectPrincipal, type, u""_ns,
                      getter_AddRefs(stream));
   }
 
@@ -874,7 +886,7 @@ nsresult HTMLCanvasElement::MozGetAsFileImpl(const nsAString& aName,
   nsAutoString type(aType);
   nsresult rv =
       ExtractData(nsContentUtils::GetCurrentJSContext(), aSubjectPrincipal,
-                  type, EmptyString(), getter_AddRefs(stream));
+                  type, u""_ns, getter_AddRefs(stream));
   NS_ENSURE_SUCCESS(rv, rv);
 
   uint64_t imgSize;
@@ -1065,19 +1077,6 @@ void HTMLCanvasElement::InvalidateCanvas() {
   if (!frame) return;
 
   frame->InvalidateFrame();
-}
-
-int32_t HTMLCanvasElement::CountContexts() {
-  if (mCurrentContext) return 1;
-
-  return 0;
-}
-
-nsICanvasRenderingContextInternal* HTMLCanvasElement::GetContextAtIndex(
-    int32_t index) {
-  if (mCurrentContext && index == 0) return mCurrentContext;
-
-  return nullptr;
 }
 
 bool HTMLCanvasElement::GetIsOpaque() {
@@ -1309,7 +1308,7 @@ ClientWebGLContext* HTMLCanvasElement::GetWebGLContext() {
     return nullptr;
   }
 
-  return static_cast<ClientWebGLContext*>(GetContextAtIndex(0));
+  return static_cast<ClientWebGLContext*>(GetCurrentContext());
 }
 
 webgpu::CanvasContext* HTMLCanvasElement::GetWebGPUContext() {
@@ -1317,7 +1316,7 @@ webgpu::CanvasContext* HTMLCanvasElement::GetWebGPUContext() {
     return nullptr;
   }
 
-  return static_cast<webgpu::CanvasContext*>(GetContextAtIndex(0));
+  return static_cast<webgpu::CanvasContext*>(GetCurrentContext());
 }
 
 }  // namespace dom

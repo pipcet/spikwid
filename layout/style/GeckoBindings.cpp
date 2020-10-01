@@ -68,6 +68,7 @@
 #include "mozilla/dom/ElementInlines.h"
 #include "mozilla/dom/HTMLTableCellElement.h"
 #include "mozilla/dom/HTMLBodyElement.h"
+#include "mozilla/dom/HTMLSelectElement.h"
 #include "mozilla/dom/HTMLSlotElement.h"
 #include "mozilla/dom/MediaList.h"
 #include "mozilla/dom/SVGElement.h"
@@ -774,6 +775,11 @@ bool Gecko_IsBrowserFrame(const Element* aElement) {
   return browserFrame && browserFrame->GetReallyIsBrowser();
 }
 
+bool Gecko_IsSelectListBox(const Element* aElement) {
+  const auto* select = HTMLSelectElement::FromNode(aElement);
+  return select && !select->IsCombobox();
+}
+
 template <typename Implementor>
 static nsAtom* LangValue(Implementor* aElement) {
   // TODO(emilio): Deduplicate a bit with nsIContent::GetLang().
@@ -1000,7 +1006,8 @@ void Gecko_nsFont_InitSystem(nsFont* aDest, int32_t aFontId,
   LookAndFeel::FontID fontID = static_cast<LookAndFeel::FontID>(aFontId);
 
   AutoWriteLock guard(*sServoFFILock);
-  nsLayoutUtils::ComputeSystemFont(aDest, fontID, defaultVariableFont);
+  nsLayoutUtils::ComputeSystemFont(aDest, fontID, defaultVariableFont,
+                                   aDocument);
 }
 
 void Gecko_nsFont_Destroy(nsFont* aDest) { aDest->~nsFont(); }

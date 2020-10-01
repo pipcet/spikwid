@@ -64,7 +64,7 @@ SVGImageElement::SVGImageElement(
   AddStatesSilently(NS_EVENT_STATE_BROKEN);
 }
 
-SVGImageElement::~SVGImageElement() { DestroyImageLoadingContent(); }
+SVGImageElement::~SVGImageElement() { nsImageLoadingContent::Destroy(); }
 
 nsCSSPropertyID SVGImageElement::GetCSSPropertyIdForAttrEnum(
     uint8_t aAttrEnum) {
@@ -229,6 +229,11 @@ EventStates SVGImageElement::IntrinsicState() const {
          nsImageLoadingContent::ImageState();
 }
 
+void SVGImageElement::DestroyContent() {
+  nsImageLoadingContent::Destroy();
+  SVGImageElementBase::DestroyContent();
+}
+
 NS_IMETHODIMP_(bool)
 SVGImageElement::IsAttributeMapped(const nsAtom* name) const {
   static const MappedAttributeEntry* const map[] = {
@@ -250,9 +255,11 @@ bool SVGImageElement::GetGeometryBounds(
     const Matrix& aToBoundsSpace, const Matrix* aToNonScalingStrokeSpace) {
   Rect rect;
 
-  MOZ_ASSERT(GetPrimaryFrame());
-  SVGGeometryProperty::ResolveAll<SVGT::X, SVGT::Y, SVGT::Width, SVGT::Height>(
-      this, &rect.x, &rect.y, &rect.width, &rect.height);
+  DebugOnly<bool> ok =
+      SVGGeometryProperty::ResolveAll<SVGT::X, SVGT::Y, SVGT::Width,
+                                      SVGT::Height>(this, &rect.x, &rect.y,
+                                                    &rect.width, &rect.height);
+  MOZ_ASSERT(ok, "SVGGeometryProperty::ResolveAll failed");
 
   if (rect.IsEmpty()) {
     // Rendering of the element disabled
@@ -279,9 +286,10 @@ already_AddRefed<Path> SVGImageElement::BuildPath(PathBuilder* aBuilder) {
 bool SVGImageElement::HasValidDimensions() const {
   float width, height;
 
-  MOZ_ASSERT(GetPrimaryFrame());
-  SVGGeometryProperty::ResolveAll<SVGT::Width, SVGT::Height>(this, &width,
-                                                             &height);
+  DebugOnly<bool> ok =
+      SVGGeometryProperty::ResolveAll<SVGT::Width, SVGT::Height>(this, &width,
+                                                                 &height);
+  MOZ_ASSERT(ok, "SVGGeometryProperty::ResolveAll failed");
 
   return width > 0 && height > 0;
 }
@@ -299,13 +307,6 @@ SVGImageElement::GetAnimatedPreserveAspectRatio() {
 SVGElement::StringAttributesInfo SVGImageElement::GetStringInfo() {
   return StringAttributesInfo(mStringAttributes, sStringInfo,
                               ArrayLength(sStringInfo));
-}
-
-nsresult SVGImageElement::CopyInnerTo(Element* aDest) {
-  if (aDest->OwnerDoc()->IsStaticDocument()) {
-    CreateStaticImageClone(static_cast<SVGImageElement*>(aDest));
-  }
-  return SVGImageElementBase::CopyInnerTo(aDest);
 }
 
 }  // namespace dom

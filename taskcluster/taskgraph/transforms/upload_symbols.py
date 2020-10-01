@@ -40,6 +40,7 @@ def check_nightlies(config, tasks):
 def fill_template(config, tasks):
     for task in tasks:
         dep = task['primary-dependency']
+        task.pop('dependent-tasks', None)
 
         # Fill out the dynamic fields in the task description
         task['label'] = dep.label + '-upload-symbols'
@@ -71,11 +72,11 @@ def fill_template(config, tasks):
         )
         task['treeherder'] = treeherder
 
-        if attributes.get('shippable'):
-            # For shippable builds, we want to run these tasks if the build is run.
-            # XXX Better to run this on promote phase instead?
-            task['run-on-projects'] = dep.attributes.get('run_on_projects')
-            task['optimization'] = dep.optimization
+        # We only want to run these tasks if the build is run.
+        # XXX Better to run this on promote phase instead?
+        task['run-on-projects'] = dep.attributes.get('run_on_projects')
+        task['optimization'] = {'upload-symbols': None}
+        task['if-dependencies'] = ['build']
 
         # clear out the stuff that's not part of a task description
         del task['primary-dependency']

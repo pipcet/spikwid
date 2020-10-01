@@ -137,12 +137,6 @@ class CommandAction(argparse.Action):
             # Try to find similar commands, may raise UnknownCommandError.
             command = self._suggest_command(command)
 
-        # This is used by the `mach` driver to find the command name amidst
-        # global arguments.
-        if getattr(self._context, 'get_command', False) is True:
-            setattr(namespace, 'command', command)
-            return
-
         handler = self._mach_registrar.command_handlers.get(command)
 
         prog = command
@@ -264,10 +258,8 @@ class CommandAction(argparse.Action):
                 # out for the current context or not. Condition functions can be
                 # applied to the command's decorator.
                 if handler.conditions:
-                    if handler.pass_context:
-                        instance = handler.cls(self._context)
-                    else:
-                        instance = handler.cls()
+                    instance = handler.create_instance(self._context,
+                                                       handler.virtualenv_name)
 
                     is_filtered = False
                     for c in handler.conditions:

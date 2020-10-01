@@ -33,11 +33,10 @@ class nsWebSocketConnection : public nsIWebSocketConnection,
                                  nsIAsyncInputStream* aInputStream,
                                  nsIAsyncOutputStream* aOutputStream);
 
-  nsresult EnqueueOutputData(nsTArray<uint8_t>&& aHeader,
-                             nsTArray<uint8_t>&& aPayload);
+  nsresult EnqueueOutputData(nsTArray<uint8_t>&& aData);
 
  private:
-  virtual ~nsWebSocketConnection() = default;
+  virtual ~nsWebSocketConnection();
 
   class OutputData {
    public:
@@ -61,6 +60,7 @@ class nsWebSocketConnection : public nsIWebSocketConnection,
   size_t mWriteOffset;
   std::list<OutputData> mOutputQueue;
   bool mStartReadingCalled;
+  bool mOutputStreamBlocked;
 };
 
 }  // namespace net

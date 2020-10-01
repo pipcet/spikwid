@@ -7,6 +7,7 @@
 #include "OpusTrackEncoder.h"
 
 #include "AudioGenerator.h"
+#include "AudioSampleFormat.h"
 
 using namespace mozilla;
 
@@ -73,8 +74,8 @@ TEST(OpusAudioTrackEncoder, Init)
   {
     // The encoder does not normally recieve enough info from null data to
     // init. However, multiple attempts to do so, with sufficiently long
-    // duration segments, should result in a best effort attempt. The first
-    // attempt should never do this though, even if the duration is long:
+    // duration segments, should result in a default-init. The first attempt
+    // should never do this though, even if the duration is long:
     OpusTrackEncoder encoder(48000);
     AudioSegment segment;
     segment.AppendNullData(48000 * 100);
@@ -87,22 +88,10 @@ TEST(OpusAudioTrackEncoder, Init)
   }
 
   {
-    // If the duration of the segments given to the encoder is not long then
-    // we shouldn't try a best effort init:
-    OpusTrackEncoder encoder(48000);
-    AudioSegment segment;
-    segment.AppendNullData(1);
-    encoder.TryInit(segment, segment.GetDuration());
-    EXPECT_FALSE(encoder.IsInitialized());
-    encoder.TryInit(segment, segment.GetDuration());
-    EXPECT_FALSE(encoder.IsInitialized());
-  }
-
-  {
     // For non-null segments we should init immediately
     OpusTrackEncoder encoder(48000);
     AudioSegment segment;
-    AudioGenerator generator(2, 48000);
+    AudioGenerator<AudioDataValue> generator(2, 48000);
     generator.Generate(segment, 1);
     encoder.TryInit(segment, segment.GetDuration());
     EXPECT_TRUE(encoder.IsInitialized());
@@ -112,7 +101,7 @@ TEST(OpusAudioTrackEncoder, Init)
     // Test low sample rate bound
     OpusTrackEncoder encoder(7999);
     AudioSegment segment;
-    AudioGenerator generator(2, 7999);
+    AudioGenerator<AudioDataValue> generator(2, 7999);
     generator.Generate(segment, 1);
     encoder.TryInit(segment, segment.GetDuration());
     EXPECT_FALSE(encoder.IsInitialized());
@@ -122,7 +111,7 @@ TEST(OpusAudioTrackEncoder, Init)
     // Test low sample rate bound
     OpusTrackEncoder encoder(8000);
     AudioSegment segment;
-    AudioGenerator generator(2, 8000);
+    AudioGenerator<AudioDataValue> generator(2, 8000);
     generator.Generate(segment, 1);
     encoder.TryInit(segment, segment.GetDuration());
     EXPECT_TRUE(encoder.IsInitialized());
@@ -132,7 +121,7 @@ TEST(OpusAudioTrackEncoder, Init)
     // Test high sample rate bound
     OpusTrackEncoder encoder(192001);
     AudioSegment segment;
-    AudioGenerator generator(2, 192001);
+    AudioGenerator<AudioDataValue> generator(2, 192001);
     generator.Generate(segment, 1);
     encoder.TryInit(segment, segment.GetDuration());
     EXPECT_FALSE(encoder.IsInitialized());
@@ -142,9 +131,24 @@ TEST(OpusAudioTrackEncoder, Init)
     // Test high sample rate bound
     OpusTrackEncoder encoder(192000);
     AudioSegment segment;
-    AudioGenerator generator(2, 192000);
+    AudioGenerator<AudioDataValue> generator(2, 192000);
     generator.Generate(segment, 1);
     encoder.TryInit(segment, segment.GetDuration());
+    EXPECT_TRUE(encoder.IsInitialized());
+  }
+
+  {
+    // Test that it takes 10s to trigger default-init.
+    OpusTrackEncoder encoder(48000);
+    AudioSegment longSegment;
+    longSegment.AppendNullData(48000 * 10 - 1);
+    AudioSegment shortSegment;
+    shortSegment.AppendNullData(1);
+    encoder.TryInit(longSegment, longSegment.GetDuration());
+    EXPECT_FALSE(encoder.IsInitialized());
+    encoder.TryInit(shortSegment, shortSegment.GetDuration());
+    EXPECT_FALSE(encoder.IsInitialized());
+    encoder.TryInit(shortSegment, shortSegment.GetDuration());
     EXPECT_TRUE(encoder.IsInitialized());
   }
 }
@@ -194,7 +198,7 @@ TEST(OpusAudioTrackEncoder, FrameEncode)
   EXPECT_TRUE(encoder.TestOpusRawCreation(channels, sampleRate));
 
   // Generate five seconds of raw audio data.
-  AudioGenerator generator(channels, sampleRate);
+  AudioGenerator<AudioDataValue> generator(channels, sampleRate);
   AudioSegment segment;
   const int32_t samples = sampleRate * 5;
   generator.Generate(segment, samples);
@@ -212,4 +216,31 @@ TEST(OpusAudioTrackEncoder, FrameEncode)
   // 44100 as used above gets resampled to 48000 for opus.
   const uint64_t five = 48000 * 5;
   EXPECT_EQ(five, totalDuration);
+}
+
+TEST(OpusAudioTrackEncoder, DefaultInitDuration)
+{
+  const TrackRate rate = 44100;
+  OpusTrackEncoder encoder(rate);
+  AudioGenerator<AudioDataValue> generator(2, rate);
+  AudioSegment segment;
+  // 15 seconds should trigger the default-init rate.
+  // The default-init timeout is evaluated once per chunk, so keep chunks
+  // reasonably short.
+  for (int i = 0; i < 150; ++i) {
+    generator.Generate(segment, rate / 10);
+  }
+  encoder.AppendAudioSegment(std::move(segment));
+  encoder.NotifyEndOfStream();
+
+  nsTArray<RefPtr<EncodedFrame>> frames;
+  EXPECT_TRUE(NS_SUCCEEDED(encoder.GetEncodedTrack(frames)));
+  // Verify that encoded data is 15 seconds long.
+  uint64_t totalDuration = 0;
+  for (auto& frame : frames) {
+    totalDuration += frame->mDuration;
+  }
+  // 44100 as used above gets resampled to 48000 for opus.
+  const uint64_t fifteen = 48000 * 15;
+  EXPECT_EQ(fifteen, totalDuration);
 }

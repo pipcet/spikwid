@@ -102,6 +102,17 @@ const TEST_CASES = [
     expectUsernameDropmarker: true,
     expectedValues: ["new_username1", "new_username2"],
   },
+  {
+    description: "non-un/pw fields also prompt doorhanger updates",
+    modifiedFields: [
+      { [PASSWORD_SELECTOR]: "myPassword" },
+      { [USERNAME_SELECTOR]: "new_username1" },
+      { [SEARCH_SELECTOR]: "search" },
+      { [CAPTCHA_SELECTOR]: "captcha" },
+    ],
+    expectUsernameDropmarker: true,
+    expectedValues: ["new_username1", "search", "captcha"],
+  },
   // {
   //   description: "duplicated saved/page usernames should TODO https://mozilla.invisionapp.com/share/XGXL6WZVKFJ#/screens/420547613/comments",
   // },
@@ -119,6 +130,12 @@ function _validateTestCase(tc) {
       "Validate test case.  A hidden dropmarker implies no expected values"
     );
   }
+}
+
+async function _setPrefs() {
+  await SpecialPowers.pushPrefEnv({
+    set: [["signon.capture.inputChanges.enabled", true]],
+  });
 }
 
 function _addSavedLogin(username) {
@@ -151,6 +168,7 @@ function _getSuggestedValues(document) {
 }
 
 add_task(async function test_edit_password() {
+  await _setPrefs();
   for (let testCase of TEST_CASES) {
     info("Test case: " + JSON.stringify(testCase));
     _validateTestCase(testCase);

@@ -114,9 +114,9 @@ class MediaRecorderReporter final : public nsIMemoryReporter {
                 sum += size;
               }
 
-              handleReport->Callback(
-                  EmptyCString(), "explicit/media/recorder"_ns, KIND_HEAP,
-                  UNITS_BYTES, sum, "Memory used by media recorder."_ns, data);
+              handleReport->Callback(""_ns, "explicit/media/recorder"_ns,
+                                     KIND_HEAP, UNITS_BYTES, sum,
+                                     "Memory used by media recorder."_ns, data);
 
               manager->EndReport();
             },
@@ -457,7 +457,7 @@ nsString SelectMimeType(bool aHasVideo, bool aHasAudio,
   if (constrainedType && constrainedType->ExtendedType().HaveCodecs()) {
     // The constrained mime type is fully defined (it has codecs!). No need to
     // select anything.
-    result = NS_ConvertUTF8toUTF16(constrainedType->OriginalString());
+    CopyUTF8toUTF16(constrainedType->OriginalString(), result);
   } else {
     // There is no constrained mime type, or there is and it is not fully
     // defined but still valid. Select what's missing, so that we have major

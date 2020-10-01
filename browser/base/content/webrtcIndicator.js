@@ -61,10 +61,6 @@ function closingInternally() {
  * Main control object for the WebRTC global indicator
  */
 const WebRTCIndicator = {
-  // This is the vertical offset from the bottom of the primary display where the
-  // indicator will first appear.
-  VERTICAL_OFFSET_PX: 80,
-
   init(event) {
     addEventListener("load", this);
     addEventListener("unload", this);
@@ -94,7 +90,7 @@ const WebRTCIndicator = {
    * Exposed externally so that webrtcUI can alert the indicator to
    * update itself when sharing states have changed.
    */
-  updateIndicatorState(initialLayout = false) {
+  updateIndicatorState() {
     if (this.macOSIndicator) {
       this.macOSIndicator.updateIndicatorState();
     }
@@ -196,7 +192,7 @@ const WebRTCIndicator = {
       this.ensureOnScreen();
 
       if (!this.positionCustomized) {
-        this.centerOnDisplay(initialLayout);
+        this.centerOnLatestBrowser();
       }
     }
 
@@ -218,82 +214,41 @@ const WebRTCIndicator = {
   },
 
   /**
-   * Finds the appropriate display and moves the indicator at the bottom,
-   * horizontally centered.
-   *
-   * If the indicator is first being opened, the appropriate display is the same
-   * display as the most recently used browser window. Otherwise, the
-   * appropriate display is the same display that the indicator is currently on.
+   * If the indicator is first being opened, we'll find the browser window
+   * associated with the most recent share, and pin the indicator to the
+   * very top of the content area.
    */
-  centerOnDisplay(aInitialLayout) {
+  centerOnLatestBrowser() {
+    let activeStreams = webrtcUI.getActiveStreams(
+      true /* camera */,
+      true /* microphone */,
+      true /* screen */,
+      true /* window */
+    );
+
+    if (!activeStreams.length) {
+      return;
+    }
+
+    let browser = activeStreams[activeStreams.length - 1].browser;
+    let browserWindow = browser.ownerGlobal;
+    let browserRect = browserWindow.windowUtils.getBoundsWithoutFlushing(
+      browser
+    );
+
     // This should be called in initialize right after we've just called
     // updateIndicatorState. Since updateIndicatorState uses
     // window.sizeToContent, the layout information should be up to date,
     // and so the numbers that we get without flushing should be sufficient.
-    let {
-      height: windowHeight,
-      width: windowWidth,
-    } = window.windowUtils.getBoundsWithoutFlushing(document.documentElement);
+    let { width: windowWidth } = window.windowUtils.getBoundsWithoutFlushing(
+      document.documentElement
+    );
 
-    let screen;
-
-    if (aInitialLayout) {
-      // The indicator is opening, so find the most recent browser window, and
-      // make sure the indicator opens on the same display.
-      let recentWindow = BrowserWindowTracker.getTopWindow();
-
-      let {
-        height: originatorHeight,
-        width: originatorWidth,
-      } = recentWindow.windowUtils.getBoundsWithoutFlushing(
-        recentWindow.document.documentElement
-      );
-
-      screen = gScreenManager.screenForRect(
-        recentWindow.screenX,
-        recentWindow.screenY,
-        originatorWidth,
-        originatorHeight
-      );
-    } else {
-      // The indicator is already open, so use the same display that the
-      // indicator is already on.
-      screen = gScreenManager.screenForRect(
-        window.screenX,
-        window.screenY,
-        windowWidth,
-        windowHeight
-      );
-    }
-
-    let scaleFactor = screen.contentsScaleFactor / screen.defaultCSSScaleFactor;
-
-    // We want to center the indicator horizontally on the display regardless of
-    // UI (like a vertical dock) on the left or right sides. This is why we're
-    // using GetRectDisplayPix for the left and width screen values.
-    let leftDevPix = {};
-    let widthDevPix = {};
-    screen.GetRectDisplayPix(leftDevPix, {}, widthDevPix, {});
-    let screenWidth = widthDevPix.value * scaleFactor;
-
-    // However, we want to make sure that vertically, the indicator is above any
-    // existing OS UI, so we use GetAvailRectDisplayPix for the top and height
-    // values.
-    let availTopDevPix = {};
-    let availHeightDevPix = {};
-    screen.GetAvailRectDisplayPix({}, availTopDevPix, {}, availHeightDevPix);
-
-    let left = leftDevPix.value * scaleFactor;
-    let availHeight =
-      (availTopDevPix.value + availHeightDevPix.value) * scaleFactor;
-    // To center the window, we subtract the window width from the screen
-    // width, and divide by 2.
-    //
-    // To put the window at the bottom of the screen, just above any OS UI,
-    // we subtract the window height from the available height.
     window.moveTo(
-      left + (screenWidth - windowWidth) / 2,
-      availHeight - windowHeight - this.VERTICAL_OFFSET_PX
+      browserWindow.mozInnerScreenX +
+        browserRect.left +
+        (browserRect.width - windowWidth) / 2,
+      browserWindow.mozInnerScreenY + browserRect.top
     );
   },
 
@@ -309,6 +264,10 @@ const WebRTCIndicator = {
       }
       case "click": {
         this.onClick(event);
+        break;
+      }
+      case "change": {
+        this.onChange(event);
         break;
       }
       case "MozUpdateWindowPos": {
@@ -331,9 +290,10 @@ const WebRTCIndicator = {
   onLoad() {
     this.loaded = true;
 
-    this.updateIndicatorState(true /* initialLayout */);
+    this.updateIndicatorState();
 
     window.addEventListener("click", this);
+    window.addEventListener("change", this);
     window.addEventListener("sizemodechange", this);
     window.windowRoot.addEventListener("MozUpdateWindowPos", this);
 
@@ -350,6 +310,10 @@ const WebRTCIndicator = {
   },
 
   onUnload() {
+    Services.ppmm.sharedData.set("WebRTC:GlobalCameraMute", false);
+    Services.ppmm.sharedData.set("WebRTC:GlobalMicrophoneMute", false);
+    Services.ppmm.sharedData.flush();
+
     if (this.macOSIndicator) {
       this.macOSIndicator.close();
       this.macOSIndicator = null;
@@ -372,51 +336,30 @@ const WebRTCIndicator = {
 
   onClick(event) {
     switch (event.target.id) {
-      case "stop-sharing-screen": {
+      case "stop-sharing": {
         let activeStreams = webrtcUI.getActiveStreams(
           false /* camera */,
           false /* microphone */,
           true /* screen */,
-          false /* window */
-        );
-        webrtcUI.stopSharingStreams(activeStreams);
-        break;
-      }
-      case "stop-sharing-window": {
-        let activeStreams = webrtcUI.getActiveStreams(
-          false /* camera */,
-          false /* microphone */,
-          false /* screen */,
           true /* window */
         );
 
-        if (this.sharingBrowserWindow) {
-          let browserWindowStreams = activeStreams.filter(stream => {
-            return stream.devices.some(device => device.scary);
-          });
-          webrtcUI.stopSharingStreams(
-            browserWindowStreams,
-            false /* camera */,
-            false /* microphone */,
-            false /* screen */,
-            true /* window */
-          );
-          break;
+        if (!activeStreams.length) {
+          return;
         }
 
-        webrtcUI.stopSharingStreams(activeStreams);
-        break;
-      }
-      case "microphone-button":
-      // Intentional fall-through
-      case "camera-button": {
-        // Revoking the microphone also revokes the camera and vice-versa.
-        let activeStreams = webrtcUI.getActiveStreams(
-          true /* camera */,
-          true /* microphone */,
-          false /* screen */
+        // getActiveStreams is filtering for streams that have screen
+        // sharing, but those streams might _also_ be sharing other
+        // devices like camera or microphone. This is why we need to
+        // tell stopSharingStreams explicitly which device type we want
+        // to stop.
+        webrtcUI.stopSharingStreams(
+          activeStreams,
+          false /* camera */,
+          false /* microphone */,
+          true /* screen */,
+          true /* window */
         );
-        this.showSharingDoorhanger(activeStreams);
         break;
       }
       case "minimize": {
@@ -426,21 +369,53 @@ const WebRTCIndicator = {
     }
   },
 
-  /**
-   * Find the most recent share in the set of active streams passed,
-   * and opens up the Permissions Panel for the associated tab to
-   * let the user revoke the streaming permission.
-   *
-   * @param activeStreams (Array<Object>)
-   *   An array of streams obtained via webrtcUI.getActiveStreams.
-   */
-  showSharingDoorhanger(activeStreams) {
-    if (!activeStreams.length) {
-      return;
+  onChange(event) {
+    switch (event.target.id) {
+      case "microphone-mute-toggle": {
+        this.toggleMicrophoneMute(event.target);
+        break;
+      }
+      case "camera-mute-toggle": {
+        this.toggleCameraMute(event.target);
+        break;
+      }
     }
+  },
 
-    let index = activeStreams.length - 1;
-    webrtcUI.showSharingDoorhanger(activeStreams[index]);
+  /**
+   * Mutes or unmutes the microphone globally based on the checked
+   * state of toggleEl. Also updates the tooltip of toggleEl once
+   * the state change is done.
+   *
+   * @param toggleEl (Element)
+   *   The input[type="checkbox"] for toggling the microphone mute
+   *   state.
+   */
+  toggleMicrophoneMute(toggleEl) {
+    Services.ppmm.sharedData.set(
+      "WebRTC:GlobalMicrophoneMute",
+      toggleEl.checked
+    );
+    Services.ppmm.sharedData.flush();
+    let l10nId =
+      "webrtc-microphone-" + (toggleEl.checked ? "muted" : "unmuted");
+    document.l10n.setAttributes(toggleEl, l10nId);
+  },
+
+  /**
+   * Mutes or unmutes the camera globally based on the checked
+   * state of toggleEl. Also updates the tooltip of toggleEl once
+   * the state change is done.
+   *
+   * @param toggleEl (Element)
+   *   The input[type="checkbox"] for toggling the camera mute
+   *   state.
+   */
+  toggleCameraMute(toggleEl) {
+    Services.ppmm.sharedData.set("WebRTC:GlobalCameraMute", toggleEl.checked);
+    Services.ppmm.sharedData.flush();
+    let l10nId = "webrtc-camera-" + (toggleEl.checked ? "muted" : "unmuted");
+    document.l10n.setAttributes(toggleEl, l10nId);
   },
 
   /**

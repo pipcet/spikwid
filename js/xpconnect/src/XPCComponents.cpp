@@ -19,6 +19,8 @@
 #include "js/Array.h"  // JS::IsArrayObject
 #include "js/CharacterEncoding.h"
 #include "js/ContextOptions.h"
+#include "js/friend/WindowProxy.h"  // js::ToWindowProxyIfWindow
+#include "js/Object.h"              // JS::GetClass, JS::GetCompartment
 #include "js/SavedFrameAPI.h"
 #include "js/StructuredClone.h"
 #include "mozilla/AppShutdown.h"
@@ -946,9 +948,8 @@ nsresult nsXPCComponents_Exception::CallOrConstruct(
     return ThrowAndFail(NS_ERROR_XPC_BAD_CONVERT_JS, cx, _retval);
   }
 
-  RefPtr<Exception> e =
-      new Exception(nsCString(parser.eMsg), parser.eResult, EmptyCString(),
-                    parser.eStack, parser.eData);
+  RefPtr<Exception> e = new Exception(nsCString(parser.eMsg), parser.eResult,
+                                      ""_ns, parser.eStack, parser.eData);
 
   RootedObject newObj(cx);
   if (NS_FAILED(xpc->WrapNative(cx, obj, e, NS_GET_IID(nsIException),
@@ -1459,7 +1460,7 @@ nsXPCComponents_Utils::ReportError(HandleValue error, HandleValue stack,
   }
 
   nsresult rv = scripterr->InitWithWindowID(
-      msg, fileName, EmptyString(), lineNo, 0, 0, "XPConnect JavaScript",
+      msg, fileName, u""_ns, lineNo, 0, 0, "XPConnect JavaScript",
       innerWindowID, innerWindowID == 0 ? true : false);
   NS_ENSURE_SUCCESS(rv, NS_OK);
 
@@ -1984,7 +1985,7 @@ nsXPCComponents_Utils::RecomputeWrappers(HandleValue vobj, JSContext* cx) {
   // Determine the compartment of the given object, if any.
   JS::Compartment* c =
       vobj.isObject()
-          ? js::GetObjectCompartment(js::UncheckedUnwrap(&vobj.toObject()))
+          ? JS::GetCompartment(js::UncheckedUnwrap(&vobj.toObject()))
           : nullptr;
 
   // If no compartment was given, recompute all.
@@ -2009,7 +2010,7 @@ nsXPCComponents_Utils::SetWantXrays(HandleValue vscope, JSContext* cx) {
   JSObject* scopeObj = js::UncheckedUnwrap(&vscope.toObject());
   MOZ_RELEASE_ASSERT(!AccessCheck::isChrome(scopeObj),
                      "Don't call setWantXrays on system-principal scopes");
-  JS::Compartment* compartment = js::GetObjectCompartment(scopeObj);
+  JS::Compartment* compartment = JS::GetCompartment(scopeObj);
   CompartmentPrivate::Get(scopeObj)->wantXrays = true;
   bool ok = js::RecomputeWrappers(cx, js::SingleCompartment(compartment),
                                   js::AllCompartments());
@@ -2195,7 +2196,7 @@ nsXPCComponents_Utils::GetClassName(HandleValue aObj, bool aUnwrap,
   if (aUnwrap) {
     obj = js::UncheckedUnwrap(obj, /* stopAtWindowProxy = */ false);
   }
-  *aRv = NS_xstrdup(js::GetObjectClass(obj)->name);
+  *aRv = NS_xstrdup(JS::GetClass(obj)->name);
   return NS_OK;
 }
 

@@ -90,11 +90,16 @@ EXPORTS.mozilla.dom += [
     'apz/util/CheckerboardReportService.h',
 ]
 
+EXPORTS.mozilla.gfx += [
+    'BuildConstants.h',
+]
+
 EXPORTS.mozilla.layers += [
     'AnimationHelper.h',
     'AnimationInfo.h',
     'AnimationStorageData.h',
     'apz/public/APZInputBridge.h',
+    'apz/public/APZPublicUtils.h',
     'apz/public/APZSampler.h',
     'apz/public/APZUpdater.h',
     'apz/public/CompositorController.h',
@@ -130,6 +135,7 @@ EXPORTS.mozilla.layers += [
     'basic/TextureHostBasic.h',
     'BSPTree.h',
     'BufferTexture.h',
+    'BuildConstants.h',
     'CanvasDrawEventRecorder.h',
     'CanvasRenderer.h',
     'client/CanvasClient.h',
@@ -148,7 +154,6 @@ EXPORTS.mozilla.layers += [
     'composite/AsyncCompositionManager.h',
     'composite/CanvasLayerComposite.h',
     'composite/ColorLayerComposite.h',
-    'composite/CompositorScreenshotGrabber.h',
     'composite/ContainerLayerComposite.h',
     'composite/ContentHost.h',
     'composite/Diagnostics.h',
@@ -243,6 +248,8 @@ EXPORTS.mozilla.layers += [
     'RenderTrace.h',
     'RepaintRequest.h',
     'RotatedBuffer.h',
+    'SampleTime.h',
+    'ScreenshotGrabber.h',
     'ScrollableLayerGuid.h',
     'ShareableCanvasRenderer.h',
     'SourceSurfaceSharedData.h',
@@ -258,6 +265,7 @@ EXPORTS.mozilla.layers += [
     'wr/ClipManager.h',
     'wr/DisplayItemCache.h',
     'wr/IpcResourceUpdateQueue.h',
+    'wr/OMTAController.h',
     'wr/OMTASampler.h',
     'wr/RenderRootStateManager.h',
     'wr/RenderRootTypes.h',
@@ -266,7 +274,6 @@ EXPORTS.mozilla.layers += [
     'wr/WebRenderBridgeParent.h',
     'wr/WebRenderCanvasRenderer.h',
     'wr/WebRenderCommandBuilder.h',
-    'wr/WebRenderCompositionRecorder.h',
     'wr/WebRenderDrawEventRecorder.h',
     'wr/WebRenderImageHost.h',
     'wr/WebRenderLayerManager.h',
@@ -348,6 +355,7 @@ UNIFIED_SOURCES += [
     'AnimationInfo.cpp',
     'apz/src/APZCTreeManager.cpp',
     'apz/src/APZInputBridge.cpp',
+    'apz/src/APZPublicUtils.cpp',
     'apz/src/APZSampler.cpp',
     'apz/src/APZUpdater.cpp',
     'apz/src/APZUtils.cpp',
@@ -356,6 +364,7 @@ UNIFIED_SOURCES += [
     'apz/src/Axis.cpp',
     'apz/src/CheckerboardEvent.cpp',
     'apz/src/DragTracker.cpp',
+    'apz/src/ExpectedGeckoMetrics.cpp',
     'apz/src/FocusState.cpp',
     'apz/src/FocusTarget.cpp',
     'apz/src/GenericScrollAnimation.cpp',
@@ -371,6 +380,8 @@ UNIFIED_SOURCES += [
     'apz/src/QueuedInput.cpp',
     'apz/src/SampledAPZCState.cpp',
     'apz/src/SimpleVelocityTracker.cpp',
+    'apz/src/SmoothMsdScrollAnimation.cpp',
+    'apz/src/SmoothScrollAnimation.cpp',
     'apz/src/WheelScrollAnimation.cpp',
     'apz/testutil/APZTestData.cpp',
     'apz/util/ActiveElementManager.cpp',
@@ -423,7 +434,6 @@ UNIFIED_SOURCES += [
     'composite/CanvasLayerComposite.cpp',
     'composite/ColorLayerComposite.cpp',
     'composite/CompositableHost.cpp',
-    'composite/CompositorScreenshotGrabber.cpp',
     'composite/ContainerLayerComposite.cpp',
     'composite/ContentHost.cpp',
     'composite/Diagnostics.cpp',
@@ -518,6 +528,9 @@ UNIFIED_SOURCES += [
     'ReadbackProcessor.cpp',
     'RenderTrace.cpp',
     'RotatedBuffer.cpp',
+    'SampleTime.cpp',
+    'ScreenshotGrabber.cpp',
+    'ScrollableLayerGuid.cpp',
     'ShareableCanvasRenderer.cpp',
     'SourceSurfaceSharedData.cpp',
     'SourceSurfaceVolatileData.cpp',
@@ -528,6 +541,7 @@ UNIFIED_SOURCES += [
     'wr/ClipManager.cpp',
     'wr/DisplayItemCache.cpp',
     'wr/IpcResourceUpdateQueue.cpp',
+    'wr/OMTAController.cpp',
     'wr/OMTASampler.cpp',
     'wr/RenderRootStateManager.cpp',
     'wr/RenderRootTypes.cpp',
@@ -536,7 +550,6 @@ UNIFIED_SOURCES += [
     'wr/WebRenderBridgeParent.cpp',
     'wr/WebRenderCanvasRenderer.cpp',
     'wr/WebRenderCommandBuilder.cpp',
-    'wr/WebRenderCompositionRecorder.cpp',
     'wr/WebRenderDrawEventRecorder.cpp',
     'wr/WebRenderImageHost.cpp',
     'wr/WebRenderLayerManager.cpp',
@@ -559,6 +572,7 @@ SOURCES += [
 
 DEFINES['GOOGLE_PROTOBUF_NO_RTTI'] = True
 DEFINES['GOOGLE_PROTOBUF_NO_STATIC_INITIALIZER'] = True
+DEFINES['MOZ_APP_VERSION'] = CONFIG['MOZ_APP_VERSION']
 
 if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
     SOURCES += [
@@ -615,7 +629,6 @@ if CONFIG['ENABLE_TESTS']:
     DIRS += ['apz/test/gtest/mvm']
 
 MOCHITEST_MANIFESTS += ['apz/test/mochitest/mochitest.ini']
-MOCHITEST_CHROME_MANIFESTS += ['apz/test/mochitest/chrome.ini']
 BROWSER_CHROME_MANIFESTS += ['apz/test/mochitest/browser.ini']
 
 CXXFLAGS += CONFIG['MOZ_CAIRO_CFLAGS']

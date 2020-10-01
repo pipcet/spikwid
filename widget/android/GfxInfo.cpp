@@ -572,19 +572,25 @@ nsresult GfxInfo::GetFeatureStatusImpl(
 
     if (aFeature == FEATURE_WEBRENDER) {
       bool isUnblocked = false;
-#ifdef NIGHTLY_BUILD
-      // On nightly enable all Adreno GPUs
       const nsCString& gpu = mGLStrings->Renderer();
-      isUnblocked |= gpu.Find("Adreno (TM) 5", /*ignoreCase*/ true) >= 0 ||
-                     gpu.Find("Adreno (TM) 6", /*ignoreCase*/ true) >= 0;
-#else
-      // Only allow pixel 2/3 devices on beta/release builds
       NS_LossyConvertUTF16toASCII model(mModel);
-      isUnblocked |= model.Find("Pixel 2", /*ignoreCase*/ true) >=
-                         0 ||  // Find substring to include all Pixel 2 models
-                     model.Find("Pixel 3", /*ignoreCase*/ true) >=
-                         0;  // Find substring to include all Pixel 3 models
+
+#ifdef NIGHTLY_BUILD
+      // On Nightly enable Webrender on all Adreno 5xx GPUs
+      isUnblocked |= gpu.Find("Adreno (TM) 5", /*ignoreCase*/ true) >= 0;
+
+      // On Nightly enable Webrender on all Mali-Gxx GPUs
+      isUnblocked |= gpu.Find("Mali-G", /*ignoreCase*/ true) >= 0;
 #endif
+      // Enable Webrender on all Adreno 5xx GPUs, excluding 505 and 506.
+      isUnblocked |=
+          gpu.Find("Adreno (TM) 5", /*ignoreCase*/ true) >= 0 &&
+          gpu.Find("Adreno (TM) 505", /*ignoreCase*/ true) == kNotFound &&
+          gpu.Find("Adreno (TM) 506", /*ignoreCase*/ true) == kNotFound;
+
+      // Enable Webrender on all Adreno 6xx devices
+      isUnblocked |= gpu.Find("Adreno (TM) 6", /*ignoreCase*/ true) >= 0;
+
       if (!isUnblocked) {
         *aStatus = nsIGfxInfo::FEATURE_BLOCKED_DEVICE;
         aFailureId = "FEATURE_FAILURE_WEBRENDER_BLOCKED_DEVICE";
@@ -595,8 +601,13 @@ nsresult GfxInfo::GetFeatureStatusImpl(
     }
 
     if (aFeature == FEATURE_WEBRENDER_SCISSORED_CACHE_CLEARS) {
-      const bool isMali = false;  // TODO
-      if (isMali) {
+      // Emulator with SwiftShader is buggy when attempting to clear picture
+      // cache textures with a scissor rect set.
+      const bool isEmulatorSwiftShader =
+          mGLStrings->Renderer().Find(
+              "Android Emulator OpenGL ES Translator (Google SwiftShader)") >=
+          0;
+      if (isEmulatorSwiftShader) {
         *aStatus = nsIGfxInfo::FEATURE_BLOCKED_DEVICE;
         aFailureId = "FEATURE_FAILURE_BUG_1603515";
       } else {

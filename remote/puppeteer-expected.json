@@ -1200,7 +1200,7 @@
     "TIMEOUT"
   ],
   "Page Page.close should *not* run beforeunload by default (page.spec.ts)": [
-    "TIMEOUT"
+    "PASS"
   ],
   "Page Page.close should set the page close state (page.spec.ts)": [
     "PASS"
@@ -1872,7 +1872,7 @@
     "PASS"
   ],
   "waittask specs Frame.waitForFunction should work when resolved right before execution context disposal (waittask.spec.ts)": [
-    "TIMEOUT"
+    "PASS"
   ],
   "waittask specs Frame.waitForFunction should poll on interval (waittask.spec.ts)": [
     "PASS"

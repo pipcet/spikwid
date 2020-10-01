@@ -71,17 +71,13 @@ class HTMLIFrameElement final : public nsGenericHTMLFrameElement {
     return mSandbox;
   }
 
-  bool AllowFullscreenForBindings() const {
+  bool AllowFullscreen() const {
     return GetBoolAttr(nsGkAtoms::allowfullscreen);
   }
 
-  void SetAllowFullscreenForBindings(bool aAllow, ErrorResult& aError) {
+  void SetAllowFullscreen(bool aAllow, ErrorResult& aError) {
     SetHTMLBoolAttr(nsGkAtoms::allowfullscreen, aAllow, aError);
   }
-
-  bool AllowFullscreen() const;
-
-  bool HasAllowFullscreenAttribute() const;
 
   bool AllowPaymentRequest() const {
     return GetBoolAttr(nsGkAtoms::allowpaymentrequest);
@@ -143,7 +139,7 @@ class HTMLIFrameElement final : public nsGenericHTMLFrameElement {
     SetHTMLAttr(nsGkAtoms::referrerpolicy, aReferrer, aError);
   }
   void GetReferrerPolicy(nsAString& aReferrer) {
-    GetEnumAttr(nsGkAtoms::referrerpolicy, EmptyCString().get(), aReferrer);
+    GetEnumAttr(nsGkAtoms::referrerpolicy, "", aReferrer);
   }
   Document* GetSVGDocument(nsIPrincipal& aSubjectPrincipal) {
     return GetContentDocument(aSubjectPrincipal);

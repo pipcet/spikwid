@@ -29,6 +29,7 @@ static const char SandboxPolicyContent[] = R"SANDBOX_LITERAL(
   (define testingReadPath3 (param "TESTING_READ_PATH3"))
   (define testingReadPath4 (param "TESTING_READ_PATH4"))
   (define crashPort (param "CRASH_PORT"))
+  (define isRosettaTranslated (param "IS_ROSETTA_TRANSLATED"))
 
   (define (moz-deny feature)
     (if (string=? should-log "TRUE")
@@ -51,11 +52,14 @@ static const char SandboxPolicyContent[] = R"SANDBOX_LITERAL(
     (debug deny))
 
   (if (defined? 'file-map-executable)
-    (allow file-map-executable file-read*
-      (subpath "/System")
-      (subpath "/usr/lib")
-      (subpath "/Library/GPUBundles")
-      (subpath appPath))
+    (begin
+      (if (string=? isRosettaTranslated "TRUE")
+        (allow file-map-executable (subpath "/private/var/db/oah")))
+      (allow file-map-executable file-read*
+        (subpath "/System")
+        (subpath "/usr/lib")
+        (subpath "/Library/GPUBundles")
+        (subpath appPath)))
     (allow file-read*
         (subpath "/System")
         (subpath "/usr/lib")
@@ -111,6 +115,7 @@ static const char SandboxPolicyContent[] = R"SANDBOX_LITERAL(
     ; removing it.
     (sysctl-name "kern.hostname")
     (sysctl-name "hw.machine")
+    (sysctl-name "hw.memsize")
     (sysctl-name "hw.model")
     (sysctl-name "hw.ncpu")
     (sysctl-name "hw.activecpu")
@@ -178,6 +183,11 @@ static const char SandboxPolicyContent[] = R"SANDBOX_LITERAL(
       (xpc-service-name "com.apple.coremedia.videodecoder")
       (xpc-service-name "com.apple.coremedia.videoencoder")))
 
+  (if (>= macosVersion 1100)
+    (allow mach-lookup
+      ; bug 1655655
+      (global-name "com.apple.trustd.agent")))
+
   (allow iokit-open
      (iokit-user-client-class "IOHIDParamUserClient"))
 
@@ -192,6 +202,7 @@ static const char SandboxPolicyContent[] = R"SANDBOX_LITERAL(
       (iokit-property "IOGVACodec")
       (iokit-property "IOGVAHEVCDecode")
       (iokit-property "IOGVAHEVCEncode")
+      (iokit-property "IOGVAXDecode")
       (iokit-property "IOPCITunnelled")
       (iokit-property "IOVARendererID")
       (iokit-property "MetalPluginName")

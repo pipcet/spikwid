@@ -13,6 +13,7 @@
 #include "nsIHttpChannel.h"
 #include "nsIMultiPartChannel.h"
 #include "nsIURI.h"
+#include "nsITransfer.h"
 #if defined(XP_WIN)
 #  include "WinUtils.h"
 #  include <wininet.h>
@@ -233,6 +234,10 @@ FilenameTypeAndDetails nsContentSecurityUtils::FilenameToFilenameType(
   static constexpr auto kExtensionRegex = u"extensions/(.+)@(.+)!(.+)$"_ns;
   static constexpr auto kSingleFileRegex = u"^[a-zA-Z0-9.?]+$"_ns;
 
+  if (fileName.IsEmpty()) {
+    return FilenameTypeAndDetails(kOther, Nothing());
+  }
+
   // resource:// and chrome://
   if (StringBeginsWith(fileName, u"chrome://"_ns)) {
     return FilenameTypeAndDetails(kChromeURI, Some(fileName));
@@ -298,9 +303,9 @@ FilenameTypeAndDetails nsContentSecurityUtils::FilenameToFilenameType(
   if (widget::WinUtils::PreparePathForTelemetry(strSanitizedPath, flags)) {
     DWORD cchDecodedUrl = INTERNET_MAX_URL_LENGTH;
     WCHAR szOut[INTERNET_MAX_URL_LENGTH];
-    HRESULT hr =
-        ::CoInternetParseUrl(fileName.get(), PARSE_SCHEMA, 0, szOut,
-                             INTERNET_MAX_URL_LENGTH, &cchDecodedUrl, 0);
+    HRESULT hr;
+    SAFECALL_URLMON_FUNC(CoInternetParseUrl, fileName.get(), PARSE_SCHEMA, 0,
+                         szOut, INTERNET_MAX_URL_LENGTH, &cchDecodedUrl, 0);
     if (hr == S_OK && cchDecodedUrl) {
       nsAutoString sanitizedPathAndScheme;
       sanitizedPathAndScheme.Append(szOut);
@@ -380,11 +385,6 @@ class EvalUsageNotificationRunnable final : public Runnable {
   uint32_t mLineNumber;
   uint32_t mColumnNumber;
 };
-
-// The Web Extension process pref may be toggled during a session, at which
-// point stuff may be loaded in the parent process but we would send telemetry
-// for it. Avoid this by observing if the pref ever was disabled.
-static bool sWebExtensionsRemoteWasEverDisabled = false;
 
 /* static */
 bool nsContentSecurityUtils::IsEvalAllowed(JSContext* cx,
@@ -478,16 +478,9 @@ bool nsContentSecurityUtils::IsEvalAllowed(JSContext* cx,
 
   if (XRE_IsE10sParentProcess() &&
       !StaticPrefs::extensions_webextensions_remote()) {
-    sWebExtensionsRemoteWasEverDisabled = true;
     MOZ_LOG(sCSMLog, LogLevel::Debug,
             ("Allowing eval() in parent process because the web extension "
              "process is disabled"));
-    return true;
-  }
-  if (XRE_IsE10sParentProcess() && sWebExtensionsRemoteWasEverDisabled) {
-    MOZ_LOG(sCSMLog, LogLevel::Debug,
-            ("Allowing eval() in parent process because the web extension "
-             "process was disabled at some point"));
     return true;
   }
 
@@ -563,13 +556,7 @@ bool nsContentSecurityUtils::IsEvalAllowed(JSContext* cx,
       fileName.get(), trimmedScript.get());
 #endif
 
-#ifdef EARLY_BETA_OR_EARLIER
-  // Until we understand the events coming from release, we don't want to
-  // enforce eval restrictions on release. Limiting to Nightly and early beta.
   return false;
-#else
-  return true;
-#endif
 }
 
 /* static */
@@ -630,7 +617,7 @@ void nsContentSecurityUtils::NotifyEvalUsage(bool aIsSystemPrincipal,
     return;
   }
 
-  rv = error->InitWithWindowID(message, aFileNameA, EmptyString(), aLineNumber,
+  rv = error->InitWithWindowID(message, aFileNameA, u""_ns, aLineNumber,
                                aColumnNumber, nsIScriptError::errorFlag,
                                "BrowserEvalUsage", aWindowID,
                                true /* From chrome context */);
@@ -906,7 +893,7 @@ void nsContentSecurityUtils::AssertAboutPageHasCSP(Document* aDocument) {
   MOZ_ASSERT(!foundWorkerSrc,
              "about: page must not contain a CSP including worker-src");
 
-  // addons, preferences, debugging, newinstall, pioneer, devtools all have
+  // addons, preferences, debugging, newinstall, ion, devtools all have
   // to allow some remote web resources
   MOZ_ASSERT(!foundWebScheme ||
                  StringBeginsWith(aboutSpec, "about:preferences"_ns) ||
@@ -914,7 +901,7 @@ void nsContentSecurityUtils::AssertAboutPageHasCSP(Document* aDocument) {
                  StringBeginsWith(aboutSpec, "about:newtab"_ns) ||
                  StringBeginsWith(aboutSpec, "about:debugging"_ns) ||
                  StringBeginsWith(aboutSpec, "about:newinstall"_ns) ||
-                 StringBeginsWith(aboutSpec, "about:pioneer"_ns) ||
+                 StringBeginsWith(aboutSpec, "about:ion"_ns) ||
                  StringBeginsWith(aboutSpec, "about:compat"_ns) ||
                  StringBeginsWith(aboutSpec, "about:logins"_ns) ||
                  StringBeginsWith(aboutSpec, "about:home"_ns) ||
@@ -1005,17 +992,9 @@ bool nsContentSecurityUtils::ValidateScriptFilename(const char* aFilename,
 
   if (XRE_IsE10sParentProcess() &&
       !StaticPrefs::extensions_webextensions_remote()) {
-    sWebExtensionsRemoteWasEverDisabled = true;
     MOZ_LOG(sCSMLog, LogLevel::Debug,
             ("Allowing a javascript load of %s because the web extension "
              "process is disabled.",
-             aFilename));
-    return true;
-  }
-  if (XRE_IsE10sParentProcess() && sWebExtensionsRemoteWasEverDisabled) {
-    MOZ_LOG(sCSMLog, LogLevel::Debug,
-            ("Allowing a javascript load of %s because the web extension "
-             "process was disabled at some point.",
              aFilename));
     return true;
   }
@@ -1111,7 +1090,7 @@ void nsContentSecurityUtils::LogMessageToConsole(nsIHttpChannel* aChannel,
 }
 
 /* static */
-bool nsContentSecurityUtils::IsDownloadAllowed(
+long nsContentSecurityUtils::ClassifyDownload(
     nsIChannel* aChannel, const nsAutoCString& aMimeTypeGuess) {
   MOZ_ASSERT(aChannel, "IsDownloadAllowed without channel?");
 
@@ -1128,7 +1107,7 @@ bool nsContentSecurityUtils::IsDownloadAllowed(
   nsCOMPtr<nsILoadInfo> secCheckLoadInfo =
       new LoadInfo(loadingPrincipal, loadInfo->TriggeringPrincipal(), nullptr,
                    nsILoadInfo::SEC_ONLY_FOR_EXPLICIT_CONTENTSEC_CHECK,
-                   nsIContentPolicy::TYPE_OTHER);
+                   nsIContentPolicy::TYPE_SAVEAS_DOWNLOAD);
 
   int16_t decission = nsIContentPolicy::ACCEPT;
   nsMixedContentBlocker::ShouldLoad(false,  //  aHadInsecureImageRedirect
@@ -1141,18 +1120,34 @@ bool nsContentSecurityUtils::IsDownloadAllowed(
   Telemetry::Accumulate(mozilla::Telemetry::MIXED_CONTENT_DOWNLOADS,
                         decission != nsIContentPolicy::ACCEPT);
 
-  if (!StaticPrefs::dom_block_download_insecure() ||
-      decission == nsIContentPolicy::ACCEPT) {
-    return true;
+  if (StaticPrefs::dom_block_download_insecure() &&
+      decission != nsIContentPolicy::ACCEPT) {
+    nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(aChannel);
+    if (httpChannel) {
+      LogMessageToConsole(httpChannel, "MixedContentBlockedDownload");
+    }
+    return nsITransfer::DOWNLOAD_POTENTIALLY_UNSAFE;
   }
 
   if (loadInfo->TriggeringPrincipal()->IsSystemPrincipal()) {
-    return true;
+    return nsITransfer::DOWNLOAD_ACCEPTABLE;
   }
 
-  nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(aChannel);
-  if (httpChannel) {
-    LogMessageToConsole(httpChannel, "MixedContentBlockedDownload");
+  if (!StaticPrefs::dom_block_download_in_sandboxed_iframes()) {
+    return nsITransfer::DOWNLOAD_ACCEPTABLE;
   }
-  return false;
+
+  uint32_t triggeringFlags = loadInfo->GetTriggeringSandboxFlags();
+  uint32_t currentflags = loadInfo->GetSandboxFlags();
+
+  if ((triggeringFlags & SANDBOXED_ALLOW_DOWNLOADS) ||
+      (currentflags & SANDBOXED_ALLOW_DOWNLOADS)) {
+    nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(aChannel);
+    if (httpChannel) {
+      LogMessageToConsole(httpChannel, "IframeSandboxBlockedDownload");
+    }
+    return nsITransfer::DOWNLOAD_FORBIDDEN;
+  }
+
+  return nsITransfer::DOWNLOAD_ACCEPTABLE;
 }

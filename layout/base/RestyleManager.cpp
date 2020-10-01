@@ -468,11 +468,8 @@ static bool StateChangeMayAffectFrame(const Element& aElement,
     return false;
   }
 
-  const bool brokenChanged = aStates.HasAtLeastOneOfStates(
-      NS_EVENT_STATE_BROKEN | NS_EVENT_STATE_USERDISABLED |
-      NS_EVENT_STATE_SUPPRESSED);
-  const bool loadingChanged =
-      aStates.HasAtLeastOneOfStates(NS_EVENT_STATE_LOADING);
+  const bool brokenChanged = aStates.HasState(NS_EVENT_STATE_BROKEN);
+  const bool loadingChanged = aStates.HasState(NS_EVENT_STATE_LOADING);
 
   if (!brokenChanged && !loadingChanged) {
     return false;
@@ -3201,14 +3198,18 @@ void RestyleManager::ContentStateChanged(nsIContent* aContent,
 
 static inline bool AttributeInfluencesOtherPseudoClassState(
     const Element& aElement, const nsAtom* aAttribute) {
-  // We must record some state for :-moz-browser-frame and
-  // :-moz-table-border-nonzero.
+  // We must record some state for :-moz-browser-frame,
+  // :-moz-table-border-nonzero, and :-moz-select-list-box.
   if (aAttribute == nsGkAtoms::mozbrowser) {
     return aElement.IsAnyOfHTMLElements(nsGkAtoms::iframe, nsGkAtoms::frame);
   }
 
   if (aAttribute == nsGkAtoms::border) {
     return aElement.IsHTMLElement(nsGkAtoms::table);
+  }
+
+  if (aAttribute == nsGkAtoms::multiple || aAttribute == nsGkAtoms::size) {
+    return aElement.IsHTMLElement(nsGkAtoms::select);
   }
 
   return false;

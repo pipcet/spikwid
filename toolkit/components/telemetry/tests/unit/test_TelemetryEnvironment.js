@@ -1967,41 +1967,6 @@ async function checkDefaultSearch(privateOn, reInitSearchService) {
     );
   }
 
-  if (!Services.prefs.getBoolPref("browser.search.modernConfig")) {
-    // Remove all the search engines.
-    for (let engine of await Services.search.getEngines()) {
-      await Services.search.removeEngine(engine);
-    }
-    // The search service does not notify "engine-default" when removing a default engine.
-    // Manually force the notification.
-    // TODO: remove this when bug 1165341 is resolved.
-    Services.obs.notifyObservers(
-      null,
-      "browser-search-engine-modified",
-      "engine-default"
-    );
-    if (privateOn) {
-      Services.obs.notifyObservers(
-        null,
-        "browser-search-engine-modified",
-        "engine-default-private"
-      );
-    }
-    await promiseNextTick();
-
-    // Then check that no default engine is reported if none is available.
-    data = TelemetryEnvironment.currentEnvironment;
-    checkEnvironmentData(data);
-    Assert.equal(data.settings.defaultSearchEngine, "NONE");
-    Assert.deepEqual(data.settings.defaultSearchEngineData, { name: "NONE" });
-    if (privateOn) {
-      Assert.equal(data.settings.defaultPrivateSearchEngine, "NONE");
-      Assert.deepEqual(data.settings.defaultPrivateSearchEngineData, {
-        name: "NONE",
-      });
-    }
-  }
-
   // Add a new search engine (this will have no engine identifier).
   const SEARCH_ENGINE_ID = "telemetry_default";
   const SEARCH_ENGINE_URL = `http://www.example.org/${
@@ -2172,38 +2137,6 @@ add_task(async function test_defaultSearchEngine() {
   data = TelemetryEnvironment.currentEnvironment;
   checkEnvironmentData(data);
   Assert.equal(data.settings.defaultSearchEngine, EXPECTED_SEARCH_ENGINE);
-
-  // Check that by default we are not sending a cohort identifier...
-  Assert.equal(data.settings.searchCohort, undefined);
-
-  // ... but that if a cohort identifier is set, we send it.
-  deferred = PromiseUtils.defer();
-  TelemetryEnvironment.registerChangeListener(
-    "testSearchEngine_pref",
-    deferred.resolve
-  );
-  Services.prefs.setCharPref("browser.search.cohort", "testcohort");
-  Services.obs.notifyObservers(null, "browser-search-service", "init-complete");
-  await deferred.promise;
-  TelemetryEnvironment.unregisterChangeListener("testSearchEngine_pref");
-  data = TelemetryEnvironment.currentEnvironment;
-  Assert.equal(data.settings.searchCohort, "testcohort");
-  Assert.equal(data.experiments.searchCohort.branch, "testcohort");
-
-  // Check that when changing the cohort identifier...
-  deferred = PromiseUtils.defer();
-  TelemetryEnvironment.registerChangeListener(
-    "testSearchEngine_pref",
-    deferred.resolve
-  );
-  Services.prefs.setCharPref("browser.search.cohort", "testcohort2");
-  Services.obs.notifyObservers(null, "browser-search-service", "init-complete");
-  await deferred.promise;
-  TelemetryEnvironment.unregisterChangeListener("testSearchEngine_pref");
-  data = TelemetryEnvironment.currentEnvironment;
-  // ... the setting and experiment are updated.
-  Assert.equal(data.settings.searchCohort, "testcohort2");
-  Assert.equal(data.experiments.searchCohort.branch, "testcohort2");
 });
 
 add_task(async function test_defaultPrivateSearchEngine() {

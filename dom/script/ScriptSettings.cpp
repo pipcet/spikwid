@@ -32,6 +32,25 @@ namespace dom {
 
 static MOZ_THREAD_LOCAL(ScriptSettingsStackEntry*) sScriptSettingsTLS;
 
+// Assert if it's not safe to run script. The helper class
+// AutoAllowLegacyScriptExecution allows to allow-list
+// legacy cases where it's actually not safe to run script.
+#ifdef DEBUG
+static void AssertIfNotSafeToRunScript() {
+  // if it's safe to run script, then there is nothing to do here.
+  if (nsContentUtils::IsSafeToRunScript()) {
+    return;
+  }
+
+  // auto allowing legacy script execution is fine for now.
+  if (AutoAllowLegacyScriptExecution::IsAllowed()) {
+    return;
+  }
+
+  MOZ_ASSERT(false, "is it safe to run script?");
+}
+#endif
+
 class ScriptSettingsStack {
  public:
   static ScriptSettingsStackEntry* Top() { return sScriptSettingsTLS.get(); }
@@ -598,6 +617,9 @@ AutoEntryScript::AutoEntryScript(nsIGlobalObject* aGlobalObject,
   MOZ_ASSERT(aGlobalObject);
 
   if (aIsMainThread) {
+#ifdef DEBUG
+    AssertIfNotSafeToRunScript();
+#endif
     if (gRunToCompletionListeners > 0) {
       mDocShellEntryMonitor.emplace(cx(), aReason);
     }
@@ -656,7 +678,8 @@ void AutoEntryScript::DocshellEntryMonitor::Entry(
     rootedScript = JS_GetFunctionScript(aCx, rootedFunction);
   }
   if (rootedScript) {
-    filename = NS_ConvertUTF8toUTF16(JS_GetScriptFilename(rootedScript));
+    CopyUTF8toUTF16(MakeStringSpan(JS_GetScriptFilename(rootedScript)),
+                    filename);
     lineNumber = JS_GetScriptBaseLineNumber(aCx, rootedScript);
   }
 
@@ -703,13 +726,10 @@ AutoNoJSAPI::~AutoNoJSAPI() {
 
 }  // namespace dom
 
-AutoJSContext::AutoJSContext(MOZ_GUARD_OBJECT_NOTIFIER_ONLY_PARAM_IN_IMPL)
-    : mCx(nullptr) {
+AutoJSContext::AutoJSContext() : mCx(nullptr) {
   JS::AutoSuppressGCAnalysis nogc;
   MOZ_ASSERT(!mCx, "mCx should not be initialized!");
   MOZ_ASSERT(NS_IsMainThread());
-
-  MOZ_GUARD_OBJECT_NOTIFIER_INIT;
 
   if (dom::IsJSAPIActive()) {
     mCx = dom::danger::GetJSContext();
@@ -721,12 +741,8 @@ AutoJSContext::AutoJSContext(MOZ_GUARD_OBJECT_NOTIFIER_ONLY_PARAM_IN_IMPL)
 
 AutoJSContext::operator JSContext*() const { return mCx; }
 
-AutoSafeJSContext::AutoSafeJSContext(
-    MOZ_GUARD_OBJECT_NOTIFIER_ONLY_PARAM_IN_IMPL)
-    : AutoJSAPI() {
+AutoSafeJSContext::AutoSafeJSContext() : AutoJSAPI() {
   MOZ_ASSERT(NS_IsMainThread());
-
-  MOZ_GUARD_OBJECT_NOTIFIER_INIT;
 
   DebugOnly<bool> ok = Init(xpc::UnprivilegedJunkScope());
   MOZ_ASSERT(ok,
@@ -735,10 +751,7 @@ AutoSafeJSContext::AutoSafeJSContext(
              "returned null, and inited correctly otherwise!");
 }
 
-AutoSlowOperation::AutoSlowOperation(
-    MOZ_GUARD_OBJECT_NOTIFIER_ONLY_PARAM_IN_IMPL)
-    : mIsMainThread(NS_IsMainThread()) {
-  MOZ_GUARD_OBJECT_NOTIFIER_INIT;
+AutoSlowOperation::AutoSlowOperation() : mIsMainThread(NS_IsMainThread()) {
   if (mIsMainThread) {
     mScriptActivity.emplace(true);
   }
@@ -758,6 +771,37 @@ void AutoSlowOperation::CheckForInterrupt() {
     MOZ_ALWAYS_TRUE(jsapi.Init(xpc::PrivilegedJunkScope()));
     JS_CheckForInterrupt(jsapi.cx());
   }
+}
+
+AutoAllowLegacyScriptExecution::AutoAllowLegacyScriptExecution() {
+#ifdef DEBUG
+  // no need to do that dance if we are off the main thread,
+  // because we only assert if we are on the main thread!
+  if (!NS_IsMainThread()) {
+    return;
+  }
+  sAutoAllowLegacyScriptExecution++;
+#endif
+}
+
+AutoAllowLegacyScriptExecution::~AutoAllowLegacyScriptExecution() {
+#ifdef DEBUG
+  // no need to do that dance if we are off the main thread,
+  // because we only assert if we are on the main thread!
+  if (!NS_IsMainThread()) {
+    return;
+  }
+  sAutoAllowLegacyScriptExecution--;
+  MOZ_ASSERT(sAutoAllowLegacyScriptExecution >= 0,
+             "how can the stack guard produce a value less than 0?");
+#endif
+}
+
+int AutoAllowLegacyScriptExecution::sAutoAllowLegacyScriptExecution = 0;
+
+/*static*/
+bool AutoAllowLegacyScriptExecution::IsAllowed() {
+  return sAutoAllowLegacyScriptExecution > 0;
 }
 
 }  // namespace mozilla

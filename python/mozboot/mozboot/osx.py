@@ -17,6 +17,7 @@ except ImportError:
 from distutils.version import StrictVersion
 
 from mozboot.base import BaseBootstrapper
+from mozfile import which
 
 HOMEBREW_BOOTSTRAP = 'https://raw.githubusercontent.com/Homebrew/install/master/install'
 XCODE_APP_STORE = 'macappstore://itunes.apple.com/app/id497799835?mt=12'
@@ -170,6 +171,12 @@ this bootstrap again.
 
 
 class OSXBootstrapper(BaseBootstrapper):
+
+    INSTALL_PYTHON_GUIDANCE = (
+        'See https://firefox-source-docs.mozilla.org/setup/macos_build.html'
+        '#install-via-homebrew for guidance on how to install Python on your '
+        'system.')
+
     def __init__(self, version, **kwargs):
         BaseBootstrapper.__init__(self, **kwargs)
 
@@ -191,18 +198,19 @@ class OSXBootstrapper(BaseBootstrapper):
                   "It will be installed with %s" % self.package_manager)
         getattr(self, 'ensure_%s_system_packages' % self.package_manager)(not hg_modern)
 
-    def install_browser_packages(self):
+    def install_browser_packages(self, mozconfig_builder):
         getattr(self, 'ensure_%s_browser_packages' % self.package_manager)()
 
-    def install_browser_artifact_mode_packages(self):
+    def install_browser_artifact_mode_packages(self, mozconfig_builder):
         getattr(self, 'ensure_%s_browser_packages' % self.package_manager)(artifact_mode=True)
 
-    def install_mobile_android_packages(self):
-        getattr(self, 'ensure_%s_mobile_android_packages' % self.package_manager)()
-
-    def install_mobile_android_artifact_mode_packages(self):
+    def install_mobile_android_packages(self, mozconfig_builder):
         getattr(self, 'ensure_%s_mobile_android_packages' %
-                self.package_manager)(artifact_mode=True)
+                self.package_manager)(mozconfig_builder)
+
+    def install_mobile_android_artifact_mode_packages(self, mozconfig_builder):
+        getattr(self, 'ensure_%s_mobile_android_packages' %
+                self.package_manager)(mozconfig_builder, artifact_mode=True)
 
     def generate_mobile_android_mozconfig(self):
         return getattr(self, 'generate_%s_mobile_android_mozconfig' %
@@ -226,7 +234,7 @@ class OSXBootstrapper(BaseBootstrapper):
         # developer preview releases of Xcode, which can be installed into
         # paths like /Applications/Xcode5-DP6.app.
         elif self.os_version >= StrictVersion('10.7'):
-            select = self.which('xcode-select')
+            select = which('xcode-select')
             try:
                 output = subprocess.check_output([select, '--print-path'],
                                                  stderr=subprocess.STDOUT)
@@ -255,7 +263,7 @@ class OSXBootstrapper(BaseBootstrapper):
                                              stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as e:
             if b'license' in e.output:
-                xcodebuild = self.which('xcodebuild')
+                xcodebuild = which('xcodebuild')
                 try:
                     subprocess.check_output([xcodebuild, '-license'],
                                             stderr=subprocess.STDOUT)
@@ -292,7 +300,7 @@ class OSXBootstrapper(BaseBootstrapper):
 
     def _ensure_homebrew_found(self):
         if not hasattr(self, 'brew'):
-            self.brew = self.which('brew')
+            self.brew = which('brew')
         # Earlier code that checks for valid package managers ensures
         # which('brew') is found.
         assert self.brew is not None
@@ -315,15 +323,6 @@ class OSXBootstrapper(BaseBootstrapper):
 
         if to_install or to_upgrade:
             print(PACKAGE_MANAGER_PACKAGES % ('Homebrew',))
-        if 'python@2' in to_install:
-            # Special handling for Python 2 since brew can't install it
-            # out-of-the-box any more.
-            to_install.remove('python@2')
-            subprocess.check_call(
-                cmd + ['install',
-                       'https://raw.githubusercontent.com/Homebrew/homebrew-core'
-                       '/86a44a0a552c673a05f11018459c9f5faae3becc'
-                       '/Formula/python@2.rb'])
         if to_install:
             subprocess.check_call(cmd + ['install'] + list(to_install))
         if to_upgrade:
@@ -350,17 +349,11 @@ class OSXBootstrapper(BaseBootstrapper):
         self._ensure_homebrew_packages(casks, extra_brew_args=['cask'])
 
     def ensure_homebrew_system_packages(self, install_mercurial):
-        # We need to install Python because Mercurial requires the
-        # Python development headers which are missing from OS X (at
-        # least on 10.8) and because the build system wants a version
-        # newer than what Apple ships.
         packages = [
             'autoconf@2.13',
             'git',
             'gnu-tar',
             'node',
-            'python',
-            'python@2',
             'terminal-notifier',
             'watchman',
         ]
@@ -376,7 +369,7 @@ class OSXBootstrapper(BaseBootstrapper):
         ]
         self._ensure_homebrew_packages(packages)
 
-    def ensure_homebrew_mobile_android_packages(self, artifact_mode=False):
+    def ensure_homebrew_mobile_android_packages(self, mozconfig_builder, artifact_mode=False):
         # Multi-part process:
         # 1. System packages.
         # 2. Android SDK. Android NDK only if we are not in artifact mode. Android packages.
@@ -401,7 +394,7 @@ class OSXBootstrapper(BaseBootstrapper):
         # Prefer homebrew's java binary by putting it on the path first.
         os.environ['PATH'] = \
             '{}{}{}'.format(JAVA_PATH, os.pathsep, os.environ['PATH'])
-        self.ensure_java()
+        self.ensure_java(mozconfig_builder)
         from mozboot import android
 
         android.ensure_android('macosx', artifact_mode=artifact_mode,
@@ -412,7 +405,7 @@ class OSXBootstrapper(BaseBootstrapper):
         return android.generate_mozconfig('macosx', artifact_mode=artifact_mode)
 
     def _ensure_macports_packages(self, packages):
-        self.port = self.which('port')
+        self.port = which('port')
         assert self.port is not None
 
         installed = set(
@@ -427,9 +420,6 @@ class OSXBootstrapper(BaseBootstrapper):
 
     def ensure_macports_system_packages(self, install_mercurial):
         packages = [
-            'python27',
-            'python36',
-            'py27-gnureadline',
             'autoconf213',
             'gnutar',
             'watchman',
@@ -462,7 +452,7 @@ class OSXBootstrapper(BaseBootstrapper):
 
         self._ensure_macports_packages(packages)
 
-    def ensure_macports_mobile_android_packages(self, artifact_mode=False):
+    def ensure_macports_mobile_android_packages(self, mozconfig_builder, artifact_mode=False):
         # Multi-part process:
         # 1. System packages.
         # 2. Android SDK. Android NDK only if we are not in artifact mode. Android packages.
@@ -479,7 +469,7 @@ class OSXBootstrapper(BaseBootstrapper):
                             'GeckoView/Firefox for Android.')
 
         # 2. Android pieces.
-        self.ensure_java()
+        self.ensure_java(mozconfig_builder)
         from mozboot import android
         android.ensure_android('macosx', artifact_mode=artifact_mode,
                                no_interactive=self.no_interactive)
@@ -496,7 +486,7 @@ class OSXBootstrapper(BaseBootstrapper):
         '''
         installed = []
         for name, cmd in PACKAGE_MANAGER.items():
-            if self.which(cmd) is not None:
+            if which(cmd) is not None:
                 installed.append(name)
 
         active_name, active_cmd = None, None
@@ -522,7 +512,7 @@ class OSXBootstrapper(BaseBootstrapper):
         # /usr/bin. If it doesn't come before /usr/bin, we'll pick up system
         # packages before package manager installed packages and the build may
         # break.
-        p = self.which(active_cmd)
+        p = which(active_cmd)
         if not p:
             print(PACKAGE_MANAGER_BIN_MISSING % active_cmd)
             sys.exit(1)
@@ -580,6 +570,12 @@ class OSXBootstrapper(BaseBootstrapper):
         self.install_toolchain_artifact(state_dir, checkout_root,
                                         minidump_stackwalk.MACOS_MINIDUMP_STACKWALK)
 
+    def ensure_dump_syms_packages(self, state_dir, checkout_root):
+        from mozboot import dump_syms
+
+        self.install_toolchain_artifact(state_dir, checkout_root,
+                                        dump_syms.MACOS_DUMP_SYMS)
+
     def install_homebrew(self):
         print(PACKAGE_MANAGER_INSTALL % ('Homebrew', 'Homebrew', 'Homebrew', 'brew'))
         bootstrap = urlopen(url=HOMEBREW_BOOTSTRAP, timeout=20).read()
@@ -627,9 +623,3 @@ class OSXBootstrapper(BaseBootstrapper):
 
     def upgrade_mercurial(self, current):
         self._upgrade_package('mercurial')
-
-    def upgrade_python(self, current):
-        if self.package_manager == 'homebrew':
-            self._upgrade_package('python')
-        else:
-            self._upgrade_package('python27')

@@ -41,6 +41,7 @@ const {
   ON_ACCOUNT_STATE_CHANGE_NOTIFICATION,
   ONLOGIN_NOTIFICATION,
   ONLOGOUT_NOTIFICATION,
+  ON_PRELOGOUT_NOTIFICATION,
   ONVERIFIED_NOTIFICATION,
   ON_DEVICE_DISCONNECTED_NOTIFICATION,
   POLL_SESSION,
@@ -214,7 +215,19 @@ AccountState.prototype = {
     });
   },
 
-  updateUserAccountData(updatedFields) {
+  async updateUserAccountData(updatedFields) {
+    if ("uid" in updatedFields) {
+      const existing = await this.getUserAccountData(["uid"]);
+      if (existing.uid != updatedFields.uid) {
+        throw new Error(
+          "The specified credentials aren't for the current user"
+        );
+      }
+      // We need to nuke uid as storage will complain if we try and
+      // update it (even when the value is the same)
+      updatedFields = Cu.cloneInto(updatedFields, {}); // clone it first
+      delete updatedFields.uid;
+    }
     if (!this.isCurrent) {
       return Promise.reject(new Error("Another user has signed in"));
     }
@@ -834,6 +847,14 @@ FxAccountsInternal.prototype = {
           ChromeUtils.import("resource://services-sync/main.js", scope);
           return scope.Weave.Service.promiseInitialized;
         },
+        // Telemetry, so ecosystem telemetry doesn't miss logouts.
+        async () => {
+          const { EcosystemTelemetry } = ChromeUtils.import(
+            "resource://gre/modules/EcosystemTelemetry.jsm",
+            {}
+          );
+          await EcosystemTelemetry.prepareForFxANotification();
+        },
       ];
     }
 
@@ -1090,22 +1111,12 @@ FxAccountsInternal.prototype = {
       log.debug("updateUserAccountData called with data", credentials);
     }
     let currentAccountState = this.currentAccountState;
-    return currentAccountState.promiseInitialized
-      .then(() => {
-        return currentAccountState.getUserAccountData(["uid"]);
-      })
-      .then(existing => {
-        if (existing.uid != credentials.uid) {
-          throw new Error(
-            "The specified credentials aren't for the current user"
-          );
-        }
-        // We need to nuke uid as storage will complain if we try and
-        // update it (even when the value is the same)
-        credentials = Cu.cloneInto(credentials, {}); // clone it first
-        delete credentials.uid;
-        return currentAccountState.updateUserAccountData(credentials);
-      });
+    return currentAccountState.promiseInitialized.then(() => {
+      if (!credentials.uid) {
+        throw new Error("The specified credentials have no uid");
+      }
+      return currentAccountState.updateUserAccountData(credentials);
+    });
   },
 
   /**
@@ -1201,6 +1212,7 @@ FxAccountsInternal.prototype = {
       sessionToken = data.sessionToken;
       tokensToRevoke = data.oauthTokens;
     }
+    await this.notifyObservers(ON_PRELOGOUT_NOTIFICATION);
     await this._signOutLocal();
     if (!localOnly) {
       // Do this in the background so *any* slow request won't

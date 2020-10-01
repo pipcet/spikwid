@@ -27,7 +27,7 @@ void AbortSignalImpl::Abort() {
   mAborted = true;
 
   // Let's inform the followers.
-  for (AbortFollower* follower : mFollowers.ForwardRange()) {
+  for (RefPtr<AbortFollower> follower : mFollowers.ForwardRange()) {
     follower->Abort();
   }
 }

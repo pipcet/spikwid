@@ -114,6 +114,13 @@ already_AddRefed<WindowGlobalChild> WindowGlobalChild::Create(
         BrowserChild::GetFrom(static_cast<mozIDOMWindow*>(aWindow));
     MOZ_ASSERT(browserChild);
 
+#ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
+    dom::BrowsingContext* bc = aWindow->GetBrowsingContext();
+#endif
+
+    MOZ_DIAGNOSTIC_ASSERT(bc->AncestorsAreCurrent());
+    MOZ_DIAGNOSTIC_ASSERT(bc->IsInProcess());
+
     ManagedEndpoint<PWindowGlobalParent> endpoint =
         browserChild->OpenPWindowGlobalEndpoint(wgc);
     browserChild->SendNewWindowGlobal(std::move(endpoint), init);
@@ -138,7 +145,7 @@ already_AddRefed<WindowGlobalChild> WindowGlobalChild::CreateDisconnected(
     windowContext =
         WindowGlobalParent::CreateDisconnected(aInit, /* aInProcess */ true);
   } else {
-    dom::WindowContext::FieldTuple fields = aInit.context().mFields;
+    dom::WindowContext::FieldValues fields = aInit.context().mFields;
     windowContext =
         new dom::WindowContext(browsingContext, aInit.context().mInnerWindowId,
                                aInit.context().mOuterWindowId,
@@ -218,6 +225,13 @@ void WindowGlobalChild::OnNewDocument(Document* aDocument) {
     txn.SetEmbedderPolicy(policy.ref());
   }
 
+  if (nsCOMPtr<nsIChannel> channel = aDocument->GetChannel()) {
+    nsCOMPtr<nsILoadInfo> loadInfo(channel->LoadInfo());
+    txn.SetIsOriginalFrameSource(loadInfo->GetOriginalFrameSrcLoad());
+  } else {
+    txn.SetIsOriginalFrameSource(false);
+  }
+
   // Init Mixed Content Fields
   nsCOMPtr<nsIURI> innerDocURI =
       NS_GetInnermostURI(aDocument->GetDocumentURI());
@@ -233,7 +247,8 @@ void WindowGlobalChild::OnNewDocument(Document* aDocument) {
   if (mixedChannel && (mixedChannel == aDocument->GetChannel())) {
     txn.SetAllowMixedContent(true);
   }
-  txn.Commit(mWindowContext);
+
+  MOZ_ALWAYS_SUCCEEDS(txn.Commit(mWindowContext));
 }
 
 /* static */
@@ -296,7 +311,7 @@ bool WindowGlobalChild::IsProcessRoot() {
 void WindowGlobalChild::BeforeUnloadAdded() {
   // Don't bother notifying the parent if we don't have an IPC link open.
   if (mBeforeUnloadListeners == 0 && CanSend()) {
-    SendSetHasBeforeUnload(true);
+    Unused << mWindowContext->SetHasBeforeUnload(true);
   }
 
   mBeforeUnloadListeners++;
@@ -307,9 +322,8 @@ void WindowGlobalChild::BeforeUnloadRemoved() {
   mBeforeUnloadListeners--;
   MOZ_ASSERT(mBeforeUnloadListeners >= 0);
 
-  // Don't bother notifying the parent if we don't have an IPC link open.
-  if (mBeforeUnloadListeners == 0 && CanSend()) {
-    SendSetHasBeforeUnload(false);
+  if (mBeforeUnloadListeners == 0) {
+    Unused << mWindowContext->SetHasBeforeUnload(false);
   }
 }
 
@@ -582,8 +596,9 @@ const nsACString& WindowGlobalChild::GetRemoteType() {
 }
 
 already_AddRefed<JSWindowActorChild> WindowGlobalChild::GetActor(
-    const nsACString& aName, ErrorResult& aRv) {
-  return JSActorManager::GetActor(aName, aRv).downcast<JSWindowActorChild>();
+    JSContext* aCx, const nsACString& aName, ErrorResult& aRv) {
+  return JSActorManager::GetActor(aCx, aName, aRv)
+      .downcast<JSWindowActorChild>();
 }
 
 already_AddRefed<JSActor> WindowGlobalChild::InitJSActor(
@@ -618,6 +633,16 @@ void WindowGlobalChild::ActorDestroy(ActorDestroyReason aWhy) {
   JSActorDidDestroy();
 }
 
+bool WindowGlobalChild::SameOriginWithTop() {
+  nsGlobalWindowInner* topWindow =
+      WindowContext()->TopWindowContext()->GetInnerWindow();
+  if (!topWindow) {
+    return false;
+  }
+  return mWindowGlobal == topWindow ||
+         mDocumentPrincipal->Equals(topWindow->GetPrincipal());
+}
+
 WindowGlobalChild::~WindowGlobalChild() {
   MOZ_ASSERT(!gWindowGlobalChildById ||
              !gWindowGlobalChildById->Contains(InnerWindowId()));
@@ -630,6 +655,13 @@ JSObject* WindowGlobalChild::WrapObject(JSContext* aCx,
 
 nsISupports* WindowGlobalChild::GetParentObject() {
   return xpc::NativeGlobal(xpc::PrivilegedJunkScope());
+}
+
+void WindowGlobalChild::MaybeSendUpdateDocumentWouldPreloadResources() {
+  if (!mDocumentWouldPreloadResources) {
+    mDocumentWouldPreloadResources = true;
+    SendUpdateDocumentWouldPreloadResources();
+  }
 }
 
 NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE(WindowGlobalChild, mWindowGlobal)

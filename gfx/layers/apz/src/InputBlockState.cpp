@@ -16,8 +16,8 @@
 #include "mozilla/StaticPrefs_mousewheel.h"
 #include "mozilla/StaticPrefs_test.h"
 #include "mozilla/Telemetry.h"                // for Telemetry
+#include "mozilla/ToString.h"
 #include "mozilla/layers/IAPZCTreeManager.h"  // for AllowedTouchBehavior
-#include "LayersLogging.h"                    // for Stringify
 #include "OverscrollHandoffState.h"
 #include "QueuedInput.h"
 
@@ -33,15 +33,19 @@ InputBlockState::InputBlockState(
     const RefPtr<AsyncPanZoomController>& aTargetApzc,
     TargetConfirmationFlags aFlags)
     : mTargetApzc(aTargetApzc),
-      mTargetConfirmed(aFlags.mTargetConfirmed
-                           ? TargetConfirmationState::eConfirmed
-                           : TargetConfirmationState::eUnconfirmed),
       mRequiresTargetConfirmation(aFlags.mRequiresTargetConfirmation),
       mBlockId(sBlockCounter++),
       mTransformToApzc(aTargetApzc->GetTransformToThis()) {
   // We should never be constructed with a nullptr target.
   MOZ_ASSERT(mTargetApzc);
   mOverscrollHandoffChain = mTargetApzc->BuildOverscrollHandoffChain();
+  // If a new block starts on a scrollthumb and we have APZ scrollbar
+  // dragging enabled, defer confirmation until we get the drag metrics
+  // for the thumb.
+  bool startingDrag = StaticPrefs::apz_drag_enabled() && aFlags.mHitScrollThumb;
+  mTargetConfirmed = aFlags.mTargetConfirmed && !startingDrag
+                         ? TargetConfirmationState::eConfirmed
+                         : TargetConfirmationState::eUnconfirmed;
 }
 
 bool InputBlockState::SetConfirmedTargetApzc(
@@ -627,7 +631,8 @@ TouchBlockState::TouchBlockState(
       mDuringFastFling(false),
       mSingleTapOccurred(false),
       mInSlop(false),
-      mTouchCounter(aCounter) {
+      mTouchCounter(aCounter),
+      mStartTime(GetTargetApzc()->GetFrameTime().Time()) {
   TBS_LOG("Creating %p\n", this);
   if (!StaticPrefs::layout_css_touch_action_enabled()) {
     mAllowedTouchBehaviorSet = true;
@@ -713,6 +718,10 @@ bool TouchBlockState::MustStayActive() { return true; }
 
 const char* TouchBlockState::Type() { return "touch"; }
 
+TimeDuration TouchBlockState::GetTimeSinceBlockStart() const {
+  return GetTargetApzc()->GetFrameTime().Time() - mStartTime;
+}
+
 void TouchBlockState::DispatchEvent(const InputData& aEvent) const {
   MOZ_ASSERT(aEvent.mInputType == MULTITOUCH_INPUT);
   mTouchCounter.Update(aEvent.AsMultiTouchInput());
@@ -790,7 +799,7 @@ bool TouchBlockState::UpdateSlopState(const MultiTouchInput& aInput,
     if (mInSlop) {
       mSlopOrigin = aInput.mTouches[0].mScreenPoint;
       TBS_LOG("%p entering slop with origin %s\n", this,
-              Stringify(mSlopOrigin).c_str());
+              ToString(mSlopOrigin).c_str());
     }
     return false;
   }
@@ -815,6 +824,8 @@ bool TouchBlockState::UpdateSlopState(const MultiTouchInput& aInput,
   }
   return mInSlop;
 }
+
+bool TouchBlockState::IsInSlop() const { return mInSlop; }
 
 Maybe<ScrollDirection> TouchBlockState::GetBestGuessPanDirection(
     const MultiTouchInput& aInput) {

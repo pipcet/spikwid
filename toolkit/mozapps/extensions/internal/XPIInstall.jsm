@@ -113,7 +113,7 @@ const PREF_XPI_DIRECT_WHITELISTED = "xpinstall.whitelist.directRequest";
 const PREF_XPI_FILE_WHITELISTED = "xpinstall.whitelist.fileRequest";
 const PREF_XPI_WHITELIST_REQUIRED = "xpinstall.whitelist.required";
 
-const PREF_SELECTED_LWT = "lightweightThemes.selectedThemeID";
+const PREF_SELECTED_THEME = "extensions.activeThemeID";
 
 const TOOLKIT_ID = "toolkit@mozilla.org";
 
@@ -210,10 +210,10 @@ const LOGGER_ID = "addons.xpi";
 // (Requires AddonManager.jsm)
 var logger = Log.repository.getLogger(LOGGER_ID);
 
-// Stores the ID of the lightweight theme which was selected during the
-// last session, if any. When installing a new built-in theme with this
-// ID, it will be automatically enabled.
-let lastLightweightTheme = null;
+// Stores the ID of the theme which was selected during the last session,
+// if any. When installing a new built-in theme with this ID, it will be
+// automatically enabled.
+let lastSelectedTheme = null;
 
 function getJarURI(file, path = "") {
   if (file instanceof Ci.nsIFile) {
@@ -779,6 +779,21 @@ function getTemporaryFile() {
 }
 
 /**
+ * Returns the string representation (hex) of the SHA256 hash of `input`.
+ *
+ * @param {string} input
+ *        The value to hash.
+ * @returns {string}
+ *          The hex representation of a SHA256 hash.
+ */
+function computeSha256HashAsString(input) {
+  const data = new Uint8Array(new TextEncoder().encode(input));
+  const crypto = CryptoHash("sha256");
+  crypto.update(data, data.length);
+  return getHashStringForCrypto(crypto);
+}
+
+/**
  * Returns the signedState for a given return code and certificate by verifying
  * it against the expected ID.
  *
@@ -798,11 +813,7 @@ function getTemporaryFile() {
 function getSignedStatus(aRv, aCert, aAddonID) {
   let expectedCommonName = aAddonID;
   if (aAddonID && aAddonID.length > 64) {
-    let data = new Uint8Array(new TextEncoder().encode(aAddonID));
-
-    let crypto = CryptoHash("sha256");
-    crypto.update(data, data.length);
-    expectedCommonName = getHashStringForCrypto(crypto);
+    expectedCommonName = computeSha256HashAsString(aAddonID);
   }
 
   switch (aRv) {
@@ -1205,7 +1216,7 @@ function getHashStringForCrypto(aCrypto) {
   let toHexString = charCode => ("0" + charCode.toString(16)).slice(-2);
 
   // convert the binary hash data to a hex string.
-  let binary = aCrypto.finish(false);
+  let binary = aCrypto.finish(/* base64 */ false);
   let hash = Array.from(binary, c => toHexString(c.charCodeAt(0)));
   return hash.join("").toLowerCase();
 }
@@ -1362,6 +1373,17 @@ class AddonInstall {
         throw new Error("Cannot start installing from this state");
     }
     return this._installPromise;
+  }
+
+  continuePostponedInstall() {
+    if (this.state !== AddonManager.STATE_POSTPONED) {
+      throw new Error("AddonInstall not in postponed state");
+    }
+
+    // Force the postponed install to continue.
+    logger.info(`${this.addon.id} has resumed a previously postponed upgrade`);
+    this.state = AddonManager.STATE_READY;
+    this.install();
   }
 
   /**
@@ -1652,11 +1674,7 @@ class AddonInstall {
         `add-on ${this.addon.id} has an upgrade listener, postponing upgrade until restart`
       );
       let resumeFn = () => {
-        logger.info(
-          `${this.addon.id} has resumed a previously postponed upgrade`
-        );
-        this.state = AddonManager.STATE_READY;
-        this.install();
+        this.continuePostponedInstall();
       };
       this.postpone(resumeFn);
       return;
@@ -2643,6 +2661,10 @@ AddonInstallWrapper.prototype = {
     installFor(this).promptHandler = handler;
   },
 
+  get promptHandler() {
+    return installFor(this).promptHandler;
+  },
+
   get installTelemetryInfo() {
     return installFor(this).installTelemetryInfo;
   },
@@ -2655,12 +2677,30 @@ AddonInstallWrapper.prototype = {
     return installFor(this).downloadStartedAt;
   },
 
+  get hashedAddonId() {
+    const addon = this.addon;
+
+    if (!addon) {
+      return null;
+    }
+
+    return computeSha256HashAsString(addon.id);
+  },
+
   install() {
     return installFor(this).install();
   },
 
+  postpone(returnFn) {
+    return installFor(this).postpone(returnFn);
+  },
+
   cancel() {
     installFor(this).cancel();
+  },
+
+  continuePostponedInstall() {
+    return installFor(this).continuePostponedInstall();
   },
 
   addListener(listener) {
@@ -3693,6 +3733,80 @@ class SystemAddonInstaller extends DirectoryInstaller {
   uninstallAddon(aAddon) {}
 }
 
+var AppUpdate = {
+  findAddonUpdates(addon, reason, appVersion, platformVersion) {
+    return new Promise((resolve, reject) => {
+      let update = null;
+      addon.findUpdates(
+        {
+          onUpdateAvailable(addon2, install) {
+            update = install;
+          },
+
+          onUpdateFinished(addon2, error) {
+            if (error == AddonManager.UPDATE_STATUS_NO_ERROR) {
+              resolve(update);
+            } else {
+              reject(error);
+            }
+          },
+        },
+        reason,
+        appVersion,
+        platformVersion || appVersion
+      );
+    });
+  },
+
+  stageInstall(installer) {
+    return new Promise((resolve, reject) => {
+      let listener = {
+        onDownloadEnded: install => {
+          install.postpone();
+        },
+        onInstallFailed: install => {
+          install.removeListener(listener);
+          reject();
+        },
+        onInstallEnded: install => {
+          // We shouldn't end up here, but if we do, resolve
+          // since we've installed.
+          install.removeListener(listener);
+          resolve();
+        },
+        onInstallPostponed: install => {
+          // At this point the addon is staged for restart.
+          install.removeListener(listener);
+          resolve();
+        },
+      };
+
+      installer.addListener(listener);
+      installer.install();
+    });
+  },
+
+  async stageLangpackUpdates(nextVersion, nextPlatformVersion) {
+    let updates = [];
+    let addons = await AddonManager.getAddonsByTypes(["locale"]);
+    for (let addon of addons) {
+      updates.push(
+        this.findAddonUpdates(
+          addon,
+          AddonManager.UPDATE_WHEN_NEW_APP_DETECTED,
+          nextVersion,
+          nextPlatformVersion
+        )
+          .then(update => update && this.stageInstall(update))
+          .catch(e => {
+            logger.debug(`addon.findUpdate error: ${e}`);
+          })
+      );
+    }
+    return Promise.all(updates);
+  },
+};
+
 var XPIInstall = {
   // An array of currently active AddonInstalls
   installs: new Set(),
@@ -3704,6 +3818,10 @@ var XPIInstall = {
   syncLoadManifest,
   loadManifestFromFile,
   uninstallAddonFromLocation,
+
+  stageLangpacksForAppUpdate(nextVersion, nextPlatformVersion) {
+    return AppUpdate.stageLangpackUpdates(nextVersion, nextPlatformVersion);
+  },
 
   // Keep track of in-progress operations that support cancel()
   _inProgress: [],
@@ -3825,6 +3943,14 @@ var XPIInstall = {
 
     let addon = await loadManifestFromFile(source, location);
 
+    // Ensure a staged addon is compatible with the current running version of
+    // Firefox.  If a prior version of the addon is installed, it will remain.
+    if (!addon.isCompatible) {
+      throw new Error(
+        `Add-on ${addon.id} is not compatible with application version.`
+      );
+    }
+
     if (
       XPIDatabase.mustSign(addon.type) &&
       addon.signedState <= AddonManager.SIGNEDSTATE_MISSING
@@ -3838,22 +3964,10 @@ var XPIInstall = {
 
     logger.debug(`Processing install of ${id} in ${location.name}`);
     let existingAddon = XPIStates.findAddon(id);
-    if (existingAddon) {
-      try {
-        var file = existingAddon.file;
-        if (file.exists()) {
-          let newVersion = existingAddon.version;
-          let reason = newVersionReason(existingAddon.version, newVersion);
-
-          XPIInternal.BootstrapScope.get(existingAddon).uninstall(reason, {
-            newVersion,
-          });
-        }
-      } catch (e) {
-        Cu.reportError(e);
-      }
-    }
-
+    // This part of the startup file changes is called from
+    // processPendingFileChanges, no addons are started yet.
+    // Here we handle copying the xpi into its proper place, later
+    // processFileChanges will call update.
     try {
       addon.sourceBundle = location.installer.installAddon({
         id,
@@ -4264,9 +4378,11 @@ var XPIInstall = {
    *          installed.
    */
   async installBuiltinAddon(base) {
-    if (lastLightweightTheme === null) {
-      lastLightweightTheme = Services.prefs.getCharPref(PREF_SELECTED_LWT, "");
-      Services.prefs.clearUserPref(PREF_SELECTED_LWT);
+    // We have to get this before the install, as the install will overwrite
+    // the pref. We then keep the value for this run, so we can restore
+    // the selected theme once it becomes available.
+    if (lastSelectedTheme === null) {
+      lastSelectedTheme = Services.prefs.getCharPref(PREF_SELECTED_THEME, "");
     }
 
     let baseURL = Services.io.newURI(base);
@@ -4286,20 +4402,14 @@ var XPIInstall = {
     // If this is a theme, decide whether to enable it. Themes are
     // disabled by default. However:
     //
-    // If a lightweight theme was selected in the last session, and this
-    // theme has the same ID, then we clearly want to enable it.
-    //
-    // If it is the default theme, more specialized behavior applies:
-    //
     // We always want one theme to be active, falling back to the
-    // default theme when the active theme is disabled. The first time
-    // we install the default theme, though, there likely aren't any
-    // other theme add-ons installed yet, in which case we want to
-    // enable it immediately.
+    // default theme when the active theme is disabled.
+    // During a theme migration, such as a change in the path to the addon, we
+    // will need to ensure a correct theme is enabled.
     if (addon.type === "theme") {
       if (
-        addon.id === lastLightweightTheme ||
-        (!lastLightweightTheme.endsWith("@mozilla.org") &&
+        addon.id === lastSelectedTheme ||
+        (!lastSelectedTheme.endsWith("@mozilla.org") &&
           addon.id === AddonSettings.DEFAULT_THEME_ID &&
           !XPIDatabase.getAddonsByType("theme").some(theme => !theme.disabled))
       ) {

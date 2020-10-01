@@ -16,6 +16,7 @@
 #include "mozilla/webrender/WebRenderAPI.h"
 #include "mozilla/webrender/webrender_ffi.h"
 #include "mozilla/layers/PaintThread.h"
+#include "mozilla/gfx/BuildConstants.h"
 #include "mozilla/gfx/gfxConfigManager.h"
 #include "mozilla/gfx/gfxVars.h"
 #include "mozilla/gfx/GPUProcessManager.h"
@@ -613,8 +614,7 @@ static void WebRenderDebugPrefChangeCallback(const char* aPrefName, void*) {
                       wr::DebugFlags::DISABLE_GRADIENT_PRIMS)
   GFX_WEBRENDER_DEBUG(".obscure-images", wr::DebugFlags::OBSCURE_IMAGES)
   GFX_WEBRENDER_DEBUG(".glyph-flashing", wr::DebugFlags::GLYPH_FLASHING)
-  GFX_WEBRENDER_DEBUG(".disable-raster-root-scaling",
-                      wr::DebugFlags::DISABLE_RASTER_ROOT_SCALING)
+  GFX_WEBRENDER_DEBUG(".capture-profiler", wr::DebugFlags::PROFILER_CAPTURE)
 #undef GFX_WEBRENDER_DEBUG
 
   gfx::gfxVars::SetWebRenderDebugFlags(flags.bits);
@@ -2550,6 +2550,28 @@ void gfxPlatform::InitAcceleration() {
       gfxVars::SetUseDoubleBufferingWithCompositor(true);
     }
 #endif
+
+    if (NS_SUCCEEDED(
+            gfxInfo->GetFeatureStatus(nsIGfxInfo::FEATURE_WEBGL2,
+                                      discardFailureId, &status))) {
+      gfxVars::SetAllowWebgl2(status == nsIGfxInfo::FEATURE_STATUS_OK);
+    }
+    if (NS_SUCCEEDED(
+            gfxInfo->GetFeatureStatus(nsIGfxInfo::FEATURE_WEBGL_OPENGL,
+                                      discardFailureId, &status))) {
+      gfxVars::SetWebglAllowWindowsNativeGl(status == nsIGfxInfo::FEATURE_STATUS_OK);
+    }
+
+    if (kIsMacOS) {
+      // Avoid crash for Intel HD Graphics 3000 on OSX. (Bug 1413269)
+      nsString vendorID, deviceID;
+      gfxInfo->GetAdapterVendorID(vendorID);
+      gfxInfo->GetAdapterDeviceID(deviceID);
+      if (vendorID.EqualsLiteral("0x8086") &&
+          (deviceID.EqualsLiteral("0x0116") || deviceID.EqualsLiteral("0x0126"))) {
+        gfxVars::SetWebglAllowCoreProfile(false);
+      }
+    }
   }
 
   if (Preferences::GetBool("media.hardware-video-decoding.enabled", false) &&
@@ -2767,6 +2789,13 @@ void gfxPlatform::InitWebRenderConfig() {
 #ifdef XP_WIN
   if (gfxConfig::IsEnabled(Feature::WEBRENDER_DCOMP_PRESENT)) {
     gfxVars::SetUseWebRenderDCompWin(true);
+  }
+  if (Preferences::GetBool("gfx.webrender.dcomp-video-overlay-win", false)) {
+    if (IsWin10AnniversaryUpdateOrLater() &&
+        gfxConfig::IsEnabled(Feature::WEBRENDER_COMPOSITOR)) {
+      MOZ_ASSERT(gfxConfig::IsEnabled(Feature::WEBRENDER_DCOMP_PRESENT));
+      gfxVars::SetUseWebRenderDCompVideoOverlayWin(true);
+    }
   }
   if (Preferences::GetBool("gfx.webrender.flip-sequential", false)) {
     // XXX relax win version to windows 8.
@@ -3138,10 +3167,10 @@ void gfxPlatform::GetCMSSupportInfo(mozilla::widget::InfoObject& aObj) {
     return;
   }
 
-  char* encodedProfile = nullptr;
+  nsString encodedProfile;
   nsresult rv =
-      Base64Encode(reinterpret_cast<char*>(outputProfileData.Elements()),
-                   outputProfileData.Length(), &encodedProfile);
+      Base64Encode(reinterpret_cast<const char*>(outputProfileData.Elements()),
+                   outputProfileData.Length(), encodedProfile);
   if (!NS_SUCCEEDED(rv)) {
     nsPrintfCString msg("base64 encode failed 0x%08x",
                         static_cast<uint32_t>(rv));
@@ -3150,7 +3179,6 @@ void gfxPlatform::GetCMSSupportInfo(mozilla::widget::InfoObject& aObj) {
   }
 
   aObj.DefineProperty("CMSOutputProfile", encodedProfile);
-  free(encodedProfile);
 }
 
 void gfxPlatform::GetDisplayInfo(mozilla::widget::InfoObject& aObj) {
@@ -3167,6 +3195,8 @@ void gfxPlatform::GetDisplayInfo(mozilla::widget::InfoObject& aObj) {
       aObj.DefineProperty(name.get(), displayInfo[i]);
     }
   }
+
+  GetPlatformDisplayInfo(aObj);
 }
 
 class FrameStatsComparator {
@@ -3202,6 +3232,13 @@ uint32_t gfxPlatform::TargetFrameRate() {
     return round(1000.0 / display.GetVsyncRate().ToMilliseconds());
   }
   return 0;
+}
+
+/* static */
+bool gfxPlatform::UseDesktopZoomingScrollbars() {
+  // bug 1657822 to enable this by default
+  return StaticPrefs::apz_allow_zooming() &&
+         !StaticPrefs::apz_force_disable_desktop_zooming_scrollbars();
 }
 
 /*static*/

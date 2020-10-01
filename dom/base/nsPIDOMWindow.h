@@ -141,6 +141,11 @@ class nsPIDOMWindowInner : public mozIDOMWindow {
   // creates new inner windows for the document it is called on.
   inline bool HasActiveDocument();
 
+  // Return true if this object is the currently-active inner window for its
+  // BrowsingContext and any container document is also fully active.
+  // For https://html.spec.whatwg.org/multipage/browsers.html#fully-active
+  bool IsFullyActive() const;
+
   // Returns true if this window is the same as mTopInnerWindow
   inline bool IsTopInnerWindow() const;
 
@@ -254,6 +259,12 @@ class nsPIDOMWindowInner : public mozIDOMWindow {
   void Suspend();
   void Resume();
 
+  // Whether or not this window was suspended by the BrowserContextGroup
+  bool GetWasSuspendedByGroup() const { return mWasSuspendedByGroup; }
+  void SetWasSuspendedByGroup(bool aSuspended) {
+    mWasSuspendedByGroup = aSuspended;
+  }
+
   // Apply the parent window's suspend, freeze, and modal state to the current
   // window.
   void SyncStateFromParentWindow();
@@ -347,6 +358,10 @@ class nsPIDOMWindowInner : public mozIDOMWindow {
   mozilla::dom::WindowGlobalChild* GetWindowGlobalChild() const {
     return mWindowGlobalChild;
   }
+
+  // Removes this inner window from the BFCache, if it is cached, and returns
+  // true if it was.
+  bool RemoveFromBFCacheSync();
 
   // Determine if the window is suspended or frozen.  Outer windows
   // will forward this call to the inner window for convenience.  If
@@ -638,6 +653,8 @@ class nsPIDOMWindowInner : public mozIDOMWindow {
   // This will be non-null during the full lifetime of the window, initialized
   // during SetNewDocument, and cleared during FreeInnerObjects.
   RefPtr<mozilla::dom::WindowGlobalChild> mWindowGlobalChild;
+
+  bool mWasSuspendedByGroup;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsPIDOMWindowInner, NS_PIDOMWINDOWINNER_IID)
@@ -702,7 +719,6 @@ class nsPIDOMWindowOuter : public mozIDOMWindowProxy {
   void SetMediaSuspend(SuspendTypes aSuspend);
 
   bool GetAudioMuted() const;
-  void SetAudioMuted(bool aMuted);
 
   float GetAudioVolume() const;
   nsresult SetAudioVolume(float aVolume);

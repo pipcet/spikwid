@@ -265,6 +265,8 @@ CSPDirective CSP_ContentTypeToDirective(nsContentPolicyType aType) {
     case nsIContentPolicy::TYPE_INTERNAL_WORKER_IMPORT_SCRIPTS:
     case nsIContentPolicy::TYPE_INTERNAL_AUDIOWORKLET:
     case nsIContentPolicy::TYPE_INTERNAL_PAINTWORKLET:
+    case nsIContentPolicy::TYPE_INTERNAL_CHROMEUTILS_COMPILED_SCRIPT:
+    case nsIContentPolicy::TYPE_INTERNAL_FRAME_MESSAGEMANAGER_SCRIPT:
       return nsIContentSecurityPolicy::SCRIPT_SRC_DIRECTIVE;
 
     case nsIContentPolicy::TYPE_STYLESHEET:
@@ -293,6 +295,8 @@ CSPDirective CSP_ContentTypeToDirective(nsContentPolicyType aType) {
     case nsIContentPolicy::TYPE_BEACON:
     case nsIContentPolicy::TYPE_PING:
     case nsIContentPolicy::TYPE_FETCH:
+    case nsIContentPolicy::TYPE_INTERNAL_XMLHTTPREQUEST:
+    case nsIContentPolicy::TYPE_INTERNAL_FETCH_PRELOAD:
       return nsIContentSecurityPolicy::CONNECT_SRC_DIRECTIVE;
 
     case nsIContentPolicy::TYPE_OBJECT:
@@ -1362,8 +1366,7 @@ nsCSPPolicy::~nsCSPPolicy() {
 bool nsCSPPolicy::permits(CSPDirective aDir, nsIURI* aUri,
                           bool aSpecific) const {
   nsString outp;
-  return this->permits(aDir, aUri, EmptyString(), false, aSpecific, false,
-                       outp);
+  return this->permits(aDir, aUri, u""_ns, false, aSpecific, false, outp);
 }
 
 bool nsCSPPolicy::permits(CSPDirective aDir, nsIURI* aUri,
@@ -1503,13 +1506,12 @@ bool nsCSPPolicy::allowsNavigateTo(nsIURI* aURI, bool aWasRedirected,
       // Early return if we can skip the allowlist AND 'unsafe-allow-redirects'
       // is present.
       if (!aEnforceAllowlist &&
-          mDirectives[i]->allows(CSP_UNSAFE_ALLOW_REDIRECTS, EmptyString(),
-                                 false)) {
+          mDirectives[i]->allows(CSP_UNSAFE_ALLOW_REDIRECTS, u""_ns, false)) {
         return true;
       }
       // Otherwise, check against the allowlist.
-      if (!mDirectives[i]->permits(aURI, EmptyString(), aWasRedirected, false,
-                                   false, false)) {
+      if (!mDirectives[i]->permits(aURI, u""_ns, aWasRedirected, false, false,
+                                   false)) {
         allowsNavigateTo = false;
       }
     }

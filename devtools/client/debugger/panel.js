@@ -79,7 +79,7 @@ class DebuggerPanel {
     const resourceWatcher = this.toolbox.resourceWatcher;
     await resourceWatcher.watchResources(
       [resourceWatcher.TYPES.ERROR_MESSAGE],
-      { onAvailable: actions.addException }
+      { onAvailable: actions.addExceptionFromResources }
     );
 
     return this;
@@ -206,8 +206,8 @@ class DebuggerPanel {
     return this._actions.selectSourceURL(cx, url, { line, column });
   }
 
-  async selectWorker(workerTargetFront) {
-    const threadActorID = workerTargetFront.threadFront?.actorID;
+  async selectWorker(workerDescriptorFront) {
+    const threadActorID = workerDescriptorFront.threadFront?.actorID;
 
     const isThreadAvailable = this._selectors
       .getThreads(this._getState())
@@ -229,7 +229,7 @@ class DebuggerPanel {
     this.selectThread(threadActorID);
 
     // select worker's source
-    const source = this.getSourceByURL(workerTargetFront._url);
+    const source = this.getSourceByURL(workerDescriptorFront._url);
     await this.selectSource(source.id, 1, 1);
   }
 
@@ -273,6 +273,11 @@ class DebuggerPanel {
   }
 
   destroy() {
+    const resourceWatcher = this.toolbox.resourceWatcher;
+    resourceWatcher.unwatchResources([resourceWatcher.TYPES.ERROR_MESSAGE], {
+      onAvailable: this._actions.addExceptionFromResources,
+    });
+
     this.panelWin.Debugger.destroy();
     this.emit("destroyed");
   }

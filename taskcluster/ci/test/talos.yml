@@ -32,29 +32,39 @@ job-defaults:
                     - talos/linux64_config_taskcluster.py
                 default:
                     - talos/linux_config.py
+    test-manifest-loader: null  # don't load tests in the taskgraph
     run-on-projects:
         by-test-name:
             talos-.*-profiling:
                 by-test-platform:
                     (linux|windows|macos)(?!.*shippable).*: []
+                    .*(?:shippable-qr).*: []
+                    windows.*(?!shippable-qr)shippable.*: []
                     default: ['mozilla-central']
             default:
                 by-test-platform:
                     (linux|windows|macos)(?!.*shippable).*: []
+                    macosx1014-64-shippable-qr/opt: ['mozilla-central']
                     default: ['mozilla-beta', 'trunk']
     fission-run-on-projects:
         by-test-platform:
-            linux64-shippable-qr/opt: ['mozilla-central']
-            windows10-64-shippable-qr/opt: ['mozilla-central']
+            (linux64|windows10-64|macosx1014-64)-shippable-qr/opt: ['mozilla-central']
             default: []
 
 talos-bcv:
     description: "Talos basic compositor video"
     try-name: bcv
     treeherder-symbol: T(bcv)
+    variants:
+        by-test-platform:
+            linux64.*-qr.*: ['fission', 'webrender-sw']
+            default: ['fission']
     run-on-projects:
         by-test-platform:
-            .*(?:shippable-qr|-qr)/.*: []
+            .*(?:shippable-qr|-qr)/.*:
+                by-variant:
+                    webrender-sw: ['trunk']
+                    default: []
             (linux|windows|macos)(?!.*shippable)(?!.*-qr).*: []
             default: ['mozilla-beta', 'trunk']
     tier:
@@ -75,6 +85,7 @@ talos-bcv-profiling:
         by-test-platform:
             .*(?:shippable-qr|-qr)/.*: []
             (linux|windows|macos)(?!.*shippable)(?!.*-qr).*: []
+            windows10-64-shippable/opt: []
             default: ['mozilla-central']
     max-run-time: 1800
     mozharness:
@@ -110,8 +121,14 @@ talos-damp:
     run-on-projects:
         by-test-platform:
             windows7-32-shippable/.*: []
+            macosx1014-64-shippable-qr/opt: ['mozilla-central']
             (linux|windows|macos)(?!.*shippable).*: []
             default: ['mozilla-beta', 'trunk']
+    fission-run-on-projects:
+        by-test-platform:
+            (linux64|windows10-64)-shippable-qr/opt: ['mozilla-central']
+            # Bug 1657864 - Disabled on macos for high frequency intermittents
+            default: []
 
     mozharness:
         extra-options:
@@ -186,6 +203,10 @@ talos-g1:
     description: "Talos g1"
     try-name: g1
     treeherder-symbol: T(g1)
+    variants:
+        by-test-platform:
+            linux64.*-qr.*: ['fission', 'webrender-sw']
+            default: ['fission']
     max-run-time:
         by-test-platform:
             linux64.*: 3600
@@ -232,9 +253,14 @@ talos-g4:
     description: "Talos g4"
     try-name: g4
     treeherder-symbol: T(g4)
+    variants:
+        by-test-platform:
+            linux64.*-qr.*: ['fission', 'webrender-sw']
+            default: ['fission']
     run-on-projects:
         by-test-platform:
             windows10-64-ref-hw-2017/opt: ['mozilla-central']
+            macosx1014-64-shippable-qr/opt: ['mozilla-central']
             (linux|windows|macos)(?!.*shippable).*: []
             default: ['mozilla-beta', 'trunk']
     max-run-time:
@@ -332,10 +358,6 @@ talos-motionmark-profiling:
     description: "Talos motionmark with gecko profiling"
     try-name: motionmark-prof
     treeherder-symbol: T-Prof(mm)
-    run-on-projects:
-        by-test-platform:
-            (linux|windows|macos)(?!.*shippable).*: []
-            default: ['mozilla-central']
     max-run-time: 3600
     tier:
         by-test-platform:
@@ -351,6 +373,10 @@ talos-other:
     description: "Talos other"
     try-name: other
     treeherder-symbol: T(o)
+    variants:
+        by-test-platform:
+            linux64.*-qr.*: ['fission', 'webrender-sw']
+            default: ['fission']
     max-run-time: 1500
     mozharness:
         extra-options:
@@ -435,6 +461,10 @@ talos-svgr:
     description: "Talos svgr"
     try-name: svgr
     treeherder-symbol: T(s)
+    variants:
+        by-test-platform:
+            linux64.*-qr.*: ['fission', 'webrender-sw']
+            default: ['fission']
     max-run-time: 1800
     mozharness:
         extra-options:
@@ -495,9 +525,14 @@ talos-webgl:
     description: "Talos WebGL"
     try-name: webgl
     treeherder-symbol: T(webgl)
+    variants:
+        by-test-platform:
+            android.*: []
+            default: ['webgl-ipc']
     run-on-projects:
         by-test-platform:
             windows10-64-ref-hw-2017/opt: ['mozilla-central']
+            macosx1014-64-shippable-qr/opt: ['mozilla-central']
             (linux|windows|macos)(?!.*shippable).*: []
             default: ['mozilla-beta', 'trunk']
     max-run-time: 1800
@@ -511,6 +546,10 @@ talos-webgl-profiling:
     treeherder-symbol: T-Prof(webgl)
     tier: 2
     run-on-projects: []
+    variants:
+        by-test-platform:
+            android.*: []
+            default: ['webgl-ipc']
     max-run-time: 1800
     mozharness:
         extra-options:

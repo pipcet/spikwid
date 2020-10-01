@@ -12,11 +12,11 @@ import org.json.JSONObject;
 import org.mozilla.gecko.EventDispatcher;
 import org.mozilla.gecko.util.GeckoBundle;
 
-import android.support.annotation.AnyThread;
-import android.support.annotation.IntDef;
-import android.support.annotation.Nullable;
-import android.support.annotation.NonNull;
-import android.support.annotation.UiThread;
+import androidx.annotation.AnyThread;
+import androidx.annotation.IntDef;
+import androidx.annotation.Nullable;
+import androidx.annotation.NonNull;
+import androidx.annotation.UiThread;
 import android.util.Log;
 
 import java.lang.annotation.Retention;
@@ -409,6 +409,12 @@ public class ContentBlockingController {
          * SocialTracking content has been loaded.
          */
         public static final int LOADED_SOCIALTRACKING_CONTENT   = 0x00020000;
+
+        /**
+         * Indicates that content that would have been blocked has instead been
+         * replaced with a shim.
+         */
+        public static final int REPLACED_UNSAFE_CONTENT        = 0x00000010;
 
         protected Event() {}
     }

@@ -24,8 +24,8 @@
 #include "PresentationConnectionList.h"
 #include "PresentationLog.h"
 
-using namespace mozilla;
-using namespace mozilla::dom;
+namespace mozilla {
+namespace dom {
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(PresentationConnection)
 
@@ -144,7 +144,7 @@ JSObject* PresentationConnection::WrapObject(
 
 void PresentationConnection::GetId(nsAString& aId) const {
   if (nsContentUtils::ShouldResistFingerprinting()) {
-    aId = EmptyString();
+    aId.Truncate();
     return;
   }
 
@@ -153,7 +153,7 @@ void PresentationConnection::GetId(nsAString& aId) const {
 
 void PresentationConnection::GetUrl(nsAString& aUrl) const {
   if (nsContentUtils::ShouldResistFingerprinting()) {
-    aUrl = EmptyString();
+    aUrl.Truncate();
     return;
   }
 
@@ -430,7 +430,7 @@ nsresult PresentationConnection::ProcessStateChanged(nsresult aReason) {
         // If aReason is not a DOM error, use error name as message.
         if (NS_FAILED(
                 NS_GetNameAndMessageForDOMNSResult(aReason, name, message))) {
-          mozilla::GetErrorName(aReason, message);
+          GetErrorName(aReason, message);
           message.InsertLiteral("Internal error: ", 0);
         }
         CopyUTF8toUTF16(message, errorMsg);
@@ -510,7 +510,7 @@ nsresult PresentationConnection::DoReceiveMessage(const nsACString& aData,
   if (aIsBinary) {
     if (mBinaryType == PresentationConnectionBinaryType::Blob) {
       RefPtr<Blob> blob =
-          Blob::CreateStringBlob(GetOwnerGlobal(), aData, EmptyString());
+          Blob::CreateStringBlob(GetOwnerGlobal(), aData, u""_ns);
       if (NS_WARN_IF(!blob)) {
         return NS_ERROR_FAILURE;
       }
@@ -587,7 +587,7 @@ nsresult PresentationConnection::DispatchMessageEvent(
 
   messageEvent->InitMessageEvent(
       nullptr, u"message"_ns, CanBubble::eNo, Cancelable::eNo, aData, origin,
-      EmptyString(), nullptr, Sequence<OwningNonNull<MessagePort>>());
+      u""_ns, nullptr, Sequence<OwningNonNull<MessagePort>>());
   messageEvent->SetTrusted(true);
 
   RefPtr<AsyncEventDispatcher> asyncDispatcher =
@@ -750,3 +750,6 @@ void PresentationConnection::AsyncCloseConnectionWithErrorMsg(
 
   Unused << NS_WARN_IF(NS_FAILED(NS_DispatchToMainThread(r)));
 }
+
+}  // namespace dom
+}  // namespace mozilla

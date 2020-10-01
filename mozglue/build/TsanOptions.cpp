@@ -126,10 +126,6 @@ extern "C" const char* __tsan_default_suppressions() {
          // Bug 1600594
          "race:nsThread::SizeOfEventQueues\n"
 
-         // Bug 1600895, bug 1647702
-         "race:UpdateArenaPointersTyped<js::ObjectGroup>\n"
-         "race:UpdateArenaPointersTyped<js::Shape>\n"
-
          // Bug 1601286
          "race:setFlagBit\n"
          "race:isFatInline\n"
@@ -148,6 +144,7 @@ extern "C" const char* __tsan_default_suppressions() {
          "race:SkARGB32_Opaque_Blitter\n"
          "race:SkRasterPipelineBlitter\n"
          "race:Clamp_S32_D32_nofilter_trans_shaderproc\n"
+         "race:SkSpriteBlitter_Memcpy\n"
 
          // Bug 1601632
          "race:ScriptPreloader::MaybeFinishOffThreadDecode\n"
@@ -170,23 +167,12 @@ extern "C" const char* __tsan_default_suppressions() {
          // Bug 1606804
          "deadlock:third_party/rust/rkv/src/env.rs\n"
 
-         // Bug 1606860
-         "race:majorGCCount\n"
-         "race:incMajorGcNumber\n"
-
          // Bug 1606864
          "race:nsSocketTransport::Close\n"
          "race:nsSocketTransport::OnSocketDetached\n"
 
-         // Bug 1607212
-         "race:CacheEntry::InvokeCallback\n"
-
          // Bug 1607138
          "race:gXPCOMThreadsShutDown\n"
-
-         // Bug 1607426
-         "race:PACLoadComplete::Run\n"
-         "race:nsPACMan::ProcessPending\n"
 
          // Bug 1607446
          "race:nsJARChannel::Suspend\n"
@@ -207,10 +193,6 @@ extern "C" const char* __tsan_default_suppressions() {
          // Bug 1607706
          "race:TemporaryIPCBlobParent::CreateAndShareFile\n"
 
-         // Bug 1607712
-         "race:GtkCompositorWidget::NotifyClientSizeChanged\n"
-         "race:GtkCompositorWidget::GetClientSize\n"
-
          // Bug 1607762
          "race:nsHtml5OwningUTF16Buffer::Release\n"
 
@@ -225,10 +207,6 @@ extern "C" const char* __tsan_default_suppressions() {
          // Bug 1608462
          "deadlock:ScriptPreloader::OffThreadDecodeCallback\n"
 
-         // Bug 1612054
-         "race:nsContentSecurityUtils::IsEvalAllowed\n"
-         "race:nsContentSecurityUtils::ValidateScriptFilename\n"
-
          // Bug 1615017
          "race:CacheFileMetadata::SetHash\n"
          "race:CacheFileMetadata::OnDataWritten\n"
@@ -236,10 +214,6 @@ extern "C" const char* __tsan_default_suppressions() {
          // Bug 1615123
          "race:_dl_deallocate_tls\n"
          "race:__libc_memalign\n"
-
-         // Bug 1615121
-         "race:CacheEntry::Purge\n"
-         "race:CacheEntry::MetaDataReady\n"
 
          // Bug 1615265
          "race:ScriptPreloader::OffThreadDecodeCallback\n"
@@ -297,6 +271,27 @@ extern "C" const char* __tsan_default_suppressions() {
 
          // See bug 1652174
          "race:event_debug_mode_too_late\n"
+
+         // See bug 1651446
+         "race:libavcodec.so*\n"
+         "race:libavutil.so*\n"
+
+         // See bug 1648604
+         "race:system_base_info\n"
+
+         // See bug 1648606
+         "race:sctp_close\n"
+         "race:sctp_iterator_work\n"
+
+         // See bug 1651770
+         "deadlock:mozilla::camera::LockAndDispatch\n"
+
+         // See bug 1653618
+         "race:sctp_handle_tick\n"
+         "race:sctp_handle_sack\n"
+
+         // See bug 1652530
+         "mutex:XErrorTrap\n"
 
       // End of suppressions.
       ;  // Please keep this semicolon.

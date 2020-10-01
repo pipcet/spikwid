@@ -13,6 +13,8 @@
 #include "gc/Allocator.h"
 #include "gc/WeakMap.h"
 #include "js/Conversions.h"
+#include "js/experimental/JitInfo.h"  // JSJitInfo
+#include "js/ScalarType.h"            // js::Scalar::Type
 #include "vm/ArrayBufferObject.h"
 #include "vm/JSObject.h"
 
@@ -177,11 +179,11 @@ class TypeDescr : public NativeObject {
   MOZ_MUST_USE bool hasProperty(const JSAtomState& names, jsid id);
 
   // Type descriptors may contain a list of their references for use during
-  // scanning. Marking code is optimized to use this list to mark inline
-  // typed objects, rather than the slower trace hook. This list is only
-  // specified when (a) the descriptor is short enough that it can fit in an
-  // InlineTypedObject, and (b) the descriptor contains at least one
-  // reference. Otherwise its value is undefined.
+  // scanning. Typed object trace hooks can use this to call an optimized
+  // marking path that doesn't need to dispatch on the tracer kind for each
+  // edge. This list is only specified when (a) the descriptor is short enough
+  // that it can fit in an InlineTypedObject, and (b) the descriptor contains at
+  // least one reference. Otherwise its value is undefined.
   //
   // The list is three consecutive arrays of uint32_t offsets, preceded by a
   // header consisting of the length of each array. The arrays store offsets of
@@ -600,11 +602,11 @@ class TypedObject : public JSObject {
 
   TypeDescr& typeDescr() const { return group()->typeDescr(); }
 
-  static JS::Result<TypedObject*, JS::OOM&> create(JSContext* cx,
-                                                   js::gc::AllocKind kind,
-                                                   js::gc::InitialHeap heap,
-                                                   js::HandleShape shape,
-                                                   js::HandleObjectGroup group);
+  static JS::Result<TypedObject*, JS::OOM> create(JSContext* cx,
+                                                  js::gc::AllocKind kind,
+                                                  js::gc::InitialHeap heap,
+                                                  js::HandleShape shape,
+                                                  js::HandleObjectGroup group);
 
   uint32_t offset() const;
   uint32_t length() const;
@@ -634,9 +636,7 @@ class TypedObject : public JSObject {
   // callee here is the type descriptor.
   static MOZ_MUST_USE bool construct(JSContext* cx, unsigned argc, Value* vp);
 
-  Shape** addressOfShapeFromGC() {
-    return shape_.unsafeUnbarrieredForTracing();
-  }
+  Shape** addressOfShapeFromGC() { return shape_.unbarrieredAddress(); }
 };
 
 using HandleTypedObject = Handle<TypedObject*>;
@@ -749,8 +749,6 @@ class InlineTypedObject : public TypedObject {
     return inlineTypedMem();
   }
 
-  uint8_t* inlineTypedMemForGC() const { return inlineTypedMem(); }
-
   static void obj_trace(JSTracer* trace, JSObject* object);
   static size_t obj_moved(JSObject* dst, JSObject* src);
 
@@ -817,8 +815,6 @@ MOZ_MUST_USE bool ObjectIsTypedObject(JSContext* cx, unsigned argc, Value* vp);
 // descriptor.
 
 MOZ_MUST_USE bool TypeDescrIsSimpleType(JSContext*, unsigned argc, Value* vp);
-
-MOZ_MUST_USE bool TypeDescrIsArrayType(JSContext*, unsigned argc, Value* vp);
 
 /*
  * Usage: TypedObjectTypeDescr(obj)
@@ -1035,14 +1031,12 @@ inline bool JSObject::is<js::TypedObject>() const {
 
 template <>
 inline bool JSObject::is<js::OutlineTypedObject>() const {
-  return getClass() == &js::OutlineTransparentTypedObject::class_ ||
-         getClass() == &js::OutlineOpaqueTypedObject::class_;
+  return js::IsOutlineTypedObjectClass(getClass());
 }
 
 template <>
 inline bool JSObject::is<js::InlineTypedObject>() const {
-  return getClass() == &js::InlineTransparentTypedObject::class_ ||
-         getClass() == &js::InlineOpaqueTypedObject::class_;
+  return js::IsInlineTypedObjectClass(getClass());
 }
 
 #endif /* builtin_TypedObject_h */

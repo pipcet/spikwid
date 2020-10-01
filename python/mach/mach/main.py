@@ -30,14 +30,12 @@ from .base import (
     FailedCommandError,
 )
 from .config import ConfigSettings
-from .decorators import (
-    CommandProvider,
-)
 from .dispatcher import CommandAction
 from .logging import LoggingManager
 from .registrar import Registrar
 from .sentry import register_sentry, NoopErrorReporter
-from .util import setenv
+from .telemetry import report_invocation_metrics, create_telemetry_from_environment
+from .util import setenv, UserError
 
 SUGGEST_MACH_BUSTED_TEMPLATE = r'''
 You can invoke |./mach busted| to check if this issue is already on file. If it
@@ -56,6 +54,10 @@ If filing a bug, please include the full output of mach, including this error
 message.
 
 The details of the failure are as follows:
+'''.lstrip()
+
+USER_ERROR = r'''
+This is a user error and does not appear to be a bug in mach.
 '''.lstrip()
 
 COMMAND_ERROR_TEMPLATE = r'''
@@ -163,7 +165,6 @@ class ContextWrapper(object):
         setattr(object.__getattribute__(self, '_context'), key, value)
 
 
-@CommandProvider
 class Mach(object):
     """Main mach driver type.
 
@@ -219,16 +220,7 @@ To see more help for a specific command, run:
             self.settings_paths.append(os.environ['MACHRC'])
 
         self.log_manager.register_structured_logger(self.logger)
-        self.global_arguments = []
         self.populate_context_handler = None
-
-    def add_global_argument(self, *args, **kwargs):
-        """Register a global argument with the argument parser.
-
-        Arguments are proxied to ArgumentParser.add_argument()
-        """
-
-        self.global_arguments.append((args, kwargs))
 
     def load_commands_from_directory(self, path):
         """Scan for mach commands from modules in a directory.
@@ -399,9 +391,10 @@ To see more help for a specific command, run:
             sys.stderr = orig_stderr
 
     def _run(self, argv, sentry):
+        telemetry = create_telemetry_from_environment(self.settings)
         context = CommandContext(cwd=self.cwd,
                                  settings=self.settings, log_manager=self.log_manager,
-                                 commands=Registrar)
+                                 commands=Registrar, telemetry=telemetry)
 
         if self.populate_context_handler:
             context = ContextWrapper(context, self.populate_context_handler)
@@ -417,18 +410,7 @@ To see more help for a specific command, run:
             return 0
 
         try:
-            try:
-                args = parser.parse_args(argv)
-            except NoCommandError as e:
-                if e.namespace.print_command:
-                    context.get_command = True
-                    args = parser.parse_args(e.namespace.print_command)
-                    if args.command == 'mach-completion':
-                        args = parser.parse_args(e.namespace.print_command[2:])
-                    print(args.command)
-                    return 0
-                else:
-                    raise
+            args = parser.parse_args(argv)
         except NoCommandError:
             print(NO_COMMAND_ERROR)
             return 1
@@ -447,6 +429,7 @@ To see more help for a specific command, run:
             raise MachError('ArgumentParser result missing mach handler info.')
 
         handler = getattr(args, 'mach_handler')
+        report_invocation_metrics(context.telemetry, handler.name)
 
         # Add JSON logging to a file if requested.
         if args.logfile:
@@ -475,14 +458,23 @@ To see more help for a specific command, run:
             self.load_settings(args.settings_file)
 
         try:
-            return Registrar._run_command_handler(handler, context=context,
-                                                  debug_command=args.debug_command,
-                                                  **vars(args.command_args))
+            return Registrar._run_command_handler(
+                handler, context, debug_command=args.debug_command,
+                **vars(args.command_args))
         except KeyboardInterrupt as ki:
             raise ki
         except FailedCommandError as e:
             print(e.message)
             return e.exit_code
+        except UserError:
+            # We explicitly don't report UserErrors to Sentry.
+            exc_type, exc_value, exc_tb = sys.exc_info()
+            # The first two frames are us and are never used.
+            stack = traceback.extract_tb(exc_tb)[2:]
+            self._print_error_header(argv, sys.stdout)
+            print(USER_ERROR)
+            self._print_exception(sys.stdout, exc_type, exc_value, stack)
+            return 1
         except Exception:
             exc_type, exc_value, exc_tb = sys.exc_info()
             sentry.report_exception(exc_value)
@@ -586,6 +578,8 @@ To see more help for a specific command, run:
                                 usage='%(prog)s [global arguments] '
                                 'command [command arguments]')
 
+        # WARNING!!! If you add a global argument here, also add it to the
+        # global argument handling in the top-level `mach` script.
         # Order is important here as it dictates the order the auto-generated
         # help messages are printed.
         global_group = parser.add_argument_group('Global Arguments')
@@ -617,11 +611,6 @@ To see more help for a specific command, run:
         global_group.add_argument('--settings', dest='settings_file',
                                   metavar='FILENAME', default=None,
                                   help='Path to settings file.')
-        global_group.add_argument('--print-command', nargs=argparse.REMAINDER,
-                                  help=argparse.SUPPRESS)
-
-        for args, kwargs in self.global_arguments:
-            global_group.add_argument(*args, **kwargs)
 
         # We need to be last because CommandAction swallows all remaining
         # arguments and argparse parses arguments in the order they were added.

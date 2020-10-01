@@ -141,4 +141,5 @@ nsresult GenerateOriginKey2(const PrincipalInfo& aPrincipalInfo,
 LogModule* GetLocalStorageLogger() { return gLogger; }
 
 }  // namespace dom
+
 }  // namespace mozilla

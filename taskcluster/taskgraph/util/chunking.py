@@ -6,8 +6,9 @@ from __future__ import absolute_import, print_function, unicode_literals
 
 """Utility functions to handle test chunking."""
 
-import os
 import json
+import logging
+import os
 from abc import ABCMeta, abstractmethod
 
 import six
@@ -21,8 +22,9 @@ from moztest.resolve import (
 )
 
 from taskgraph import GECKO
-from taskgraph.util.bugbug import CT_LOW, push_schedules
+from taskgraph.util.bugbug import BugbugTimeoutException, CT_LOW, push_schedules
 
+logger = logging.getLogger(__name__)
 here = os.path.abspath(os.path.dirname(__file__))
 resolver = TestResolver.from_environment(cwd=here, loader_cls=TestManifestLoader)
 
@@ -209,11 +211,25 @@ class BugbugLoader(DefaultLoader):
     filter them based on a query to bugbug."""
     CONFIDENCE_THRESHOLD = CT_LOW
 
+    def __init__(self, *args, **kwargs):
+        super(BugbugLoader, self).__init__(*args, **kwargs)
+        self.timedout = False
+
     @memoize
     def get_manifests(self, suite, mozinfo):
         manifests = super(BugbugLoader, self).get_manifests(suite, mozinfo)
 
-        data = push_schedules(self.params['project'], self.params['head_rev'])
+        # Don't prune any manifests if we're on a backstop push or there was a timeout.
+        if self.params["backstop"] or self.timedout:
+            return manifests
+
+        try:
+            data = push_schedules(self.params['project'], self.params['head_rev'])
+        except BugbugTimeoutException:
+            logger.warning("Timed out waiting for bugbug, loading all test manifests.")
+            self.timedout = True
+            return self.get_manifests(suite, mozinfo)
+
         bugbug_manifests = {m for m, c in data.get('groups', {}).items()
                             if c >= self.CONFIDENCE_THRESHOLD}
 
@@ -226,3 +242,16 @@ manifest_loaders = {
     'bugbug': BugbugLoader,
     'default': DefaultLoader,
 }
+
+_loader_cache = {}
+
+
+def get_manifest_loader(name, params):
+    # Ensure we never create more than one instance of the same loader type for
+    # performance reasons.
+    if name in _loader_cache:
+        return _loader_cache[name]
+
+    loader = manifest_loaders[name](dict(params))
+    _loader_cache[name] = loader
+    return loader

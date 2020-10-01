@@ -820,12 +820,20 @@ static bool IsTrimmableSpace(const nsTextFragment* aFrag, uint32_t aPos,
   }
 }
 
-static bool IsSelectionSpace(const nsTextFragment* aFrag, uint32_t aPos) {
-  NS_ASSERTION(aPos < aFrag->GetLength(), "No text for IsSpace!");
+static bool IsSelectionInlineWhitespace(const nsTextFragment* aFrag,
+                                        uint32_t aPos) {
+  NS_ASSERTION(aPos < aFrag->GetLength(),
+               "No text for IsSelectionInlineWhitespace!");
   char16_t ch = aFrag->CharAt(aPos);
   if (ch == ' ' || ch == CH_NBSP)
     return !IsSpaceCombiningSequenceTail(aFrag, aPos + 1);
-  return ch == '\t' || ch == '\n' || ch == '\f' || ch == '\r';
+  return ch == '\t' || ch == '\f';
+}
+
+static bool IsSelectionNewline(const nsTextFragment* aFrag, uint32_t aPos) {
+  NS_ASSERTION(aPos < aFrag->GetLength(), "No text for IsSelectionNewline!");
+  char16_t ch = aFrag->CharAt(aPos);
+  return ch == '\n' || ch == '\r';
 }
 
 // Count the amount of trimmable whitespace (as per CSS
@@ -3774,6 +3782,23 @@ void nsTextFrame::PropertyProvider::SetupJustificationSpacing(
   }
 }
 
+void nsTextFrame::PropertyProvider::InitFontGroupAndFontMetrics() const {
+  if (!mFontMetrics) {
+    if (mWhichTextRun == nsTextFrame::eInflated) {
+      if (!mFrame->InflatedFontMetrics()) {
+        float inflation = mFrame->GetFontSizeInflation();
+        mFontMetrics = nsLayoutUtils::GetFontMetricsForFrame(mFrame, inflation);
+        mFrame->SetInflatedFontMetrics(mFontMetrics);
+      } else {
+        mFontMetrics = mFrame->InflatedFontMetrics();
+      }
+    } else {
+      mFontMetrics = nsLayoutUtils::GetFontMetricsForFrame(mFrame, 1.0f);
+    }
+  }
+  mFontGroup = mFontMetrics->GetThebesFontGroup();
+}
+
 //----------------------------------------------------------------------
 
 static nscolor EnsureDifferentColors(nscolor colorA, nscolor colorB) {
@@ -5382,7 +5407,7 @@ static gfxFloat ComputeDecorationLineOffset(
 void nsTextFrame::UnionAdditionalOverflow(nsPresContext* aPresContext,
                                           nsIFrame* aBlock,
                                           PropertyProvider& aProvider,
-                                          nsRect* aVisualOverflowRect,
+                                          nsRect* aInkOverflowRect,
                                           bool aIncludeTextDecorations,
                                           bool aIncludeShadows) {
   const WritingMode wm = GetWritingMode();
@@ -5427,9 +5452,9 @@ void nsTextFrame::UnionAdditionalOverflow(nsPresContext* aPresContext,
     nscoord maxAscent =
         inverted ? fontMetrics->MaxDescent() : fontMetrics->MaxAscent();
 
-    Float gfxWidth = (verticalRun ? aVisualOverflowRect->height
-                                  : aVisualOverflowRect->width) /
-                     appUnitsPerDevUnit;
+    Float gfxWidth =
+        (verticalRun ? aInkOverflowRect->height : aInkOverflowRect->width) /
+        appUnitsPerDevUnit;
     params.lineSize.width = gfxWidth;
     params.ascent = gfxFloat(mAscent) / appUnitsPerDevUnit;
     params.style = decorationStyle;
@@ -5446,8 +5471,8 @@ void nsTextFrame::UnionAdditionalOverflow(nsPresContext* aPresContext,
     nsRect overlineRect =
         nsCSSRendering::GetTextDecorationRect(aPresContext, params);
 
-    aVisualOverflowRect->UnionRect(*aVisualOverflowRect, underlineRect);
-    aVisualOverflowRect->UnionRect(*aVisualOverflowRect, overlineRect);
+    aInkOverflowRect->UnionRect(*aInkOverflowRect, underlineRect);
+    aInkOverflowRect->UnionRect(*aInkOverflowRect, overlineRect);
 
     // XXX If strikeoutSize is much thicker than the underlineSize, it may
     //     cause overflowing from the overflow rect.  However, such case
@@ -5552,15 +5577,15 @@ void nsTextFrame::UnionAdditionalOverflow(nsPresContext* aPresContext,
                                  params.decoration);
       }
 
-      aVisualOverflowRect->UnionRect(
-          *aVisualOverflowRect,
+      aInkOverflowRect->UnionRect(
+          *aInkOverflowRect,
           verticalDec
               ? nsRect(topOrLeft, 0, bottomOrRight - topOrLeft, measure)
               : nsRect(0, topOrLeft, measure, bottomOrRight - topOrLeft));
     }
 
-    aVisualOverflowRect->UnionRect(*aVisualOverflowRect,
-                                   UpdateTextEmphasis(parentWM, aProvider));
+    aInkOverflowRect->UnionRect(*aInkOverflowRect,
+                                UpdateTextEmphasis(parentWM, aProvider));
   }
 
   // text-stroke overflows: add half of text-stroke-width on all sides
@@ -5568,22 +5593,22 @@ void nsTextFrame::UnionAdditionalOverflow(nsPresContext* aPresContext,
   if (textStrokeWidth > 0) {
     // Inflate rect by stroke-width/2; we add an extra pixel to allow for
     // antialiasing, rounding errors, etc.
-    nsRect strokeRect = *aVisualOverflowRect;
+    nsRect strokeRect = *aInkOverflowRect;
     strokeRect.Inflate(textStrokeWidth / 2 + appUnitsPerDevUnit);
-    aVisualOverflowRect->UnionRect(*aVisualOverflowRect, strokeRect);
+    aInkOverflowRect->UnionRect(*aInkOverflowRect, strokeRect);
   }
 
   // Text-shadow overflows
   if (aIncludeShadows) {
     nsRect shadowRect =
-        nsLayoutUtils::GetTextShadowRectsUnion(*aVisualOverflowRect, this);
-    aVisualOverflowRect->UnionRect(*aVisualOverflowRect, shadowRect);
+        nsLayoutUtils::GetTextShadowRectsUnion(*aInkOverflowRect, this);
+    aInkOverflowRect->UnionRect(*aInkOverflowRect, shadowRect);
   }
 
   // When this frame is not selected, the text-decoration area must be in
   // frame bounds.
   if (!IsSelected() ||
-      !CombineSelectionUnderlineRect(aPresContext, *aVisualOverflowRect))
+      !CombineSelectionUnderlineRect(aPresContext, *aInkOverflowRect))
     return;
   AddStateBits(TEXT_SELECTION_UNDERLINE_OVERFLOWED);
 }
@@ -7053,7 +7078,7 @@ void nsTextFrame::DrawTextRunAndDecorations(
   if (!skipClipping) {
     // Get the inline-size according to the specified range.
     gfxFloat clipLength = mTextRun->GetAdvanceWidth(aRange, aParams.provider);
-    nsRect visualRect = GetVisualOverflowRect();
+    nsRect visualRect = InkOverflowRect();
 
     const bool isInlineReversed = mTextRun->IsInlineReversed();
     if (verticalDec) {
@@ -7156,7 +7181,7 @@ nsRect nsTextFrame::WebRenderBounds() {
     nsOverflowAreas overflowAreas;
     ComputeCustomOverflowInternal(overflowAreas, false);
     cachedBounds = new nsRect();
-    *cachedBounds = overflowAreas.VisualOverflow();
+    *cachedBounds = overflowAreas.InkOverflow();
     SetProperty(WebRenderTextBounds(), cachedBounds);
   }
   return *cachedBounds;
@@ -7705,7 +7730,8 @@ class MOZ_STACK_CLASS ClusterIterator {
                   bool aTrimSpaces = true);
 
   bool NextCluster();
-  bool IsWhitespace() const;
+  bool IsInlineWhitespace() const;
+  bool IsNewline() const;
   bool IsPunctuation() const;
   bool HaveWordBreakBefore() const { return mHaveWordBreak; }
 
@@ -7850,9 +7876,14 @@ nsIFrame::FrameSearchResult nsTextFrame::PeekOffsetCharacter(
   return CONTINUE;
 }
 
-bool ClusterIterator::IsWhitespace() const {
+bool ClusterIterator::IsInlineWhitespace() const {
   NS_ASSERTION(mCharIndex >= 0, "No cluster selected");
-  return IsSelectionSpace(mFrag, mCharIndex);
+  return IsSelectionInlineWhitespace(mFrag, mCharIndex);
+}
+
+bool ClusterIterator::IsNewline() const {
+  NS_ASSERTION(mCharIndex >= 0, "No cluster selected");
+  return IsSelectionNewline(mFrag, mCharIndex);
 }
 
 bool ClusterIterator::IsPunctuation() const {
@@ -7907,7 +7938,10 @@ bool ClusterIterator::NextCluster() {
       mCharIndex = mIterator.GetOriginalOffset();
       mIterator.AdvanceOriginal(1);
     } else {
-      if (mIterator.GetOriginalOffset() <= mTrimmed.mStart) return false;
+      if (mIterator.GetOriginalOffset() <= mTrimmed.mStart) {
+        // Trimming can skip backward word breakers, see bug 1667138
+        return mHaveWordBreak;
+      }
       mIterator.AdvanceOriginal(-1);
       keepGoing = mIterator.IsOriginalCharSkipped() ||
                   mIterator.GetOriginalOffset() >= mTrimmed.GetEnd() ||
@@ -8035,8 +8069,12 @@ nsIFrame::FrameSearchResult nsTextFrame::PeekOffsetWord(
 
   do {
     bool isPunctuation = cIter.IsPunctuation();
-    bool isWhitespace = cIter.IsWhitespace();
+    bool isInlineWhitespace = cIter.IsInlineWhitespace();
+    bool isWhitespace = isInlineWhitespace || cIter.IsNewline();
     bool isWordBreakBefore = cIter.HaveWordBreakBefore();
+    if (!isWhitespace || isInlineWhitespace) {
+      aState->SetSawInlineCharacter();
+    }
     if (aWordSelectEatSpace == isWhitespace && !aState->mSawBeforeType) {
       aState->SetSawBeforeType();
       aState->Update(isPunctuation, isWhitespace);
@@ -8618,13 +8656,13 @@ void nsTextFrame::AddInlinePrefISize(gfxContext* aRenderingContext,
 }
 
 /* virtual */
-LogicalSize nsTextFrame::ComputeSize(
+nsIFrame::SizeComputationResult nsTextFrame::ComputeSize(
     gfxContext* aRenderingContext, WritingMode aWM, const LogicalSize& aCBSize,
     nscoord aAvailableISize, const LogicalSize& aMargin,
-    const LogicalSize& aBorder, const LogicalSize& aPadding,
-    ComputeSizeFlags aFlags) {
+    const LogicalSize& aBorderPadding, ComputeSizeFlags aFlags) {
   // Inlines and text don't compute size before reflow.
-  return LogicalSize(aWM, NS_UNCONSTRAINEDSIZE, NS_UNCONSTRAINEDSIZE);
+  return {LogicalSize(aWM, NS_UNCONSTRAINEDSIZE, NS_UNCONSTRAINEDSIZE),
+          AspectRatioUsage::None};
 }
 
 static nsRect RoundOut(const gfxRect& aRect) {
@@ -8639,7 +8677,7 @@ static nsRect RoundOut(const gfxRect& aRect) {
 nsRect nsTextFrame::ComputeTightBounds(DrawTarget* aDrawTarget) const {
   if (Style()->HasTextDecorationLines() || HasAnyStateBits(TEXT_HYPHEN_BREAK)) {
     // This is conservative, but OK.
-    return GetVisualOverflowRect();
+    return InkOverflowRect();
   }
 
   gfxSkipCharsIterator iter =
@@ -9432,13 +9470,13 @@ void nsTextFrame::ReflowText(nsLineLayout& aLineLayout, nscoord aAvailableWidth,
     boundingBox.y += mAscent;
   }
   aMetrics.SetOverflowAreasToDesiredBounds();
-  aMetrics.VisualOverflow().UnionRect(aMetrics.VisualOverflow(), boundingBox);
+  aMetrics.InkOverflow().UnionRect(aMetrics.InkOverflow(), boundingBox);
 
   // When we have text decorations, we don't need to compute their overflow now
   // because we're guaranteed to do it later
   // (see nsLineLayout::RelativePositionFrames)
   UnionAdditionalOverflow(presContext, aLineLayout.LineContainerRI()->mFrame,
-                          provider, &aMetrics.VisualOverflow(), false, true);
+                          provider, &aMetrics.InkOverflow(), false, true);
 
   /////////////////////////////////////////////////////////////////////
   // Clean up, update state
@@ -9675,7 +9713,7 @@ nsOverflowAreas nsTextFrame::RecomputeOverflow(nsIFrame* aBlockFrame,
     std::swap(boundingBox.x, boundingBox.y);
     std::swap(boundingBox.width, boundingBox.height);
   }
-  nsRect& vis = result.VisualOverflow();
+  nsRect& vis = result.InkOverflow();
   vis.UnionRect(vis, boundingBox);
   UnionAdditionalOverflow(PresContext(), aBlockFrame, provider, &vis, true,
                           aIncludeShadows);
@@ -10023,6 +10061,15 @@ void nsTextFrame::List(FILE* out, const char* aPrefix, ListFlags aFlags) const {
     str += " SELECTED";
   }
   fprintf_stderr(out, "%s\n", str.get());
+}
+
+void nsTextFrame::ListTextRuns(FILE* out,
+                               nsTHashtable<nsVoidPtrHashKey>& aSeen) const {
+  if (!mTextRun || aSeen.Contains(mTextRun)) {
+    return;
+  }
+  aSeen.PutEntry(mTextRun);
+  mTextRun->Dump(out);
 }
 #endif
 

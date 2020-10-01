@@ -41,7 +41,8 @@
 #include "jit/Ion.h"
 #include "jit/PcScriptCache.h"
 #include "js/CharacterEncoding.h"
-#include "js/ContextOptions.h"  // JS::ContextOptions
+#include "js/ContextOptions.h"      // JS::ContextOptions
+#include "js/friend/StackLimits.h"  // js::ReportOverRecursed
 #include "js/Printf.h"
 #ifdef JS_SIMULATOR_ARM
 #  include "jit/arm/Simulator-arm.h"
@@ -62,7 +63,7 @@
 #include "vm/BytecodeUtil.h"  // JSDVG_IGNORE_STACK
 #include "vm/ErrorObject.h"
 #include "vm/ErrorReporting.h"
-#include "vm/HelperThreads.h"
+#include "vm/HelperThreadState.h"
 #include "vm/Iteration.h"
 #include "vm/JSAtom.h"
 #include "vm/JSFunction.h"
@@ -83,6 +84,15 @@ using namespace js;
 
 using mozilla::DebugOnly;
 using mozilla::PodArrayZero;
+
+#ifdef DEBUG
+JSContext* js::MaybeGetJSContext() {
+  if (!TlsContext.init()) {
+    return nullptr;
+  }
+  return TlsContext.get();
+}
+#endif
 
 bool js::AutoCycleDetector::init() {
   MOZ_ASSERT(cyclic);
@@ -277,7 +287,7 @@ JS_FRIEND_API void js::ReportOutOfMemory(JSContext* cx) {
   cx->setPendingException(oomMessage, nullptr);
 }
 
-mozilla::GenericErrorResult<OOM&> js::ReportOutOfMemoryResult(JSContext* cx) {
+mozilla::GenericErrorResult<OOM> js::ReportOutOfMemoryResult(JSContext* cx) {
   ReportOutOfMemory(cx);
   return cx->alreadyReportedOOM();
 }
@@ -659,21 +669,6 @@ JSObject* js::CreateErrorNotesArray(JSContext* cx, JSErrorReport* report) {
   return notesArray;
 }
 
-const JSErrorFormatString js_ErrorFormatString[JSErr_Limit] = {
-#define MSG_DEF(name, count, exception, format) \
-  {#name, format, count, exception},
-#include "js.msg"
-#undef MSG_DEF
-};
-
-JS_FRIEND_API const JSErrorFormatString* js::GetErrorMessage(
-    void* userRef, const unsigned errorNumber) {
-  if (errorNumber > 0 && errorNumber < JSErr_Limit) {
-    return &js_ErrorFormatString[errorNumber];
-  }
-  return nullptr;
-}
-
 void JSContext::recoverFromOutOfMemory() {
   if (isHelperThreadContext()) {
     // Keep in sync with addPendingOutOfMemory.
@@ -866,10 +861,7 @@ js::UniquePtr<JS::JobQueue::SavedJobQueue> InternalJobQueue::saveJobQueue(
   return saved;
 }
 
-JS::Error JSContext::reportedError;
-JS::OOM JSContext::reportedOOM;
-
-mozilla::GenericErrorResult<OOM&> JSContext::alreadyReportedOOM() {
+mozilla::GenericErrorResult<OOM> JSContext::alreadyReportedOOM() {
 #ifdef DEBUG
   if (isHelperThreadContext()) {
     // Keep in sync with addPendingOutOfMemory.
@@ -880,27 +872,28 @@ mozilla::GenericErrorResult<OOM&> JSContext::alreadyReportedOOM() {
     MOZ_ASSERT(isThrowingOutOfMemory());
   }
 #endif
-  return mozilla::Err(reportedOOM);
+  return mozilla::Err(JS::OOM());
 }
 
-mozilla::GenericErrorResult<JS::Error&> JSContext::alreadyReportedError() {
+mozilla::GenericErrorResult<JS::Error> JSContext::alreadyReportedError() {
 #ifdef DEBUG
   if (!isHelperThreadContext()) {
     MOZ_ASSERT(isExceptionPending());
   }
 #endif
-  return mozilla::Err(reportedError);
+  return mozilla::Err(JS::Error());
 }
 
 JSContext::JSContext(JSRuntime* runtime, const JS::ContextOptions& options)
     : runtime_(runtime),
-      kind_(ContextKind::HelperThread),
+      kind_(ContextKind::Uninitialized),
       nurserySuppressions_(this),
       options_(this, options),
       freeLists_(this, nullptr),
       atomsZoneFreeLists_(this),
       defaultFreeOp_(this, runtime, true),
       freeUnusedMemory(false),
+      measuringExecutionTime_(this, false),
       jitActivation(this, nullptr),
       isolate(this, nullptr),
       activation_(this, nullptr),
@@ -980,7 +973,7 @@ JSContext::JSContext(JSRuntime* runtime, const JS::ContextOptions& options)
 JSContext::~JSContext() {
   // Clear the ContextKind first, so that ProtectedData checks will allow us to
   // destroy this context even if the runtime is already gone.
-  kind_ = ContextKind::HelperThread;
+  kind_ = ContextKind::Uninitialized;
 
   /* Free the stuff hanging off of cx. */
   MOZ_ASSERT(!resolvingList);
@@ -1010,13 +1003,20 @@ JSContext::~JSContext() {
   TlsContext.set(nullptr);
 }
 
-void JSContext::setHelperThread(AutoLockHelperThreadState& locked) {
+void JSContext::setHelperThread(const AutoLockHelperThreadState& locked) {
+  MOZ_ASSERT(isHelperThreadContext());
   MOZ_ASSERT_IF(!JSRuntime::hasLiveRuntimes(), !TlsContext.get());
+  MOZ_ASSERT(currentThread_ == ThreadId());
+
   TlsContext.set(this);
   currentThread_ = ThreadId::ThisThreadId();
 }
 
-void JSContext::clearHelperThread(AutoLockHelperThreadState& locked) {
+void JSContext::clearHelperThread(const AutoLockHelperThreadState& locked) {
+  MOZ_ASSERT(isHelperThreadContext());
+  MOZ_ASSERT(TlsContext.get() == this);
+  MOZ_ASSERT(currentThread_ == ThreadId::ThisThreadId());
+
   currentThread_ = ThreadId();
   TlsContext.set(nullptr);
 }
@@ -1210,15 +1210,6 @@ void AutoEnterOOMUnsafeRegion::crash(size_t size, const char* reason) {
   }
   crash(reason);
 }
-
-AutoKeepAtoms::AutoKeepAtoms(
-    JSContext* cx MOZ_GUARD_OBJECT_NOTIFIER_PARAM_IN_IMPL)
-    : cx(cx) {
-  MOZ_GUARD_OBJECT_NOTIFIER_INIT;
-  cx->zone()->keepAtoms();
-}
-
-AutoKeepAtoms::~AutoKeepAtoms() { cx->zone()->releaseAtoms(); };
 
 void ExternalValueArray::trace(JSTracer* trc) {
   if (Value* vp = begin()) {

@@ -76,18 +76,20 @@ bool WeakRefObject::construct(JSContext* cx, unsigned argc, Value* vp) {
 
   // 4. Perfom ! KeepDuringJob(target).
   if (!target->zone()->keepDuringJob(target)) {
+    ReportOutOfMemory(cx);
     return false;
   };
-
-  // 5. Set weakRef.[[Target]] to target.
-  weakRef->setPrivateGCThing(target);
 
   // Add an entry to the per-zone maps from target JS object to a list of weak
   // ref objects.
   gc::GCRuntime* gc = &cx->runtime()->gc;
   if (!gc->registerWeakRef(target, wrappedWeakRef)) {
+    ReportOutOfMemory(cx);
     return false;
   };
+
+  // 5. Set weakRef.[[Target]] to target.
+  weakRef->setPrivateGCThing(target);
 
   // 6. Return weakRef.
   args.rval().setObject(*weakRef);
@@ -113,8 +115,8 @@ void WeakRefObject::trace(JSTracer* trc, JSObject* obj) {
     JSObject* target = weakRef->target();
     if (target) {
       TraceManuallyBarrieredEdge(trc, &target, "WeakRefObject::target");
+      weakRef->setPrivateUnbarriered(target);
     }
-    weakRef->setPrivate(target);
   }
 }
 
@@ -238,7 +240,7 @@ void WeakRefObject::readBarrier(JSContext* cx, Handle<WeakRefObject*> self) {
     }
   }
 
-  JSObject::readBarrier(obj);
+  gc::ReadBarrier(obj.get());
 }
 
 namespace gc {
@@ -258,16 +260,26 @@ bool GCRuntime::registerWeakRef(HandleObject target, HandleObject weakRef) {
   return refs.emplaceBack(weakRef);
 }
 
-void GCRuntime::unregisterWeakRef(WeakRefObject* weakRef) {
+bool GCRuntime::unregisterWeakRefWrapper(JSObject* wrapper) {
+  WeakRefObject* weakRef =
+      &UncheckedUnwrapWithoutExpose(wrapper)->as<WeakRefObject>();
+
   JSObject* target = weakRef->target();
   MOZ_ASSERT(target);
 
+  bool removed = false;
   auto& map = target->zone()->weakRefMap();
   if (auto ptr = map.lookup(target)) {
-    ptr->value().eraseIf([weakRef](JSObject* obj) {
-      return UncheckedUnwrapWithoutExpose(obj) == weakRef;
+    ptr->value().eraseIf([wrapper, &removed](JSObject* obj) {
+      bool remove = obj == wrapper;
+      if (remove) {
+        removed = true;
+      }
+      return remove;
     });
   }
+
+  return removed;
 }
 
 void GCRuntime::traceKeptObjects(JSTracer* trc) {

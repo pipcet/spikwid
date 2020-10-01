@@ -185,12 +185,29 @@ class VideoOutput : public DirectMediaTrackListener {
                                  bool aEnabled) override {
     MutexAutoLock lock(mMutex);
     mEnabled = aEnabled;
-    // Since mEnabled will affect whether frames are real, or black, we assign
-    // new FrameIDs whenever this changes.
-    for (auto& idChunkPair : mFrames) {
-      idChunkPair.first = mVideoFrameContainer->NewFrameID();
+    DropPastFrames();
+    if (!mEnabled || mFrames.Length() > 1) {
+      // Re-send frames when disabling, as new frames may not arrive. When
+      // enabling we keep them black until new frames arrive, or re-send if we
+      // already have frames in the future. If we're disabling and there are no
+      // frames available yet, we invent one. Unfortunately with a hardcoded
+      // size.
+      //
+      // Since mEnabled will affect whether
+      // frames are real, or black, we assign new FrameIDs whenever we re-send
+      // frames after an mEnabled change.
+      for (auto& idChunkPair : mFrames) {
+        idChunkPair.first = mVideoFrameContainer->NewFrameID();
+      }
+      if (mFrames.IsEmpty()) {
+        VideoSegment v;
+        v.AppendFrame(nullptr, gfx::IntSize(640, 480), PRINCIPAL_HANDLE_NONE,
+                      true, TimeStamp::Now());
+        mFrames.AppendElement(std::make_pair(mVideoFrameContainer->NewFrameID(),
+                                             *v.GetLastChunk()));
+      }
+      SendFramesEnsureLocked();
     }
-    SendFramesEnsureLocked();
   }
 
   Mutex mMutex;
@@ -206,6 +223,63 @@ class VideoOutput : public DirectMediaTrackListener {
   const RefPtr<AbstractThread> mMainThread;
   const layers::ImageContainer::ProducerID mProducerID =
       layers::ImageContainer::AllocateProducerID();
+};
+
+/**
+ * This listener observes the first video frame to arrive with a non-empty size,
+ * and renders it to its VideoFrameContainer.
+ */
+class FirstFrameVideoOutput : public VideoOutput {
+ public:
+  FirstFrameVideoOutput(VideoFrameContainer* aContainer,
+                        AbstractThread* aMainThread)
+      : VideoOutput(aContainer, aMainThread) {
+    MOZ_ASSERT(NS_IsMainThread());
+  }
+
+  // NB that this overrides VideoOutput::NotifyRealtimeTrackData, so we can
+  // filter out all frames but the first one with a real size. This allows us to
+  // later re-use the logic in VideoOutput for rendering that frame.
+  void NotifyRealtimeTrackData(MediaTrackGraph* aGraph, TrackTime aTrackOffset,
+                               const MediaSegment& aMedia) override {
+    MOZ_ASSERT(aMedia.GetType() == MediaSegment::VIDEO);
+
+    if (mInitialSizeFound) {
+      return;
+    }
+
+    const VideoSegment& video = static_cast<const VideoSegment&>(aMedia);
+    for (VideoSegment::ConstChunkIterator c(video); !c.IsEnded(); c.Next()) {
+      if (c->mFrame.GetIntrinsicSize() != gfx::IntSize(0, 0)) {
+        mInitialSizeFound = true;
+
+        mMainThread->Dispatch(NS_NewRunnableFunction(
+            "FirstFrameVideoOutput::FirstFrameRenderedSetter",
+            [self = RefPtr<FirstFrameVideoOutput>(this)] {
+              self->mFirstFrameRendered = true;
+            }));
+
+        // Pick the first frame and run it through the rendering code.
+        VideoSegment segment;
+        segment.AppendFrame(do_AddRef(c->mFrame.GetImage()),
+                            c->mFrame.GetIntrinsicSize(),
+                            c->mFrame.GetPrincipalHandle(),
+                            c->mFrame.GetForceBlack(), c->mTimeStamp);
+        VideoOutput::NotifyRealtimeTrackData(aGraph, aTrackOffset, segment);
+        return;
+      }
+    }
+  }
+
+  // Main thread only.
+  Watchable<bool> mFirstFrameRendered = {
+      false, "FirstFrameVideoOutput::mFirstFrameRendered"};
+
+ private:
+  // Whether a frame with a concrete size has been received. May only be
+  // accessed on the MTG's appending thread. (this is a direct listener so we
+  // get called by whoever is producing this track's data)
+  bool mInitialSizeFound = false;
 };
 
 }  // namespace mozilla

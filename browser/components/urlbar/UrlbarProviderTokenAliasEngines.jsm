@@ -60,6 +60,12 @@ class ProviderTokenAliasEngines extends UrlbarProvider {
    */
   async isActive(queryContext) {
     let instance = this.queryInstance;
+
+    // This is usually reset on canceling or completing the query, but since we
+    // query in isActive, it may not have been canceled by the previous call.
+    // It is an object with values { result: UrlbarResult, instance: Query }.
+    this._autofillData = null;
+
     // Once the user starts typing a search string after the token, we hand off
     // suggestions to UrlbarProviderSearchSuggestions.
     if (
@@ -79,15 +85,15 @@ class ProviderTokenAliasEngines extends UrlbarProvider {
       return false;
     }
 
-    if (queryContext.searchString.trim() == "@") {
+    if (queryContext.trimmedSearchString == "@") {
       return true;
     }
 
-    // If there's no engine associated with the searchString, then we don't want
-    // to block other kinds of results.
+    // If the user is typing a potential engine name, autofill it.
     if (UrlbarPrefs.get("autoFill") && queryContext.allowAutofill) {
-      this._autofillResult = this._getAutofillResult(queryContext);
-      if (this._autofillResult) {
+      let result = this._getAutofillResult(queryContext);
+      if (result) {
+        this._autofillData = { result, instance };
         return true;
       }
     }
@@ -106,7 +112,7 @@ class ProviderTokenAliasEngines extends UrlbarProvider {
       return;
     }
 
-    if (queryContext.searchString.trim() == "@") {
+    if (queryContext.trimmedSearchString == "@") {
       for (let { engine, tokenAliases } of this._engines) {
         let result = new UrlbarResult(
           UrlbarUtils.RESULT_TYPE.SEARCH,
@@ -115,14 +121,18 @@ class ProviderTokenAliasEngines extends UrlbarProvider {
             engine: [engine.name, UrlbarUtils.HIGHLIGHT.TYPED],
             keyword: [tokenAliases[0], UrlbarUtils.HIGHLIGHT.TYPED],
             query: ["", UrlbarUtils.HIGHLIGHT.TYPED],
-            icon: engine.iconURI ? engine.iconURI.spec : "",
+            icon: engine.iconURI?.spec,
             keywordOffer: UrlbarUtils.KEYWORD_OFFER.SHOW,
           })
         );
         addCallback(this, result);
       }
-    } else if (this._autofillResult) {
-      addCallback(this, this._autofillResult);
+    } else if (
+      this._autofillData &&
+      this._autofillData.instance == this.queryInstance
+    ) {
+      addCallback(this, this._autofillData.result);
+      this._autofillData = null;
     }
   }
 
@@ -140,18 +150,35 @@ class ProviderTokenAliasEngines extends UrlbarProvider {
    * @param {object} queryContext The query context object
    */
   cancelQuery(queryContext) {
-    delete this._autofillResult;
+    if (this._autofillData?.instance == this.queryInstance) {
+      this._autofillData = null;
+    }
   }
 
   _getAutofillResult(queryContext) {
-    let token = queryContext.tokens[0];
+    let lowerCaseSearchString = queryContext.searchString.toLowerCase();
+
     // The user is typing a specific engine. We should show a heuristic result.
     for (let { engine, tokenAliases } of this._engines) {
       for (let alias of tokenAliases) {
-        if (alias.startsWith(token.lowerCaseValue)) {
-          // We found a specific engine. We will add an autofill result.
+        if (alias.startsWith(lowerCaseSearchString)) {
+          // We found the engine.
+
+          // Stop adding an autofill result once the user has typed the full
+          // alias followed by a space.  UrlbarProviderUnifiedComplete will take
+          // over at this point.
+          if (
+            UrlbarPrefs.get("update2") &&
+            lowerCaseSearchString.startsWith(alias + " ")
+          ) {
+            return null;
+          }
+
+          // Add an autofill result.  Append a space so the user can hit enter
+          // or the right arrow key and immediately start typing their query.
           let aliasPreservingUserCase =
-            token.value + alias.substr(token.value.length);
+            queryContext.searchString +
+            alias.substr(queryContext.searchString.length);
           let value = aliasPreservingUserCase + " ";
           let result = new UrlbarResult(
             UrlbarUtils.RESULT_TYPE.SEARCH,
@@ -160,14 +187,8 @@ class ProviderTokenAliasEngines extends UrlbarProvider {
               engine: [engine.name, UrlbarUtils.HIGHLIGHT.TYPED],
               keyword: [aliasPreservingUserCase, UrlbarUtils.HIGHLIGHT.TYPED],
               query: ["", UrlbarUtils.HIGHLIGHT.TYPED],
-              icon: engine.iconURI ? engine.iconURI.spec : "",
+              icon: engine.iconURI?.spec,
               keywordOffer: UrlbarUtils.KEYWORD_OFFER.HIDE,
-              // For test interoperabilty with UrlbarProviderSearchSuggestions.
-              suggestion: undefined,
-              tailPrefix: undefined,
-              tail: undefined,
-              tailOffsetIndex: -1,
-              isSearchHistory: false,
             })
           );
           result.heuristic = true;

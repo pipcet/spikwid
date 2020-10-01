@@ -45,6 +45,7 @@
 #include "mozilla/dom/WindowContext.h"
 #include "mozilla/StorageAccess.h"
 #include "mozilla/StoragePrincipalHelper.h"
+#include "mozilla/Telemetry.h"
 #include "mozilla/ThreadEventQueue.h"
 #include "mozilla/ThrottledEventQueue.h"
 #include "mozilla/TimelineConsumers.h"
@@ -996,8 +997,8 @@ class WorkerJSContextStats final : public JS::RuntimeStats {
 
   const nsCString& Path() const { return mRtPath; }
 
-  virtual void initExtraZoneStats(JS::Zone* aZone,
-                                  JS::ZoneStats* aZoneStats) override {
+  virtual void initExtraZoneStats(JS::Zone* aZone, JS::ZoneStats* aZoneStats,
+                                  const JS::AutoRequireNoGC& nogc) override {
     MOZ_ASSERT(!aZoneStats->extra);
 
     // ReportJSRuntimeExplicitTreeStats expects that
@@ -1011,8 +1012,9 @@ class WorkerJSContextStats final : public JS::RuntimeStats {
     aZoneStats->extra = extras;
   }
 
-  virtual void initExtraRealmStats(JS::Handle<JS::Realm*> aRealm,
-                                   JS::RealmStats* aRealmStats) override {
+  virtual void initExtraRealmStats(JS::Realm* aRealm,
+                                   JS::RealmStats* aRealmStats,
+                                   const JS::AutoRequireNoGC& nogc) override {
     MOZ_ASSERT(!aRealmStats->extra);
 
     // ReportJSRuntimeExplicitTreeStats expects that
@@ -1241,7 +1243,7 @@ WorkerPrivate::MemoryReporter::FinishCollectRunnable::Run() {
       nsCString path = mCxStats.Path();
       path.AppendLiteral("dom/performance/user-entries");
       mHandleReport->Callback(
-          EmptyCString(), path, nsIMemoryReporter::KIND_HEAP,
+          ""_ns, path, nsIMemoryReporter::KIND_HEAP,
           nsIMemoryReporter::UNITS_BYTES, mPerformanceUserEntries,
           "Memory used for performance user entries."_ns, mHandlerData);
     }
@@ -1250,7 +1252,7 @@ WorkerPrivate::MemoryReporter::FinishCollectRunnable::Run() {
       nsCString path = mCxStats.Path();
       path.AppendLiteral("dom/performance/resource-entries");
       mHandleReport->Callback(
-          EmptyCString(), path, nsIMemoryReporter::KIND_HEAP,
+          ""_ns, path, nsIMemoryReporter::KIND_HEAP,
           nsIMemoryReporter::UNITS_BYTES, mPerformanceResourceEntries,
           "Memory used for performance resource entries."_ns, mHandlerData);
     }
@@ -1334,7 +1336,7 @@ nsresult WorkerPrivate::SetCSPFromHeaderValues(
   MOZ_ASSERT(selfURI, "need a self URI for CSP");
 
   rv = csp->SetRequestContextWithPrincipal(mLoadInfo.mPrincipal, selfURI,
-                                           EmptyString(), 0);
+                                           u""_ns, 0);
   NS_ENSURE_SUCCESS(rv, rv);
 
   csp->EnsureEventTarget(mMainThreadEventTarget);
@@ -1805,8 +1807,8 @@ bool WorkerPrivate::ProxyReleaseMainThreadObjects() {
     mLoadInfo.mLoadGroup.swap(loadGroupToCancel);
   }
 
-  bool result =
-      mLoadInfo.ProxyReleaseMainThreadObjects(this, loadGroupToCancel);
+  bool result = mLoadInfo.ProxyReleaseMainThreadObjects(
+      this, std::move(loadGroupToCancel));
 
   mMainThreadObjectsForgotten = true;
 

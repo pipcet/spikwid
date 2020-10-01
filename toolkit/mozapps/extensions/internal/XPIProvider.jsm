@@ -128,7 +128,7 @@ const XPI_PERMISSION = "install";
 
 const XPI_SIGNATURE_CHECK_PERIOD = 24 * 60 * 60;
 
-const DB_SCHEMA = 32;
+const DB_SCHEMA = 33;
 
 XPCOMUtils.defineLazyPreferenceGetter(
   this,
@@ -2460,8 +2460,8 @@ var XPIProvider = {
 
       this.maybeInstallBuiltinAddon(
         "default-theme@mozilla.org",
-        "1.0",
-        "resource://gre/modules/themes/default/"
+        "1.1",
+        "resource://default-theme/"
       );
 
       resolveProviderReady(Promise.all(this.startupPromises));
@@ -2735,10 +2735,8 @@ var XPIProvider = {
    * Adds a list of currently active add-ons to the next crash report.
    */
   addAddonsToCrashReporter() {
-    if (
-      !(Services.appinfo instanceof Ci.nsICrashReporter) ||
-      Services.appinfo.inSafeMode
-    ) {
+    void (Services.appinfo instanceof Ci.nsICrashReporter);
+    if (!Services.appinfo.annotateCrashReport || Services.appinfo.inSafeMode) {
       return;
     }
 
@@ -2772,7 +2770,9 @@ var XPIProvider = {
         continue;
       }
 
-      let cleanNames = [];
+      // Collect any install errors for specific removal from the staged directory
+      // during cleanStagingDir.  Successful installs remove the files.
+      let stagedFailureNames = [];
       let promises = [];
       for (let [id, metadata] of loc.getStagedAddons()) {
         loc.unstageAddon(id);
@@ -2785,7 +2785,7 @@ var XPIProvider = {
             },
             error => {
               delete aManifests[loc.name][id];
-              cleanNames.push(`${id}.xpi`);
+              stagedFailureNames.push(`${id}.xpi`);
 
               logger.error(
                 `Failed to install staged add-on ${id} in ${loc.name}`,
@@ -2802,8 +2802,8 @@ var XPIProvider = {
       }
 
       try {
-        if (cleanNames.length) {
-          loc.installer.cleanStagingDir(cleanNames);
+        if (changed || stagedFailureNames.length) {
+          loc.installer.cleanStagingDir(stagedFailureNames);
         }
       } catch (e) {
         // Non-critical, just saves some perf on startup if we clean this up.
@@ -2886,15 +2886,29 @@ var XPIProvider = {
     return changed;
   },
 
-  maybeInstallBuiltinAddon(aID, aVersion, aBase) {
-    if (!(enabledScopes & BuiltInLocation.scope)) {
-      return;
+  /**
+   * Like `installBuiltinAddon`, but only installs the addon at `aBase`
+   * if an existing built-in addon with the ID `aID` and version doesn't
+   * already exist.
+   *
+   * @param {string} aID
+   *        The ID of the add-on being registered.
+   * @param {string} aVersion
+   *        The version of the add-on being registered.
+   * @param {string} aBase
+   *        A string containing the base URL.  Must be a resource: URL.
+   * @returns {Promise<Addon>} a Promise that resolves when the addon is installed.
+   */
+  async maybeInstallBuiltinAddon(aID, aVersion, aBase) {
+    let installed;
+    if (enabledScopes & BuiltInLocation.scope) {
+      let existing = BuiltInLocation.get(aID);
+      if (!existing || existing.version != aVersion) {
+        installed = this.installBuiltinAddon(aBase);
+        this.startupPromises.push(installed);
+      }
     }
-
-    let existing = BuiltInLocation.get(aID);
-    if (!existing || existing.version != aVersion) {
-      this.startupPromises.push(this.installBuiltinAddon(aBase));
-    }
+    return installed;
   },
 
   getDependentAddons(aAddon) {
@@ -3180,6 +3194,7 @@ for (let meth of [
   "isInstallAllowed",
   "isInstallEnabled",
   "updateSystemAddons",
+  "stageLangpacksForAppUpdate",
 ]) {
   XPIProvider[meth] = function() {
     return XPIInstall[meth](...arguments);

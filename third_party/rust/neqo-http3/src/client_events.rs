@@ -11,6 +11,7 @@ use crate::send_message::SendMessageEvents;
 use crate::Header;
 use crate::RecvMessageEvents;
 
+use neqo_crypto::ResumptionToken;
 use neqo_transport::{AppError, StreamType};
 
 use std::cell::RefCell;
@@ -53,6 +54,8 @@ pub enum Http3ClientEvent {
     RequestsCreatable,
     /// Cert authentication needed
     AuthenticationNeeded,
+    /// A new resumption token.
+    ResumptionToken(ResumptionToken),
     /// Zero Rtt has been rejected.
     ZeroRttRejected,
     /// Client has received a GOAWAY frame
@@ -142,6 +145,11 @@ impl Http3ClientEvents {
         self.insert(Http3ClientEvent::AuthenticationNeeded);
     }
 
+    /// Add a new resumption token event.
+    pub(crate) fn resumption_token(&self, token: ResumptionToken) {
+        self.insert(Http3ClientEvent::ResumptionToken(token));
+    }
+
     /// Add a new `ZeroRttRejected` event.
     pub(crate) fn zero_rtt_rejected(&self) {
         self.insert(Http3ClientEvent::ZeroRttRejected);
@@ -181,9 +189,14 @@ impl Http3ClientEvents {
 
     /// Add a new `StateChange` event.
     pub(crate) fn connection_state_change(&self, state: Http3State) {
-        // If closing, existing events no longer relevant.
         match state {
+            // If closing, existing events no longer relevant.
             Http3State::Closing { .. } | Http3State::Closed(_) => self.events.borrow_mut().clear(),
+            Http3State::Connected => {
+                self.remove(|evt| {
+                    matches!(evt, Http3ClientEvent::StateChange(Http3State::ZeroRtt))
+                });
+            }
             _ => (),
         }
         self.insert(Http3ClientEvent::StateChange(state));

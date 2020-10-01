@@ -1,5 +1,12 @@
 "use strict";
 
+const { ExperimentAPI } = ChromeUtils.import(
+  "resource://messaging-system/experiments/ExperimentAPI.jsm"
+);
+const { ExperimentFakes } = ChromeUtils.import(
+  "resource://testing-common/MSTestUtils.jsm"
+);
+
 const SEPARATE_ABOUT_WELCOME_PREF = "browser.aboutwelcome.enabled";
 const ABOUT_WELCOME_OVERRIDE_CONTENT_PREF =
   "browser.aboutwelcome.overrideContent";
@@ -21,11 +28,12 @@ const TEST_MULTISTAGE_CONTENT = {
           },
           data: [
             {
-              theme: "test-theme-1",
+              theme: "automatic",
               label: "theme-1",
+              tooltip: "test-tooltip",
             },
             {
-              theme: "test-theme-2",
+              theme: "dark",
               label: "theme-2",
             },
           ],
@@ -40,10 +48,8 @@ const TEST_MULTISTAGE_CONTENT = {
           label: "link top",
           position: "top",
           action: {
-            type: "OPEN_URL",
-            data: {
-              args: "http://example.com/",
-            },
+            type: "SHOW_FIREFOX_ACCOUNTS",
+            data: { entrypoint: "test" },
           },
         },
       },
@@ -52,10 +58,12 @@ const TEST_MULTISTAGE_CONTENT = {
       id: "AW_STEP2",
       order: 1,
       content: {
-        title: "Step 2",
+        zap: true,
+        title: "Step 2 longzaptest",
+        disclaimer: "test",
         tiles: {
           type: "topsites",
-          tooltip: "test",
+          info: true,
         },
         primary_button: {
           label: "Next",
@@ -174,10 +182,90 @@ async function onButtonClick(browser, elementId) {
 }
 
 /**
- * Test the multistage welcome UI rendered using TEST_MULTISTAGE_JSON
+ * Test the zero onboarding using ExperimentAPI
  */
-add_task(async function test_Multistage_About_Welcome_branches() {
-  let browser = await openAboutWelcome();
+add_task(async function test_multistage_zeroOnboarding_experimentAPI() {
+  await setAboutWelcomePref(true);
+  let updatePromise = ExperimentFakes.waitForExperimentUpdate(
+    ExperimentAPI,
+    "mochitest-1-aboutwelcome"
+  );
+  ExperimentAPI._store.addExperiment({
+    slug: "mochitest-1-aboutwelcome",
+    branch: {
+      slug: "mochitest-1-aboutwelcome",
+      feature: {
+        enabled: false,
+        featureId: "aboutwelcome",
+        value: null,
+      },
+    },
+    active: true,
+  });
+
+  await updatePromise;
+  ExperimentAPI._store._syncToChildren({ flush: true });
+
+  let tab = await BrowserTestUtils.openNewForegroundTab(
+    gBrowser,
+    "about:welcome",
+    true
+  );
+  registerCleanupFunction(() => {
+    BrowserTestUtils.removeTab(tab);
+  });
+
+  const browser = tab.linkedBrowser;
+
+  await test_screen_content(
+    browser,
+    "Opens new tab",
+    // Expected selectors:
+    ["div.search-wrapper", "body.activity-stream"],
+    // Unexpected selectors:
+    ["div.multistageContainer", "main.AW_STEP1"]
+  );
+
+  ExperimentAPI._store._deleteForTests("mochitest-1-aboutwelcome");
+  Assert.equal(ExperimentAPI._store.getAll().length, 0, "Cleanup done");
+});
+
+/**
+ * Test the multistage welcome UI using ExperimentAPI
+ */
+add_task(async function test_multistage_aboutwelcome_experimentAPI() {
+  await setAboutWelcomePref(true);
+  await setAboutWelcomeMultiStage({});
+  let updatePromise = ExperimentFakes.waitForExperimentUpdate(
+    ExperimentAPI,
+    "mochitest-aboutwelcome"
+  );
+  ExperimentAPI._store.addExperiment({
+    slug: "mochitest-aboutwelcome",
+    branch: {
+      slug: "mochitest-aboutwelcome",
+      feature: {
+        enabled: true,
+        featureId: "aboutwelcome",
+        value: TEST_MULTISTAGE_CONTENT,
+      },
+    },
+    active: true,
+  });
+
+  await updatePromise;
+  ExperimentAPI._store._syncToChildren({ flush: true });
+
+  let tab = await BrowserTestUtils.openNewForegroundTab(
+    gBrowser,
+    "about:welcome",
+    true
+  );
+  registerCleanupFunction(() => {
+    BrowserTestUtils.removeTab(tab);
+  });
+
+  const browser = tab.linkedBrowser;
 
   await test_screen_content(
     browser,
@@ -187,9 +275,11 @@ add_task(async function test_Multistage_About_Welcome_branches() {
       "div.multistageContainer",
       "main.AW_STEP1",
       "h1.welcomeZap",
+      "span.zap.short",
       "div.secondary-cta.top",
       "button.secondary",
-      "button.theme",
+      "label.theme",
+      "input[type='radio']",
       "div.indicator.current",
     ],
     // Unexpected selectors:
@@ -205,10 +295,12 @@ add_task(async function test_Multistage_About_Welcome_branches() {
       "div.multistageContainer",
       "main.AW_STEP2",
       "button.secondary",
+      "h1.welcomeZap",
+      "span.zap.long",
       "div.tiles-container.info",
     ],
     // Unexpected selectors:
-    ["main.AW_STEP1", "main.AW_STEP3", "div.secondary-cta.top", "h1.welcomeZap"]
+    ["main.AW_STEP1", "main.AW_STEP3", "div.secondary-cta.top"]
   );
   await onButtonClick(browser, "button.primary");
   await test_screen_content(
@@ -223,6 +315,75 @@ add_task(async function test_Multistage_About_Welcome_branches() {
     ],
     // Unexpected selectors:
     ["main.AW_STEP1", "main.AW_STEP2"]
+  );
+  await onButtonClick(browser, "button.primary");
+  await test_screen_content(
+    browser,
+    "home",
+    // Expected selectors:
+    ["body.activity-stream"],
+    // Unexpected selectors:
+    ["div.multistageContainer"]
+  );
+
+  ExperimentAPI._store._deleteForTests("mochitest-aboutwelcome");
+  Assert.equal(ExperimentAPI._store.getAll().length, 0, "Cleanup done");
+});
+
+/**
+ * Test the multistage welcome UI rendered using TEST_MULTISTAGE_JSON
+ */
+add_task(async function test_Multistage_About_Welcome_branches() {
+  let browser = await openAboutWelcome();
+
+  await test_screen_content(
+    browser,
+    "multistage step 1",
+    // Expected selectors:
+    [
+      "div.multistageContainer",
+      "main.AW_STEP1",
+      "h1.welcomeZap",
+      "span.zap.short",
+      "div.secondary-cta.top",
+      "button.secondary",
+      "label.theme",
+      "input[type='radio']",
+      "div.indicator.current",
+    ],
+    // Unexpected selectors:
+    ["main.AW_STEP2", "main.AW_STEP3", "div.tiles-container.info"]
+  );
+
+  await onButtonClick(browser, "button.primary");
+  await test_screen_content(
+    browser,
+    "multistage step 2",
+    // Expected selectors:
+    [
+      "div.multistageContainer",
+      "main.AW_STEP2",
+      "h1.welcomeZap",
+      "span.zap.long",
+      "button.secondary",
+      "div.tiles-container.info",
+    ],
+    // Unexpected selectors:
+    ["main.AW_STEP1", "main.AW_STEP3", "div.secondary-cta.top"]
+  );
+  await onButtonClick(browser, "button.primary");
+  await test_screen_content(
+    browser,
+    "multistage step 3",
+    // Expected selectors:
+    [
+      "div.multistageContainer",
+      "main.AW_STEP3",
+      "div.brand-logo",
+      "div.welcome-text",
+    ],
+    // Unexpected selectors:
+    ["main.AW_STEP1", "main.AW_STEP2", "h1.welcomeZap"]
   );
   await onButtonClick(browser, "button.primary");
   await test_screen_content(
@@ -423,7 +584,7 @@ add_task(async function test_AWMultistage_Secondary_Open_URL_Action() {
   const { callCount } = aboutWelcomeActor.onContentMessage;
   ok(
     callCount >= 2,
-    `${callCount} Stub called twice to handle Open_URL and Telemetry`
+    `${callCount} Stub called twice to handle FxA open URL and Telemetry`
   );
 
   let actionCall;
@@ -445,16 +606,19 @@ add_task(async function test_AWMultistage_Secondary_Open_URL_Action() {
   );
   Assert.equal(
     actionCall.args[1].type,
-    "OPEN_URL",
-    "Special action OPEN_URL event handled"
+    "SHOW_FIREFOX_ACCOUNTS",
+    "Special action SHOW_FIREFOX_ACCOUNTS event handled"
   );
-  ok(
-    actionCall.args[1].data.args.includes(
-      "utm_term=aboutwelcome-default-screen"
-    ),
-    "UTMTerm set in opened URL"
+  Assert.equal(
+    actionCall.args[1].data.extraParams.utm_term,
+    "aboutwelcome-default-screen",
+    "UTMTerm set in FxA URL"
   );
-
+  Assert.equal(
+    actionCall.args[1].data.entrypoint,
+    "test",
+    "EntryPoint set in FxA URL"
+  );
   Assert.equal(
     eventCall.args[0],
     "AWPage:TELEMETRY_EVENT",
@@ -488,14 +652,14 @@ add_task(async function test_AWMultistage_Themes() {
 
   await ContentTask.spawn(browser, "Themes", async () => {
     await ContentTaskUtils.waitForCondition(
-      () => content.document.querySelector("button.theme"),
+      () => content.document.querySelector("label.theme"),
       "Theme Icons"
     );
-    let themes = content.document.querySelectorAll("button.theme");
+    let themes = content.document.querySelectorAll("label.theme");
     Assert.equal(themes.length, 2, "Two themes displayed");
   });
 
-  await onButtonClick(browser, "button[value=test-theme-1]");
+  await onButtonClick(browser, "input[value=automatic]");
 
   const { callCount } = aboutWelcomeActor.onContentMessage;
   ok(callCount >= 1, `${callCount} Stub was called`);
@@ -519,8 +683,8 @@ add_task(async function test_AWMultistage_Themes() {
   );
   Assert.equal(
     actionCall.args[1],
-    "TEST-THEME-1",
-    "Theme value passed as TEST-THEME-1"
+    "AUTOMATIC",
+    "Theme value passed as AUTOMATIC"
   );
   Assert.equal(
     eventCall.args[0],
@@ -534,7 +698,7 @@ add_task(async function test_AWMultistage_Themes() {
   );
   Assert.equal(
     eventCall.args[1].event_context.source,
-    "test-theme-1",
-    "test-theme-1 click source recorded in Telemetry"
+    "automatic",
+    "automatic click source recorded in Telemetry"
   );
 });

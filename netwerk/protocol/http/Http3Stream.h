@@ -8,6 +8,7 @@
 
 #include "nsAHttpTransaction.h"
 #include "ARefBase.h"
+#include "mozilla/WeakPtr.h"
 
 namespace mozilla {
 namespace net {
@@ -16,6 +17,7 @@ class Http3Session;
 
 class Http3Stream final : public nsAHttpSegmentReader,
                           public nsAHttpSegmentWriter,
+                          public SupportsWeakPtr,
                           public ARefBase {
  public:
   NS_DECL_NSAHTTPSEGMENTREADER
@@ -56,7 +58,13 @@ class Http3Stream final : public nsAHttpSegmentReader,
     mRecvState = RECEIVED_RESET;
   }
 
+  void StopSending();
+
   void SetResponseHeaders(nsTArray<uint8_t>& aResponseHeaders, bool fin);
+
+  // Mirrors nsAHttpTransaction
+  bool Do0RTT();
+  nsresult Finish0RTT(bool aRestart);
 
  private:
   ~Http3Stream() = default;
@@ -84,7 +92,7 @@ class Http3Stream final : public nsAHttpSegmentReader,
    *      the data to neqo.
    *      After SENDING_BODY, the state transfers to READING_HEADERS.
    *  - EARLY_RESPONSE:
-   *      The server may send STOP_SENDING frame with error HTTP_EARLY_RESPONSE.
+   *      The server may send STOP_SENDING frame with error HTTP_NO_ERROR.
    *      That error means that the server is not interested in the request
    *      body. In this state the server will just ignore the request body.
    **/
@@ -140,6 +148,10 @@ class Http3Stream final : public nsAHttpSegmentReader,
   uint64_t mTotalRead;
 
   bool mFin;
+
+  bool mAttempting0RTT = false;
+
+  uint32_t mSendingBlockedByFlowControlCount = 0;
 };
 
 }  // namespace net

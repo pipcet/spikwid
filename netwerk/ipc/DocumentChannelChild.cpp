@@ -6,6 +6,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "DocumentChannelChild.h"
+#include "nsIObjectLoadingContent.h"
 
 using namespace mozilla::dom;
 using namespace mozilla::ipc;
@@ -57,8 +58,10 @@ DocumentChannelChild::AsyncOpen(nsIStreamListener* aListener) {
   rv = NS_CheckPortSafety(mURI);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  // add ourselves to the load group.
-  if (mLoadGroup) {
+  bool isNotDownload = mLoadState->FileName().IsVoid();
+
+  // If not a download, add ourselves to the load group
+  if (isNotDownload && mLoadGroup) {
     // During this call, we can re-enter back into the DocumentChannelChild to
     // call SetNavigationTiming.
     mLoadGroup->AddRequest(this, nullptr);
@@ -73,8 +76,16 @@ DocumentChannelChild::AsyncOpen(nsIStreamListener* aListener) {
 
   gHttpHandler->OnOpeningDocumentRequest(this);
 
-  if (!GetDocShell() || !GetDocShell()->GetBrowsingContext() ||
-      GetDocShell()->GetBrowsingContext()->IsDiscarded()) {
+  RefPtr<nsDocShell> docShell = GetDocShell();
+  if (!docShell) {
+    return NS_ERROR_FAILURE;
+  }
+
+  // `loadingContext` is the BC that is initiating the resource load.
+  // For normal subdocument loads, the BC is the one that the subdoc will load
+  // into. For <object>/<embed> it's the embedder doc's BC.
+  RefPtr<BrowsingContext> loadingContext = docShell->GetBrowsingContext();
+  if (!loadingContext || loadingContext->IsDiscarded()) {
     return NS_ERROR_FAILURE;
   }
 
@@ -84,9 +95,6 @@ DocumentChannelChild::AsyncOpen(nsIStreamListener* aListener) {
   args.cacheKey() = mCacheKey;
   args.channelId() = mChannelId;
   args.asyncOpenTime() = mAsyncOpenTime;
-  args.outerWindowId() = GetDocShell()->GetOuterWindowID();
-  args.uriModified() = mUriModified;
-  args.isXFOError() = mIsXFOError;
 
   Maybe<IPCClientInfo> ipcClientInfo;
   if (mInitialClientInfo.isSome()) {
@@ -98,16 +106,41 @@ DocumentChannelChild::AsyncOpen(nsIStreamListener* aListener) {
     args.timing() = Some(mTiming);
   }
 
-  args.hasValidTransientUserAction() =
-      GetDocShell()
-          ->GetBrowsingContext()
-          ->HasValidTransientUserGestureActivation();
+  switch (mLoadInfo->GetExternalContentPolicyType()) {
+    case nsIContentPolicy::TYPE_DOCUMENT:
+    case nsIContentPolicy::TYPE_SUBDOCUMENT: {
+      DocumentCreationArgs docArgs;
+      docArgs.uriModified() = mUriModified;
+      docArgs.isXFOError() = mIsXFOError;
 
-  GetDocShell()->GetBrowsingContext()->SetCurrentLoadIdentifier(
-      Some(mLoadState->GetLoadIdentifier()));
+      args.elementCreationArgs() = docArgs;
+      break;
+    }
 
-  gNeckoChild->SendPDocumentChannelConstructor(
-      this, GetDocShell()->GetBrowsingContext(), args);
+    case nsIContentPolicy::TYPE_OBJECT: {
+      ObjectCreationArgs objectArgs;
+      objectArgs.embedderInnerWindowId() = InnerWindowIDForExtantDoc(docShell);
+      objectArgs.loadFlags() = mLoadFlags;
+      objectArgs.contentPolicyType() = mLoadInfo->InternalContentPolicyType();
+      objectArgs.isUrgentStart() = UserActivation::IsHandlingUserInput();
+
+      args.elementCreationArgs() = objectArgs;
+      break;
+    }
+  }
+
+  switch (mLoadInfo->GetExternalContentPolicyType()) {
+    case nsIContentPolicy::TYPE_DOCUMENT:
+    case nsIContentPolicy::TYPE_SUBDOCUMENT:
+      MOZ_ALWAYS_SUCCEEDS(loadingContext->SetCurrentLoadIdentifier(
+          Some(mLoadState->GetLoadIdentifier())));
+      break;
+
+    default:
+      break;
+  }
+
+  gNeckoChild->SendPDocumentChannelConstructor(this, loadingContext, args);
 
   mIsPending = true;
   mWasOpened = true;
@@ -222,8 +255,9 @@ IPCResult DocumentChannelChild::RecvRedirectToRealChannel(
   }
 
   nsDocShell* docShell = GetDocShell();
-  if (docShell && aArgs.sessionHistoryInfo().isSome()) {
-    docShell->SetLoadingSessionHistoryInfo(aArgs.sessionHistoryInfo().ref());
+  if (docShell && aArgs.loadingSessionHistoryInfo().isSome()) {
+    docShell->SetLoadingSessionHistoryInfo(
+        aArgs.loadingSessionHistoryInfo().ref());
   }
 
   // transfer any properties. This appears to be entirely a content-side
@@ -258,6 +292,48 @@ IPCResult DocumentChannelChild::RecvRedirectToRealChannel(
   }
 
   // scopeExit will call CrossProcessRedirectFinished(rv) here
+  return IPC_OK();
+}
+
+IPCResult DocumentChannelChild::RecvUpgradeObjectLoad(
+    UpgradeObjectLoadResolver&& aResolve) {
+  // We're doing a load for an <object> or <embed> element if we got here.
+  MOZ_ASSERT(mLoadFlags & nsIRequest::LOAD_HTML_OBJECT_DATA,
+             "Should have LOAD_HTML_OBJECT_DATA set");
+  MOZ_ASSERT(!(mLoadFlags & nsIChannel::LOAD_DOCUMENT_URI),
+             "Shouldn't be a LOAD_DOCUMENT_URI load yet");
+  MOZ_ASSERT(mLoadInfo->GetExternalContentPolicyType() ==
+                 nsIContentPolicy::TYPE_OBJECT,
+             "Should have the TYPE_OBJECT content policy type");
+
+  // If our load has already failed, or been cancelled, abort this attempt to
+  // upgade the load.
+  if (NS_FAILED(mStatus)) {
+    aResolve(nullptr);
+    return IPC_OK();
+  }
+
+  nsCOMPtr<nsIObjectLoadingContent> loadingContent;
+  NS_QueryNotificationCallbacks(this, loadingContent);
+  if (!loadingContent) {
+    return IPC_FAIL(this, "Channel is not for ObjectLoadingContent!");
+  }
+
+  // We're upgrading to a document channel now. Add the LOAD_DOCUMENT_URI flag
+  // after-the-fact.
+  mLoadFlags |= nsIChannel::LOAD_DOCUMENT_URI;
+
+  RefPtr<BrowsingContext> browsingContext;
+  nsresult rv = loadingContent->UpgradeLoadToDocument(
+      this, getter_AddRefs(browsingContext));
+  if (NS_FAILED(rv) || !browsingContext) {
+    // Oops! Looks like something went wrong, so let's bail out.
+    mLoadFlags &= ~nsIChannel::LOAD_DOCUMENT_URI;
+    aResolve(nullptr);
+    return IPC_OK();
+  }
+
+  aResolve(browsingContext);
   return IPC_OK();
 }
 

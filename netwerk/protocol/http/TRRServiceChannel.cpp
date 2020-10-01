@@ -389,20 +389,24 @@ nsresult TRRServiceChannel::BeginConnect() {
   mRequestHead.SetOrigin(scheme, host, port);
 
   RefPtr<nsHttpConnectionInfo> connInfo = new nsHttpConnectionInfo(
-      host, port, EmptyCString(), mUsername, GetTopWindowOrigin(), proxyInfo,
+      host, port, ""_ns, mUsername, GetTopWindowOrigin(), proxyInfo,
       OriginAttributes(), isHttps);
   // TODO: Bug 1622778 for using AltService in socket process.
-  mAllowAltSvc = XRE_IsParentProcess() &&
-                 (mAllowAltSvc && !gHttpHandler->IsSpdyBlacklisted(connInfo));
+  mAllowAltSvc = XRE_IsParentProcess() && mAllowAltSvc;
+  bool http2Allowed = !gHttpHandler->IsHttp2Excluded(connInfo);
+  bool http3Allowed = !mUpgradeProtocolCallback && !mProxyInfo &&
+                      !(mCaps & NS_HTTP_BE_CONSERVATIVE) && !mBeConservative &&
+                      !gHttpHandler->IsHttp3Excluded(connInfo);
 
   RefPtr<AltSvcMapping> mapping;
   if (!mConnectionInfo && mAllowAltSvc &&  // per channel
-      !(mLoadFlags & LOAD_FRESH_CONNECTION) &&
+      (http2Allowed || http3Allowed) && !(mLoadFlags & LOAD_FRESH_CONNECTION) &&
       AltSvcMapping::AcceptableProxy(proxyInfo) &&
       (scheme.EqualsLiteral("http") || scheme.EqualsLiteral("https")) &&
       (mapping = gHttpHandler->GetAltServiceMapping(
            scheme, host, port, mPrivateBrowsing, IsIsolated(),
-           GetTopWindowOrigin(), OriginAttributes(), false))) {
+           GetTopWindowOrigin(), OriginAttributes(), http2Allowed,
+           http3Allowed))) {
     LOG(("TRRServiceChannel %p Alt Service Mapping Found %s://%s:%d [%s]\n",
          this, scheme.get(), mapping->AlternateHost().get(),
          mapping->AlternatePort(), mapping->HashKey().get()));
@@ -438,7 +442,7 @@ nsresult TRRServiceChannel::BeginConnect() {
 
   // Need to re-ask the handler, since mConnectionInfo may not be the connInfo
   // we used earlier
-  if (gHttpHandler->IsSpdyBlacklisted(mConnectionInfo)) {
+  if (gHttpHandler->IsHttp2Excluded(mConnectionInfo)) {
     mAllowSpdy = 0;
     mCaps |= NS_HTTP_DISALLOW_SPDY;
     mConnectionInfo->SetNoSpdy(true);
@@ -1025,8 +1029,6 @@ TRRServiceChannel::OnStartRequest(nsIRequest* request) {
 
       if (httpStatus == 300 || httpStatus == 301 || httpStatus == 302 ||
           httpStatus == 303 || httpStatus == 307 || httpStatus == 308) {
-        Telemetry::AccumulateCategorical(
-            Telemetry::LABELS_DNS_TRR_REDIRECTED::Redirected);
         nsresult rv = SyncProcessRedirection(httpStatus);
         if (NS_SUCCEEDED(rv)) {
           return rv;
@@ -1036,8 +1038,6 @@ TRRServiceChannel::OnStartRequest(nsIRequest* request) {
         DoNotifyListener();
         return rv;
       }
-      Telemetry::AccumulateCategorical(
-          Telemetry::LABELS_DNS_TRR_REDIRECTED::None);
     } else {
       NS_WARNING("No response head in OnStartRequest");
     }

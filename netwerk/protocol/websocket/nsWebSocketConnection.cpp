@@ -20,7 +20,14 @@ nsWebSocketConnection::nsWebSocketConnection(
       mSocketIn(aInputStream),
       mSocketOut(aOutputStream),
       mWriteOffset(0),
-      mStartReadingCalled(false) {}
+      mStartReadingCalled(false),
+      mOutputStreamBlocked(false) {
+  LOG(("nsWebSocketConnection ctor %p\n", this));
+}
+
+nsWebSocketConnection::~nsWebSocketConnection() {
+  LOG(("nsWebSocketConnection dtor %p\n", this));
+}
 
 NS_IMETHODIMP
 nsWebSocketConnection::Init(nsIWebSocketConnectionListener* aListener,
@@ -47,6 +54,7 @@ nsWebSocketConnection::Init(nsIWebSocketConnectionListener* aListener,
 
 NS_IMETHODIMP
 nsWebSocketConnection::Close() {
+  LOG(("nsWebSocketConnection::Close %p\n", this));
   if (mTransport) {
     mTransport->SetSecurityCallbacks(nullptr);
     mTransport->SetEventSink(nullptr, nullptr);
@@ -66,16 +74,13 @@ nsWebSocketConnection::Close() {
     mSocketOut = nullptr;
   }
 
-  mListener = nullptr;
   return NS_OK;
 }
 
-nsresult nsWebSocketConnection::EnqueueOutputData(
-    nsTArray<uint8_t>&& aHeader, nsTArray<uint8_t>&& aPayload) {
+nsresult nsWebSocketConnection::EnqueueOutputData(nsTArray<uint8_t>&& aData) {
   MOZ_ASSERT(mEventTarget->IsOnCurrentThread());
 
-  mOutputQueue.emplace_back(std::move(aHeader));
-  mOutputQueue.emplace_back(std::move(aPayload));
+  mOutputQueue.emplace_back(std::move(aData));
 
   if (mSocketOut) {
     mSocketOut->AsyncWait(this, 0, 0, mEventTarget);
@@ -90,12 +95,22 @@ nsWebSocketConnection::EnqueueOutputData(const uint8_t* aHdrBuf,
                                          const uint8_t* aPayloadBuf,
                                          uint32_t aPayloadBufLength) {
   LOG(("nsWebSocketConnection::EnqueueOutputData %p\n", this));
+  MOZ_ASSERT(mEventTarget->IsOnCurrentThread());
 
-  nsTArray<uint8_t> header;
-  header.AppendElements(aHdrBuf, aHdrBufLength);
-  nsTArray<uint8_t> payload;
-  payload.AppendElements(aPayloadBuf, aPayloadBufLength);
-  return EnqueueOutputData(std::move(header), std::move(payload));
+  nsTArray<uint8_t> data;
+  data.AppendElements(aHdrBuf, aHdrBufLength);
+  data.AppendElements(aPayloadBuf, aPayloadBufLength);
+  mOutputQueue.emplace_back(std::move(data));
+
+  if (mSocketOut) {
+    mSocketOut->AsyncWait(this, 0, 0, mEventTarget);
+  }
+
+  if (mOutputStreamBlocked) {
+    return NS_BASE_STREAM_WOULD_BLOCK;
+  }
+
+  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -153,11 +168,12 @@ NS_IMETHODIMP
 nsWebSocketConnection::OnInputStreamReady(nsIAsyncInputStream* aStream) {
   LOG(("nsWebSocketConnection::OnInputStreamReady() %p\n", this));
   MOZ_ASSERT(mEventTarget->IsOnCurrentThread());
+  MOZ_ASSERT(mListener);
 
-  if (!mSocketIn)  // did we we clean up the socket after scheduling InputReady?
+  // did we we clean up the socket after scheduling InputReady?
+  if (!mSocketIn) {
     return NS_OK;
-
-  if (!mListener) return NS_OK;
+  }
 
   // this is after the http upgrade - so we are speaking websockets
   uint8_t buffer[2048];
@@ -198,8 +214,13 @@ NS_IMETHODIMP
 nsWebSocketConnection::OnOutputStreamReady(nsIAsyncOutputStream* aStream) {
   LOG(("nsWebSocketConnection::OnOutputStreamReady() %p\n", this));
   MOZ_ASSERT(mEventTarget->IsOnCurrentThread());
+  MOZ_ASSERT(mListener);
 
-  if (!mListener) return NS_OK;
+  if (!mSocketOut) {
+    return NS_OK;
+  }
+
+  mOutputStreamBlocked = false;
 
   while (!mOutputQueue.empty()) {
     const OutputData& data = mOutputQueue.front();
@@ -211,8 +232,12 @@ nsWebSocketConnection::OnOutputStreamReady(nsIAsyncOutputStream* aStream) {
 
     uint32_t wrote = 0;
     nsresult rv = mSocketOut->Write(buffer, toWrite, &wrote);
+    LOG(("nsWebSocketConnection::OnOutputStreamReady: write %u rv %" PRIx32,
+         wrote, static_cast<uint32_t>(rv)));
+
     if (rv == NS_BASE_STREAM_WOULD_BLOCK) {
       mSocketOut->AsyncWait(this, 0, 0, mEventTarget);
+      mOutputStreamBlocked = true;
       return NS_OK;
     }
 
@@ -230,6 +255,8 @@ nsWebSocketConnection::OnOutputStreamReady(nsIAsyncOutputStream* aStream) {
       mOutputQueue.pop_front();
     }
   }
+
+  Unused << mListener->OnReadyToSendData();
 
   return NS_OK;
 }

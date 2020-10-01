@@ -22,6 +22,7 @@
 #include "mozilla/TextEvents.h"
 #include "mozilla/ToString.h"
 #include "mozilla/dom/BrowserChild.h"
+#include "mozilla/widget/GeckoViewSupport.h"
 
 #include <android/api-level.h>
 #include <android/input.h>
@@ -35,10 +36,6 @@
     do {                   \
     } while (0)
 #endif
-
-template <>
-const char nsWindow::NativePtr<mozilla::widget::GeckoEditableSupport>::sName[] =
-    "GeckoEditableSupport";
 
 static uint32_t ConvertAndroidKeyCodeToDOMKeyCode(int32_t androidKeyCode) {
   // Special-case alphanumeric keycodes because they are most common.
@@ -465,8 +462,10 @@ void GeckoEditableSupport::OnKeyEvent(int32_t aAction, int32_t aKeyCode,
                   : widget ? widget->GetTextEventDispatcher() : nullptr;
   NS_ENSURE_TRUE_VOID(dispatcher && widget);
 
-  if (!aIsSynthesizedImeKey && mWindow) {
-    mWindow->UserActivity();
+  if (!aIsSynthesizedImeKey) {
+    if (nsWindow* window = GetNsWindow()) {
+      window->UserActivity();
+    }
   } else if (aIsSynthesizedImeKey && mIMEMaskEventsCount > 0) {
     // Don't synthesize editor keys when not focused.
     return;
@@ -595,24 +594,30 @@ void GeckoEditableSupport::AddIMETextChange(const IMETextChange& aChange) {
       // No overlap between ranges
       continue;
     }
-    // When merging two ranges, there are generally four posibilities:
-    // [----(----]----), (----[----]----),
-    // [----(----)----], (----[----)----]
-    // where [----] is the first range and (----) is the second range
-    // As seen above, the start of the merged range is always the lesser
-    // of the two start offsets. OldEnd and NewEnd then need to be
-    // adjusted separately depending on the case. In any case, the change
-    // in text length of the merged range should be the sum of text length
-    // changes of the two original ranges, i.e.,
-    // newNewEnd - newOldEnd == newEnd1 - oldEnd1 + newEnd2 - oldEnd2
-    dst.mStart = std::min(dst.mStart, src.mStart);
-    if (src.mOldEnd < dst.mNewEnd) {
-      // New range overlaps or is within previous range; merge
-      dst.mNewEnd += src.mNewEnd - src.mOldEnd;
-    } else {  // src.mOldEnd >= dst.mNewEnd
-      // New range overlaps previous range; merge
-      dst.mOldEnd += src.mOldEnd - dst.mNewEnd;
-      dst.mNewEnd = src.mNewEnd;
+
+    if (src.mStart == dst.mStart && src.mNewEnd == dst.mNewEnd) {
+      // Same range. Adjust old end offset.
+      dst.mOldEnd = std::min(src.mOldEnd, dst.mOldEnd);
+    } else {
+      // When merging two ranges, there are generally four posibilities:
+      // [----(----]----), (----[----]----),
+      // [----(----)----], (----[----)----]
+      // where [----] is the first range and (----) is the second range
+      // As seen above, the start of the merged range is always the lesser
+      // of the two start offsets. OldEnd and NewEnd then need to be
+      // adjusted separately depending on the case. In any case, the change
+      // in text length of the merged range should be the sum of text length
+      // changes of the two original ranges, i.e.,
+      // newNewEnd - newOldEnd == newEnd1 - oldEnd1 + newEnd2 - oldEnd2
+      dst.mStart = std::min(dst.mStart, src.mStart);
+      if (src.mOldEnd < dst.mNewEnd) {
+        // New range overlaps or is within previous range; merge
+        dst.mNewEnd += src.mNewEnd - src.mOldEnd;
+      } else {  // src.mOldEnd >= dst.mNewEnd
+        // New range overlaps previous range; merge
+        dst.mOldEnd += src.mOldEnd - dst.mNewEnd;
+        dst.mNewEnd = src.mNewEnd;
+      }
     }
     // src merged to dst; delete src.
     mIMETextChanges.RemoveElementAt(srcIndex);
@@ -853,8 +858,8 @@ bool GeckoEditableSupport::DoReplaceText(int32_t aStart, int32_t aEnd,
     return false;
   }
 
-  if (mWindow) {
-    mWindow->UserActivity();
+  if (nsWindow* window = GetNsWindow()) {
+    window->UserActivity();
   }
 
   /*
@@ -1258,7 +1263,8 @@ nsresult GeckoEditableSupport::NotifyIME(
         if (mIsRemote) {
           if (!mEditableAttached) {
             // Re-attach on focus; see OnRemovedFrom().
-            AttachNative(mEditable, this);
+            jni::NativeWeakPtrHolder<GeckoEditableSupport>::AttachExisting(
+                mEditable, do_AddRef(this));
             mEditableAttached = true;
           }
           // Because GeckoEditableSupport in content process doesn't
@@ -1295,6 +1301,7 @@ nsresult GeckoEditableSupport::NotifyIME(
           mIMEDelaySynchronizeReply = false;
           mIMEActiveSynchronizeCount = 0;
           mIMEActiveCompositionCount = 0;
+          mInputContext.ShutDown();
           mEditable->NotifyIME(EditableListener::NOTIFY_IME_OF_BLUR);
           OnRemovedFrom(mDispatcher);
         }
@@ -1371,7 +1378,7 @@ void GeckoEditableSupport::OnRemovedFrom(
 
   if (mIsRemote && mEditable->HasEditableParent()) {
     // When we're remote, detach every time.
-    OnDetach(NS_NewRunnableFunction(
+    OnWeakNonIntrusiveDetach(NS_NewRunnableFunction(
         "GeckoEditableSupport::OnRemovedFrom",
         [editable = java::GeckoEditableChild::GlobalRef(mEditable)] {
           DisposeNative(editable);
@@ -1391,6 +1398,8 @@ GeckoEditableSupport::GetIMENotificationRequests() {
 
 void GeckoEditableSupport::SetInputContext(const InputContext& aContext,
                                            const InputContextAction& aAction) {
+  // SetInputContext is called from chrome process only
+  MOZ_ASSERT(XRE_IsParentProcess());
   MOZ_ASSERT(mEditable);
 
   ALOGIME(
@@ -1438,10 +1447,13 @@ void GeckoEditableSupport::NotifyIMEContext(const InputContext& aContext,
 
   mEditable->NotifyIMEContext(
       aContext.mIMEState.mEnabled, aContext.mHTMLInputType,
-      aContext.mHTMLInputInputmode, aContext.mActionHint, flags);
+      aContext.mHTMLInputInputmode, aContext.mActionHint,
+      aContext.mAutocapitalize, flags);
 }
 
 InputContext GeckoEditableSupport::GetInputContext() {
+  // GetInputContext is called from chrome process only
+  MOZ_ASSERT(XRE_IsParentProcess());
   InputContext context = mInputContext;
   context.mIMEState.mOpen = IMEState::OPEN_STATE_NOT_SUPPORTED;
   return context;
@@ -1454,7 +1466,20 @@ void GeckoEditableSupport::TransferParent(jni::Object::Param aEditableParent) {
   // and focus information, so it can accept additional calls from us.
   if (mIMEFocusCount > 0) {
     mEditable->NotifyIME(EditableListener::NOTIFY_IME_OF_TOKEN);
-    NotifyIMEContext(mInputContext, InputContextAction());
+    if (mIsRemote) {
+      // GeckoEditableSupport::SetInputContext is called on chrome process
+      // only, so mInputContext may be still invalid since it is set after
+      // we have gotton focus.
+      RefPtr<GeckoEditableSupport> self(this);
+      nsAppShell::PostEvent([self = std::move(self)] {
+        NS_WARNING_ASSERTION(
+            self->mDispatcher,
+            "Text dispatcher is still null. Why don't we get focus yet?");
+        self->NotifyIMEContext(self->mInputContext, InputContextAction());
+      });
+    } else {
+      NotifyIMEContext(mInputContext, InputContextAction());
+    }
     mEditable->NotifyIME(EditableListener::NOTIFY_IME_OF_FOCUS);
     // We have focus, so don't destroy editable child.
     return;
@@ -1491,15 +1516,19 @@ void GeckoEditableSupport::SetOnBrowserChild(dom::BrowserChild* aBrowserChild) {
     // We need to set a new listener.
     const auto editableChild = java::GeckoEditableChild::New(
         /* parent */ nullptr, /* default */ false);
-    RefPtr<widget::GeckoEditableSupport> editableSupport =
-        new widget::GeckoEditableSupport(editableChild);
-
-    // Tell PuppetWidget to use our listener for IME operations.
-    widget->SetNativeTextEventDispatcherListener(editableSupport);
 
     // Temporarily attach so we can receive the initial editable parent.
-    AttachNative(editableChild, editableSupport);
-    editableSupport->mEditableAttached = true;
+    auto editableSupport =
+        jni::NativeWeakPtrHolder<GeckoEditableSupport>::Attach(editableChild,
+                                                               editableChild);
+    auto accEditableSupport(editableSupport.Access());
+    MOZ_RELEASE_ASSERT(accEditableSupport);
+
+    // Tell PuppetWidget to use our listener for IME operations.
+    widget->SetNativeTextEventDispatcherListener(
+        accEditableSupport.AsRefPtr().get());
+
+    accEditableSupport->mEditableAttached = true;
 
     // Connect the new child to a parent that corresponds to the BrowserChild.
     java::GeckoServiceChildProcess::GetEditableParent(editableChild, contentId,
@@ -1521,13 +1550,30 @@ void GeckoEditableSupport::SetOnBrowserChild(dom::BrowserChild* aBrowserChild) {
       static_cast<widget::GeckoEditableSupport*>(listener.get());
   if (!support->mEditableAttached) {
     // Temporarily attach so we can receive the initial editable parent.
-    AttachNative(support->GetJavaEditable(), support);
+    jni::NativeWeakPtrHolder<GeckoEditableSupport>::AttachExisting(
+        support->GetJavaEditable(), do_AddRef(support));
     support->mEditableAttached = true;
   }
 
   // Transfer to a new parent that corresponds to the BrowserChild.
   java::GeckoServiceChildProcess::GetEditableParent(support->GetJavaEditable(),
                                                     contentId, tabId);
+}
+
+nsIWidget* GeckoEditableSupport::GetWidget() const {
+  MOZ_ASSERT(NS_IsMainThread());
+  return mDispatcher ? mDispatcher->GetWidget() : GetNsWindow();
+}
+
+nsWindow* GeckoEditableSupport::GetNsWindow() const {
+  MOZ_ASSERT(NS_IsMainThread());
+
+  auto acc(mWindow.Access());
+  if (!acc) {
+    return nullptr;
+  }
+
+  return acc->GetNsWindow();
 }
 
 }  // namespace widget

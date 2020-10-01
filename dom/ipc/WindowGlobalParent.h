@@ -16,6 +16,7 @@
 #include "mozilla/dom/DOMRect.h"
 #include "mozilla/dom/PWindowGlobalParent.h"
 #include "mozilla/dom/WindowContext.h"
+#include "mozilla/dom/WindowGlobalActorsBinding.h"
 #include "nsDataHashtable.h"
 #include "nsRefPtrHashtable.h"
 #include "nsWrapperCache.h"
@@ -86,7 +87,8 @@ class WindowGlobalParent final : public WindowContext,
   already_AddRefed<WindowGlobalChild> GetChildActor();
 
   // Get a JS actor object by name.
-  already_AddRefed<JSWindowActorParent> GetActor(const nsACString& aName,
+  already_AddRefed<JSWindowActorParent> GetActor(JSContext* aCx,
+                                                 const nsACString& aName,
                                                  ErrorResult& aRv);
 
   // Get this actor's manager if it is not an in-process actor. Returns
@@ -142,7 +144,8 @@ class WindowGlobalParent final : public WindowContext,
 
   bool IsInitialDocument() { return mIsInitialDocument; }
 
-  bool HasBeforeUnload() { return mHasBeforeUnload; }
+  already_AddRefed<mozilla::dom::Promise> PermitUnload(
+      PermitUnloadAction aAction, mozilla::ErrorResult& aRv);
 
   already_AddRefed<mozilla::dom::Promise> DrawSnapshot(
       const DOMRect* aRect, double aScale, const nsACString& aBackgroundColor,
@@ -206,9 +209,7 @@ class WindowGlobalParent final : public WindowContext,
   mozilla::ipc::IPCResult RecvLoadURI(
       const MaybeDiscarded<dom::BrowsingContext>& aTargetBC,
       nsDocShellLoadState* aLoadState, bool aSetNavigating);
-  mozilla::ipc::IPCResult RecvInternalLoad(
-      const MaybeDiscarded<dom::BrowsingContext>& aTargetBC,
-      nsDocShellLoadState* aLoadState);
+  mozilla::ipc::IPCResult RecvInternalLoad(nsDocShellLoadState* aLoadState);
   mozilla::ipc::IPCResult RecvUpdateDocumentURI(nsIURI* aURI);
   mozilla::ipc::IPCResult RecvUpdateDocumentPrincipal(
       nsIPrincipal* aNewDocumentPrincipal);
@@ -226,7 +227,6 @@ class WindowGlobalParent final : public WindowContext,
   }
   mozilla::ipc::IPCResult RecvUpdateDocumentSecurityInfo(
       nsITransportSecurityInfo* aSecurityInfo);
-  mozilla::ipc::IPCResult RecvSetHasBeforeUnload(bool aHasBeforeUnload);
   mozilla::ipc::IPCResult RecvSetClientInfo(
       const IPCClientInfo& aIPCClientInfo);
   mozilla::ipc::IPCResult RecvDestroy();
@@ -249,10 +249,23 @@ class WindowGlobalParent final : public WindowContext,
   mozilla::ipc::IPCResult RecvShare(IPCWebShareData&& aData,
                                     ShareResolver&& aResolver);
 
+  mozilla::ipc::IPCResult RecvUpdateDocumentWouldPreloadResources();
+  mozilla::ipc::IPCResult RecvSubmitLoadEventPreloadTelemetry(
+      TimeStamp aNavigationStart, TimeStamp aLoadEventStart,
+      TimeStamp aLoadEventEnd);
+  mozilla::ipc::IPCResult RecvSubmitTimeToFirstInteractionPreloadTelemetry(
+      uint32_t aMillis);
+  mozilla::ipc::IPCResult RecvSubmitLoadInputEventResponsePreloadTelemetry(
+      uint32_t aMillis);
+
+  mozilla::ipc::IPCResult RecvCheckPermitUnload(
+      bool aHasInProcessBlocker, XPCOMPermitUnloadAction aAction,
+      CheckPermitUnloadResolver&& aResolver);
+
  private:
   WindowGlobalParent(CanonicalBrowsingContext* aBrowsingContext,
                      uint64_t aInnerWindowId, uint64_t aOuterWindowId,
-                     bool aInProcess, FieldTuple&& aFields);
+                     bool aInProcess, FieldValues&& aInit);
 
   ~WindowGlobalParent();
 
@@ -299,6 +312,7 @@ class WindowGlobalParent final : public WindowContext,
 
   bool mDocumentHasLoaded;
   bool mDocumentHasUserInteracted;
+  bool mDocumentTreeWouldPreloadResources = false;
   bool mBlockAllMixedContent;
   bool mUpgradeInsecureRequests;
 

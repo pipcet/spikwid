@@ -64,6 +64,7 @@ arg_writer_info = {
     'ObjId': ('ObjOperandId', 'writeOperandId'),
     'StringId': ('StringOperandId', 'writeOperandId'),
     'SymbolId': ('SymbolOperandId', 'writeOperandId'),
+    'BooleanId': ('BooleanOperandId', 'writeOperandId'),
     'Int32Id': ('Int32OperandId', 'writeOperandId'),
     'NumberId': ('NumberOperandId', 'writeOperandId'),
     'BigIntId': ('BigIntOperandId', 'writeOperandId'),
@@ -77,6 +78,7 @@ arg_writer_info = {
     'AtomField': ('JSAtom*', 'writeStringField'),
     'PropertyNameField': ('PropertyName*', 'writeStringField'),
     'SymbolField': ('JS::Symbol*', 'writeSymbolField'),
+    'BaseScriptField': ('BaseScript*', 'writeBaseScriptField'),
     'RawWordField': ('uintptr_t', 'writeRawWordField'),
     'RawPointerField': ('const void*', 'writeRawPointerField'),
     'IdField': ('jsid', 'writeIdField'),
@@ -160,6 +162,7 @@ arg_reader_info = {
     'ObjId': ('ObjOperandId', 'Id', 'reader.objOperandId()'),
     'StringId': ('StringOperandId', 'Id', 'reader.stringOperandId()'),
     'SymbolId': ('SymbolOperandId', 'Id', 'reader.symbolOperandId()'),
+    'BooleanId': ('BooleanOperandId', 'Id', 'reader.booleanOperandId()'),
     'Int32Id': ('Int32OperandId', 'Id', 'reader.int32OperandId()'),
     'NumberId': ('NumberOperandId', 'Id', 'reader.numberOperandId()'),
     'BigIntId': ('BigIntOperandId', 'Id', 'reader.bigIntOperandId()'),
@@ -173,6 +176,7 @@ arg_reader_info = {
     'AtomField': ('uint32_t', 'Offset', 'reader.stubOffset()'),
     'PropertyNameField': ('uint32_t', 'Offset', 'reader.stubOffset()'),
     'SymbolField': ('uint32_t', 'Offset', 'reader.stubOffset()'),
+    'BaseScriptField': ('uint32_t', 'Offset', 'reader.stubOffset()'),
     'RawWordField': ('uint32_t', 'Offset', 'reader.stubOffset()'),
     'RawPointerField': ('uint32_t', 'Offset', 'reader.stubOffset()'),
     'IdField': ('uint32_t', 'Offset', 'reader.stubOffset()'),
@@ -242,6 +246,7 @@ arg_spewer_method = {
     'ObjId': 'spewOperandId',
     'StringId': 'spewOperandId',
     'SymbolId': 'spewOperandId',
+    'BooleanId': 'spewOperandId',
     'Int32Id': 'spewOperandId',
     'NumberId': 'spewOperandId',
     'BigIntId': 'spewOperandId',
@@ -255,6 +260,7 @@ arg_spewer_method = {
     'AtomField': 'spewField',
     'PropertyNameField': 'spewField',
     'SymbolField': 'spewField',
+    'BaseScriptField': 'spewField',
     'RawWordField': 'spewField',
     'RawPointerField': 'spewField',
     'IdField': 'spewField',
@@ -374,6 +380,7 @@ arg_length = {
     'ObjId': 1,
     'StringId': 1,
     'SymbolId': 1,
+    'BooleanId': 1,
     'Int32Id': 1,
     'NumberId': 1,
     'BigIntId': 1,
@@ -387,6 +394,7 @@ arg_length = {
     'AtomField': 1,
     'PropertyNameField': 1,
     'SymbolField': 1,
+    'BaseScriptField': 1,
     'RawWordField': 1,
     'RawPointerField': 1,
     'DOMExpandoGenerationField': 1,
@@ -468,7 +476,9 @@ def generate_cacheirops_header(c_out, yaml_path):
         else:
             args_length = '0'
 
-        ops_items.append('_({}, {}, {})'.format(name, args_length, cost_estimate))
+        transpile_str = ('true' if transpile else 'false')
+        ops_items.append('_({}, {}, {}, {})'.format(
+            name, args_length, transpile_str, cost_estimate))
 
         writer_methods.append(gen_writer_method(name, args, custom_writer))
 

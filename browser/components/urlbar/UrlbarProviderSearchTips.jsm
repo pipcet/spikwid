@@ -181,7 +181,7 @@ class ProviderSearchTips extends UrlbarProvider {
       {
         type: tip,
         buttonTextData: { id: "urlbar-search-tips-confirm" },
-        icon: defaultEngine.iconURI.spec,
+        icon: defaultEngine.iconURI?.spec,
       }
     );
 
@@ -214,13 +214,6 @@ class ProviderSearchTips extends UrlbarProvider {
 
     addCallback(this, result);
   }
-
-  /**
-   * Cancels a running query,
-   * @param {UrlbarQueryContext} queryContext the query context object to cancel
-   *        query for.
-   */
-  cancelQuery(queryContext) {}
 
   /**
    * Called when the tip is selected.

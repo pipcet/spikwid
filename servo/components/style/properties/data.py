@@ -334,7 +334,6 @@ class Longhand(object):
                 "BackgroundRepeat",
                 "BorderImageRepeat",
                 "BorderStyle",
-                "ButtonAppearance",
                 "Clear",
                 "ColumnCount",
                 "Contain",
@@ -361,7 +360,7 @@ class Longhand(object):
                 "MasonryAutoFlow",
                 "MozForceBrokenImageIcon",
                 "MozListReversed",
-                "MozScriptLevel",
+                "MathDepth",
                 "MozScriptMinSize",
                 "MozScriptSizeMultiplier",
                 "TextDecorationSkipInk",
@@ -774,11 +773,14 @@ class PropertyRestrictions:
         return set([
             "color",
             "text-combine-upright",
+            "text-transform",
             "unicode-bidi",
             "direction",
             "content",
             "-moz-osx-font-smoothing",
-        ] + PropertyRestrictions.spec(data, "css-fonts"))
+        ] + PropertyRestrictions.spec(data, "css-fonts")
+          + PropertyRestrictions.spec(data, "css-animations")
+          + PropertyRestrictions.spec(data, "css-transitions"))
 
     # https://www.w3.org/TR/webvtt1/#the-cue-pseudo-element
     @staticmethod

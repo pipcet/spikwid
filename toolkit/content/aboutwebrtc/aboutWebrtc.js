@@ -181,6 +181,27 @@ class AecLogging extends Control {
   }
 }
 
+class ShowTab extends Control {
+  constructor(browserId) {
+    super();
+    this.label = string("show_tab_label");
+    this.message = null;
+    this.browserId = browserId;
+  }
+
+  onClick() {
+    const gBrowser =
+      window.ownerGlobal.browsingContext.topChromeWindow.gBrowser;
+    for (const tab of gBrowser.visibleTabs) {
+      if (tab.linkedBrowser && tab.linkedBrowser.browserId == this.browserId) {
+        gBrowser.selectedTab = tab;
+        return;
+      }
+    }
+    this.ctrl.disabled = true;
+  }
+}
+
 (async () => {
   // Setup. Retrieve reports & log while page loads.
   const haveReports = getStats();
@@ -207,6 +228,8 @@ class AecLogging extends Control {
   let reports = await haveReports;
   let log = await haveLog;
 
+  reports.sort((a, b) => a.browserId - b.browserId);
+
   let peerConnections = renderElement("div");
   let connectionLog = renderElement("div");
   let userPrefs = renderElement("div");
@@ -230,7 +253,7 @@ class AecLogging extends Control {
       ...reports.map(renderPeerConnection),
     ]);
     const logDiv = renderElements("div", { className: "log" }, [
-      renderElement("span", { className: "section-heading" }, [
+      renderElements("span", { className: "section-heading" }, [
         renderText("h3", string("log_heading")),
         renderElement("button", {
           textContent: string("log_clear"),
@@ -283,7 +306,7 @@ class AecLogging extends Control {
 })();
 
 function renderPeerConnection(report) {
-  const { pcid, closed, timestamp, configuration } = report;
+  const { pcid, browserId, closed, timestamp, configuration } = report;
 
   const pcDiv = renderElement("div", { className: "peer-connection" });
   {
@@ -292,7 +315,10 @@ function renderPeerConnection(report) {
     const closedStr = closed ? `(${string("connection_closed")})` : "";
     const now = new Date(timestamp).toString();
 
-    pcDiv.append(renderText("h3", `[ ${id} ] ${url} ${closedStr} ${now}`));
+    pcDiv.append(
+      renderText("h3", `[ ${browserId} | ${id} ] ${url} ${closedStr} ${now}`)
+    );
+    pcDiv.append(new ShowTab(browserId).render()[0]);
   }
   {
     const section = renderFoldableSection(pcDiv);
@@ -876,7 +902,7 @@ function renderICEStats(report) {
 }
 
 function renderIceMetric(label, value) {
-  return renderElement("div", {}, [
+  return renderElements("div", {}, [
     renderText("span", `${string(label)}: `, { className: "info-label" }),
     renderText("span", value, { className: "info-body" }),
   ]);

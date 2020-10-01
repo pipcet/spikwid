@@ -375,10 +375,6 @@ class AudioData : public MediaData {
   // If mAudioBuffer is null, creates it from mAudioData.
   void EnsureAudioBuffer();
 
-  // To check whether mAudioData has audible signal, it's used to distinguish
-  // the audiable data and silent data.
-  bool IsAudible() const;
-
   // Return true if the adjusted time is valid. Caller should handle error when
   // the result is invalid.
   bool AdjustForStartTime(const media::TimeUnit& aStartTime) override;
@@ -399,6 +395,7 @@ class AudioData : public MediaData {
   ~AudioData() = default;
 
  private:
+  friend class ArrayOfRemoteAudioData;
   AudioDataValue* GetAdjustedData() const;
   media::TimeUnit mOriginalTime;
   // mFrames frames, each with mChannels values
@@ -614,6 +611,8 @@ class MediaRawData final : public MediaData {
   MediaRawData(const uint8_t* aData, size_t aSize);
   MediaRawData(const uint8_t* aData, size_t aSize, const uint8_t* aAlphaData,
                size_t aAlphaSize);
+  explicit MediaRawData(AlignedByteBuffer&& aData);
+  MediaRawData(AlignedByteBuffer&& aData, AlignedByteBuffer&& aAlphaData);
 
   // Pointer to data or null if not-yet allocated
   const uint8_t* Data() const { return mBuffer.Data(); }
@@ -627,7 +626,7 @@ class MediaRawData final : public MediaData {
            mAlphaBuffer.ComputedSizeOfExcludingThis();
   }
   // Access the buffer as a Span.
-  operator Span<const uint8_t>() { return MakeSpan(Data(), Size()); }
+  operator Span<const uint8_t>() { return Span{Data(), Size()}; }
 
   const CryptoSample& mCrypto;
   RefPtr<MediaByteBuffer> mExtraData;
@@ -662,6 +661,7 @@ class MediaRawData final : public MediaData {
 
  private:
   friend class MediaRawDataWriter;
+  friend class ArrayOfRemoteMediaRawData;
   AlignedByteBuffer mBuffer;
   AlignedByteBuffer mAlphaBuffer;
   CryptoSample mCryptoInternal;

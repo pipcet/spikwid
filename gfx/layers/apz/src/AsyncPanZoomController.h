@@ -10,6 +10,7 @@
 #include "CrossProcessMutex.h"
 #include "mozilla/layers/GeckoContentController.h"
 #include "mozilla/layers/RepaintRequest.h"
+#include "mozilla/layers/SampleTime.h"
 #include "mozilla/layers/ZoomConstraints.h"
 #include "mozilla/Atomics.h"
 #include "mozilla/Attributes.h"
@@ -22,6 +23,7 @@
 #include "mozilla/UniquePtr.h"
 #include "InputData.h"
 #include "Axis.h"  // for Axis, Side, etc.
+#include "ExpectedGeckoMetrics.h"
 #include "InputQueue.h"
 #include "APZUtils.h"
 #include "Layers.h"  // for Layer::ScrollDirection
@@ -246,10 +248,10 @@ class AsyncPanZoomController {
    * The return value indicates whether or not any currently running animation
    * should continue. If true, the compositor should schedule another composite.
    */
-  bool AdvanceAnimations(const TimeStamp& aSampleTime);
+  bool AdvanceAnimations(const SampleTime& aSampleTime);
 
   bool UpdateAnimation(const RecursiveMutexAutoLock& aProofOfLock,
-                       const TimeStamp& aSampleTime,
+                       const SampleTime& aSampleTime,
                        nsTArray<RefPtr<Runnable>>* aOutDeferredTasks);
 
   // --------------------------------------------------------------------------
@@ -318,7 +320,7 @@ class AsyncPanZoomController {
    * See GetCheckerboardMagnitude for documentation of the
    * aClippedCompositionBounds argument that needs to be provided by the caller.
    */
-  void ReportCheckerboard(const TimeStamp& aSampleTime,
+  void ReportCheckerboard(const SampleTime& aSampleTime,
                           const ParentLayerRect& aClippedCompositionBounds);
 
   /**
@@ -329,6 +331,12 @@ class AsyncPanZoomController {
    * on the next composite.
    */
   void FlushActiveCheckerboardReport();
+
+  /**
+   * See documentation on corresponding method in APZPublicUtils.h
+   */
+  static gfx::IntSize GetDisplayportAlignmentMultiplier(
+      const ScreenSize& aBaseSize);
 
   /**
    * Recalculates the displayport. Ideally, this should paint an area bigger
@@ -528,9 +536,17 @@ class AsyncPanZoomController {
   const FrameMetrics& Metrics() const;
   FrameMetrics& Metrics();
 
+  /**
+   * Get the GeckoViewMetrics to be sent to Gecko for the current composite.
+   */
+  GeckoViewMetrics GetGeckoViewMetrics() const;
+
   // Helper function to compare root frame metrics and update them
   // Returns true when the metrics have changed and were updated.
-  bool UpdateRootFrameMetricsIfChanged(FrameMetrics& metrics);
+  bool UpdateRootFrameMetricsIfChanged(GeckoViewMetrics& aMetrics);
+
+  // Returns the cached current frame time.
+  SampleTime GetFrameTime() const;
 
  private:
   // Get whether the horizontal content of the honoured target of auto-dir
@@ -542,9 +558,6 @@ class AsyncPanZoomController {
  protected:
   // Protected destructor, to discourage deletion outside of Release():
   virtual ~AsyncPanZoomController();
-
-  // Returns the cached current frame time.
-  TimeStamp GetFrameTime() const;
 
   /**
    * Helper method for touches beginning. Sets everything up for panning and any
@@ -688,13 +701,13 @@ class AsyncPanZoomController {
   /**
    * Scroll the scroll frame to an X,Y offset.
    */
-  void SetScrollOffset(const CSSPoint& aOffset);
+  void SetVisualScrollOffset(const CSSPoint& aOffset);
 
   /**
    * Scroll the scroll frame to an X,Y offset, clamping the resulting scroll
    * offset to the scroll range.
    */
-  void ClampAndSetScrollOffset(const CSSPoint& aOffset);
+  void ClampAndSetVisualScrollOffset(const CSSPoint& aOffset);
 
   /**
    * Scroll the scroll frame by an X,Y offset.
@@ -829,6 +842,7 @@ class AsyncPanZoomController {
    */
   void RequestContentRepaint(const FrameMetrics& aFrameMetrics,
                              const ParentLayerPoint& aVelocity,
+                             const ScreenMargin& aDisplayportMargins,
                              RepaintUpdateType aUpdateType);
 
   /**
@@ -992,10 +1006,10 @@ class AsyncPanZoomController {
 
   // The last time the compositor has sampled the content transform for this
   // frame.
-  TimeStamp mLastSampleTime;
+  SampleTime mLastSampleTime;
 
   // The last sample time at which we submitted a checkerboarding report.
-  TimeStamp mLastCheckerboardReport;
+  SampleTime mLastCheckerboardReport;
 
   // Stores the previous focus point if there is a pinch gesture happening. Used
   // to allow panning by moving multiple fingers (thus moving the focus point).
@@ -1232,7 +1246,9 @@ class AsyncPanZoomController {
     ANIMATING_ZOOM,       /* animated zoom to a new rect */
     OVERSCROLL_ANIMATION, /* Spring-based animation used to relieve overscroll
                              once the finger is lifted. */
-    SMOOTH_SCROLL,        /* Smooth scrolling to destination. Used by
+    SMOOTH_SCROLL,        /* Smooth scrolling to destination, with physics
+                             controlled by prefs specific to the scroll origin. */
+    SMOOTHMSD_SCROLL,     /* SmoothMSD scrolling to destination. Used by
                              CSSOM-View smooth scroll-behavior */
     WHEEL_SCROLL,    /* Smooth scrolling to a destination for a wheel event. */
     KEYBOARD_SCROLL, /* Smooth scrolling to a destination for a keyboard event.
@@ -1363,7 +1379,7 @@ class AsyncPanZoomController {
   friend class AndroidFlingPhysics;
   friend class DesktopFlingPhysics;
   friend class OverscrollAnimation;
-  friend class SmoothScrollAnimation;
+  friend class SmoothMsdScrollAnimation;
   friend class GenericScrollAnimation;
   friend class WheelScrollAnimation;
   friend class KeyboardScrollAnimation;
@@ -1375,7 +1391,7 @@ class AsyncPanZoomController {
   // The initial velocity of the most recent fling.
   ParentLayerPoint mLastFlingVelocity;
   // The time at which the most recent fling started.
-  TimeStamp mLastFlingTime;
+  SampleTime mLastFlingTime;
   // Indicates if the repaint-during-pinch timer is currently set
   bool mPinchPaintTimerSet;
 
@@ -1394,7 +1410,14 @@ class AsyncPanZoomController {
   // Start an overscroll animation with the given initial velocity.
   void StartOverscrollAnimation(const ParentLayerPoint& aVelocity);
 
-  void SmoothScrollTo(const CSSPoint& aDestination);
+  // Start a smooth-scrolling animation to the given destination, with physics
+  // based on the prefs for the indicated origin.
+  void SmoothScrollTo(const CSSPoint& aDestination,
+                      const ScrollOrigin& aOrigin);
+
+  // Start a smooth-scrolling animation to the given destination, with MSD
+  // physics that is suited for scroll-snapping.
+  void SmoothMsdScrollTo(const CSSPoint& aDestination);
 
   // Returns whether overscroll is allowed during an event.
   bool AllowScrollHandoffInCurrentBlock() const;
@@ -1406,6 +1429,9 @@ class AsyncPanZoomController {
   // point and in the given direction.
   float ComputePLPPI(ParentLayerPoint aPoint,
                      ParentLayerPoint aDirection) const;
+
+  Maybe<CSSPoint> GetCurrentAnimationDestination(
+      const RecursiveMutexAutoLock& aProofOfLock) const;
 
   /* ===================================================================
    * The functions and members in this section are used to make ancestor chains

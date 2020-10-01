@@ -4,7 +4,7 @@
 
 use std::sync::{Mutex, MutexGuard};
 
-use glean::once_cell::sync::Lazy;
+use fog::once_cell::sync::Lazy;
 
 const GLOBAL_APPLICATION_ID: &str = "org.mozilla.firefox.test";
 
@@ -32,9 +32,14 @@ pub fn setup_glean(tempdir: Option<tempfile::TempDir>) -> tempfile::TempDir {
         upload_enabled: true,
         max_events: None,
         delay_ping_lifetime_io: false,
+        language_binding_name: "Rust".into(),
     };
     let glean = glean_core::Glean::new(cfg).unwrap();
     glean_core::setup_glean(glean).expect("can't set up global Glean object");
+
+    // This might have been flushed by other tests already, so we ignore the return value.
+    // The dispatch queue is definitely unblocked after this, no matter what.
+    let _ = fog::flush_init();
 
     dir
 }

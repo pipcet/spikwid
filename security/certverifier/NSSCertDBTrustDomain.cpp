@@ -9,6 +9,7 @@
 #include <stdint.h>
 
 #include "ExtendedValidation.h"
+#include "MultiLogCTVerifier.h"
 #include "NSSErrorsService.h"
 #include "OCSPVerificationTrustDomain.h"
 #include "PublicKeyPinningService.h"
@@ -33,7 +34,6 @@
 #include "nsCRTGlue.h"
 #include "nsIObserverService.h"
 #include "nsNSSCertHelper.h"
-#include "nsNSSCertValidity.h"
 #include "nsNSSCertificate.h"
 #include "nsNSSCertificateDB.h"
 #include "nsPrintfCString.h"
@@ -45,12 +45,17 @@
 #include "secerr.h"
 #include "secder.h"
 
+#ifdef MOZ_WIDGET_COCOA
+#  include "nsCocoaFeatures.h"
+#endif
+
 #include "TrustOverrideUtils.h"
 #include "TrustOverride-AppleGoogleDigiCertData.inc"
 #include "TrustOverride-StartComAndWoSignData.inc"
 #include "TrustOverride-SymantecData.inc"
 
 using namespace mozilla;
+using namespace mozilla::ct;
 using namespace mozilla::pkix;
 
 extern LazyLogModule gCertVerifierLog;
@@ -602,11 +607,34 @@ static Result GetOCSPAuthorityInfoAccessLocation(const UniquePLArenaPool& arena,
   return Success;
 }
 
+Result GetEarliestSCTTimestamp(Input sctExtension,
+                               Maybe<uint64_t>& earliestTimestamp) {
+  earliestTimestamp.reset();
+
+  Input sctList;
+  Result rv =
+      ExtractSignedCertificateTimestampListFromExtension(sctExtension, sctList);
+  if (rv != Success) {
+    return rv;
+  }
+  std::vector<SignedCertificateTimestamp> decodedSCTs;
+  size_t decodingErrors;
+  DecodeSCTs(sctList, decodedSCTs, decodingErrors);
+  Unused << decodingErrors;
+  for (const auto& scts : decodedSCTs) {
+    if (!earliestTimestamp.isSome() || scts.timestamp < *earliestTimestamp) {
+      earliestTimestamp = Some(scts.timestamp);
+    }
+  }
+  return Success;
+}
+
 Result NSSCertDBTrustDomain::CheckRevocation(
     EndEntityOrCA endEntityOrCA, const CertID& certID, Time time,
-    Time certValidityPeriodBeginning, Duration validityDuration,
+    Duration validityDuration,
     /*optional*/ const Input* stapledOCSPResponse,
-    /*optional*/ const Input* aiaExtension) {
+    /*optional*/ const Input* aiaExtension,
+    /*optional*/ const Input* sctExtension) {
   // Actively distrusted certificates will have already been blocked by
   // GetCertTrust.
 
@@ -616,10 +644,20 @@ Result NSSCertDBTrustDomain::CheckRevocation(
   MOZ_LOG(gCertVerifierLog, LogLevel::Debug,
           ("NSSCertDBTrustDomain: Top of CheckRevocation\n"));
 
+  Maybe<uint64_t> earliestSCTTimestamp = Nothing();
+  if (sctExtension) {
+    Result rv = GetEarliestSCTTimestamp(*sctExtension, earliestSCTTimestamp);
+    if (rv != Success) {
+      MOZ_LOG(
+          gCertVerifierLog, LogLevel::Debug,
+          ("decoding SCT extension failed - CRLite will be not be consulted"));
+    }
+  }
+
   Maybe<TimeDuration> crliteLookupDuration;
 #ifdef MOZ_NEW_CERT_STORAGE
   if (endEntityOrCA == EndEntityOrCA::MustBeEndEntity &&
-      mCRLiteMode != CRLiteMode::Disabled) {
+      mCRLiteMode != CRLiteMode::Disabled && earliestSCTTimestamp.isSome()) {
     MOZ_LOG(gCertVerifierLog, LogLevel::Debug,
             ("NSSCertDBTrustDomain::CheckRevocation: checking CRLite"));
     nsTArray<uint8_t> issuerBytes;
@@ -665,12 +703,15 @@ Result NSSCertDBTrustDomain::CheckRevocation(
         crliteLookupDuration.emplace(crliteLookupAfter - crliteLookupBefore);
       }
       Time filterTimestampTime(TimeFromEpochInSeconds(filterTimestamp));
-      // We can only use this result if this certificate's `notBefore` time
-      // (i.e. the beginning of its validity period) is older than what cert
-      // storage returned for its CRLite timestamp. Otherwise, the CRLite filter
-      // cascade may have been created before this certificate existed, and if
-      // it would create a false positive, it hasn't been accounted for.
-      if (certValidityPeriodBeginning <= filterTimestampTime &&
+      // We can only use this result if the earliest embedded signed
+      // certificate timestamp from the certificate is older than what cert
+      // storage returned for its CRLite timestamp. Otherwise, the CRLite
+      // filter cascade may have been created before this certificate existed,
+      // and if it would create a false positive, it hasn't been accounted for.
+      // SCT timestamps are milliseconds since the epoch.
+      Time earliestCertificateTimestamp(
+          TimeFromEpochInSeconds(*earliestSCTTimestamp / 1000));
+      if (earliestCertificateTimestamp <= filterTimestampTime &&
           crliteRevocationState == nsICertStorage::STATE_ENFORCE) {
         if (mCRLiteTelemetryInfo) {
           mCRLiteTelemetryInfo->mLookupResult =
@@ -704,7 +745,7 @@ Result NSSCertDBTrustDomain::CheckRevocation(
           mCRLiteTelemetryInfo->mLookupResult =
               CRLiteLookupResult::FilterNotAvailable;
         }
-      } else if (certValidityPeriodBeginning > filterTimestampTime) {
+      } else if (earliestCertificateTimestamp > filterTimestampTime) {
         MOZ_LOG(gCertVerifierLog, LogLevel::Debug,
                 ("NSSCertDBTrustDomain::CheckRevocation: cert too new"));
         if (mCRLiteTelemetryInfo) {
@@ -1246,8 +1287,19 @@ Result NSSCertDBTrustDomain::IsChainValid(const DERArray& certArray, Time time,
     bool enforceTestMode =
         (mPinningMode == CertVerifier::pinningEnforceTestMode);
     bool chainHasValidPins;
+
+    nsTArray<Span<const uint8_t>> derCertSpanList;
+    size_t numCerts = certArray.GetLength();
+    for (size_t i = numCerts; i > 0; --i) {
+      const Input* der = certArray.GetDER(i - 1);
+      if (!der) {
+        return Result::FATAL_ERROR_LIBRARY_FAILURE;
+      }
+      derCertSpanList.EmplaceBack(der->UnsafeGetData(), der->GetLength());
+    }
+
     nsrv = PublicKeyPinningService::ChainHasValidPins(
-        nssCertList, mHostname, time, enforceTestMode, mOriginAttributes,
+        derCertSpanList, mHostname, time, enforceTestMode, mOriginAttributes,
         chainHasValidPins, mPinningTelemetryInfo);
     if (NS_FAILED(nsrv)) {
       return Result::FATAL_ERROR_LIBRARY_FAILURE;
@@ -1599,6 +1651,12 @@ bool LoadUserModuleAt(const char* moduleName, const char* libraryName,
 const char* kOSClientCertsModuleName = "OS Client Cert Module";
 
 bool LoadOSClientCertsModule(const nsCString& dir) {
+#ifdef MOZ_WIDGET_COCOA
+  // osclientcerts requires macOS 10.14 or later
+  if (!nsCocoaFeatures::OnMojaveOrLater()) {
+    return false;
+  }
+#endif
   return LoadUserModuleAt(kOSClientCertsModuleName, "osclientcerts", dir);
 }
 

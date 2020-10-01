@@ -20,6 +20,7 @@
 #  include "mozilla/gfx/Rect.h"
 #  include "mozilla/layers/LayersTypes.h"
 
+class nsDisplayListBuilder;
 class nsICanvasRenderingContextInternal;
 class nsITimerCallback;
 enum class gfxAlphaType;
@@ -88,10 +89,8 @@ class HTMLCanvasElementObserver final : public nsIObserver,
  * will be given a copy of the just-painted canvas.
  * All FrameCaptureListeners get the same copy.
  */
-class FrameCaptureListener : public SupportsWeakPtr<FrameCaptureListener> {
+class FrameCaptureListener : public SupportsWeakPtr {
  public:
-  MOZ_DECLARE_WEAKREFERENCE_TYPENAME(FrameCaptureListener)
-
   FrameCaptureListener() : mFrameCaptureRequested(false) {}
 
   /*
@@ -119,7 +118,7 @@ class FrameCaptureListener : public SupportsWeakPtr<FrameCaptureListener> {
 
 class HTMLCanvasElement final : public nsGenericHTMLElement,
                                 public CanvasRenderingContextHelper,
-                                public SupportsWeakPtr<HTMLCanvasElement> {
+                                public SupportsWeakPtr {
   enum { DEFAULT_CANVAS_WIDTH = 300, DEFAULT_CANVAS_HEIGHT = 150 };
 
   typedef layers::CanvasRenderer CanvasRenderer;
@@ -140,9 +139,6 @@ class HTMLCanvasElement final : public nsGenericHTMLElement,
   // CC
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(HTMLCanvasElement,
                                            nsGenericHTMLElement)
-
-  // WeakPtr
-  MOZ_DECLARE_WEAKREFERENCE_TYPENAME(HTMLCanvasElement)
 
   // WebIDL
   uint32_t Height() {
@@ -236,12 +232,9 @@ class HTMLCanvasElement final : public nsGenericHTMLElement,
    */
   void InvalidateCanvas();
 
-  /*
-   * Get the number of contexts in this canvas, and request a context at
-   * an index.
-   */
-  int32_t CountContexts();
-  nsICanvasRenderingContextInternal* GetContextAtIndex(int32_t index);
+  nsICanvasRenderingContextInternal* GetCurrentContext() {
+    return mCurrentContext;
+  }
 
   /*
    * Returns true if the canvas context content is guaranteed to be opaque

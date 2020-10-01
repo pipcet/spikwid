@@ -1022,10 +1022,11 @@ class Marionette(object):
                 # which wants to reset the context but fails sending the message.
                 pass
 
+            timeout_restart = self.shutdown_timeout + self.startup_timeout
             try:
                 # Wait for a new Marionette connection to appear while the
                 # process restarts itself.
-                self.raise_for_port(timeout=self.shutdown_timeout,
+                self.raise_for_port(timeout=timeout_restart,
                                     check_process_status=False)
             except socket.timeout:
                 exc_cls, _, tb = sys.exc_info()
@@ -1037,7 +1038,7 @@ class Marionette(object):
                     self._send_message("Marionette:AcceptConnections", {"value": True})
 
                     message = "Process still running {}s after restart request"
-                    reraise(exc_cls, exc_cls(message.format(self.shutdown_timeout)), tb)
+                    reraise(exc_cls, exc_cls(message.format(timeout_restart)), tb)
 
                 else:
                     # The process shutdown but didn't start again.
@@ -1359,12 +1360,6 @@ class Marionette(object):
         """
         self._send_message("WebDriver:SwitchToWindow", {"handle": handle, "focus": focus})
         self.window = handle
-
-    def get_active_frame(self):
-        """Returns an :class:`~marionette_driver.marionette.HTMLElement`
-        representing the frame Marionette is currently acting on."""
-        return self._send_message("WebDriver:GetActiveFrame",
-                                  key="value")
 
     def switch_to_default_content(self):
         """Switch the current context to page's default content."""

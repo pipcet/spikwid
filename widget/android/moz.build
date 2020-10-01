@@ -100,8 +100,11 @@ sources_from_WrapForJNI = sorted(
 EXPORTS.mozilla.widget += [
     'AndroidCompositorWidget.h',
     'AndroidUiThread.h',
+    'AndroidView.h',
     'EventDispatcher.h',
+    'GeckoViewSupport.h',
     'nsWindow.h',
+    'WindowEvent.h',
 ]
 
 EXPORTS.mozilla.java += [
@@ -133,9 +136,11 @@ UNIFIED_SOURCES += [
     'nsAppShell.cpp',
     'nsClipboard.cpp',
     'nsDeviceContextAndroid.cpp',
-    'nsIdleServiceAndroid.cpp',
     'nsLookAndFeel.cpp',
+    'nsNativeBasicThemeAndroid.cpp',
+    'nsNativeThemeAndroid.cpp',
     'nsPrintSettingsServiceAndroid.cpp',
+    'nsUserIdleServiceAndroid.cpp',
     'nsWidgetFactory.cpp',
     'nsWindow.cpp',
     'ProcInfo.cpp',
@@ -170,6 +175,7 @@ LOCAL_INCLUDES += [
     '/dom/system/android',
     '/gfx/2d',
     '/gfx/vr',
+    '/layout/forms',
     '/layout/painting',
     '/netwerk/base',
     '/netwerk/cache',

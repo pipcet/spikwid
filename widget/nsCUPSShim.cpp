@@ -1,5 +1,5 @@
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ex: set tabstop=8 softtabstop=4 shiftwidth=4 expandtab: */
+/* ex: set tabstop=8 softtabstop=2 shiftwidth=2 expandtab: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -10,54 +10,66 @@
 #include "mozilla/ArrayUtils.h"
 #include "prlink.h"
 
-// List of symbols to find in libcups. Must match symAddr[] defined in Init().
-// Making this an array of arrays instead of pointers allows storing the
-// whole thing in read-only memory.
-static const char gSymName[][sizeof("cupsPrintFile")] = {
-    {"cupsAddOption"}, {"cupsFreeDests"}, {"cupsGetDest"},
-    {"cupsGetDests"},  {"cupsPrintFile"}, {"cupsTempFd"},
-};
-static const int gSymNameCt = mozilla::ArrayLength(gSymName);
+#ifdef CUPS_SHIM_RUNTIME_LINK
 
-#ifdef XP_MACOSX
-// TODO: On OS X we are guaranteed to have CUPS, so it would be nice to just
-// assign the members from the header directly instead of dlopen'ing.
-// Alternatively, we could just do some #define's on OS X, but we don't use
-// CUPS all that much, so there really isn't too much overhead in storing this
-// table of functions even on OS X.
+// TODO: This is currently pointless as we always use the compile-time linked
+// version of CUPS, but in the future this may become a configure option.
+// We also cannot use NSPR's library suffix support, since that cannot handle
+// version number suffixes.
+#  ifdef XP_MACOSX
 static const char gCUPSLibraryName[] = "libcups.2.dylib";
-#else
+#  else
 static const char gCUPSLibraryName[] = "libcups.so.2";
-#endif
+#  endif
 
-bool nsCUPSShim::Init() {
-  mCupsLib = PR_LoadLibrary(gCUPSLibraryName);
-  if (!mCupsLib) return false;
-
-  // List of symbol pointers. Must match gSymName[] defined above.
-  void** symAddr[] = {
-      (void**)&mCupsAddOption, (void**)&mCupsFreeDests, (void**)&mCupsGetDest,
-      (void**)&mCupsGetDests,  (void**)&mCupsPrintFile, (void**)&mCupsTempFd,
-  };
-
-  for (int i = gSymNameCt; i--;) {
-    *(symAddr[i]) = PR_FindSymbol(mCupsLib, gSymName[i]);
-    if (!*(symAddr[i])) {
-#ifdef DEBUG
-      nsAutoCString msg(gSymName[i]);
-      msg.AppendLiteral(" not found in CUPS library");
-      NS_WARNING(msg.get());
-#endif
-
-#ifndef MOZ_TSAN
-      // With TSan, we cannot unload libcups once we have loaded it because
-      // TSan does not support unloading libraries that are matched from its
-      // suppression list. Hence we just keep the library loaded in TSan builds.
-      PR_UnloadLibrary(mCupsLib);
-#endif
-      mCupsLib = nullptr;
-      return false;
-    }
+template <typename FuncT>
+static bool LoadCupsFunc(PRLibrary*& lib, FuncT*& dest,
+                         const char* const name) {
+  dest = (FuncT*)PR_FindSymbol(lib, name);
+  if (MOZ_UNLIKELY(!dest)) {
+#  ifdef DEBUG
+    nsAutoCString msg(name);
+    msg.AppendLiteral(" not found in CUPS library");
+    NS_WARNING(msg.get());
+#  endif
+#  ifndef MOZ_TSAN
+    // With TSan, we cannot unload libcups once we have loaded it because
+    // TSan does not support unloading libraries that are matched from its
+    // suppression list. Hence we just keep the library loaded in TSan builds.
+    PR_UnloadLibrary(lib);
+#  endif
+    lib = nullptr;
+    return false;
   }
   return true;
 }
+
+bool nsCUPSShim::Init() {
+  mozilla::OffTheBooksMutexAutoLock lock(mInitMutex);
+  if (mInited) {
+    return true;
+  }
+
+  mCupsLib = PR_LoadLibrary(gCUPSLibraryName);
+  if (!mCupsLib) {
+    return false;
+  }
+
+// This is a macro so that it could also load from libcups if we are configured
+// to use it as a compile-time dependency.
+#  define CUPS_SHIM_LOAD(NAME) \
+    if (!LoadCupsFunc(mCupsLib, NAME, #NAME)) return false;
+  CUPS_SHIM_ALL_FUNCS(CUPS_SHIM_LOAD)
+#  undef CUPS_SHIM_LOAD
+  mInited = true;
+  return true;
+}
+
+#else  // CUPS_SHIM_RUNTIME_LINK
+
+bool nsCUPSShim::Init() {
+  mInited = true;
+  return true;
+}
+
+#endif

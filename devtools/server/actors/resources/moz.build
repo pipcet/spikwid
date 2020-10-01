@@ -10,10 +10,14 @@ DIRS += [
 
 DevToolsModules(
     'console-messages.js',
+    'css-changes.js',
     'css-messages.js',
+    'document-event.js',
     'error-messages.js',
     'index.js',
+    'network-events.js',
     'platform-messages.js',
+    'stylesheets.js',
 )
 
 with Files('*-messages.js'):

@@ -94,6 +94,12 @@ class nsHttpConnectionMgr final : public HttpConnectionMgrShell,
                                nsHttpConnectionInfo* wildcardCI,
                                HttpConnectionBase* conn);
 
+  // Move a transaction from the pendingQ of it's connection entry to another
+  // one. Returns true if the transaction is moved successfully, otherwise
+  // returns false.
+  bool MoveTransToHTTPSSVCConnEntry(nsHttpTransaction* aTrans,
+                                    nsHttpConnectionInfo* aNewCI);
+
   [[nodiscard]] bool ProcessPendingQForEntry(nsHttpConnectionInfo*);
 
   // This is used to force an idle connection to be closed and removed from
@@ -106,6 +112,8 @@ class nsHttpConnectionMgr final : public HttpConnectionMgrShell,
   // upgraded to SPDY because the dispatch and idle semantics are a little
   // bit different.
   void ReportSpdyConnection(nsHttpConnection*, bool usingSpdy);
+
+  void ReportHttp3Connection(HttpConnectionBase*);
 
   bool GetConnectionData(nsTArray<HttpRetParams>*);
 
@@ -227,8 +235,9 @@ class nsHttpConnectionMgr final : public HttpConnectionMgrShell,
 
     bool mDoNotDestroy : 1;
 
-    bool AllowSpdy() const { return mCanUseSpdy; }
-    void DisallowSpdy();
+    bool AllowHttp2() const { return mCanUseSpdy; }
+    void DisallowHttp2();
+    void DontReuseHttp3Conn();
 
     // Set the IP family preference flags according the connected family
     void RecordIPFamilyPreference(uint16_t family);

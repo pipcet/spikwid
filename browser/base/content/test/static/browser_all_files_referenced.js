@@ -34,10 +34,10 @@ var gExceptionPaths = [
   "resource://payments/",
 
   // https://github.com/mozilla/activity-stream/issues/3053
-  "resource://activity-stream/data/content/tippytop/images/",
-  "resource://activity-stream/data/content/tippytop/favicons/",
+  "chrome://activity-stream/content/data/content/tippytop/images/",
+  "chrome://activity-stream/content/data/content/tippytop/favicons/",
   // These resources are referenced by messages delivered through Remote Settings
-  "resource://activity-stream/data/content/assets/remote/",
+  "chrome://activity-stream/content/data/content/assets/remote/",
 
   // browser/extensions/pdfjs/content/build/pdf.js#1999
   "resource://pdf.js/web/images/",
@@ -233,6 +233,15 @@ if (AppConstants.NIGHTLY_BUILD && AppConstants.platform != "win") {
   whitelist.push({ file: "chrome://fxr/content/fxrui.html" });
 }
 
+if (!AppConstants.NIGHTLY_BUILD || AppConstants.platform == "android") {
+  // Bug 1656680, should be removed after Bug 1651111 lands.
+  // The l10n build system can't package string files only for some platforms.
+  // Referenced by aboutGlean.html
+  whitelist.push({
+    file: "resource://gre/localization/en-US/toolkit/about/aboutGlean.ftl",
+  });
+}
+
 whitelist = new Set(
   whitelist
     .filter(
@@ -382,9 +391,10 @@ function parseManifest(manifestUri) {
   });
 }
 
-// If the given URI is a webextension manifest, extract the scripts
-// for any embedded APIs.  Returns the passed in URI if the manifest
-// is not a webextension manifest, null otherwise.
+// If the given URI is a webextension manifest, extract files used by
+// any of its APIs (scripts, icons, style sheets, theme images).
+// Returns the passed in URI if the manifest is not a webextension
+// manifest, null otherwise.
 async function parseJsonManifest(uri) {
   uri = Services.io.newURI(convertToCodeURI(uri.spec));
 
@@ -419,6 +429,14 @@ async function parseJsonManifest(uri) {
   if (data.theme_experiment && data.theme_experiment.stylesheet) {
     let stylesheet = uri.resolve(data.theme_experiment.stylesheet);
     gReferencesFromCode.set(stylesheet, null);
+  }
+
+  for (let themeKey of ["theme", "dark_theme"]) {
+    if (data?.[themeKey]?.images?.additional_backgrounds) {
+      for (let background of data[themeKey].images.additional_backgrounds) {
+        gReferencesFromCode.set(uri.resolve(background), null);
+      }
+    }
   }
 
   return null;

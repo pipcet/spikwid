@@ -16,7 +16,6 @@
 #include "jit/JitCode.h"
 #include "jit/shared/Assembler-shared.h"
 #include "util/TrailingArray.h"
-#include "vm/EnvironmentObject.h"
 #include "vm/JSContext.h"
 #include "vm/Realm.h"
 #include "vm/TraceLogging.h"
@@ -262,8 +261,7 @@ class alignas(uintptr_t) BaselineScript final : public TrailingArray {
 
   template <typename T>
   mozilla::Span<T> makeSpan(Offset start, Offset end) {
-    return mozilla::MakeSpan(offsetToPointer<T>(start),
-                             numElements<T>(start, end));
+    return mozilla::Span{offsetToPointer<T>(start), numElements<T>(start, end)};
   }
 
   // We store the native code address corresponding to each bytecode offset in
@@ -384,7 +382,7 @@ class alignas(uintptr_t) BaselineScript final : public TrailingArray {
     return offsetof(BaselineScript, resumeEntriesOffset_);
   }
 
-  static void writeBarrierPre(Zone* zone, BaselineScript* script);
+  static void preWriteBarrier(Zone* zone, BaselineScript* script);
 
   bool hasPendingIonCompileTask() const { return !!pendingIonCompileTask_; }
 
@@ -473,7 +471,7 @@ struct alignas(uintptr_t) BaselineBailoutInfo {
 
 MOZ_MUST_USE bool BailoutIonToBaseline(
     JSContext* cx, JitActivation* activation, const JSJitFrameIter& iter,
-    bool invalidate, BaselineBailoutInfo** bailoutInfo,
+    BaselineBailoutInfo** bailoutInfo,
     const ExceptionBailoutInfo* exceptionInfo);
 
 MethodStatus BaselineCompile(JSContext* cx, JSScript* script,

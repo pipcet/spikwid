@@ -15,31 +15,21 @@
 namespace js {
 namespace jit {
 
+class CallInfo;
 class MBasicBlock;
 class MDefinition;
 class MInstruction;
-class MIRGenerator;
+class WarpBuilder;
 class WarpCacheIR;
-class WarpSnapshot;
-class CallInfo;
 
 using MDefinitionStackVector = Vector<MDefinition*, 8, SystemAllocPolicy>;
 
 // Generate MIR from a Baseline ICStub's CacheIR.
-MOZ_MUST_USE bool TranspileCacheIRToMIR(WarpSnapshot& snapshot,
-                                        MIRGenerator& mirGen,
+MOZ_MUST_USE bool TranspileCacheIRToMIR(WarpBuilder* builder,
                                         BytecodeLocation loc,
-                                        MBasicBlock* current,
                                         const WarpCacheIR* cacheIRSnapshot,
-                                        const MDefinitionStackVector& inputs);
-
-// Overload used to pass information for calls to the transpiler.
-MOZ_MUST_USE bool TranspileCacheIRToMIR(WarpSnapshot& snapshot,
-                                        MIRGenerator& mirGen,
-                                        BytecodeLocation loc,
-                                        MBasicBlock* current,
-                                        const WarpCacheIR* cacheIRSnapshot,
-                                        CallInfo& callInfo);
+                                        const MDefinitionStackVector& inputs,
+                                        CallInfo* maybeCallInfo = nullptr);
 
 }  // namespace jit
 }  // namespace js

@@ -360,9 +360,11 @@ void MacroAssemblerCompat::wasmLoadImpl(const wasm::MemoryAccessDesc& access,
         Ldr(SelectGPReg(outany, out64), srcAddr);
         break;
       case Scalar::Float32:
+        MOZ_ASSERT(!access.isZeroExtendSimd128Load());
         Ldr(SelectFPReg(outany, out64, 32), srcAddr);
         break;
       case Scalar::Float64:
+        MOZ_ASSERT(!access.isZeroExtendSimd128Load());
         Ldr(SelectFPReg(outany, out64, 64), srcAddr);
         break;
       case Scalar::Uint8Clamped:
@@ -645,7 +647,8 @@ void MacroAssembler::Pop(Register reg) {
 }
 
 void MacroAssembler::Pop(FloatRegister f) {
-  MOZ_CRASH("NYI: Pop(FloatRegister)");
+  loadDouble(Address(getStackPointer(), 0), f);
+  freeStack(sizeof(double));
 }
 
 void MacroAssembler::Pop(const ValueOperand& val) {
@@ -2310,6 +2313,16 @@ void MacroAssembler::roundDoubleToInt32(FloatRegister src, Register dest,
   }
 
   bind(&done);
+}
+
+void MacroAssembler::nearbyIntDouble(RoundingMode mode, FloatRegister src,
+                                     FloatRegister dest) {
+  MOZ_CRASH("not supported on this platform");
+}
+
+void MacroAssembler::nearbyIntFloat32(RoundingMode mode, FloatRegister src,
+                                      FloatRegister dest) {
+  MOZ_CRASH("not supported on this platform");
 }
 
 //}}} check_macroassembler_style

@@ -183,9 +183,13 @@ AutofillProfileAutoCompleteSearch.prototype = {
     let isInputAutofilled = activeFieldDetail.state == FIELD_STATES.AUTO_FILLED;
     let allFieldNames = activeSection.allFieldNames;
     let filledRecordGUID = activeSection.filledRecordGUID;
+
+    let creditCardsEnabledAndVisible =
+      FormAutofill.isAutofillCreditCardsEnabled &&
+      !FormAutofill.isAutofillCreditCardsHideUI;
     let searchPermitted = isAddressField
       ? FormAutofill.isAutofillAddressesEnabled
-      : FormAutofill.isAutofillCreditCardsEnabled;
+      : creditCardsEnabledAndVisible;
     let AutocompleteResult = isAddressField ? AddressResult : CreditCardResult;
     let isFormAutofillSearch = true;
     let pendingSearchResult = null;
@@ -355,7 +359,7 @@ let ProfileAutocomplete = {
     Services.obs.removeObserver(this, "autocomplete-will-enter-text");
   },
 
-  observe(subject, topic, data) {
+  async observe(subject, topic, data) {
     switch (topic) {
       case "autocomplete-will-enter-text": {
         if (!FormAutofillContent.activeInput) {
@@ -363,7 +367,10 @@ let ProfileAutocomplete = {
           break;
         }
         FormAutofillContent.autofillPending = true;
-        this._fillFromAutocompleteRow(FormAutofillContent.activeInput);
+        Services.obs.notifyObservers(null, "autofill-fill-starting");
+        await this._fillFromAutocompleteRow(FormAutofillContent.activeInput);
+        Services.obs.notifyObservers(null, "autofill-fill-complete");
+        FormAutofillContent.autofillPending = false;
         break;
       }
     }
@@ -383,7 +390,6 @@ let ProfileAutocomplete = {
     let formDetails = FormAutofillContent.activeFormDetails;
     if (!formDetails) {
       // The observer notification is for a different frame.
-      FormAutofillContent.autofillPending = false;
       return;
     }
 
@@ -394,7 +400,6 @@ let ProfileAutocomplete = {
       this.lastProfileAutoCompleteResult.getStyleAt(selectedIndex) !=
         "autofill-profile"
     ) {
-      FormAutofillContent.autofillPending = false;
       return;
     }
 
@@ -403,7 +408,6 @@ let ProfileAutocomplete = {
     );
 
     await FormAutofillContent.activeHandler.autofillFormFields(profile);
-    FormAutofillContent.autofillPending = false;
   },
 
   _clearProfilePreview() {
@@ -550,6 +554,50 @@ var FormAutofillContent = {
     let records = handler.createRecords();
     if (!Object.values(records).some(typeRecords => typeRecords.length)) {
       return;
+    }
+
+    records.creditCard.forEach(record => {
+      let extra = {
+        // Fields which have been filled manually.
+        fields_not_auto: "0",
+        // Fields which have been autofilled.
+        fields_auto: "0",
+        // Fields which have been autofilled and then modified.
+        fields_modified: "0",
+      };
+
+      if (record.guid !== null) {
+        // If the `guid` is not null, it means we're editing an existing record.
+        // In that case, all fields in the record are autofilled, and fields in
+        // `untouchedFields` are unmodified.
+        let totalCount = handler.form.elements.length;
+        let autofilledCount = Object.keys(record.record).length;
+        let unmodifiedCount = record.untouchedFields.length;
+
+        extra.fields_not_auto = (totalCount - autofilledCount).toString();
+        extra.fields_auto = autofilledCount.toString();
+        extra.fields_modified = (autofilledCount - unmodifiedCount).toString();
+      } else {
+        // If the `guid` is null, we're filling a new form.
+        // In that case, all not-null fields are manually filled.
+        extra.fields_not_auto = Array.from(handler.form.elements)
+          .filter(element => !!element.value.trim().length)
+          .length.toString();
+      }
+
+      Services.telemetry.recordEvent(
+        "creditcard",
+        "submitted",
+        "cc_form",
+        record.flowId,
+        extra
+      );
+    });
+    if (records.creditCard.length) {
+      Services.telemetry.scalarAdd(
+        "formautofill.creditCards.submitted_sections_count",
+        records.creditCard.length
+      );
     }
 
     this._onFormSubmit(records, domWin, handler.timeStartedFillingMS);
@@ -827,6 +875,13 @@ var FormAutofillContent = {
     this.debug(
       "Popup has opened, automatic =",
       formFillController.passwordPopupAutomaticallyOpened
+    );
+
+    Services.telemetry.recordEvent(
+      "creditcard",
+      "popup_shown",
+      "cc_form",
+      this.activeSection.flowId
     );
   },
 

@@ -15,6 +15,8 @@
 #include "vm/ArgumentsObject.h"
 #include "vm/BytecodeUtil.h"  // JSDVG_SEARCH_STACK
 #include "vm/Realm.h"
+#include "vm/SharedStencil.h"  // GCThingIndex
+#include "vm/ThrowMsgKind.h"
 
 #include "vm/EnvironmentObject-inl.h"
 #include "vm/GlobalObject-inl.h"
@@ -538,43 +540,6 @@ static MOZ_ALWAYS_INLINE bool GetElemOptimizedArguments(
   return true;
 }
 
-static MOZ_ALWAYS_INLINE bool GetPrivateElemOperation(JSContext* cx,
-                                                      jsbytecode* pc,
-                                                      HandleValue lhsValue,
-                                                      HandleValue key,
-                                                      MutableHandleValue res) {
-  // Private names represented as PrivateSymbol properties on objects.
-  MOZ_ASSERT(key.isSymbol());
-  MOZ_ASSERT(key.toSymbol()->isPrivateName());
-
-  RootedId id(cx);
-  if (!ToPropertyKey(cx, key, &id)) {
-    return false;
-  }
-
-  // LHS must be an object.
-  if (!lhsValue.isObject()) {
-    ReportNotObject(cx, lhsValue);
-    return false;
-  }
-
-  RootedObject obj(cx, &lhsValue.toObject());
-
-  // Check obj has required property already.
-  bool hasField = false;
-  if (!HasOwnProperty(cx, obj, id, &hasField)) {
-    return false;
-  }
-
-  if (!hasField) {
-    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
-                              JSMSG_UNDECLARED_PRIVATE);
-    return false;
-  }
-
-  return GetProperty(cx, obj, obj, id, res);
-}
-
 static MOZ_ALWAYS_INLINE bool GetElementOperationWithStackIndex(
     JSContext* cx, JSOp op, HandleValue lref, int lrefIndex, HandleValue rref,
     MutableHandleValue res) {
@@ -630,76 +595,56 @@ static MOZ_ALWAYS_INLINE bool InitElemOperation(JSContext* cx, jsbytecode* pc,
   }
 
   unsigned flags = GetInitDataPropAttrs(JSOp(*pc));
+  if (id.isPrivateName()) {
+    // Clear enumerate flag off of private names.
+    flags &= ~JSPROP_ENUMERATE;
+  }
   return DefineDataProperty(cx, obj, id, val, flags);
 }
 
-static MOZ_ALWAYS_INLINE bool InitPrivateElemOperation(JSContext* cx,
-                                                       jsbytecode* pc,
-                                                       HandleObject obj,
-                                                       HandleValue idval,
-                                                       HandleValue val) {
-  MOZ_ASSERT(!val.isMagic(JS_ELEMENTS_HOLE));
+static MOZ_ALWAYS_INLINE bool CheckPrivateFieldOperation(JSContext* cx,
+                                                         jsbytecode* pc,
+                                                         HandleValue val,
+                                                         HandleValue idval,
+                                                         bool* result) {
+  // Result had better not be a nullptr.
+  MOZ_ASSERT(result);
 
-  // Private names represented as PrivateSymbol properties on objects.
+  ThrowCondition condition;
+  ThrowMsgKind msgKind;
+  GetCheckPrivateFieldOperands(pc, &condition, &msgKind);
+
   MOZ_ASSERT(idval.isSymbol());
   MOZ_ASSERT(idval.toSymbol()->isPrivateName());
 
-  RootedId id(cx);
-  if (!ToPropertyKey(cx, idval, &id)) {
+  if (!HasOwnProperty(cx, val, idval, result)) {
     return false;
   }
 
-  bool hasField = false;
-  if (!HasOwnProperty(cx, obj, id, &hasField)) {
-    return false;
+  if (!CheckPrivateFieldWillThrow(condition, *result)) {
+    return true;
   }
 
-  // PrivateFieldAdd: Step 4: We must throw a type error if obj already has
-  // this property.
-  if (hasField) {
-    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
-                              JSMSG_PRIVATE_FIELD_DOUBLE);
-    return false;
-  }
-  unsigned flags = GetInitDataPropAttrs(JSOp(*pc));
-  return DefineDataProperty(cx, obj, id, val, flags);
-}
-
-static MOZ_ALWAYS_INLINE bool SetPrivateElementOperation(JSContext* cx,
-                                                         HandleObject obj,
-                                                         HandleId id,
-                                                         HandleValue value,
-                                                         HandleValue receiver) {
-  bool hasField = false;
-  if (!HasOwnProperty(cx, obj, id, &hasField)) {
-    return false;
-  }
-
-  if (!hasField) {
-    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
-                              JSMSG_UNDECLARED_PRIVATE);
-    return false;
-  }
-
-  ObjectOpResult result;
-  return SetProperty(cx, obj, id, value, receiver, result) &&
-         result.checkStrictModeError(cx, obj, id, true);
+  // Throw!
+  JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                            ThrowMsgKindToErrNum(msgKind));
+  return false;
 }
 
 static MOZ_ALWAYS_INLINE bool InitArrayElemOperation(JSContext* cx,
                                                      jsbytecode* pc,
-                                                     HandleObject obj,
+                                                     HandleArrayObject arr,
                                                      uint32_t index,
                                                      HandleValue val) {
   JSOp op = JSOp(*pc);
   MOZ_ASSERT(op == JSOp::InitElemArray || op == JSOp::InitElemInc);
 
-  MOZ_ASSERT(obj->is<ArrayObject>());
-
   // The JITs depend on InitElemArray's index not exceeding the dense element
-  // capacity.
+  // capacity. Furthermore, the dense elements must have been initialized up to
+  // that index.
+  MOZ_ASSERT_IF(op == JSOp::InitElemArray, index < arr->getDenseCapacity());
   MOZ_ASSERT_IF(op == JSOp::InitElemArray,
-                index < obj->as<ArrayObject>().getDenseCapacity());
+                index == arr->getDenseInitializedLength());
 
   if (op == JSOp::InitElemInc && index == INT32_MAX) {
     JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
@@ -707,31 +652,27 @@ static MOZ_ALWAYS_INLINE bool InitArrayElemOperation(JSContext* cx,
     return false;
   }
 
-  /*
-   * If val is a hole, do not call DefineElement.
-   *
-   * Furthermore, if the current op is JSOp::InitElemInc, always call
-   * SetLengthProperty even if it is not the last element initialiser, because
-   * it may be followed by a SpreadElement loop, which will not set the array
-   * length if nothing is spread.
-   *
-   * Alternatively, if the current op is JSOp::InitElemArray, the length will
-   * have already been set by the earlier JSOp::NewArray; JSOp::InitElemArray
-   * cannot follow SpreadElements.
-   */
+  // If val is a hole, do not call DefineDataElement.
   if (val.isMagic(JS_ELEMENTS_HOLE)) {
     if (op == JSOp::InitElemInc) {
-      if (!SetLengthProperty(cx, obj, index + 1)) {
-        return false;
-      }
+      // Always call SetLengthProperty even if this is not the last element
+      // initialiser, because this may be followed by a SpreadElement loop,
+      // which will not set the array length if nothing is spread.
+      return SetLengthProperty(cx, arr, index + 1);
     }
-  } else {
-    if (!DefineDataElement(cx, obj, index, val, JSPROP_ENUMERATE)) {
-      return false;
-    }
+
+    MOZ_ASSERT(op == JSOp::InitElemArray);
+
+    // The length will have already been set by the earlier JSOp::NewArray;
+    // JSOp::InitElemArray cannot follow SpreadElements. Bump the initialized
+    // length and store the hole value to ensure the index == initLength
+    // invariant holds for later InitArrayElem ops.
+    arr->ensureDenseInitializedLength(cx, index, 1);
+    arr->setDenseElementHole(cx, index);
+    return true;
   }
 
-  return true;
+  return DefineDataElement(cx, arr, index, val, JSPROP_ENUMERATE);
 }
 
 static inline ArrayObject* ProcessCallSiteObjOperation(JSContext* cx,
@@ -742,7 +683,7 @@ static inline ArrayObject* ProcessCallSiteObjOperation(JSContext* cx,
   RootedArrayObject cso(cx, &script->getObject(pc)->as<ArrayObject>());
 
   if (cso->isExtensible()) {
-    RootedObject raw(cx, script->getObject(GET_UINT32_INDEX(pc) + 1));
+    RootedObject raw(cx, script->getObject(GET_GCTHING_INDEX(pc).next()));
     MOZ_ASSERT(raw->is<ArrayObject>());
 
     RootedValue rawValue(cx, ObjectValue(*raw));

@@ -14,9 +14,15 @@ from mozbuild.util import memoize
 
 from taskgraph.util.taskcluster import requests_retry_session
 
+try:
+    # TODO(py3): use time.monotonic()
+    from time import monotonic
+except ImportError:
+    from time import time as monotonic
+
 BUGBUG_BASE_URL = "https://bugbug.herokuapp.com"
-RETRY_TIMEOUT = 8 * 60  # seconds
-RETRY_INTERVAL = 10      # seconds
+RETRY_TIMEOUT = 9 * 60  # seconds
+RETRY_INTERVAL = 10     # seconds
 
 # Preset confidence thresholds.
 CT_LOW = 0.7
@@ -71,10 +77,17 @@ def _write_perfherder_data(lower_is_better):
 @memoize
 def push_schedules(branch, rev):
     url = BUGBUG_BASE_URL + '/push/{branch}/{rev}/schedules'.format(branch=branch, rev=rev)
-    # TODO(py3): use time.monotonic()
-    start = time.clock()
+    start = monotonic()
     session = get_session()
-    attempts = RETRY_TIMEOUT / RETRY_INTERVAL
+
+    # On try there is no fallback and pulling is slower, so we allow bugbug more
+    # time to compute the results.
+    # See https://github.com/mozilla/bugbug/issues/1673.
+    timeout = RETRY_TIMEOUT
+    if branch == "try":
+        timeout += int(timeout / 3)
+
+    attempts = timeout / RETRY_INTERVAL
     i = 0
     while i < attempts:
         r = session.get(url)
@@ -85,7 +98,7 @@ def push_schedules(branch, rev):
 
         time.sleep(RETRY_INTERVAL)
         i += 1
-    end = time.clock()
+    end = monotonic()
 
     _write_perfherder_data(lower_is_better={
         'bugbug_push_schedules_time': end-start,

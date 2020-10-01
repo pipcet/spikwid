@@ -42,7 +42,8 @@ class gfxPlatformGtk final : public gfxPlatform {
 
   nsresult UpdateFontList() override;
 
-  void GetCommonFallbackFonts(uint32_t aCh, uint32_t aNextCh, Script aRunScript,
+  void GetCommonFallbackFonts(uint32_t aCh, Script aRunScript,
+                              eFontPresentation aPresentation,
                               nsTArray<const char*>& aFontList) override;
 
   gfxPlatformFontList* CreatePlatformFontList() override;
@@ -82,10 +83,6 @@ class gfxPlatformGtk final : public gfxPlatform {
       override;
 #endif
 
-#ifdef MOZ_X11
-  Display* GetCompositorDisplay() { return mCompositorDisplay; }
-#endif  // MOZ_X11
-
 #ifdef MOZ_WAYLAND
   bool UseDMABufTextures();
   bool UseDMABufVideoTextures();
@@ -110,9 +107,6 @@ class gfxPlatformGtk final : public gfxPlatform {
   nsTArray<uint8_t> GetPlatformCMSOutputProfileData() override;
 
   bool mIsX11Display;
-#ifdef MOZ_X11
-  Display* mCompositorDisplay;
-#endif
 #ifdef MOZ_WAYLAND
   bool mUseWebGLDmabufBackend;
 #endif

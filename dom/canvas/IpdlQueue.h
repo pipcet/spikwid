@@ -83,10 +83,6 @@ struct IpdlQueueBuffer {
 
 using IpdlQueueBuffers = nsTArray<IpdlQueueBuffer>;
 
-// Any object larger than this will be inserted into its own Shmem.
-// TODO: Base this on something.
-static constexpr size_t kMaxIpdlQueueArgSize = 256 * 1024;
-
 static constexpr uint32_t kAsyncFlushWaitMs = 4;  // 4ms
 
 template <typename Derived>
@@ -309,13 +305,12 @@ class SyncConsumerActor : public AsyncConsumerActor<Derived> {
 };
 
 template <typename _Actor>
-class IpdlProducer final : public SupportsWeakPtr<IpdlProducer<_Actor>> {
+class IpdlProducer final : public SupportsWeakPtr {
   nsTArray<uint8_t> mSerializedData;
   WeakPtr<_Actor> mActor;
   uint64_t mId;
 
  public:
-  MOZ_DECLARE_WEAKREFERENCE_TYPENAME(IpdlProducer<_Actor>)
   using Actor = _Actor;
   using SelfType = IpdlProducer<Actor>;
 
@@ -432,10 +427,6 @@ class IpdlProducer final : public SupportsWeakPtr<IpdlProducer<_Actor>> {
         arg, aArgSize);
   }
 
-  inline bool NeedsSharedMemory(size_t aRequested) {
-    return aRequested >= kMaxIpdlQueueArgSize;
-  }
-
   base::ProcessId OtherPid() { return mActor ? mActor->OtherPid() : 0; }
 
  protected:
@@ -451,9 +442,8 @@ class IpdlProducer final : public SupportsWeakPtr<IpdlProducer<_Actor>> {
 };
 
 template <typename _Actor>
-class IpdlConsumer final : public SupportsWeakPtr<IpdlConsumer<_Actor>> {
+class IpdlConsumer final : public SupportsWeakPtr {
  public:
-  MOZ_DECLARE_WEAKREFERENCE_TYPENAME(IpdlConsumer<_Actor>)
   using Actor = _Actor;
   using SelfType = IpdlConsumer<Actor>;
 
@@ -541,10 +531,6 @@ class IpdlConsumer final : public SupportsWeakPtr<IpdlConsumer<_Actor>> {
     // TODO: Queue needs one extra byte for PCQ (fixme).
     return mozilla::webgl::Marshaller::ReadObject(
         mBuf.Elements(), mBuf.Length() + 1, aRead, aWrite, arg, aArgSize);
-  }
-
-  static inline bool NeedsSharedMemory(size_t aRequested) {
-    return aRequested >= kMaxIpdlQueueArgSize;
   }
 
   base::ProcessId OtherPid() { return mActor ? mActor->OtherPid() : 0; }

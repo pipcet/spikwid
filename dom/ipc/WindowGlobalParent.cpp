@@ -12,14 +12,15 @@
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/dom/InProcessParent.h"
 #include "mozilla/dom/BrowserBridgeParent.h"
+#include "mozilla/dom/BrowsingContextGroup.h"
 #include "mozilla/dom/CanonicalBrowsingContext.h"
 #include "mozilla/dom/ClientInfo.h"
 #include "mozilla/dom/ClientIPCTypes.h"
+#include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/BrowserHost.h"
 #include "mozilla/dom/BrowserParent.h"
 #include "mozilla/dom/RemoteWebProgress.h"
-#include "mozilla/dom/WindowGlobalActorsBinding.h"
 #include "mozilla/dom/WindowGlobalChild.h"
 #include "mozilla/dom/ChromeUtils.h"
 #include "mozilla/dom/ipc/IdType.h"
@@ -28,6 +29,7 @@
 #include "mozilla/ServoStyleSet.h"
 #include "mozilla/StaticPrefs_network.h"
 #include "mozilla/Telemetry.h"
+#include "mozilla/Variant.h"
 #include "mozJSComponentLoader.h"
 #include "nsContentUtils.h"
 #include "nsDocShell.h"
@@ -39,6 +41,7 @@
 #include "nsFrameLoaderOwner.h"
 #include "nsSerializationHelper.h"
 #include "nsIBrowser.h"
+#include "nsIPromptCollection.h"
 #include "nsITransportSecurityInfo.h"
 #include "nsISharePicker.h"
 #include "mozilla/Telemetry.h"
@@ -58,11 +61,10 @@ namespace dom {
 
 WindowGlobalParent::WindowGlobalParent(
     CanonicalBrowsingContext* aBrowsingContext, uint64_t aInnerWindowId,
-    uint64_t aOuterWindowId, bool aInProcess, FieldTuple&& aFields)
+    uint64_t aOuterWindowId, bool aInProcess, FieldValues&& aInit)
     : WindowContext(aBrowsingContext, aInnerWindowId, aOuterWindowId,
-                    aInProcess, std::move(aFields)),
+                    aInProcess, std::move(aInit)),
       mIsInitialDocument(false),
-      mHasBeforeUnload(false),
       mSandboxFlags(0),
       mDocumentHasLoaded(false),
       mDocumentHasUserInteracted(false),
@@ -83,7 +85,7 @@ already_AddRefed<WindowGlobalParent> WindowGlobalParent::CreateDisconnected(
       GetByInnerWindowId(aInit.context().mInnerWindowId);
   MOZ_RELEASE_ASSERT(!wgp, "Creating duplicate WindowGlobalParent");
 
-  FieldTuple fields(aInit.context().mFields);
+  FieldValues fields(aInit.context().mFields);
   wgp = new WindowGlobalParent(browsingContext, aInit.context().mInnerWindowId,
                                aInit.context().mOuterWindowId, aInProcess,
                                std::move(fields));
@@ -139,10 +141,9 @@ void WindowGlobalParent::Init() {
     Unused << otherContent->SendCreateWindowContext(ipcinit);
   });
 
-  // If there is no current window global, assume we're about to become it
-  // optimistically.
   if (!BrowsingContext()->IsDiscarded()) {
-    BrowsingContext()->SetCurrentInnerWindowId(InnerWindowId());
+    MOZ_ALWAYS_SUCCEEDS(
+        BrowsingContext()->SetCurrentInnerWindowId(InnerWindowId()));
   }
 
   nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
@@ -292,15 +293,19 @@ mozilla::ipc::IPCResult WindowGlobalParent::RecvLoadURI(
 }
 
 mozilla::ipc::IPCResult WindowGlobalParent::RecvInternalLoad(
-    const MaybeDiscarded<dom::BrowsingContext>& aTargetBC,
     nsDocShellLoadState* aLoadState) {
-  if (aTargetBC.IsNullOrDiscarded()) {
+  if (!aLoadState->Target().IsEmpty() ||
+      aLoadState->TargetBrowsingContext().IsNull()) {
+    return IPC_FAIL(this, "must already be retargeted");
+  }
+  if (aLoadState->TargetBrowsingContext().IsDiscarded()) {
     MOZ_LOG(
         BrowsingContext::GetLog(), LogLevel::Debug,
         ("ParentIPC: Trying to send a message with dead or detached context"));
     return IPC_OK();
   }
-  CanonicalBrowsingContext* targetBC = aTargetBC.get_canonical();
+  CanonicalBrowsingContext* targetBC =
+      aLoadState->TargetBrowsingContext().get_canonical();
 
   // FIXME: For cross-process loads, we should double check CanAccess() for the
   // source browsing context in the parent process.
@@ -389,11 +394,6 @@ IPCResult WindowGlobalParent::RecvUpdateDocumentCspSettings(
   return IPC_OK();
 }
 
-IPCResult WindowGlobalParent::RecvSetHasBeforeUnload(bool aHasBeforeUnload) {
-  mHasBeforeUnload = aHasBeforeUnload;
-  return IPC_OK();
-}
-
 mozilla::ipc::IPCResult WindowGlobalParent::RecvSetClientInfo(
     const IPCClientInfo& aIPCClientInfo) {
   mClientInfo = Some(ClientInfo(aIPCClientInfo));
@@ -474,8 +474,9 @@ void WindowGlobalParent::NotifyContentBlockingEvent(
 }
 
 already_AddRefed<JSWindowActorParent> WindowGlobalParent::GetActor(
-    const nsACString& aName, ErrorResult& aRv) {
-  return JSActorManager::GetActor(aName, aRv).downcast<JSWindowActorParent>();
+    JSContext* aCx, const nsACString& aName, ErrorResult& aRv) {
+  return JSActorManager::GetActor(aCx, aName, aRv)
+      .downcast<JSWindowActorParent>();
 }
 
 already_AddRefed<JSActor> WindowGlobalParent::InitJSActor(
@@ -604,6 +605,269 @@ mozilla::ipc::IPCResult WindowGlobalParent::RecvShare(
   return IPC_OK();
 }
 
+mozilla::ipc::IPCResult
+WindowGlobalParent::RecvUpdateDocumentWouldPreloadResources() {
+  TopWindowContext()->mDocumentTreeWouldPreloadResources = true;
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult WindowGlobalParent::RecvSubmitLoadEventPreloadTelemetry(
+    TimeStamp aNavigationStart, TimeStamp aLoadEventStart,
+    TimeStamp aLoadEventEnd) {
+  if (!IsTop()) {
+    return IPC_FAIL(this, "submit preload telemetry on non-toplevel document");
+  }
+
+  if (mDocumentTreeWouldPreloadResources) {
+    Telemetry::AccumulateTimeDelta(
+        Telemetry::TIME_TO_LOAD_EVENT_START_PRELOAD_MS, aNavigationStart,
+        aLoadEventStart);
+    Telemetry::AccumulateTimeDelta(Telemetry::TIME_TO_LOAD_EVENT_END_PRELOAD_MS,
+                                   aNavigationStart, aLoadEventEnd);
+  } else {
+    Telemetry::AccumulateTimeDelta(
+        Telemetry::TIME_TO_LOAD_EVENT_START_NO_PRELOAD_MS, aNavigationStart,
+        aLoadEventStart);
+    Telemetry::AccumulateTimeDelta(
+        Telemetry::TIME_TO_LOAD_EVENT_END_NO_PRELOAD_MS, aNavigationStart,
+        aLoadEventEnd);
+  }
+
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult
+WindowGlobalParent::RecvSubmitTimeToFirstInteractionPreloadTelemetry(
+    uint32_t aMillis) {
+  if (!IsTop()) {
+    return IPC_FAIL(this, "submit preload telemetry on non-toplevel document");
+  }
+
+  if (mDocumentTreeWouldPreloadResources) {
+    Telemetry::Accumulate(Telemetry::TIME_TO_FIRST_INTERACTION_PRELOAD_MS,
+                          aMillis);
+  } else {
+    Telemetry::Accumulate(Telemetry::TIME_TO_FIRST_INTERACTION_NO_PRELOAD_MS,
+                          aMillis);
+  }
+
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult
+WindowGlobalParent::RecvSubmitLoadInputEventResponsePreloadTelemetry(
+    uint32_t aMillis) {
+  if (!IsTop()) {
+    return IPC_FAIL(this, "submit preload telemetry on non-toplevel document");
+  }
+
+  if (mDocumentTreeWouldPreloadResources) {
+    Telemetry::Accumulate(Telemetry::LOAD_INPUT_EVENT_RESPONSE_PRELOAD_MS,
+                          aMillis);
+  } else {
+    Telemetry::Accumulate(Telemetry::LOAD_INPUT_EVENT_RESPONSE_NO_PRELOAD_MS,
+                          aMillis);
+  }
+
+  return IPC_OK();
+}
+
+namespace {
+
+class CheckPermitUnloadRequest final : public PromiseNativeHandler {
+ public:
+  CheckPermitUnloadRequest(WindowGlobalParent* aWGP, bool aHasInProcessBlocker,
+                           nsIContentViewer::PermitUnloadAction aAction,
+                           std::function<void(bool)>&& aResolver)
+      : mResolver(std::move(aResolver)),
+        mWGP(aWGP),
+        mAction(aAction),
+        mFoundBlocker(aHasInProcessBlocker) {}
+
+  void Run(ContentParent* aIgnoreProcess = nullptr) {
+    MOZ_ASSERT(mState == State::UNINITIALIZED);
+    mState = State::WAITING;
+
+    RefPtr<CheckPermitUnloadRequest> self(this);
+
+    AutoTArray<ContentParent*, 8> seen;
+    if (aIgnoreProcess) {
+      seen.AppendElement(aIgnoreProcess);
+    }
+
+    BrowsingContext* bc = mWGP->GetBrowsingContext();
+    bc->PreOrderWalk([&](dom::BrowsingContext* aBC) {
+      if (WindowGlobalParent* wgp =
+              aBC->Canonical()->GetCurrentWindowGlobal()) {
+        ContentParent* cp = wgp->GetContentParent();
+        if (wgp->HasBeforeUnload() && !seen.ContainsSorted(cp)) {
+          seen.InsertElementSorted(cp);
+          mPendingRequests++;
+          auto resolve = [self](bool blockNavigation) {
+            if (blockNavigation) {
+              self->mFoundBlocker = true;
+            }
+            self->ResolveRequest();
+          };
+          if (cp) {
+            cp->SendDispatchBeforeUnloadToSubtree(
+                bc, resolve, [self](auto) { self->ResolveRequest(); });
+          } else {
+            ContentChild::DispatchBeforeUnloadToSubtree(bc, resolve);
+          }
+        }
+      }
+    });
+
+    CheckDoneWaiting();
+  }
+
+  void ResolveRequest() {
+    mPendingRequests--;
+    CheckDoneWaiting();
+  }
+
+  void CheckDoneWaiting() {
+    // If we've found a blocker, we prompt immediately without waiting for
+    // further responses. The user's response applies to the entire navigation
+    // attempt, regardless of how many "beforeunload" listeners we call.
+    if (mState != State::WAITING || (mPendingRequests && !mFoundBlocker)) {
+      return;
+    }
+
+    mState = State::PROMPTING;
+
+    if (!mFoundBlocker) {
+      SendReply(true);
+      return;
+    }
+
+    auto action = mAction;
+    if (StaticPrefs::dom_disable_beforeunload()) {
+      action = nsIContentViewer::eDontPromptAndUnload;
+    }
+    if (action != nsIContentViewer::ePrompt) {
+      SendReply(action == nsIContentViewer::eDontPromptAndUnload);
+      return;
+    }
+
+    // Handle any failure in prompting by aborting the navigation. See comment
+    // in nsContentViewer::PermitUnload for reasoning.
+    auto cleanup = MakeScopeExit([&]() { SendReply(false); });
+
+    if (nsCOMPtr<nsIPromptCollection> prompt =
+            do_GetService("@mozilla.org/embedcomp/prompt-collection;1")) {
+      mozilla::Telemetry::Accumulate(
+          mozilla::Telemetry::ONBEFOREUNLOAD_PROMPT_COUNT, 1);
+
+      RefPtr<Promise> promise;
+      prompt->AsyncBeforeUnloadCheck(mWGP->GetBrowsingContext(),
+                                     getter_AddRefs(promise));
+
+      if (!promise) {
+        mozilla::Telemetry::Accumulate(
+            mozilla::Telemetry::ONBEFOREUNLOAD_PROMPT_ACTION, 2);
+        return;
+      }
+
+      promise->AppendNativeHandler(this);
+      cleanup.release();
+    }
+  }
+
+  void SendReply(bool aAllow) {
+    MOZ_ASSERT(mState != State::REPLIED);
+    mResolver(aAllow);
+    mState = State::REPLIED;
+  }
+
+  void ResolvedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue) override {
+    MOZ_ASSERT(mState == State::PROMPTING);
+
+    bool allow = JS::ToBoolean(aValue);
+
+    mozilla::Telemetry::Accumulate(
+        mozilla::Telemetry::ONBEFOREUNLOAD_PROMPT_ACTION, (allow ? 1 : 0));
+
+    SendReply(allow);
+  }
+
+  void RejectedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue) override {
+    MOZ_ASSERT(mState == State::PROMPTING);
+
+    mozilla::Telemetry::Accumulate(
+        mozilla::Telemetry::ONBEFOREUNLOAD_PROMPT_ACTION, 2);
+
+    SendReply(false);
+  }
+
+  NS_DECL_ISUPPORTS
+
+ private:
+  ~CheckPermitUnloadRequest() {
+    // We may get here without having sent a reply if the promise we're waiting
+    // on is destroyed without being resolved or rejected.
+    if (mState != State::REPLIED) {
+      SendReply(false);
+    }
+  }
+
+  enum class State : uint8_t {
+    UNINITIALIZED,
+    WAITING,
+    PROMPTING,
+    REPLIED,
+  };
+
+  std::function<void(bool)> mResolver;
+
+  RefPtr<WindowGlobalParent> mWGP;
+
+  uint32_t mPendingRequests = 0;
+
+  nsIContentViewer::PermitUnloadAction mAction;
+
+  State mState = State::UNINITIALIZED;
+
+  bool mFoundBlocker = false;
+};
+
+NS_IMPL_ISUPPORTS0(CheckPermitUnloadRequest)
+
+}  // namespace
+
+mozilla::ipc::IPCResult WindowGlobalParent::RecvCheckPermitUnload(
+    bool aHasInProcessBlocker, XPCOMPermitUnloadAction aAction,
+    CheckPermitUnloadResolver&& aResolver) {
+  if (!IsCurrentGlobal()) {
+    aResolver(false);
+    return IPC_OK();
+  }
+
+  auto request = MakeRefPtr<CheckPermitUnloadRequest>(
+      this, aHasInProcessBlocker, aAction, std::move(aResolver));
+  request->Run(/* aIgnoreProcess */ GetContentParent());
+
+  return IPC_OK();
+}
+
+already_AddRefed<Promise> WindowGlobalParent::PermitUnload(
+    PermitUnloadAction aAction, mozilla::ErrorResult& aRv) {
+  nsIGlobalObject* global = GetParentObject();
+  RefPtr<Promise> promise = Promise::Create(global, aRv);
+  if (NS_WARN_IF(aRv.Failed())) {
+    return nullptr;
+  }
+
+  auto request = MakeRefPtr<CheckPermitUnloadRequest>(
+      this, /* aHasInProcessBlocker */ false,
+      nsIContentViewer::PermitUnloadAction(aAction),
+      [promise](bool aAllow) { promise->MaybeResolve(aAllow); });
+  request->Run();
+
+  return promise.forget();
+}
+
 already_AddRefed<mozilla::dom::Promise> WindowGlobalParent::DrawSnapshot(
     const DOMRect* aRect, double aScale, const nsACString& aBackgroundColor,
     mozilla::ErrorResult& aRv) {
@@ -621,8 +885,13 @@ already_AddRefed<mozilla::dom::Promise> WindowGlobalParent::DrawSnapshot(
     return nullptr;
   }
 
-  if (!gfx::CrossProcessPaint::Start(this, aRect, (float)aScale, color,
-                                     gfx::CrossProcessPaintFlags::None,
+  gfx::CrossProcessPaintFlags flags = gfx::CrossProcessPaintFlags::None;
+  if (!aRect) {
+    // If no explicit Rect was passed, we want the currently visible viewport.
+    flags = gfx::CrossProcessPaintFlags::DrawView;
+  }
+
+  if (!gfx::CrossProcessPaint::Start(this, aRect, (float)aScale, color, flags,
                                      promise)) {
     aRv = NS_ERROR_FAILURE;
     return nullptr;
@@ -725,18 +994,9 @@ void WindowGlobalParent::ActorDestroy(ActorDestroyReason aWhy) {
     }
     Accumulate(Telemetry::MIXED_CONTENT_PAGE_LOAD, mixedContentLevel);
 
-    ScalarAdd(Telemetry::ScalarID::MEDIA_PAGE_COUNT, 1);
-    if (GetDocTreeHadAudibleMedia()) {
-      ScalarAdd(Telemetry::ScalarID::MEDIA_PAGE_HAD_MEDIA_COUNT, 1);
+    if (GetDocTreeHadMedia()) {
+      ScalarAdd(Telemetry::ScalarID::MEDIA_ELEMENT_IN_PAGE_COUNT, 1);
     }
-  }
-
-  // If there are any non-discarded nested contexts when this WindowContext is
-  // destroyed, tear them down.
-  nsTArray<RefPtr<dom::BrowsingContext>> toDiscard;
-  toDiscard.AppendElements(Children());
-  for (auto& context : toDiscard) {
-    context->Detach(/* aFromIPC */ true);
   }
 
   // Note that our WindowContext has become discarded.

@@ -34,7 +34,7 @@ void GetURLSpecFromChannel(nsITimedChannel* aChannel, nsAString& aSpec) {
     return;
   }
 
-  aSpec = NS_ConvertUTF8toUTF16(spec);
+  CopyUTF8toUTF16(spec, aSpec);
 }
 
 }  // namespace
@@ -335,7 +335,7 @@ void PerformanceMainThread::CreateNavigationTimingEntry() {
   mDocEntry = new PerformanceNavigationTiming(std::move(timing), this, name);
 }
 
-void PerformanceMainThread::QueueNavigationTimingEntry() {
+void PerformanceMainThread::UpdateNavigationTimingEntry() {
   if (!mDocEntry) {
     return;
   }
@@ -345,6 +345,14 @@ void PerformanceMainThread::QueueNavigationTimingEntry() {
   if (httpChannel) {
     mDocEntry->UpdatePropertiesFromHttpChannel(httpChannel, mChannel);
   }
+}
+
+void PerformanceMainThread::QueueNavigationTimingEntry() {
+  if (!mDocEntry) {
+    return;
+  }
+
+  UpdateNavigationTimingEntry();
 
   QueueEntry(mDocEntry);
 }

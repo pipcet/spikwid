@@ -151,6 +151,7 @@ Here is some boilerplate code for a new highlighter class:
  function MyNewHighlighter(targetActor) {
    this.doc = targetActor.window.document;
    this.markup = new CanvasFrameAnonymousContentHelper(targetActor, this._buildMarkup.bind(this));
+   this.markup.initialize();
  }
 
  MyNewHighlighter.prototype = {
@@ -160,7 +161,7 @@ Here is some boilerplate code for a new highlighter class:
    },
 
    _buildMarkup: function() {
-     let container = this.doc.createElement("div");
+     let container = this.markup.anonymousContentDocument.createElement("div");
      container.innerHTML = '<div id="new-highlighted-" style="display:none;">';
      return container;
    },

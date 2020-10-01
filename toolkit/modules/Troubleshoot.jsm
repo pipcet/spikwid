@@ -55,13 +55,13 @@ const PREFS_WHITELIST = [
   "browser.search.searchEnginesURL",
   "browser.search.suggest.enabled",
   "browser.search.update",
-  "browser.search.useDBForOrder",
   "browser.sessionstore.",
   "browser.startup.homepage",
   "browser.startup.page",
   "browser.tabs.",
   "browser.urlbar.",
   "browser.zoom.",
+  "doh-rollout.",
   "dom.",
   "extensions.checkCompatibility",
   "extensions.formautofill.",
@@ -115,7 +115,9 @@ const PREFS_BLACKLIST = [
   /^network[.]proxy[.]/,
   /[.]print_to_filename$/,
   /^print[.]macosx[.]pagesetup/,
-  /^print[.]printer/,
+  // Don't filter out the printing prefs for now while the project to overhaul
+  // the printing code is ongoing and causing some unintended disruption:
+  // /^print[.]printer/,
 ];
 
 // Table of getters for various preference types.
@@ -434,6 +436,30 @@ var dataProviders = {
         ];
       })
     );
+  },
+
+  async environmentVariables(done) {
+    let Subprocess;
+    try {
+      // Subprocess is not available in all builds
+      Subprocess = ChromeUtils.import("resource://gre/modules/Subprocess.jsm")
+        .Subprocess;
+    } catch (ex) {
+      done({});
+      return;
+    }
+
+    let environment = Subprocess.getEnvironment();
+    let filteredEnvironment = {};
+    // Limit the environment variables to those that we
+    // know may affect Firefox to reduce leaking PII.
+    let filteredEnvironmentKeys = ["xre_", "moz_", "gdk", "display"];
+    for (let key of Object.keys(environment)) {
+      if (filteredEnvironmentKeys.some(k => key.toLowerCase().startsWith(k))) {
+        filteredEnvironment[key] = environment[key];
+      }
+    }
+    done(filteredEnvironment);
   },
 
   modifiedPreferences: function modifiedPreferences(done) {

@@ -14,9 +14,8 @@
 #  include "mozilla/Logging.h"
 #  include "nsTArray.h"
 #  include "Units.h"
-extern mozilla::LazyLogModule gWaylandDmabufLog;
-#  define LOGDMABUF(args) \
-    MOZ_LOG(gWaylandDmabufLog, mozilla::LogLevel::Debug, args)
+extern mozilla::LazyLogModule gDmabufLog;
+#  define LOGDMABUF(args) MOZ_LOG(gDmabufLog, mozilla::LogLevel::Debug, args)
 #else
 #  define LOGDMABUF(args)
 #endif /* MOZ_LOGGING */
@@ -118,23 +117,44 @@ class nsGbmLib {
   static bool sLibLoaded;
 };
 
+struct GbmFormat {
+  bool mIsSupported;
+  bool mHasAlpha;
+  int mFormat;
+  uint64_t* mModifiers;
+  int mModifiersCount;
+};
+
 class nsDMABufDevice {
  public:
   nsDMABufDevice();
+  ~nsDMABufDevice();
+
+  void Init();
 
   gbm_device* GetGbmDevice();
   // Returns -1 if we fails to gbm device file descriptor.
   int GetGbmDeviceFd();
 
   bool IsDMABufEnabled();
-  bool IsDMABufBasicEnabled();
   bool IsDMABufTexturesEnabled();
   bool IsDMABufVideoTexturesEnabled();
   bool IsDMABufWebGLEnabled();
   bool IsDRMVAAPIDisplayEnabled();
 
+  GbmFormat* GetGbmFormat(bool aHasAlpha);
+  GbmFormat* GetExactGbmFormat(int aFormat);
+  void ResetFormatsModifiers();
+  void AddFormatModifier(bool aHasAlpha, int aFormat, uint32_t mModifierHi,
+                         uint32_t mModifierLo);
+
  private:
   bool Configure();
+
+  wl_registry* mRegistry;
+
+  GbmFormat mXRGBFormat;
+  GbmFormat mARGBFormat;
 
   gbm_device* mGbmDevice;
   int mGbmFd;

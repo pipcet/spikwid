@@ -70,6 +70,11 @@ class Raptor(TestingMixin, MercurialScript, CodeCoverageMixin, AndroidMixin, Pyt
             "default": None,
             "help": argparse.SUPPRESS
         }],
+        [["--browsertime-vismet-script"], {
+            "dest": "browsertime_vismet_script",
+            "default": None,
+            "help": argparse.SUPPRESS
+        }],
         [["--browsertime-chromedriver"], {
             "dest": "browsertime_chromedriver",
             "default": None,
@@ -87,6 +92,12 @@ class Raptor(TestingMixin, MercurialScript, CodeCoverageMixin, AndroidMixin, Pyt
         }],
         [["--browsertime-video"], {
             "dest": "browsertime_video",
+            "action": "store_true",
+            "default": False,
+            "help": argparse.SUPPRESS
+        }],
+        [["--browsertime-visualmetrics"], {
+            "dest": "browsertime_visualmetrics",
             "action": "store_true",
             "default": False,
             "help": argparse.SUPPRESS
@@ -272,6 +283,12 @@ class Raptor(TestingMixin, MercurialScript, CodeCoverageMixin, AndroidMixin, Pyt
             "default": False,
             "help": "Run tests using live sites instead of recorded sites.",
         }],
+        [["--chimera"], {
+            "dest": "chimera",
+            "action": "store_true",
+            "default": False,
+            "help": "Run tests in chimera mode. Each browser cycle will run a cold and warm test.",
+        }],
         [["--debug-mode"], {
             "dest": "debug_mode",
             "action": "store_true",
@@ -324,17 +341,17 @@ class Raptor(TestingMixin, MercurialScript, CodeCoverageMixin, AndroidMixin, Pyt
         kwargs.setdefault('all_actions', ['clobber',
                                           'download-and-extract',
                                           'populate-webroot',
+                                          'create-virtualenv',
                                           'install-chrome-android',
                                           'install-chromium-distribution',
-                                          'create-virtualenv',
                                           'install',
                                           'run-tests',
                                           ])
         kwargs.setdefault('default_actions', ['clobber',
                                               'download-and-extract',
                                               'populate-webroot',
-                                              'install-chromium-distribution',
                                               'create-virtualenv',
+                                              'install-chromium-distribution',
                                               'install',
                                               'run-tests',
                                               ])
@@ -402,6 +419,7 @@ class Raptor(TestingMixin, MercurialScript, CodeCoverageMixin, AndroidMixin, Pyt
         self.memory_test = self.config.get('memory_test')
         self.cpu_test = self.config.get('cpu_test')
         self.live_sites = self.config.get('live_sites')
+        self.chimera = self.config.get('chimera')
         self.disable_perf_tuning = self.config.get('disable_perf_tuning')
         self.conditioned_profile_scenario = self.config.get('conditioned_profile_scenario',
                                                             'settled')
@@ -411,12 +429,17 @@ class Raptor(TestingMixin, MercurialScript, CodeCoverageMixin, AndroidMixin, Pyt
         self.chromium_dist_path = None
         self.firefox_android_browsers = ["fennec", "geckoview", "refbrow", "fenix"]
         self.android_browsers = self.firefox_android_browsers + ["chrome-m"]
+        self.browsertime_visualmetrics = False
+        self.browsertime_video = False
 
         for (arg,), details in Raptor.browsertime_options:
             # Allow overriding defaults on the `./mach raptor-test ...` command-line.
             value = self.config.get(details['dest'])
             if value and arg not in self.config.get("raptor_cmd_line_args", []):
                 setattr(self, details['dest'], value)
+
+        if not self.run_local and self.browsertime_visualmetrics and self.browsertime_video:
+            self.error("Cannot run visual metrics in the same CI task as the test.")
 
     # We accept some configuration options from the try commit message in the
     # format mozharness: <options>. Example try commit message: mozharness:
@@ -468,7 +491,7 @@ class Raptor(TestingMixin, MercurialScript, CodeCoverageMixin, AndroidMixin, Pyt
                 "raptor",
                 "tooltool-manifests",
                 "chrome-android",
-                "chrome80.manifest"
+                "chrome85.manifest"
             ),
             output_dir=tmpdir
         )
@@ -633,6 +656,8 @@ class Raptor(TestingMixin, MercurialScript, CodeCoverageMixin, AndroidMixin, Pyt
             options.extend(['--cpu-test'])
         if self.config.get('live_sites', False):
             options.extend(['--live-sites'])
+        if self.config.get('chimera', False):
+            options.extend(['--chimera'])
         if self.config.get('disable_perf_tuning', False):
             options.extend(['--disable-perf-tuning'])
         if self.config.get('cold', False):
@@ -643,6 +668,8 @@ class Raptor(TestingMixin, MercurialScript, CodeCoverageMixin, AndroidMixin, Pyt
             options.extend(['--no-conditioned-profile'])
         if self.config.get('enable_fission', False):
             options.extend(['--enable-fission'])
+        if self.config.get('verbose', False):
+            options.extend(['--verbose'])
         if self.config.get('extra_prefs'):
             options.extend(['--setpref={}'.format(i) for i in self.config.get('extra_prefs')])
 
@@ -735,10 +762,20 @@ class Raptor(TestingMixin, MercurialScript, CodeCoverageMixin, AndroidMixin, Pyt
             two_pass=True,
             editable=True,
         )
+
+        modules = ['pip>=1.5']
+        if self.run_local:
+            # Add modules required for visual metrics
+            modules.extend([
+                'numpy==1.16.1',
+                'Pillow==6.1.0',
+                'scipy==1.2.3',
+                'pyssim==0.4'
+            ])
+
         # Require pip >= 1.5 so pip will prefer .whl files to install
-        super(Raptor, self).create_virtualenv(
-            modules=['pip>=1.5']
-        )
+        super(Raptor, self).create_virtualenv(modules=modules)
+
         # Install Raptor dependencies
         self.install_module(
             requirements=[os.path.join(self.raptor_path,

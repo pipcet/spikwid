@@ -59,6 +59,8 @@ from taskgraph.util.taskcluster import (
     list_artifacts,
 )
 
+from mach.util import UserError
+
 from mozbuild.artifact_cache import ArtifactCache
 from mozbuild.artifact_builds import JOB_CHOICES
 from mozbuild.util import (
@@ -120,12 +122,12 @@ class ArtifactJob(object):
         ('bin/OCSPStaplingServer', ('bin', 'bin')),
         ('bin/SanctionsTestServer', ('bin', 'bin')),
         ('bin/certutil', ('bin', 'bin')),
-        ('bin/fileid', ('bin', 'bin')),
         ('bin/geckodriver', ('bin', 'bin')),
         ('bin/pk12util', ('bin', 'bin')),
         ('bin/screentopng', ('bin', 'bin')),
         ('bin/ssltunnel', ('bin', 'bin')),
         ('bin/xpcshell', ('bin', 'bin')),
+        ('bin/http3server', ('bin', 'bin')),
         ('bin/plugins/gmp-*/*/*', ('bin/plugins', 'bin')),
         ('bin/plugins/*', ('bin/plugins', 'plugins')),
         ('bin/components/*.xpt', ('bin/components', 'bin/components')),
@@ -141,7 +143,7 @@ class ArtifactJob(object):
                  download_symbols=False,
                  download_host_bins=False,
                  download_maven_zip=False,
-                 substs=None):
+                 substs=None, mozbuild=None):
         self._package_re = re.compile(self.package_re)
         self._tests_re = None
         if download_tests:
@@ -158,9 +160,10 @@ class ArtifactJob(object):
         self._substs = substs
         self._symbols_archive_suffix = None
         if download_symbols == 'full':
-            self._symbols_archive_suffix = 'crashreporter-symbols-full.zip'
+            self._symbols_archive_suffix = 'crashreporter-symbols-full.tar.zst'
         elif download_symbols:
             self._symbols_archive_suffix = 'crashreporter-symbols.zip'
+        self._mozbuild = mozbuild
 
     def log(self, *args, **kwargs):
         if self._log:
@@ -310,18 +313,17 @@ class ArtifactJob(object):
 
     def process_symbols_archive(self, filename, processed_filename, skip_compressed=False):
         with JarWriter(file=processed_filename, compress_level=5) as writer:
-            reader = JarReader(filename)
-            for filename in reader.entries:
+            for filename, entry in self.iter_artifact_archive(filename):
                 if skip_compressed and filename.endswith('.gz'):
                     self.log(logging.DEBUG, 'artifact',
                              {'filename': filename},
                              'Skipping compressed ELF debug symbol file {filename}')
                     continue
                 destpath = mozpath.join('crashreporter-symbols', filename)
-                self.log(logging.DEBUG, 'artifact',
+                self.log(logging.INFO, 'artifact',
                          {'destpath': destpath},
                          'Adding {destpath} to processed archive')
-                writer.add(destpath.encode('utf-8'), reader[filename])
+                writer.add(destpath.encode('utf-8'), entry)
 
     def process_host_bin(self, filename, processed_filename):
         with JarWriter(file=processed_filename, compress_level=5) as writer:
@@ -331,6 +333,25 @@ class ArtifactJob(object):
             orig_basename = os.path.basename(filename).split('-', 1)[1]
             destpath = mozpath.join('host/bin', orig_basename)
             writer.add(destpath.encode('utf-8'), open(filename, 'rb'))
+
+    def iter_artifact_archive(self, filename):
+        if filename.endswith('.zip'):
+            reader = JarReader(filename)
+            for filename in reader.entries:
+                yield filename, reader[filename]
+        elif filename.endswith('.tar.zst') and self._mozbuild is not None:
+            self._mozbuild._ensure_zstd()
+            import zstandard
+            ctx = zstandard.ZstdDecompressor()
+            uncompressed = ctx.stream_reader(open(filename, 'rb'))
+            with tarfile.open(mode='r|', fileobj=uncompressed, bufsize=1024*1024) as reader:
+                while True:
+                    info = reader.next()
+                    if info is None:
+                        break
+                    yield info.name, reader.extractfile(info)
+        else:
+            raise RuntimeError('Unsupported archive type for %s' % filename)
 
 
 class AndroidArtifactJob(ArtifactJob):
@@ -363,14 +384,13 @@ class AndroidArtifactJob(ArtifactJob):
         ArtifactJob.process_symbols_archive(
             self, filename, processed_filename, skip_compressed=True)
 
-        if self._symbols_archive_suffix != 'crashreporter-symbols-full.zip':
+        if not self._symbols_archive_suffix.startswith('crashreporter-symbols-full.'):
             return
 
         import gzip
 
         with JarWriter(file=processed_filename, compress_level=5) as writer:
-            reader = JarReader(filename)
-            for filename in reader.entries:
+            for filename, entry in self.iter_artifact_archive(filename):
                 if not filename.endswith('.gz'):
                     continue
 
@@ -390,7 +410,7 @@ class AndroidArtifactJob(ArtifactJob):
                          'Adding uncompressed ELF debug symbol file '
                          '{destpath} to processed archive')
                 writer.add(destpath.encode('utf-8'),
-                           gzip.GzipFile(fileobj=reader[filename].uncompressed_data))
+                           gzip.GzipFile(fileobj=entry))
 
 
 class LinuxArtifactJob(ArtifactJob):
@@ -576,13 +596,13 @@ class WinArtifactJob(ArtifactJob):
         ('bin/OCSPStaplingServer.exe', ('bin', 'bin')),
         ('bin/SanctionsTestServer.exe', ('bin', 'bin')),
         ('bin/certutil.exe', ('bin', 'bin')),
-        ('bin/fileid.exe', ('bin', 'bin')),
         ('bin/geckodriver.exe', ('bin', 'bin')),
         ('bin/minidumpwriter.exe', ('bin', 'bin')),
         ('bin/pk12util.exe', ('bin', 'bin')),
         ('bin/screenshot.exe', ('bin', 'bin')),
         ('bin/ssltunnel.exe', ('bin', 'bin')),
         ('bin/xpcshell.exe', ('bin', 'bin')),
+        ('bin/http3server.exe', ('bin', 'bin')),
         ('bin/plugins/gmp-*/*/*', ('bin/plugins', 'bin')),
         ('bin/plugins/*', ('bin/plugins', 'plugins')),
         ('bin/components/*', ('bin/components', 'bin/components')),
@@ -831,7 +851,7 @@ class Artifacts(object):
                  cache_dir='.', hg=None, git=None, skip_cache=False,
                  topsrcdir=None, download_tests=True, download_symbols=False,
                  download_host_bins=False,
-                 download_maven_zip=False, no_process=False):
+                 download_maven_zip=False, no_process=False, mozbuild=None):
         if (hg and git) or (not hg and not git):
             raise ValueError("Must provide path to exactly one of hg and git")
 
@@ -857,7 +877,7 @@ class Artifacts(object):
                                      download_symbols=download_symbols,
                                      download_host_bins=download_host_bins,
                                      download_maven_zip=download_maven_zip,
-                                     substs=self._substs)
+                                     substs=self._substs, mozbuild=mozbuild)
         except KeyError:
             self.log(logging.INFO, 'artifact',
                      {'job': self._job},
@@ -973,6 +993,13 @@ class Artifacts(object):
             if not hg_hash or hg_hash == zeroes:
                 continue
             hashes.append(hg_hash)
+        if not hashes:
+            raise UserError(
+                'Could not list any recent revisions in your clone. Does your '
+                'clone have git-cinnabar metadata? If not, consider re-cloning '
+                'using the directions at '
+                'https://github.com/glandium/git-cinnabar/wiki/Mozilla:-A-git-'
+                'workflow-for-Gecko-development')
         return hashes
 
     def _get_recent_public_revisions(self):
@@ -992,7 +1019,7 @@ class Artifacts(object):
                                 cwd=self._topsrcdir).splitlines()
 
         if len(last_revs) == 0:
-            raise Exception("""\
+            raise UserError("""\
 There are no public revisions.
 This can happen if the repository is created from bundle file and never pulled
 from remote.  Please run `hg pull` and build again.

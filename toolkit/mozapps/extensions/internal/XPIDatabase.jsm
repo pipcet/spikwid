@@ -25,7 +25,6 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   AddonManagerPrivate: "resource://gre/modules/AddonManager.jsm",
   AddonRepository: "resource://gre/modules/addons/AddonRepository.jsm",
   AddonSettings: "resource://gre/modules/addons/AddonSettings.jsm",
-  AppConstants: "resource://gre/modules/AppConstants.jsm",
   DeferredTask: "resource://gre/modules/DeferredTask.jsm",
   ExtensionUtils: "resource://gre/modules/ExtensionUtils.jsm",
   FileUtils: "resource://gre/modules/FileUtils.jsm",
@@ -795,7 +794,7 @@ AddonWrapper = class {
   }
 
   get __AddonInternal__() {
-    return AppConstants.DEBUG ? addonFor(this) : undefined;
+    return addonFor(this);
   }
 
   get seen() {
@@ -937,7 +936,7 @@ AddonWrapper = class {
     return null;
   }
 
-  get isRecommended() {
+  get recommendationStates() {
     let addon = addonFor(this);
     let state = addon.recommendationState;
     if (
@@ -947,9 +946,22 @@ AddonWrapper = class {
       addon.isCorrectlySigned &&
       !this.temporarilyInstalled
     ) {
-      return state.states.includes("recommended");
+      return state.states;
     }
-    return false;
+    return [];
+  }
+
+  get isRecommended() {
+    return this.recommendationStates.includes("recommended");
+  }
+
+  get canBypassThirdParyInstallPrompt() {
+    // We only bypass if the extension is signed (to support distributions
+    // that turn off the signing requirement) and has recommendation states.
+    return (
+      this.signedState >= AddonManager.SIGNEDSTATE_SIGNED &&
+      this.recommendationStates.length
+    );
   }
 
   get applyBackgroundUpdates() {
@@ -3013,6 +3025,16 @@ this.XPIDatabaseReconcile = {
       aOldAddon.signedDate === undefined &&
       (aOldAddon.signedState || checkSigning);
 
+    // If maxVersion was inadvertently updated for a locale, force a reload
+    // from the manifest.  See Bug 1646016 for details.
+    if (
+      !aReloadMetadata &&
+      aOldAddon.type === "locale" &&
+      aOldAddon.matchingTargetApplication
+    ) {
+      aReloadMetadata = aOldAddon.matchingTargetApplication.maxVersion === "*";
+    }
+
     let manifest = null;
     if (checkSigning || aReloadMetadata || signedDateMissing) {
       try {
@@ -3040,7 +3062,6 @@ this.XPIDatabaseReconcile = {
     if (aReloadMetadata) {
       // Avoid re-reading these properties from manifest,
       // use existing addon instead.
-      // TODO - consider re-scanning for targetApplications.
       let remove = [
         "syncGUID",
         "foreignInstall",
@@ -3051,9 +3072,13 @@ this.XPIDatabaseReconcile = {
         "applyBackgroundUpdates",
         "sourceURI",
         "releaseNotesURI",
-        "targetApplications",
         "installTelemetryInfo",
       ];
+
+      // TODO - consider re-scanning for targetApplications for other addon types.
+      if (aOldAddon.type !== "locale") {
+        remove.push("targetApplications");
+      }
 
       let props = PROP_JSON_FIELDS.filter(a => !remove.includes(a));
       copyProperties(manifest, props, aOldAddon);
@@ -3402,30 +3427,9 @@ this.XPIDatabaseReconcile = {
           id
         );
 
-        if (
-          previousAddon.location &&
-          (!previousAddon._sourceBundle ||
-            (previousAddon._sourceBundle.exists() &&
-              !previousAddon._sourceBundle.equals(currentAddon._sourceBundle)))
-        ) {
-          promise = XPIInternal.BootstrapScope.get(previousAddon).update(
-            currentAddon
-          );
-        } else if (
-          this.isSystemAddonLocation(currentAddon.location) &&
-          previousAddon.version == currentAddon.version &&
-          previousAddon.userDisabled != currentAddon.userDisabled
-        ) {
-          // A system addon change, no need for install or update events.
-        } else {
-          let reason = XPIInstall.newVersionReason(
-            previousAddon.version,
-            currentAddon.version
-          );
-          XPIInternal.BootstrapScope.get(currentAddon).install(reason, false, {
-            oldVersion: previousAddon.version,
-          });
-        }
+        promise = XPIInternal.BootstrapScope.get(previousAddon).update(
+          currentAddon
+        );
       }
 
       if (isActive != wasActive) {

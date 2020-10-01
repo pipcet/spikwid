@@ -605,6 +605,23 @@ class TextInputDelegateTest : BaseSessionTest() {
         assertText("Can type using event", ic, "frabat")
     }
 
+    // Test for Multiple setComposingText with same string length.
+    @WithDisplay(width = 512, height = 512) // Child process updates require having a display.
+    @Test fun inputConnection_multiple_setComposingText() {
+
+        setupContent("")
+        val ic = mainSession.textInput.onCreateInputConnection(EditorInfo())!!
+
+        // Don't wait composition event for this test.
+        ic.setComposingText("aaa", 1)
+        ic.setComposingText("aaa", 1)
+        ic.setComposingText("aab", 1)
+
+        finishComposingText(ic)
+        assertTextAndSelectionAt("Multiple setComposingText don't commit composition string",
+                                 ic, "aab", 3)
+    }
+
     // Bug 1133802, duplication when setting the same composing text more than once.
     @Ignore // Disable for frequent failures.
     @WithDisplay(width = 512, height = 512) // Child process updates require having a display.
@@ -800,6 +817,42 @@ class TextInputDelegateTest : BaseSessionTest() {
                     "search" -> EditorInfo.IME_ACTION_SEARCH
                     "send" -> EditorInfo.IME_ACTION_SEND
                     else -> EditorInfo.IME_ACTION_NONE
+                }))
+
+            mainSession.evaluateJS("document.querySelector('$id').blur()")
+            mainSession.waitUntilCalled(GeckoSession.TextInputDelegate::class, "restartInput")
+        }
+    }
+
+    @WithDisplay(width = 512, height = 512) // Child process updates require having a display.
+    @Test fun editorInfo_autocapitalize() {
+        // no way to set autocapitalize on designmode.
+        assumeThat("Not in designmode", id, not(equalTo("#designmode")))
+
+        sessionRule.setPrefsUntilTestEnd(mapOf("dom.forms.autocapitalize" to true))
+
+        mainSession.textInput.view = View(InstrumentationRegistry.getInstrumentation().targetContext)
+
+        mainSession.loadTestPath(INPUTS_PATH)
+        mainSession.waitForPageStop()
+
+        textContent = ""
+        val values = listOf("characters", "none", "sentences", "words", "off", "on")
+        for (autocapitalize in values) {
+            mainSession.evaluateJS("""
+                document.querySelector('$id').autocapitalize = '$autocapitalize';
+                document.querySelector('$id').focus()""")
+            mainSession.waitUntilCalled(GeckoSession.TextInputDelegate::class, "restartInput")
+
+            val editorInfo = EditorInfo()
+            mainSession.textInput.onCreateInputConnection(editorInfo)
+            assertThat("EditorInfo.inputType by $autocapitalize", editorInfo.inputType and 0x00007000, equalTo(
+                when (autocapitalize) {
+                    "characters" -> InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
+                    "on" -> InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+                    "sentences" -> InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+                    "words" -> InputType.TYPE_TEXT_FLAG_CAP_WORDS
+                    else -> 0
                 }))
 
             mainSession.evaluateJS("document.querySelector('$id').blur()")

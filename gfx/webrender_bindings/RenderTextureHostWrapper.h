@@ -33,8 +33,15 @@ class RenderTextureHostWrapper final : public RenderTextureHost {
   void Unlock() override;
   void ClearCachedResources() override;
 
+  RenderMacIOSurfaceTextureHostOGL* AsRenderMacIOSurfaceTextureHostOGL()
+      override;
+
+  virtual RenderDXGITextureHostOGL* AsRenderDXGITextureHostOGL() override;
+
  private:
   ~RenderTextureHostWrapper() override;
+
+  void EnsureTextureHost();
 
   const ExternalImageId mExternalImageId;
   RefPtr<RenderTextureHost> mTextureHost;

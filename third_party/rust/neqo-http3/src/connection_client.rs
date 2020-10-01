@@ -17,11 +17,11 @@ use crate::RecvMessageEvents;
 use neqo_common::{
     hex, hex_with_len, qdebug, qinfo, qlog::NeqoQlog, qtrace, Datagram, Decoder, Encoder, Role,
 };
-use neqo_crypto::{agent::CertificateInfo, AuthenticationStatus, SecretAgentInfo};
+use neqo_crypto::{agent::CertificateInfo, AuthenticationStatus, ResumptionToken, SecretAgentInfo};
 use neqo_qpack::{stats::Stats, QpackSettings};
 use neqo_transport::{
-    AppError, Connection, ConnectionEvent, ConnectionIdManager, Output, QuicVersion, StreamId,
-    StreamType, ZeroRttState,
+    AppError, Connection, ConnectionEvent, ConnectionId, ConnectionIdManager, Output, QuicVersion,
+    StreamId, StreamType, ZeroRttState,
 };
 use std::cell::RefCell;
 use std::fmt::Display;
@@ -144,35 +144,35 @@ impl Http3Client {
         self.conn.set_qlog(qlog);
     }
 
-    /// Returns a resumption token if present.
-    /// A resumption token encodes transport and settings parameter as well.
+    /// Get the connection id, which is useful for disambiguating connections to
+    /// the same origin.
     #[must_use]
-    pub fn resumption_token(&self) -> Option<Vec<u8>> {
-        if let Some(token) = self.conn.resumption_token() {
-            if let Some(settings) = self.base_handler.get_settings() {
-                let mut enc = Encoder::default();
-                settings.encode_frame_contents(&mut enc);
-                enc.encode(&token[..]);
-                Some(enc.into())
-            } else {
-                None
-            }
-        } else {
-            None
+    pub fn connection_id(&self) -> &ConnectionId {
+        &self.conn.odcid().expect("Client always has odcid")
+    }
+
+    /// A resumption token encodes transport and settings parameter as well.
+    fn create_resumption_token(&mut self, token: &ResumptionToken) {
+        if let Some(settings) = self.base_handler.get_settings() {
+            let mut enc = Encoder::default();
+            settings.encode_frame_contents(&mut enc);
+            enc.encode(token.as_ref());
+            self.events
+                .resumption_token(ResumptionToken::new(enc.into(), token.expiration_time()));
         }
     }
 
     /// This may be call if an application has a resumption token. This must be called before connection starts.
     /// # Errors
     /// An error is return if token cannot be decoded or a connection is is a wrong state.
-    pub fn set_resumption_token(&mut self, now: Instant, token: &[u8]) -> Res<()> {
+    pub fn enable_resumption(&mut self, now: Instant, token: impl AsRef<[u8]>) -> Res<()> {
         if self.base_handler.state != Http3State::Initializing {
             return Err(Error::InvalidState);
         }
-        let mut dec = Decoder::from(token);
+        let mut dec = Decoder::from(token.as_ref());
         let settings_slice = match dec.decode_vvec() {
             Some(v) => v,
-            _ => return Err(Error::InvalidResumptionToken),
+            None => return Err(Error::InvalidResumptionToken),
         };
         qtrace!([self], "  settings {}", hex_with_len(&settings_slice));
         let mut dec_settings = Decoder::from(settings_slice);
@@ -182,9 +182,7 @@ impl Http3Client {
             .map_err(|_| Error::InvalidResumptionToken)?;
         let tok = dec.decode_remainder();
         qtrace!([self], "  Transport token {}", hex(&tok));
-        self.conn
-            .set_resumption_token(now, tok)
-            .map_err(|e| Error::map_set_resumption_errors(&e))?;
+        self.conn.enable_resumption(now, tok)?;
         if self.conn.state().closed() {
             let state = self.conn.state().clone();
             debug_assert!(
@@ -198,6 +196,8 @@ impl Http3Client {
         if *self.conn.zero_rtt_state() == ZeroRttState::Sending {
             self.base_handler
                 .set_0rtt_settings(&mut self.conn, settings)?;
+            self.events
+                .connection_state_change(self.base_handler.state());
             self.push_handler
                 .borrow_mut()
                 .maybe_send_max_push_id_frame(&mut self.base_handler);
@@ -559,6 +559,9 @@ impl Http3Client {
                     self.events.zero_rtt_rejected();
                     self.push_handler.borrow_mut().handle_zero_rtt_rejected();
                 }
+                ConnectionEvent::ResumptionToken(token) => {
+                    self.create_resumption_token(&token);
+                }
             }
         }
         Ok(())
@@ -688,15 +691,17 @@ mod tests {
         AuthenticationStatus, Connection, Error, HSettings, Header, Http3Client, Http3ClientEvent,
         Http3Parameters, Http3State, QpackSettings, Rc, RefCell, StreamType,
     };
-    use crate::hframe::HFrame;
-    use crate::settings::{HSetting, HSettingType};
+    use crate::hframe::{HFrame, H3_FRAME_TYPE_SETTINGS, H3_RESERVED_FRAME_TYPES};
+    use crate::settings::{HSetting, HSettingType, H3_RESERVED_SETTINGS};
     use neqo_common::{Datagram, Encoder};
-    use neqo_crypto::{AllowZeroRtt, AntiReplay};
+    use neqo_crypto::{AllowZeroRtt, AntiReplay, ResumptionToken};
     use neqo_qpack::encoder::QPackEncoder;
     use neqo_transport::{
         CloseError, ConnectionEvent, FixedConnectionIdManager, QuicVersion, State,
         RECV_BUFFER_SIZE, SEND_BUFFER_SIZE,
     };
+    use std::convert::TryFrom;
+    use std::time::Duration;
     use test_fixture::{
         default_server, fixture_init, loopback, now, DEFAULT_ALPN, DEFAULT_SERVER_NAME,
     };
@@ -753,6 +758,11 @@ mod tests {
     // resumed settings.
     const ENCODER_STREAM_DATA_WITH_CAP_INSTRUCTION: &[u8] = &[0x2, 0x3f, 0x45];
 
+    const ENCODER_STREAM_DATA_WITH_CAP_INST_AND_ENCODING_INST: &[u8] = &[
+        0x2, 0x3f, 0x45, 0x67, 0xa7, 0xd4, 0xe5, 0x1c, 0x85, 0xb1, 0x1f, 0x86, 0xa7, 0xd7, 0x71,
+        0xd1, 0x69, 0x7f,
+    ];
+
     // Decoder stream data
     const DECODER_STREAM_DATA: &[u8] = &[0x3];
 
@@ -791,7 +801,7 @@ mod tests {
                 encoder: QPackEncoder::new(
                     QpackSettings {
                         max_table_size_encoder: 128,
-                        max_table_size_decoder: 0,
+                        max_table_size_decoder: 128,
                         max_blocked_streams: 0,
                     },
                     true,
@@ -811,7 +821,7 @@ mod tests {
                 encoder: QPackEncoder::new(
                     QpackSettings {
                         max_table_size_encoder: 128,
-                        max_table_size_decoder: 0,
+                        max_table_size_decoder: 128,
                         max_blocked_streams: 0,
                     },
                     true,
@@ -836,6 +846,9 @@ mod tests {
                     .unwrap(),
                 1
             );
+            self.encoder
+                .add_recv_stream(CLIENT_SIDE_DECODER_STREAM_ID)
+                .unwrap();
         }
 
         pub fn create_control_stream(&mut self) {
@@ -861,16 +874,23 @@ mod tests {
         }
 
         pub fn check_client_control_qpack_streams_no_resumption(&mut self) {
-            self.check_client_control_qpack_streams(ENCODER_STREAM_DATA, false, true);
+            self.check_client_control_qpack_streams(
+                ENCODER_STREAM_DATA,
+                EXPECTED_REQUEST_HEADER_FRAME,
+                false,
+                true,
+            );
         }
 
         pub fn check_control_qpack_request_streams_resumption(
             &mut self,
             expect_encoder_stream_data: &[u8],
+            expect_request_header: &[u8],
             expect_request: bool,
         ) {
             self.check_client_control_qpack_streams(
                 expect_encoder_stream_data,
+                expect_request_header,
                 expect_request,
                 false,
             );
@@ -880,6 +900,7 @@ mod tests {
         pub fn check_client_control_qpack_streams(
             &mut self,
             expect_encoder_stream_data: &[u8],
+            expect_request_header: &[u8],
             expect_request: bool,
             expect_connected: bool,
         ) {
@@ -917,11 +938,7 @@ mod tests {
                             qpack_decoder_stream = true;
                         } else if stream_id == 0 {
                             assert!(expect_request);
-                            self.read_and_check_stream_data(
-                                stream_id,
-                                EXPECTED_REQUEST_HEADER_FRAME,
-                                true,
-                            );
+                            self.read_and_check_stream_data(stream_id, expect_request_header, true);
                             request = true;
                         } else {
                             panic!("unexpected event");
@@ -1020,10 +1037,10 @@ mod tests {
         (client, server)
     }
 
-    // Fetch request fetch("GET", "https", "something.com", "/", &[]).
-    fn make_request(client: &mut Http3Client, close_sending_side: bool) -> u64 {
+    // Fetch request fetch("GET", "https", "something.com", "/", headers).
+    fn make_request(client: &mut Http3Client, close_sending_side: bool, headers: &[Header]) -> u64 {
         let request_stream_id = client
-            .fetch(now(), "GET", "https", "something.com", "/", &[])
+            .fetch(now(), "GET", "https", "something.com", "/", headers)
             .unwrap();
         if close_sending_side {
             let _ = client.stream_close_send(request_stream_id);
@@ -1036,6 +1053,13 @@ mod tests {
     const EXPECTED_REQUEST_HEADER_FRAME: &[u8] = &[
         0x01, 0x10, 0x00, 0x00, 0xd1, 0xd7, 0x50, 0x89, 0x41, 0xe9, 0x2a, 0x67, 0x35, 0x53, 0x2e,
         0x43, 0xd3, 0xc1,
+    ];
+
+    // For fetch request fetch("GET", "https", "something.com", "/", &[(String::from("myheaders"), String::from("myvalue"))])
+    // the following request header frame will be sent:
+    const EXPECTED_REQUEST_HEADER_FRAME_VERSION2: &[u8] = &[
+        0x01, 0x11, 0x02, 0x80, 0xd1, 0xd7, 0x50, 0x89, 0x41, 0xe9, 0x2a, 0x67, 0x35, 0x53, 0x2e,
+        0x43, 0xd3, 0xc1, 0x10,
     ];
 
     const HTTP_HEADER_FRAME_0: &[u8] = &[0x01, 0x06, 0x00, 0x00, 0xd9, 0x54, 0x01, 0x30];
@@ -1106,10 +1130,12 @@ mod tests {
     // The data frame payload from HTTP_RESPONSE_2 is:
     const EXPECTED_RESPONSE_DATA_2_FRAME_1: &[u8] = &[0x61, 0x62, 0x63];
 
-    fn connect_and_send_request(close_sending_side: bool) -> (Http3Client, TestServer, u64) {
-        let (mut client, mut server) = connect();
-        let request_stream_id = make_request(&mut client, close_sending_side);
-        assert_eq!(request_stream_id, 0);
+    fn make_request_and_exchange_pkts(
+        client: &mut Http3Client,
+        server: &mut TestServer,
+        close_sending_side: bool,
+    ) -> u64 {
+        let request_stream_id = make_request(client, close_sending_side, &[]);
 
         let out = client.process(None, now());
         let _ = server.conn.process(out.dgram(), now());
@@ -1134,6 +1160,14 @@ mod tests {
         }
         let out = server.conn.process(None, now());
         client.process(out.dgram(), now());
+        request_stream_id
+    }
+
+    fn connect_and_send_request(close_sending_side: bool) -> (Http3Client, TestServer, u64) {
+        let (mut client, mut server) = connect();
+        let request_stream_id =
+            make_request_and_exchange_pkts(&mut client, &mut server, close_sending_side);
+        assert_eq!(request_stream_id, 0);
 
         (client, server, request_stream_id)
     }
@@ -2491,11 +2525,11 @@ mod tests {
     #[test]
     fn test_goaway() {
         let (mut client, mut server) = connect();
-        let request_stream_id_1 = make_request(&mut client, false);
+        let request_stream_id_1 = make_request(&mut client, false, &[]);
         assert_eq!(request_stream_id_1, 0);
-        let request_stream_id_2 = make_request(&mut client, false);
+        let request_stream_id_2 = make_request(&mut client, false, &[]);
         assert_eq!(request_stream_id_2, 4);
-        let request_stream_id_3 = make_request(&mut client, false);
+        let request_stream_id_3 = make_request(&mut client, false, &[]);
         assert_eq!(request_stream_id_3, 8);
 
         let out = client.process(None, now());
@@ -2565,11 +2599,11 @@ mod tests {
     #[test]
     fn multiple_goaways() {
         let (mut client, mut server) = connect();
-        let request_stream_id_1 = make_request(&mut client, false);
+        let request_stream_id_1 = make_request(&mut client, false, &[]);
         assert_eq!(request_stream_id_1, 0);
-        let request_stream_id_2 = make_request(&mut client, false);
+        let request_stream_id_2 = make_request(&mut client, false, &[]);
         assert_eq!(request_stream_id_2, 4);
-        let request_stream_id_3 = make_request(&mut client, false);
+        let request_stream_id_3 = make_request(&mut client, false, &[]);
         assert_eq!(request_stream_id_3, 8);
 
         let out = client.process(None, now());
@@ -2643,11 +2677,11 @@ mod tests {
     #[test]
     fn multiple_goaways_stream_id_increased() {
         let (mut client, mut server) = connect();
-        let request_stream_id_1 = make_request(&mut client, false);
+        let request_stream_id_1 = make_request(&mut client, false, &[]);
         assert_eq!(request_stream_id_1, 0);
-        let request_stream_id_2 = make_request(&mut client, false);
+        let request_stream_id_2 = make_request(&mut client, false, &[]);
         assert_eq!(request_stream_id_2, 4);
-        let request_stream_id_3 = make_request(&mut client, false);
+        let request_stream_id_3 = make_request(&mut client, false, &[]);
         assert_eq!(request_stream_id_3, 8);
 
         // First send a Goaway frame with a smaller number
@@ -3089,9 +3123,7 @@ mod tests {
     fn test_read_frames_header_blocked() {
         let (mut client, mut server, request_stream_id) = connect_and_send_request(true);
 
-        server.encoder.set_max_capacity(100).unwrap();
-        server.encoder.set_max_blocked_streams(100).unwrap();
-        server.encoder.send(&mut server.conn).unwrap();
+        setup_server_side_encoder(&mut client, &mut server);
 
         let headers = vec![
             (String::from(":status"), String::from("200")),
@@ -3127,11 +3159,11 @@ mod tests {
         assert!(!client.events().any(header_ready_event));
 
         // Let client receive the encoder instructions.
-        let _out = client.process(encoder_inst_pkt.dgram(), now());
+        let _ = client.process(encoder_inst_pkt.dgram(), now());
 
         let out = server.conn.process(None, now());
-        let _out = client.process(out.dgram(), now());
-        let _out = client.process(None, now());
+        let _ = client.process(out.dgram(), now());
+        let _ = client.process(None, now());
 
         let mut recv_header = false;
         let mut recv_data = false;
@@ -3159,9 +3191,7 @@ mod tests {
     fn test_read_frames_header_blocked_with_fin_after_headers() {
         let (mut hconn, mut server, request_stream_id) = connect_and_send_request(true);
 
-        server.encoder.set_max_capacity(100).unwrap();
-        server.encoder.set_max_blocked_streams(100).unwrap();
-        server.encoder.send(&mut server.conn).unwrap();
+        setup_server_side_encoder(&mut hconn, &mut server);
 
         let sent_headers = vec![
             (String::from(":status"), String::from("200")),
@@ -3216,13 +3246,24 @@ mod tests {
         assert!(recv_header);
     }
 
-    fn exchange_token(client: &mut Http3Client, server: &mut Connection) -> Vec<u8> {
+    fn exchange_token(client: &mut Http3Client, server: &mut Connection) -> ResumptionToken {
         server.send_ticket(now(), &[]).expect("can send ticket");
         let out = server.process_output(now());
         assert!(out.as_dgram_ref().is_some());
         client.process_input(out.dgram().unwrap(), now());
+        // We do not have a token so we need to wait for a resumption token timer to trigger.
+        client.process_output(now() + Duration::from_millis(250));
         assert_eq!(client.state(), Http3State::Connected);
-        client.resumption_token().expect("should have token")
+        client
+            .events()
+            .find_map(|e| {
+                if let Http3ClientEvent::ResumptionToken(token) = e {
+                    Some(token)
+                } else {
+                    None
+                }
+            })
+            .unwrap()
     }
 
     fn start_with_0rtt() -> (Http3Client, TestServer) {
@@ -3235,10 +3276,12 @@ mod tests {
 
         assert_eq!(client.state(), Http3State::Initializing);
         client
-            .set_resumption_token(now(), &token)
+            .enable_resumption(now(), &token)
             .expect("Set resumption token.");
 
         assert_eq!(client.state(), Http3State::ZeroRtt);
+        let zerortt_event = |e| matches!(e, Http3ClientEvent::StateChange(Http3State::ZeroRtt));
+        assert!(client.events().any(zerortt_event));
 
         (client, server)
     }
@@ -3259,6 +3302,7 @@ mod tests {
         // the peer settings already.
         server.check_control_qpack_request_streams_resumption(
             ENCODER_STREAM_DATA_WITH_CAP_INSTRUCTION,
+            EXPECTED_REQUEST_HEADER_FRAME,
             false,
         );
 
@@ -3266,7 +3310,7 @@ mod tests {
         let out = client.process(out.dgram(), now());
         assert_eq!(client.state(), Http3State::Connected);
 
-        let _out = server.conn.process(out.dgram(), now());
+        let _ = server.conn.process(out.dgram(), now());
         assert!(server.conn.state().connected());
 
         assert!(client.tls_info().unwrap().resumed());
@@ -3277,7 +3321,11 @@ mod tests {
     fn zero_rtt_send_request() {
         let (mut client, mut server) = start_with_0rtt();
 
-        let request_stream_id = make_request(&mut client, true);
+        let request_stream_id = make_request(
+            &mut client,
+            true,
+            &[(String::from("myheaders"), String::from("myvalue"))],
+        );
         assert_eq!(request_stream_id, 0);
 
         let out = client.process(None, now());
@@ -3291,7 +3339,8 @@ mod tests {
         // Also qpack encoder stream will send "change capacity" instruction because it has
         // the peer settings already.
         server.check_control_qpack_request_streams_resumption(
-            ENCODER_STREAM_DATA_WITH_CAP_INSTRUCTION,
+            ENCODER_STREAM_DATA_WITH_CAP_INST_AND_ENCODING_INST,
+            EXPECTED_REQUEST_HEADER_FRAME_VERSION2,
             true,
         );
 
@@ -3345,15 +3394,17 @@ mod tests {
 
         assert_eq!(client.state(), Http3State::Initializing);
         client
-            .set_resumption_token(now(), &token)
+            .enable_resumption(now(), &token)
             .expect("Set resumption token.");
+        let zerortt_event = |e| matches!(e, Http3ClientEvent::StateChange(Http3State::ZeroRtt));
+        assert!(client.events().any(zerortt_event));
 
         // Send ClientHello.
         let client_hs = client.process(None, now());
         assert!(client_hs.as_dgram_ref().is_some());
 
         // Create a request
-        let request_stream_id = make_request(&mut client, false);
+        let request_stream_id = make_request(&mut client, false, &[]);
         assert_eq!(request_stream_id, 0);
 
         let client_0rtt = client.process(None, now());
@@ -3384,7 +3435,7 @@ mod tests {
         TestServer::new_with_conn(server).check_client_control_qpack_streams_no_resumption();
 
         // Check that we can send a request and that the stream_id starts again from 0.
-        assert_eq!(make_request(&mut client, false), 0);
+        assert_eq!(make_request(&mut client, false, &[]), 0);
     }
 
     // Connect to a server, get token and reconnect using 0-rtt. Seerver sends new Settings.
@@ -3404,7 +3455,7 @@ mod tests {
         let mut server = TestServer::new_with_settings(resumption_settings);
         assert_eq!(client.state(), Http3State::Initializing);
         client
-            .set_resumption_token(now(), &token)
+            .enable_resumption(now(), &token)
             .expect("Set resumption token.");
         assert_eq!(client.state(), Http3State::ZeroRtt);
         let out = client.process(None, now());
@@ -3416,7 +3467,11 @@ mod tests {
         // Check that control and qpack streams anda SETTINGS frame are received.
         // Also qpack encoder stream will send "change capacity" instruction because it has
         // the peer settings already.
-        server.check_control_qpack_request_streams_resumption(expected_encoder_stream_data, false);
+        server.check_control_qpack_request_streams_resumption(
+            expected_encoder_stream_data,
+            EXPECTED_REQUEST_HEADER_FRAME,
+            false,
+        );
 
         assert_eq!(*server.conn.state(), State::Handshaking);
         let out = client.process(out.dgram(), now());
@@ -4001,13 +4056,11 @@ mod tests {
         let qpack_pkt1 = server.conn.process(None, now());
         // delay delivery of this packet.
 
-        let request_stream_id = make_request(&mut client, true);
+        let request_stream_id = make_request(&mut client, true, &[]);
         let out = client.process(None, now());
         let _ = server.conn.process(out.dgram(), now());
 
-        server.encoder.set_max_capacity(100).unwrap();
-        server.encoder.set_max_blocked_streams(100).unwrap();
-        server.encoder.send(&mut server.conn).unwrap();
+        setup_server_side_encoder(&mut client, &mut server);
 
         let headers = vec![
             (String::from(":status"), String::from("200")),
@@ -4036,13 +4089,13 @@ mod tests {
         server.conn.stream_close_send(request_stream_id).unwrap();
 
         let out = server.conn.process(None, now());
-        let _out = client.process(out.dgram(), now());
+        let _ = client.process(out.dgram(), now());
 
         let header_ready_event = |e| matches!(e, Http3ClientEvent::HeaderReady { .. });
         assert!(!client.events().any(header_ready_event));
 
         // Let client receive the encoder instructions.
-        let _out = client.process(qpack_pkt1.dgram(), now());
+        let _ = client.process(qpack_pkt1.dgram(), now());
 
         assert!(client.events().any(header_ready_event));
     }
@@ -4380,7 +4433,7 @@ mod tests {
         send_push_promise_and_exchange_packets(&mut client, &mut server, request_stream_id, 5);
 
         // make a second request.
-        let request_stream_id_2 = make_request(&mut client, false);
+        let request_stream_id_2 = make_request(&mut client, false, &[]);
         assert_eq!(request_stream_id_2, 4);
 
         let out = client.process(None, now());
@@ -4416,7 +4469,7 @@ mod tests {
         send_push_data_and_exchange_packets(&mut client, &mut server, 5, true);
 
         // make a second request.
-        let request_stream_id_2 = make_request(&mut client, false);
+        let request_stream_id_2 = make_request(&mut client, false, &[]);
         assert_eq!(request_stream_id_2, 4);
 
         let out = client.process(None, now());
@@ -4464,7 +4517,7 @@ mod tests {
         );
 
         // make a second request.
-        let request_stream_id_2 = make_request(&mut client, false);
+        let request_stream_id_2 = make_request(&mut client, false, &[]);
         assert_eq!(request_stream_id_2, 4);
 
         let out = client.process(None, now());
@@ -5088,7 +5141,7 @@ mod tests {
             .unwrap();
 
         let out = client.process(None, now());
-        let _out = server.conn.process(out.dgram(), now());
+        let _ = server.conn.process(out.dgram(), now());
         // Check that encoder got stream_canceled instruction.
         let mut inst = [0_u8; 100];
         let (amount, fin) = server
@@ -5098,5 +5151,352 @@ mod tests {
         assert_eq!(fin, false);
         assert_eq!(amount, STREAM_CANCELED_ID_0.len());
         assert_eq!(&inst[..amount], STREAM_CANCELED_ID_0);
+    }
+
+    #[test]
+    fn data_readable_in_decoder_blocked_state() {
+        let (mut client, mut server, request_stream_id) = connect_and_send_request(true);
+
+        setup_server_side_encoder(&mut client, &mut server);
+
+        let headers = vec![
+            (String::from(":status"), String::from("200")),
+            (String::from("my-header"), String::from("my-header")),
+            (String::from("content-length"), String::from("0")),
+        ];
+        let encoded_headers = server
+            .encoder
+            .encode_header_block(&mut server.conn, &headers, request_stream_id)
+            .unwrap();
+        let hframe = HFrame::Headers {
+            header_block: encoded_headers.to_vec(),
+        };
+
+        // Delay encoder instruction so that the stream will be blocked.
+        let encoder_insts = server.conn.process(None, now());
+
+        // Send response headers.
+        let mut d = Encoder::default();
+        hframe.encode(&mut d);
+        server_send_response_and_exchange_packet(
+            &mut client,
+            &mut server,
+            request_stream_id,
+            &d,
+            false,
+        );
+
+        // Headers are blocked waiting fro the encoder instructions.
+        let header_ready_event = |e| matches!(e, Http3ClientEvent::HeaderReady { .. });
+        assert!(!client.events().any(header_ready_event));
+
+        // Now send data frame. This will trigger DataRead event.
+        let mut d = Encoder::default();
+        hframe.encode(&mut d);
+        let d_frame = HFrame::Data { len: 0 };
+        d_frame.encode(&mut d);
+        server_send_response_and_exchange_packet(
+            &mut client,
+            &mut server,
+            request_stream_id,
+            &d,
+            true,
+        );
+
+        // Now read headers.
+        let _ = client.process(encoder_insts.dgram(), now());
+    }
+
+    #[test]
+    fn qpack_stream_reset() {
+        let (mut client, mut server, request_stream_id) = connect_and_send_request(true);
+        setup_server_side_encoder(&mut client, &mut server);
+        // Cancel request.
+        let _ = client.stream_reset(request_stream_id, Error::HttpRequestCancelled.code());
+        assert_eq!(server.encoder.stats().stream_cancelled_recv, 0);
+        let out = client.process(None, now());
+        let _ = server.conn.process(out.dgram(), now());
+        let _ = server
+            .encoder
+            .recv_if_encoder_stream(&mut server.conn, CLIENT_SIDE_DECODER_STREAM_ID);
+        assert_eq!(server.encoder.stats().stream_cancelled_recv, 1);
+    }
+
+    fn send_headers_using_encoder(
+        client: &mut Http3Client,
+        server: &mut TestServer,
+        request_stream_id: u64,
+        headers: &[(String, String)],
+        data: &[u8],
+    ) -> Option<Datagram> {
+        let encoded_headers = server
+            .encoder
+            .encode_header_block(&mut server.conn, &headers, request_stream_id)
+            .unwrap();
+        let hframe = HFrame::Headers {
+            header_block: encoded_headers.to_vec(),
+        };
+
+        let out = server.conn.process(None, now());
+
+        // Send response
+        let mut d = Encoder::default();
+        hframe.encode(&mut d);
+        let d_frame = HFrame::Data {
+            len: u64::try_from(data.len()).unwrap(),
+        };
+        d_frame.encode(&mut d);
+        d.encode(data);
+        server_send_response_and_exchange_packet(client, server, request_stream_id, &d, true);
+
+        out.dgram()
+    }
+
+    #[test]
+    fn qpack_stream_reset_recv() {
+        let (mut client, mut server, request_stream_id) = connect_and_send_request(true);
+        setup_server_side_encoder(&mut client, &mut server);
+
+        // Cancel request.
+        let _ = server
+            .conn
+            .stream_reset_send(request_stream_id, Error::HttpRequestCancelled.code());
+        assert_eq!(server.encoder.stats().stream_cancelled_recv, 0);
+        let out = server.conn.process(None, now());
+        let out = client.process(out.dgram(), now());
+        let _ = server.conn.process(out.dgram(), now());
+        let _ = server
+            .encoder
+            .recv_if_encoder_stream(&mut server.conn, CLIENT_SIDE_DECODER_STREAM_ID);
+        assert_eq!(server.encoder.stats().stream_cancelled_recv, 1);
+    }
+
+    #[test]
+    fn qpack_stream_reset_during_header_qpack_blocked() {
+        let (mut client, mut server, request_stream_id) = connect_and_send_request(true);
+
+        setup_server_side_encoder(&mut client, &mut server);
+
+        let _ = send_headers_using_encoder(
+            &mut client,
+            &mut server,
+            request_stream_id,
+            &[
+                (String::from(":status"), String::from("200")),
+                (String::from("my-header"), String::from("my-header")),
+                (String::from("content-length"), String::from("3")),
+            ],
+            &[0x61, 0x62, 0x63],
+        );
+
+        let header_ready_event = |e| matches!(e, Http3ClientEvent::HeaderReady { .. });
+        assert!(!client.events().any(header_ready_event));
+
+        // Cancel request.
+        let _ = client.stream_reset(request_stream_id, Error::HttpRequestCancelled.code());
+
+        assert_eq!(server.encoder.stats().stream_cancelled_recv, 0);
+        let out = client.process(None, now());
+        let _ = server.conn.process(out.dgram(), now());
+        let _ = server
+            .encoder
+            .recv_if_encoder_stream(&mut server.conn, CLIENT_SIDE_DECODER_STREAM_ID);
+        assert_eq!(server.encoder.stats().stream_cancelled_recv, 1);
+    }
+
+    #[test]
+    fn qpack_no_stream_cancelled_after_fin() {
+        let (mut client, mut server, request_stream_id) = connect_and_send_request(true);
+
+        setup_server_side_encoder(&mut client, &mut server);
+
+        let encoder_instruct = send_headers_using_encoder(
+            &mut client,
+            &mut server,
+            request_stream_id,
+            &[
+                (String::from(":status"), String::from("200")),
+                (String::from("my-header"), String::from("my-header")),
+                (String::from("content-length"), String::from("3")),
+            ],
+            &[],
+        );
+
+        // Exchange encoder instructions
+        let _ = client.process(encoder_instruct, now());
+
+        let header_ready_event = |e| matches!(e, Http3ClientEvent::HeaderReady { .. });
+        assert!(client.events().any(header_ready_event));
+        // After this the recv_stream is in ClosePending state
+
+        // Cancel request.
+        let _ = client.stream_reset(request_stream_id, Error::HttpRequestCancelled.code());
+
+        assert_eq!(server.encoder.stats().stream_cancelled_recv, 0);
+        let out = client.process(None, now());
+        let _ = server.conn.process(out.dgram(), now());
+        let _ = server
+            .encoder
+            .recv_if_encoder_stream(&mut server.conn, CLIENT_SIDE_DECODER_STREAM_ID);
+        assert_eq!(server.encoder.stats().stream_cancelled_recv, 0);
+    }
+
+    #[test]
+    fn qpack_stream_reset_push_promise_header_decoder_block() {
+        let (mut client, mut server, request_stream_id) = connect_and_send_request(true);
+
+        setup_server_side_encoder(&mut client, &mut server);
+
+        let headers = vec![
+            (String::from(":status"), String::from("200")),
+            (String::from("content-length"), String::from("3")),
+        ];
+        let encoded_headers = server
+            .encoder
+            .encode_header_block(&mut server.conn, &headers, request_stream_id)
+            .unwrap();
+        let hframe = HFrame::Headers {
+            header_block: encoded_headers.to_vec(),
+        };
+
+        // Send the encoder instructions.
+        let out = server.conn.process(None, now());
+        let _ = client.process(out.dgram(), now());
+
+        // Send PushPromise that will be blocked waiting for decoder instructions.
+        let _ = send_push_promise_using_encoder(&mut client, &mut server, request_stream_id, 0);
+
+        // Send response
+        let mut d = Encoder::default();
+        hframe.encode(&mut d);
+        let d_frame = HFrame::Data { len: 0 };
+        d_frame.encode(&mut d);
+        server_send_response_and_exchange_packet(
+            &mut client,
+            &mut server,
+            request_stream_id,
+            &d,
+            true,
+        );
+
+        let header_ready_event = |e| matches!(e, Http3ClientEvent::HeaderReady { .. });
+        assert!(client.events().any(header_ready_event));
+
+        // Cancel request.
+        let _ = client.stream_reset(request_stream_id, Error::HttpRequestCancelled.code());
+
+        let out = client.process(None, now());
+        let _ = server.conn.process(out.dgram(), now());
+        let _ = server
+            .encoder
+            .recv_if_encoder_stream(&mut server.conn, CLIENT_SIDE_DECODER_STREAM_ID);
+        assert_eq!(server.encoder.stats().stream_cancelled_recv, 1);
+    }
+
+    #[test]
+    fn qpack_stream_reset_dynamic_table_zero() {
+        let (mut client, mut server, request_stream_id) = connect_and_send_request(true);
+        // Cancel request.
+        let _ = client.stream_reset(request_stream_id, Error::HttpRequestCancelled.code());
+        assert_eq!(server.encoder.stats().stream_cancelled_recv, 0);
+        let out = client.process(None, now());
+        let _ = server.conn.process(out.dgram(), now());
+        let _ = server
+            .encoder
+            .recv_if_encoder_stream(&mut server.conn, CLIENT_SIDE_DECODER_STREAM_ID);
+        assert_eq!(server.encoder.stats().stream_cancelled_recv, 0);
+    }
+
+    #[test]
+    fn multiple_streams_in_decoder_blocked_state() {
+        let (mut client, mut server, request_stream_id) = connect_and_send_request(true);
+
+        setup_server_side_encoder(&mut client, &mut server);
+
+        let headers = vec![
+            (String::from(":status"), String::from("200")),
+            (String::from("my-header"), String::from("my-header")),
+            (String::from("content-length"), String::from("0")),
+        ];
+        let encoded_headers = server
+            .encoder
+            .encode_header_block(&mut server.conn, &headers, request_stream_id)
+            .unwrap();
+        let hframe = HFrame::Headers {
+            header_block: encoded_headers.to_vec(),
+        };
+
+        // Delay encoder instruction so that the stream will be blocked.
+        let encoder_insts = server.conn.process(None, now());
+
+        // Send response headers.
+        let mut d = Encoder::default();
+        hframe.encode(&mut d);
+        server_send_response_and_exchange_packet(
+            &mut client,
+            &mut server,
+            request_stream_id,
+            &d,
+            true,
+        );
+
+        // Headers are blocked waiting for the encoder instructions.
+        let header_ready_event = |e| matches!(e, Http3ClientEvent::HeaderReady { .. });
+        assert!(!client.events().any(header_ready_event));
+
+        // Make another request.
+        let request2 = make_request_and_exchange_pkts(&mut client, &mut server, true);
+        // Send response headers.
+        server_send_response_and_exchange_packet(&mut client, &mut server, request2, &d, true);
+
+        // Headers on the second request are blocked as well are blocked
+        // waiting for the encoder instructions.
+        assert!(!client.events().any(header_ready_event));
+
+        // Now make the encoder instructions available.
+        let _ = client.process(encoder_insts.dgram(), now());
+
+        // Header blocks for both streams should be ready.
+        let mut count_responses = 0;
+        while let Some(e) = client.next_event() {
+            if let Http3ClientEvent::HeaderReady { stream_id, .. } = e {
+                assert!((stream_id == request_stream_id) || (stream_id == request2));
+                count_responses += 1;
+            }
+        }
+        assert_eq!(count_responses, 2);
+    }
+
+    #[test]
+    fn reserved_frames() {
+        for f in H3_RESERVED_FRAME_TYPES {
+            let mut enc = Encoder::default();
+            enc.encode_varint(*f);
+            test_wrong_frame_on_control_stream(&enc);
+            test_wrong_frame_on_push_stream(&enc);
+            test_wrong_frame_on_request_stream(&enc);
+        }
+    }
+
+    #[test]
+    fn send_reserved_settings() {
+        for s in H3_RESERVED_SETTINGS {
+            let (mut client, mut server) = connect_only_transport();
+            let control_stream = server.conn.stream_create(StreamType::UniDi).unwrap();
+            // Send the control stream type(0x0).
+            let _ = server.conn.stream_send(control_stream, CONTROL_STREAM_TYPE);
+            // Create a settings frame of length 2.
+            let mut enc = Encoder::default();
+            enc.encode_varint(H3_FRAME_TYPE_SETTINGS);
+            enc.encode_varint(2_u64);
+            // The settings frame contains a reserved settings type and some value (0x1).
+            enc.encode_varint(*s);
+            enc.encode_varint(1_u64);
+            let sent = server.conn.stream_send(control_stream, &enc);
+            assert_eq!(sent, Ok(4));
+            let out = server.conn.process(None, now());
+            client.process(out.dgram(), now());
+            assert_closed(&client, &Error::HttpSettings);
+        }
     }
 }

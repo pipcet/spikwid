@@ -63,6 +63,7 @@
 #include "nsGkAtoms.h"
 #include "nsHTMLParts.h"
 #include "nsIContent.h"
+#include "nsIFrameInlines.h"
 #include "nsIScrollableFrame.h"
 #include "nsITheme.h"
 #include "nsLayoutUtils.h"
@@ -374,7 +375,7 @@ void nsBoxFrame::DidReflow(nsPresContext* aPresContext,
   }
 }
 
-bool nsBoxFrame::HonorPrintBackgroundSettings() {
+bool nsBoxFrame::HonorPrintBackgroundSettings() const {
   return !mContent->IsInNativeAnonymousSubtree() &&
          nsContainerFrame::HonorPrintBackgroundSettings();
 }
@@ -959,13 +960,11 @@ void nsBoxFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
     const ActiveScrolledRoot* ownLayerASR = contASRTracker->GetContainerASR();
     DisplayListClipState::AutoSaveRestore ownLayerClipState(aBuilder);
 
-    if (forceLayer) {
-      // Wrap the list to make it its own layer
-      aLists.Content()->AppendNewToTopWithIndex<nsDisplayOwnLayer>(
-          aBuilder, this, /* aIndex = */ nsDisplayOwnLayer::OwnLayerForBoxFrame,
-          &masterList, ownLayerASR, nsDisplayOwnLayerFlags::None,
-          mozilla::layers::ScrollbarData{}, true, true);
-    }
+    // Wrap the list to make it its own layer
+    aLists.Content()->AppendNewToTopWithIndex<nsDisplayOwnLayer>(
+        aBuilder, this, /* aIndex = */ nsDisplayOwnLayer::OwnLayerForBoxFrame,
+        &masterList, ownLayerASR, nsDisplayOwnLayerFlags::None,
+        mozilla::layers::ScrollbarData{}, true, true);
   }
 }
 

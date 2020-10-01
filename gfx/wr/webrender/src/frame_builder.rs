@@ -66,6 +66,7 @@ pub struct FrameBuilderConfig {
     pub gpu_supports_fast_clears: bool,
     pub gpu_supports_advanced_blend: bool,
     pub advanced_blend_is_coherent: bool,
+    pub gpu_supports_render_target_partial_update: bool,
     pub batch_lookback_count: usize,
     pub background_color: Option<ColorF>,
     pub compositor_kind: CompositorKind,
@@ -401,9 +402,8 @@ impl FrameBuilder {
         // against the screen world rect, in absence of any
         // other dirty regions.
         let mut default_dirty_region = DirtyRegion::new();
-        default_dirty_region.push(
+        default_dirty_region.add_dirty_region(
             frame_context.global_screen_world_rect,
-            PrimitiveVisibilityMask::all(),
         );
         frame_state.push_dirty_region(default_dirty_region);
 
@@ -496,7 +496,7 @@ impl FrameBuilder {
         profile_counters
             .total_primitives
             .set(scene.prim_store.prim_count());
-        resource_profile.content_slices.set(scene.content_slice_count);
+        resource_profile.picture_cache_slices.set(scene.tile_cache_config.picture_cache_slice_count);
         resource_cache.begin_frame(stamp);
         gpu_cache.begin_frame(stamp);
 
@@ -526,11 +526,11 @@ impl FrameBuilder {
         let picture_caching_is_enabled =
             scene.config.global_enable_picture_caching &&
             !debug_flags.contains(DebugFlags::DISABLE_PICTURE_CACHING) &&
-            !scene.picture_cache_spatial_nodes.iter().any(|spatial_node_index| {
+            !scene.tile_cache_config.picture_cache_spatial_nodes.iter().any(|spatial_node_index| {
                 let spatial_node = &scene
                     .spatial_tree
                     .spatial_nodes[spatial_node_index.0 as usize];
-                spatial_node.is_ancestor_or_self_zooming
+                spatial_node.is_ancestor_or_self_zooming()
             });
 
         let mut composite_state = CompositeState::new(
@@ -579,7 +579,7 @@ impl FrameBuilder {
             );
 
             // Used to generated a unique z-buffer value per primitive.
-            let mut z_generator = ZBufferIdGenerator::new(layer, scene.config.max_depth_ids);
+            let mut z_generator = ZBufferIdGenerator::new(scene.config.max_depth_ids);
             let use_dual_source_blending = scene.config.dual_source_blending_is_enabled &&
                                            scene.config.dual_source_blending_is_supported;
 

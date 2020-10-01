@@ -7,12 +7,12 @@
 #ifndef __FFmpegVideoDecoder_h__
 #define __FFmpegVideoDecoder_h__
 
-#include "FFmpegLibWrapper.h"
 #include "FFmpegDataDecoder.h"
+#include "FFmpegLibWrapper.h"
 #include "SimpleMap.h"
 #ifdef MOZ_WAYLAND_USE_VAAPI
-#  include "mozilla/widget/DMABufSurface.h"
 #  include "mozilla/LinkedList.h"
+#  include "mozilla/widget/DMABufSurface.h"
 #endif
 
 namespace mozilla {
@@ -75,6 +75,12 @@ class DMABufSurfaceWrapper final {
     return mSurface->GetAsDMABufSurfaceYUV();
   }
 
+  // Don't allow DMABufSurfaceWrapper plain copy as it leads to
+  // enexpected DMABufSurface/HW buffer releases and we don't want to
+  // deep copy them.
+  DMABufSurfaceWrapper(const DMABufSurfaceWrapper&) = delete;
+  const DMABufSurfaceWrapper& operator=(DMABufSurfaceWrapper const&) = delete;
+
  private:
   const RefPtr<DMABufSurface> mSurface;
   const FFmpegLibWrapper* mLib;
@@ -101,8 +107,8 @@ class FFmpegVideoDecoder<LIBAV_VER>
   typedef SimpleMap<int64_t> DurationMap;
 
  public:
-  FFmpegVideoDecoder(FFmpegLibWrapper* aLib, TaskQueue* aTaskQueue,
-                     const VideoInfo& aConfig, KnowsCompositor* aAllocator,
+  FFmpegVideoDecoder(FFmpegLibWrapper* aLib, const VideoInfo& aConfig,
+                     KnowsCompositor* aAllocator,
                      ImageContainer* aImageContainer, bool aLowLatency,
                      bool aDisableHardwareDecoding);
 
@@ -138,10 +144,10 @@ class FFmpegVideoDecoder<LIBAV_VER>
         mCodecID == AV_CODEC_ID_VP8;
 #endif
   }
-  gfx::YUVColorSpace GetFrameColorSpace();
+  gfx::YUVColorSpace GetFrameColorSpace() const;
 
   MediaResult CreateImage(int64_t aOffset, int64_t aPts, int64_t aDuration,
-                          MediaDataDecoder::DecodedData& aResults);
+                          MediaDataDecoder::DecodedData& aResults) const;
 
 #ifdef MOZ_WAYLAND_USE_VAAPI
   MediaResult InitVAAPIDecoder();

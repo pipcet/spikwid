@@ -53,7 +53,9 @@ job_description_schema = Schema({
     Optional('attributes'): task_description_schema['attributes'],
     Optional('job-from'): task_description_schema['job-from'],
     Optional('dependencies'): task_description_schema['dependencies'],
+    Optional('if-dependencies'): task_description_schema['if-dependencies'],
     Optional('soft-dependencies'): task_description_schema['soft-dependencies'],
+    Optional('if-dependencies'): task_description_schema['if-dependencies'],
     Optional('requires'): task_description_schema['requires'],
     Optional('expires-after'): task_description_schema['expires-after'],
     Optional('routes'): task_description_schema['routes'],
@@ -88,6 +90,7 @@ job_description_schema = Schema({
             Required('artifact'): text_type,
             Optional('dest'): text_type,
             Optional('extract'): bool,
+            Optional('verify-hash'): bool,
         }],
     },
 
@@ -160,6 +163,47 @@ def set_label(config, jobs):
             job['label'] = '{}-{}'.format(config.kind, job['name'])
         if job.get('name'):
             del job['name']
+        yield job
+
+
+@transforms.add
+def add_resource_monitor(config, jobs):
+    for job in jobs:
+        if job.get('attributes', {}).get('resource-monitor'):
+            worker_implementation, worker_os = worker_type_implementation(
+                config.graph_config, job["worker-type"]
+            )
+            # Normalise worker os so that linux-bitbar and similar use linux tools.
+            worker_os = worker_os.split('-')[0]
+            # We don't currently support an Arm worker, due to gopsutil's indirect
+            # dependencies (go-ole)
+            if 'aarch64' in job["worker-type"]:
+                yield job
+                continue
+            elif 'win7' in job["worker-type"]:
+                arch = '32'
+            else:
+                arch = '64'
+            job.setdefault("fetches", {})
+            job["fetches"].setdefault("toolchain", [])
+            job["fetches"]["toolchain"].append("{}{}-resource-monitor".format(worker_os, arch))
+
+            if worker_implementation == 'docker-worker':
+                artifact_source = "/builds/worker/monitoring/resource-monitor.json"
+            else:
+                artifact_source = "monitoring/resource-monitor.json"
+            job["worker"].setdefault("artifacts", [])
+            job["worker"]["artifacts"].append(
+                {
+                    "name": "public/monitoring/resource-monitor.json",
+                    "type": "file",
+                    "path": artifact_source,
+                }
+            )
+            # Set env for output file
+            job["worker"].setdefault("env", {})
+            job["worker"]["env"]["RESOURCE_MONITOR_OUTPUT"] = artifact_source
+
         yield job
 
 
@@ -257,10 +301,12 @@ def use_fetches(config, jobs):
                         path = artifact
                         dest = None
                         extract = True
+                        verify_hash = False
                     else:
                         path = artifact['artifact']
                         dest = artifact.get('dest')
                         extract = artifact.get('extract', True)
+                        verify_hash = artifact.get('verify-hash', False)
 
                     fetch = {
                         'artifact': '{prefix}/{path}'.format(prefix=prefix, path=path)
@@ -270,6 +316,8 @@ def use_fetches(config, jobs):
                     }
                     if dest is not None:
                         fetch['dest'] = dest
+                    if verify_hash:
+                        fetch['verify-hash'] = verify_hash
                     job_fetches.append(fetch)
 
         if job.get('use-sccache') and not has_sccache:
@@ -309,8 +357,8 @@ def make_task_description(config, jobs):
     import_sibling_modules(exceptions=('common.py',))
 
     for job in jobs:
-        # always-optimized tasks never execute, so have no workdir
-        if job['run']['using'] != 'always-optimized':
+        # only docker-worker uses a fixed absolute path to find directories
+        if job['worker']['implementation'] == 'docker-worker':
             job['run'].setdefault('workdir', '/builds/worker')
 
         taskdesc = copy.deepcopy(job)
@@ -318,6 +366,7 @@ def make_task_description(config, jobs):
         # fill in some empty defaults to make run implementations easier
         taskdesc.setdefault('attributes', {})
         taskdesc.setdefault('dependencies', {})
+        taskdesc.setdefault('if-dependencies', [])
         taskdesc.setdefault('soft-dependencies', [])
         taskdesc.setdefault('routes', [])
         taskdesc.setdefault('scopes', [])

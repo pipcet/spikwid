@@ -6,10 +6,10 @@
 
 package org.mozilla.geckoview;
 
-import android.arch.lifecycle.ProcessLifecycleOwner;
-import android.arch.lifecycle.Lifecycle;
-import android.arch.lifecycle.LifecycleObserver;
-import android.arch.lifecycle.OnLifecycleEvent;
+import androidx.lifecycle.ProcessLifecycleOwner;
+import androidx.lifecycle.Lifecycle;
+import androidx.lifecycle.LifecycleObserver;
+import androidx.lifecycle.OnLifecycleEvent;
 
 import android.app.ActivityManager;
 import android.content.ComponentName;
@@ -24,11 +24,11 @@ import android.os.Parcel;
 import android.os.Parcelable;
 import android.os.Process;
 import android.provider.Settings;
-import android.support.annotation.AnyThread;
-import android.support.annotation.NonNull;
-import android.support.annotation.Nullable;
-import android.support.annotation.UiThread;
-import android.support.v4.util.ArrayMap;
+import androidx.annotation.AnyThread;
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.annotation.UiThread;
+import androidx.collection.ArrayMap;
 import android.util.Log;
 
 import org.mozilla.gecko.EventDispatcher;
@@ -461,99 +461,6 @@ public final class GeckoRuntime implements Parcelable {
     @UiThread
     public @NonNull ProfilerController getProfilerController() {
         return mProfilerController;
-    }
-
-    /**
-     * Register a {@link WebExtension} that will be run with this GeckoRuntime.
-     *
-     * <p>At this time, WebExtensions don't have access to any UI element and
-     * cannot communicate with the application. Any UI element will be
-     * ignored.</p>
-     *
-     * Example:
-     * <pre><code>
-     *     runtime.registerWebExtension(new WebExtension(
-     *              "resource://android/assets/web_extensions/my_webextension/"))
-     *           .exceptionally(ex -&gt; {
-     *               Log.e("MyActivity", "Could not register WebExtension", ex);
-     *               return null;
-     *           });
-     *
-     *     runtime.registerWebExtension(new WebExtension(
-     *              "file:///path/to/web_extension/my_webextension2.xpi",
-     *              "mywebextension2@example.com"));
-     * </code></pre>
-     *
-     * To learn more about WebExtensions refer to
-     * <a href="https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions">
-     *    Mozilla/Add-ons/WebExtensions
-     * </a>.
-     *
-     * @param webExtension {@link WebExtension} to register
-     *
-     * @return A {@link GeckoResult} that will complete when the WebExtension
-     * has been installed.
-     *
-     * @deprecated Use {@link WebExtensionController#installBuiltIn} instead. This method will
-     * be removed in GeckoView 81.
-     */
-    @Deprecated // Bug 1634504
-    @UiThread
-    public @NonNull GeckoResult<Void> registerWebExtension(
-            final @NonNull WebExtension webExtension) {
-        final CallbackResult<Void> result = new CallbackResult<Void>() {
-            @Override
-            public void sendSuccess(final Object response) {
-                complete(null);
-            }
-        };
-
-        final GeckoBundle bundle = new GeckoBundle(3);
-        bundle.putString("locationUri", webExtension.location);
-        bundle.putString("id", webExtension.id);
-        bundle.putBoolean("allowContentMessaging",
-                (webExtension.flags & WebExtension.Flags.ALLOW_CONTENT_MESSAGING) > 0);
-
-        mWebExtensionController.registerWebExtension(webExtension);
-
-        EventDispatcher.getInstance().dispatch("GeckoView:RegisterWebExtension",
-                bundle, result);
-
-        return result;
-    }
-
-    /**
-     * Unregisters this WebExtension. After a WebExtension is unregistered all
-     * scripts associated with it stop running.
-     *
-     * @param webExtension {@link WebExtension} to unregister
-     *
-     * @return A {@link GeckoResult} that will complete when the WebExtension
-     * has been unregistered.
-     *
-     * @deprecated Use {@link WebExtensionController#uninstall} instead. This method will
-     * be removed in GeckoView 81.
-     */
-    @Deprecated // Bug 1634504
-    @UiThread
-    public @NonNull GeckoResult<Void> unregisterWebExtension(
-            final @NonNull WebExtension webExtension) {
-        final CallbackResult<Void> result = new CallbackResult<Void>() {
-            @Override
-            public void sendSuccess(final Object response) {
-                complete(null);
-            }
-        };
-
-        final GeckoBundle bundle = new GeckoBundle(1);
-        bundle.putString("id", webExtension.id);
-
-        EventDispatcher.getInstance().dispatch("GeckoView:UnregisterWebExtension", bundle, result);
-
-        return result.then(success -> {
-            mWebExtensionController.unregisterWebExtension(webExtension);
-            return GeckoResult.fromValue(success);
-        });
     }
 
     /**

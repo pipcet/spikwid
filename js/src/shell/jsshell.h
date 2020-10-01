@@ -34,11 +34,7 @@ namespace js {
 namespace shell {
 
 // Define use of application-specific slots on the shell's global object.
-enum GlobalAppSlot {
-  GlobalAppSlotModuleRegistry,
-  GlobalAppSlotModuleResolveHook,  // HostResolveImportedModule
-  GlobalAppSlotCount
-};
+enum GlobalAppSlot { GlobalAppSlotModuleRegistry, GlobalAppSlotCount };
 static_assert(GlobalAppSlotCount <= JSCLASS_GLOBAL_APPLICATION_SLOTS,
               "Too many applications slots defined for shell global");
 
@@ -117,6 +113,9 @@ extern bool enableWasmBaseline;
 extern bool enableWasmIon;
 extern bool enableWasmCranelift;
 extern bool enableWasmReftypes;
+#ifdef ENABLE_WASM_FUNCTION_REFERENCES
+extern bool enableWasmFunctionReferences;
+#endif
 #ifdef ENABLE_WASM_GC
 extern bool enableWasmGc;
 #endif
@@ -139,8 +138,10 @@ extern bool enableReadableStreamPipeTo;
 extern bool enableWeakRefs;
 extern bool enableToSource;
 extern bool enablePropertyErrorMessageFix;
+extern bool useOffThreadParseGlobal;
 extern bool enableIteratorHelpers;
 extern bool enablePrivateClassFields;
+extern bool enablePrivateClassMethods;
 #ifdef JS_GC_ZEAL
 extern uint32_t gZealBits;
 extern uint32_t gZealFrequency;
@@ -158,6 +159,8 @@ extern bool defaultToSameCompartment;
 extern bool dumpEntrainedVariables;
 extern bool OOM_printAllocationCount;
 #endif
+
+extern UniqueChars processWideModuleLoadPath;
 
 // Alias the global dstName to namespaceObj.srcName. For example, if dstName is
 // "snarf", namespaceObj represents "os.file", and srcName is "readFile", then

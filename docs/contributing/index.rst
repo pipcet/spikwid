@@ -9,6 +9,7 @@ development process and source code documentation.
    :maxdepth: 1
 
    contribution_quickref
+   pocket-guide-shipping-firefox
    editor
    reviews
 
@@ -18,6 +19,14 @@ development process and source code documentation.
    :glob:
 
    vcs/*
+
+
+.. toctree::
+   :caption: Debugging
+   :maxdepth: 1
+   :glob:
+
+   debugging/*
 
 
 .. toctree::

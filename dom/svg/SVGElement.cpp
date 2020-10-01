@@ -8,6 +8,7 @@
 
 #include "mozilla/dom/MutationEventBinding.h"
 #include "mozilla/dom/MutationObservers.h"
+#include "mozilla/dom/CSSRuleBinding.h"
 #include "mozilla/dom/SVGElementBinding.h"
 #include "mozilla/dom/SVGGeometryElement.h"
 #include "mozilla/dom/SVGLengthBinding.h"
@@ -88,6 +89,11 @@ namespace dom {
 using namespace SVGUnitTypes_Binding;
 
 NS_IMPL_ELEMENT_CLONE_WITH_INIT(SVGElement)
+
+// Use the CC variant of this, even though this class does not define
+// a new CC participant, to make QIing to the CC interfaces faster.
+NS_IMPL_QUERY_INTERFACE_CYCLE_COLLECTION_INHERITED(SVGElement, SVGElementBase,
+                                                   SVGElement)
 
 SVGEnumMapping SVGElement::sSVGUnitTypesMap[] = {
     {nsGkAtoms::userSpaceOnUse, SVG_UNIT_TYPE_USERSPACEONUSE},
@@ -256,8 +262,7 @@ nsresult SVGElement::BindToTree(BindContext& aContext, nsINode& aParent) {
         [self = RefPtr<SVGElement>(this)]() {
           nsAutoString nonce;
           self->GetNonce(nonce);
-          self->SetAttr(kNameSpaceID_None, nsGkAtoms::nonce, EmptyString(),
-                        true);
+          self->SetAttr(kNameSpaceID_None, nsGkAtoms::nonce, u""_ns, true);
           self->SetNonce(nonce);
         }));
   }
@@ -1143,12 +1148,13 @@ void MappedAttrParser::ParseMappedAttrValue(nsAtom* aMappedAttrName,
     nsCOMPtr<nsIReferrerInfo> referrerInfo =
         ReferrerInfo::CreateForSVGResources(mElement->OwnerDoc());
 
-    RefPtr<URLExtraData> data =
-        new URLExtraData(mBaseURI, referrerInfo, mElement->NodePrincipal());
+    auto data = MakeRefPtr<URLExtraData>(mBaseURI, referrerInfo,
+                                         mElement->NodePrincipal());
     changed = Servo_DeclarationBlock_SetPropertyById(
         mDecl->Raw(), propertyID, &value, false, data,
         ParsingMode::AllowUnitlessLength,
-        mElement->OwnerDoc()->GetCompatibilityMode(), mLoader, {});
+        mElement->OwnerDoc()->GetCompatibilityMode(), mLoader,
+        CSSRule_Binding::STYLE_RULE, {});
 
     // TODO(emilio): If we want to record these from CSSOM more generally, we
     // can pass the document use counters down the FFI call. For now manually
@@ -1474,6 +1480,15 @@ void SVGElement::DidAnimateLength(uint8_t aAttrEnum) {
                             info.mLengthInfo[aAttrEnum].mName,
                             MutationEvent_Binding::SMIL);
   }
+}
+
+SVGAnimatedLength* SVGElement::GetAnimatedLength(uint8_t aAttrEnum) {
+  LengthAttributesInfo info = GetLengthInfo();
+  if (aAttrEnum < info.mLengthCount) {
+    return &info.mLengths[aAttrEnum];
+  }
+  MOZ_ASSERT_UNREACHABLE("Bad attrEnum");
+  return nullptr;
 }
 
 SVGAnimatedLength* SVGElement::GetAnimatedLength(const nsAtom* aAttrName) {

@@ -46,12 +46,18 @@
             {
               "name": "channel",
               "value": "fflb",
-              "purpose": "keyword"
+              "purpose": "searchbar"
             },
             {
               "name": "channel",
               "value": "rcs",
               "purpose": "contextmenu"
+            },
+            {
+              "name": "myparam",
+              "mozparam": true,
+              "condition": "pref",
+              "pref": "test"
             }
           ]
         },
@@ -74,12 +80,18 @@
               "name": "channel",
               "value": "rcs",
               "purpose": "contextmenu"
+            },
+            {
+              "name": "myparam",
+              "mozparam": true,
+              "condition": "pref",
+              "pref": "test"
             }
           ]
         }
       ],
       "queryCharset": "UTF-8",
-      "extensionID": "test-addon-id@mozilla.org"
+      "_extensionID": "test-addon-id@mozilla.org"
     }
   ]
 }

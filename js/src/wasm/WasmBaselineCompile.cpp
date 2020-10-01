@@ -118,7 +118,6 @@
 #include "jit/IonTypes.h"
 #include "jit/JitAllocPolicy.h"
 #include "jit/Label.h"
-#include "jit/MacroAssembler.h"
 #include "jit/MIR.h"
 #include "jit/RegisterAllocator.h"
 #include "jit/Registers.h"
@@ -138,7 +137,7 @@
 #  include "jit/mips-shared/Assembler-mips-shared.h"
 #  include "jit/mips64/Assembler-mips64.h"
 #endif
-
+#include "js/ScalarType.h"  // js::Scalar::Type
 #include "util/Memory.h"
 #include "wasm/WasmGC.h"
 #include "wasm/WasmGenerator.h"
@@ -6380,7 +6379,7 @@ class BaseCompiler final : public BaseCompilerInterface {
 
   void roundF32(RoundingMode roundingMode, RegF32 f0) {
 #if defined(JS_CODEGEN_X64) || defined(JS_CODEGEN_X86)
-    masm.vroundss(Assembler::ToX86RoundingMode(roundingMode), f0, f0, f0);
+    masm.nearbyIntFloat32(roundingMode, f0, f0);
 #else
     MOZ_CRASH("NYI");
 #endif
@@ -6388,7 +6387,7 @@ class BaseCompiler final : public BaseCompilerInterface {
 
   void roundF64(RoundingMode roundingMode, RegF64 f0) {
 #if defined(JS_CODEGEN_X64) || defined(JS_CODEGEN_X86)
-    masm.vroundsd(Assembler::ToX86RoundingMode(roundingMode), f0, f0, f0);
+    masm.nearbyIntDouble(roundingMode, f0, f0);
 #else
     MOZ_CRASH("NYI");
 #endif
@@ -7802,6 +7801,8 @@ class BaseCompiler final : public BaseCompilerInterface {
     latentType_ = operandType;
   }
 
+  bool hasLatentOp() const { return latentOp_ != LatentOp::None; }
+
   void resetLatentOp() { latentOp_ = LatentOp::None; }
 
   void branchTo(Assembler::DoubleCondition c, RegF64 lhs, RegF64 rhs,
@@ -7830,12 +7831,16 @@ class BaseCompiler final : public BaseCompilerInterface {
     masm.branch64(c, lhs, rhs, l);
   }
 
+  void branchTo(Assembler::Condition c, RegPtr lhs, ImmWord rhs, Label* l) {
+    masm.branchPtr(c, lhs, rhs, l);
+  }
+
   // Emit a conditional branch that optionally and optimally cleans up the CPU
   // stack before we branch.
   //
   // Cond is either Assembler::Condition or Assembler::DoubleCondition.
   //
-  // Lhs is RegI32, RegI64, or RegF32, or RegF64.
+  // Lhs is RegI32, RegI64, or RegF32, RegF64, or RegPtr.
   //
   // Rhs is either the same as Lhs, or an immediate expression compatible with
   // Lhs "when applicable".
@@ -8062,6 +8067,10 @@ class BaseCompiler final : public BaseCompilerInterface {
   MOZ_MUST_USE bool emitRefFunc();
   MOZ_MUST_USE bool emitRefNull();
   MOZ_MUST_USE bool emitRefIsNull();
+#ifdef ENABLE_WASM_FUNCTION_REFERENCES
+  MOZ_MUST_USE bool emitRefAsNonNull();
+  MOZ_MUST_USE bool emitBrOnNull();
+#endif
 
   MOZ_MUST_USE bool emitAtomicCmpXchg(ValType type, Scalar::Type viewType);
   MOZ_MUST_USE bool emitAtomicLoad(ValType type, Scalar::Type viewType);
@@ -8073,7 +8082,6 @@ class BaseCompiler final : public BaseCompilerInterface {
   MOZ_MUST_USE bool emitFence();
   MOZ_MUST_USE bool emitAtomicXchg(ValType type, Scalar::Type viewType);
   void emitAtomicXchg64(MemoryAccessDesc* access, WantResult wantResult);
-  MOZ_MUST_USE bool bulkmemOpsEnabled();
   MOZ_MUST_USE bool emitMemCopy();
   MOZ_MUST_USE bool emitMemCopyCall(uint32_t lineOrBytecode);
   MOZ_MUST_USE bool emitMemCopyInline();
@@ -8110,6 +8118,11 @@ class BaseCompiler final : public BaseCompilerInterface {
   void emitVectorBinopWithTemp(void (*)(MacroAssembler& masm, RegV128 rs,
                                         RegV128 rsd, TempRegType temp));
 
+  template <typename TempRegType1, typename TempRegType2>
+  void emitVectorBinopWithTwoTemps(void (*)(MacroAssembler& masm, RegV128 rs,
+                                            RegV128 rsd, TempRegType1 temp1,
+                                            TempRegType2 temp2));
+
   void emitVectorComparison(Assembler::Condition cond,
                             void (*)(MacroAssembler& masm,
                                      Assembler::Condition cond, RegV128 rs,
@@ -8141,6 +8154,7 @@ class BaseCompiler final : public BaseCompilerInterface {
   void emitVectorAndNot();
 
   MOZ_MUST_USE bool emitLoadSplat(Scalar::Type viewType);
+  MOZ_MUST_USE bool emitLoadZero(Scalar::Type viewType);
   MOZ_MUST_USE bool emitLoadExtend(Scalar::Type viewType);
   MOZ_MUST_USE bool emitBitselect();
   MOZ_MUST_USE bool emitVectorShuffle();
@@ -9815,6 +9829,41 @@ bool BaseCompiler::emitBrIf() {
   return true;
 }
 
+#ifdef ENABLE_WASM_FUNCTION_REFERENCES
+bool BaseCompiler::emitBrOnNull() {
+  MOZ_ASSERT(!hasLatentOp());
+
+  uint32_t relativeDepth;
+  ResultType type;
+  NothingVector unused_values;
+  Nothing unused_condition;
+  if (!iter_.readBrOnNull(&relativeDepth, &type, &unused_values,
+                          &unused_condition)) {
+    return false;
+  }
+
+  if (deadCode_) {
+    return true;
+  }
+
+  Control& target = controlItem(relativeDepth);
+  target.bceSafeOnExit &= bceSafe_;
+
+  BranchState b(&target.label, target.stackHeight, InvertBranch(false), type);
+  if (b.hasBlockResults()) {
+    needResultRegisters(b.resultType);
+  }
+  RegPtr rp = popRef();
+  if (b.hasBlockResults()) {
+    freeResultRegisters(b.resultType);
+  }
+  jumpConditionalWithResults(&b, Assembler::Equal, rp, ImmWord(NULLREF_VALUE));
+  pushRef(rp);
+
+  return true;
+}
+#endif
+
 bool BaseCompiler::emitBrTable() {
   Uint32Vector depths;
   uint32_t defaultDepth;
@@ -10599,6 +10648,11 @@ bool BaseCompiler::emitGetGlobal() {
       case ValType::Ref:
         pushRef(intptr_t(value.ref().forCompiledCode()));
         break;
+#ifdef ENABLE_WASM_SIMD
+      case ValType::V128:
+        pushV128(value.v128());
+        break;
+#endif
       default:
         MOZ_CRASH("Global constant type");
     }
@@ -11156,6 +11210,18 @@ bool BaseCompiler::emitSelect(bool typed) {
       pushF64(r);
       break;
     }
+#ifdef ENABLE_WASM_SIMD
+    case ValType::V128: {
+      RegV128 r, rs;
+      pop2xV128(&r, &rs);
+      emitBranchPerform(&b);
+      moveV128(rs, r);
+      masm.bind(&done);
+      freeV128(rs);
+      pushV128(r);
+      break;
+    }
+#endif
     case ValType::Ref: {
       RegPtr r, rs;
       pop2xRef(&r, &rs);
@@ -11295,7 +11361,7 @@ bool BaseCompiler::emitInstanceCall(uint32_t lineOrBytecode,
         t = ValType::I64;
         break;
       case MIRType::RefOrNull:
-        t = RefType::any();
+        t = RefType::extern_();
         break;
       case MIRType::Pointer:
         // Instance function args can now be uninterpreted pointers (eg, for
@@ -11407,6 +11473,28 @@ bool BaseCompiler::emitRefIsNull() {
   pushI32(rd);
   return true;
 }
+
+#ifdef ENABLE_WASM_FUNCTION_REFERENCES
+bool BaseCompiler::emitRefAsNonNull() {
+  Nothing nothing;
+  if (!iter_.readRefAsNonNull(&nothing)) {
+    return false;
+  }
+
+  if (deadCode_) {
+    return true;
+  }
+
+  RegPtr rp = popRef();
+  Label ok;
+  masm.branchTestPtr(Assembler::NonZero, rp, rp, &ok);
+  trap(Trap::NullPointerDereference);
+  masm.bind(&ok);
+  pushRef(rp);
+
+  return true;
+}
+#endif
 
 bool BaseCompiler::emitAtomicCmpXchg(ValType type, Scalar::Type viewType) {
   LinearMemoryAddress<Nothing> addr;
@@ -11741,21 +11829,7 @@ bool BaseCompiler::emitFence() {
   return true;
 }
 
-// Bulk memory must be available if shared memory is enabled.
-bool BaseCompiler::bulkmemOpsEnabled() {
-#ifndef ENABLE_WASM_BULKMEM_OPS
-  if (env_.sharedMemoryEnabled == Shareable::False) {
-    return iter_.fail("bulk memory ops disabled");
-  }
-#endif
-  return true;
-}
-
 bool BaseCompiler::emitMemCopy() {
-  if (!bulkmemOpsEnabled()) {
-    return false;
-  }
-
   uint32_t lineOrBytecode = readCallSiteLineOrBytecode();
 
   uint32_t dstMemOrTableIndex = 0;
@@ -11972,10 +12046,6 @@ bool BaseCompiler::emitMemCopyInline() {
 }
 
 bool BaseCompiler::emitTableCopy() {
-  if (!bulkmemOpsEnabled()) {
-    return false;
-  }
-
   uint32_t lineOrBytecode = readCallSiteLineOrBytecode();
 
   uint32_t dstMemOrTableIndex = 0;
@@ -12001,10 +12071,6 @@ bool BaseCompiler::emitTableCopy() {
 }
 
 bool BaseCompiler::emitDataOrElemDrop(bool isData) {
-  if (!bulkmemOpsEnabled()) {
-    return false;
-  }
-
   uint32_t lineOrBytecode = readCallSiteLineOrBytecode();
 
   uint32_t segIndex = 0;
@@ -12025,10 +12091,6 @@ bool BaseCompiler::emitDataOrElemDrop(bool isData) {
 }
 
 bool BaseCompiler::emitMemFill() {
-  if (!bulkmemOpsEnabled()) {
-    return false;
-  }
-
   uint32_t lineOrBytecode = readCallSiteLineOrBytecode();
 
   Nothing nothing;
@@ -12176,10 +12238,6 @@ bool BaseCompiler::emitMemFillInline() {
 }
 
 bool BaseCompiler::emitMemOrTableInit(bool isMem) {
-  if (!bulkmemOpsEnabled()) {
-    return false;
-  }
-
   uint32_t lineOrBytecode = readCallSiteLineOrBytecode();
 
   uint32_t segIndex = 0;
@@ -12632,13 +12690,13 @@ bool BaseCompiler::emitStructNarrow() {
 
   // struct.narrow validation ensures that these hold.
 
-  MOZ_ASSERT(inputType.isAnyRef() || env_.isStructType(inputType));
-  MOZ_ASSERT(outputType.isAnyRef() || env_.isStructType(outputType));
-  MOZ_ASSERT_IF(outputType.isAnyRef(), inputType.isAnyRef());
+  MOZ_ASSERT(inputType.isExternRef() || env_.isStructType(inputType));
+  MOZ_ASSERT(outputType.isExternRef() || env_.isStructType(outputType));
+  MOZ_ASSERT_IF(outputType.isExternRef(), inputType.isExternRef());
 
   // AnyRef -> AnyRef is a no-op, just leave the value on the stack.
 
-  if (inputType.isAnyRef() && outputType.isAnyRef()) {
+  if (inputType.isExternRef() && outputType.isExternRef()) {
     return true;
   }
 
@@ -12646,7 +12704,7 @@ bool BaseCompiler::emitStructNarrow() {
 
   // AnyRef -> (optref T) must first unbox; leaves rp or null
 
-  bool mustUnboxAnyref = inputType.isAnyRef();
+  bool mustUnboxAnyref = inputType.isExternRef();
 
   // Dynamic downcast (optref T) -> (optref U), leaves rp or null
   const StructType& outputStruct =
@@ -12784,22 +12842,44 @@ static void DivF64x2(MacroAssembler& masm, RegV128 rs, RegV128 rsd) {
   masm.divFloat64x2(rs, rsd);
 }
 
-static void MinF32x4(MacroAssembler& masm, RegV128 rs, RegV128 rsd) {
-  masm.minFloat32x4(rs, rsd);
+static void MinF32x4(MacroAssembler& masm, RegV128 rs, RegV128 rsd,
+                     RegV128 temp1, RegV128 temp2) {
+  masm.minFloat32x4(rs, rsd, temp1, temp2);
 }
 
-static void MinF64x2(MacroAssembler& masm, RegV128 rs, RegV128 rsd) {
-  masm.minFloat64x2(rs, rsd);
+static void MinF64x2(MacroAssembler& masm, RegV128 rs, RegV128 rsd,
+                     RegV128 temp1, RegV128 temp2) {
+  masm.minFloat64x2(rs, rsd, temp1, temp2);
 }
 
 static void MaxF32x4(MacroAssembler& masm, RegV128 rs, RegV128 rsd,
-                     RegV128 temp) {
-  masm.maxFloat32x4(rs, rsd, temp);
+                     RegV128 temp1, RegV128 temp2) {
+  masm.maxFloat32x4(rs, rsd, temp1, temp2);
 }
 
 static void MaxF64x2(MacroAssembler& masm, RegV128 rs, RegV128 rsd,
-                     RegV128 temp) {
-  masm.maxFloat64x2(rs, rsd, temp);
+                     RegV128 temp1, RegV128 temp2) {
+  masm.maxFloat64x2(rs, rsd, temp1, temp2);
+}
+
+static void PMinF32x4(MacroAssembler& masm, RegV128 rs, RegV128 rsd) {
+  masm.pseudoMinFloat32x4(rs, rsd);
+}
+
+static void PMinF64x2(MacroAssembler& masm, RegV128 rs, RegV128 rsd) {
+  masm.pseudoMinFloat64x2(rs, rsd);
+}
+
+static void PMaxF32x4(MacroAssembler& masm, RegV128 rs, RegV128 rsd) {
+  masm.pseudoMaxFloat32x4(rs, rsd);
+}
+
+static void PMaxF64x2(MacroAssembler& masm, RegV128 rs, RegV128 rsd) {
+  masm.pseudoMaxFloat64x2(rs, rsd);
+}
+
+static void DotI16x8(MacroAssembler& masm, RegV128 rs, RegV128 rsd) {
+  masm.widenDotInt16x8(rs, rsd);
 }
 
 static void CmpI8x16(MacroAssembler& masm, Assembler::Condition cond,
@@ -12880,6 +12960,38 @@ static void SqrtF32x4(MacroAssembler& masm, RegV128 rs, RegV128 rd) {
 
 static void SqrtF64x2(MacroAssembler& masm, RegV128 rs, RegV128 rd) {
   masm.sqrtFloat64x2(rs, rd);
+}
+
+static void CeilF32x4(MacroAssembler& masm, RegV128 rs, RegV128 rd) {
+  masm.ceilFloat32x4(rs, rd);
+}
+
+static void FloorF32x4(MacroAssembler& masm, RegV128 rs, RegV128 rd) {
+  masm.floorFloat32x4(rs, rd);
+}
+
+static void TruncF32x4(MacroAssembler& masm, RegV128 rs, RegV128 rd) {
+  masm.truncFloat32x4(rs, rd);
+}
+
+static void NearestF32x4(MacroAssembler& masm, RegV128 rs, RegV128 rd) {
+  masm.nearestFloat32x4(rs, rd);
+}
+
+static void CeilF64x2(MacroAssembler& masm, RegV128 rs, RegV128 rd) {
+  masm.ceilFloat64x2(rs, rd);
+}
+
+static void FloorF64x2(MacroAssembler& masm, RegV128 rs, RegV128 rd) {
+  masm.floorFloat64x2(rs, rd);
+}
+
+static void TruncF64x2(MacroAssembler& masm, RegV128 rs, RegV128 rd) {
+  masm.truncFloat64x2(rs, rd);
+}
+
+static void NearestF64x2(MacroAssembler& masm, RegV128 rs, RegV128 rd) {
+  masm.nearestFloat64x2(rs, rd);
 }
 
 static void NotV128(MacroAssembler& masm, RegV128 rs, RegV128 rd) {
@@ -13248,6 +13360,21 @@ void BaseCompiler::emitVectorBinopWithTemp(void (*op)(MacroAssembler& masm,
   pushV128(r);
 }
 
+template <typename TempRegType1, typename TempRegType2>
+void BaseCompiler::emitVectorBinopWithTwoTemps(
+    void (*op)(MacroAssembler& masm, RegV128 rs, RegV128 rsd,
+               TempRegType1 temp1, TempRegType2 temp2)) {
+  RegV128 r, rs;
+  pop2xV128(&r, &rs);
+  TempRegType1 temp1 = need<TempRegType1>();
+  TempRegType2 temp2 = need<TempRegType2>();
+  op(masm, rs, r, temp1, temp2);
+  freeV128(rs);
+  free(temp1);
+  free(temp2);
+  pushV128(r);
+}
+
 void BaseCompiler::emitVectorComparison(Assembler::Condition cond,
                                         void (*op)(MacroAssembler& masm,
                                                    Assembler::Condition cond,
@@ -13379,6 +13506,22 @@ bool BaseCompiler::emitLoadSplat(Scalar::Type viewType) {
       MOZ_CRASH();
   }
   return true;
+}
+
+bool BaseCompiler::emitLoadZero(Scalar::Type viewType) {
+  // LoadZero has the structure of LoadSplat
+  LinearMemoryAddress<Nothing> addr;
+  if (!iter_.readLoadSplat(Scalar::byteSize(viewType), &addr)) {
+    return false;
+  }
+
+  if (deadCode_) {
+    return true;
+  }
+
+  MemoryAccessDesc access(viewType, addr.align, addr.offset, bytecodeOffset());
+  access.setZeroExtendSimd128Load();
+  return loadCommon(&access, AccessCheck(), ValType::V128);
 }
 
 bool BaseCompiler::emitLoadExtend(Scalar::Type viewType) {
@@ -13605,6 +13748,11 @@ bool BaseCompiler::emitBody() {
     do {                      \
     } while (0)
 #endif
+
+#define CHECK_EXPERIMENTAL_SIMD() \
+  if (!SimdExperimentalEnabled) { \
+    break;                        \
+  }
 
 #define CHECK(E) \
   if (!(E)) return false
@@ -14234,12 +14382,24 @@ bool BaseCompiler::emitBody() {
       case uint16_t(Op::MemorySize):
         CHECK_NEXT(emitMemorySize());
 
+#ifdef ENABLE_WASM_FUNCTION_REFERENCES
+      case uint16_t(Op::RefAsNonNull):
+        if (!env_.functionReferencesEnabled()) {
+          return iter_.unrecognizedOpcode(&op);
+        }
+        CHECK_NEXT(emitRefAsNonNull());
+      case uint16_t(Op::BrOnNull):
+        if (!env_.functionReferencesEnabled()) {
+          return iter_.unrecognizedOpcode(&op);
+        }
+        CHECK_NEXT(emitBrOnNull());
+#endif
 #ifdef ENABLE_WASM_GC
       case uint16_t(Op::RefEq):
         if (!env_.gcTypesEnabled()) {
           return iter_.unrecognizedOpcode(&op);
         }
-        CHECK_NEXT(dispatchComparison(emitCompareRef, RefType::any(),
+        CHECK_NEXT(dispatchComparison(emitCompareRef, RefType::extern_(),
                                       Assembler::Equal));
 #endif
 #ifdef ENABLE_WASM_REFTYPES
@@ -14535,9 +14695,11 @@ bool BaseCompiler::emitBody() {
           case uint32_t(SimdOp::F32x4Div):
             CHECK_NEXT(dispatchVectorBinary(emitVectorBinop, DivF32x4));
           case uint32_t(SimdOp::F32x4Min):
-            CHECK_NEXT(dispatchVectorBinary(emitVectorBinop, MinF32x4));
+            CHECK_NEXT(
+                dispatchVectorBinary(emitVectorBinopWithTwoTemps, MinF32x4));
           case uint32_t(SimdOp::F32x4Max):
-            CHECK_NEXT(dispatchVectorBinary(emitVectorBinopWithTemp, MaxF32x4));
+            CHECK_NEXT(
+                dispatchVectorBinary(emitVectorBinopWithTwoTemps, MaxF32x4));
           case uint32_t(SimdOp::F64x2Add):
             CHECK_NEXT(dispatchVectorBinary(emitVectorBinop, AddF64x2));
           case uint32_t(SimdOp::F64x2Sub):
@@ -14547,9 +14709,11 @@ bool BaseCompiler::emitBody() {
           case uint32_t(SimdOp::F64x2Div):
             CHECK_NEXT(dispatchVectorBinary(emitVectorBinop, DivF64x2));
           case uint32_t(SimdOp::F64x2Min):
-            CHECK_NEXT(dispatchVectorBinary(emitVectorBinop, MinF64x2));
+            CHECK_NEXT(
+                dispatchVectorBinary(emitVectorBinopWithTwoTemps, MinF64x2));
           case uint32_t(SimdOp::F64x2Max):
-            CHECK_NEXT(dispatchVectorBinary(emitVectorBinopWithTemp, MaxF64x2));
+            CHECK_NEXT(
+                dispatchVectorBinary(emitVectorBinopWithTwoTemps, MaxF64x2));
           case uint32_t(SimdOp::I8x16NarrowSI16x8):
             CHECK_NEXT(dispatchVectorBinary(emitVectorBinop, NarrowI16x8));
           case uint32_t(SimdOp::I8x16NarrowUI16x8):
@@ -14560,6 +14724,21 @@ bool BaseCompiler::emitBody() {
             CHECK_NEXT(dispatchVectorBinary(emitVectorBinop, NarrowUI32x4));
           case uint32_t(SimdOp::V8x16Swizzle):
             CHECK_NEXT(dispatchVectorBinary(emitVectorBinopWithTemp, Swizzle));
+          case uint32_t(SimdOp::F32x4PMaxExperimental):
+            CHECK_EXPERIMENTAL_SIMD();
+            CHECK_NEXT(dispatchVectorBinary(emitVectorBinop, PMaxF32x4));
+          case uint32_t(SimdOp::F32x4PMinExperimental):
+            CHECK_EXPERIMENTAL_SIMD();
+            CHECK_NEXT(dispatchVectorBinary(emitVectorBinop, PMinF32x4));
+          case uint32_t(SimdOp::F64x2PMaxExperimental):
+            CHECK_EXPERIMENTAL_SIMD();
+            CHECK_NEXT(dispatchVectorBinary(emitVectorBinop, PMaxF64x2));
+          case uint32_t(SimdOp::F64x2PMinExperimental):
+            CHECK_EXPERIMENTAL_SIMD();
+            CHECK_NEXT(dispatchVectorBinary(emitVectorBinop, PMinF64x2));
+          case uint32_t(SimdOp::I32x4DotSI16x8Experimental):
+            CHECK_EXPERIMENTAL_SIMD();
+            CHECK_NEXT(dispatchVectorBinary(emitVectorBinop, DotI16x8));
           case uint32_t(SimdOp::I8x16Neg):
             CHECK_NEXT(dispatchVectorUnary(emitVectorUnop, NegI8x16));
           case uint32_t(SimdOp::I16x8Neg):
@@ -14616,6 +14795,30 @@ bool BaseCompiler::emitBody() {
             CHECK_NEXT(dispatchVectorUnary(emitVectorUnop, AbsI16x8));
           case uint32_t(SimdOp::I32x4Abs):
             CHECK_NEXT(dispatchVectorUnary(emitVectorUnop, AbsI32x4));
+          case uint32_t(SimdOp::F32x4CeilExperimental):
+            CHECK_EXPERIMENTAL_SIMD();
+            CHECK_NEXT(dispatchVectorUnary(emitVectorUnop, CeilF32x4));
+          case uint32_t(SimdOp::F32x4FloorExperimental):
+            CHECK_EXPERIMENTAL_SIMD();
+            CHECK_NEXT(dispatchVectorUnary(emitVectorUnop, FloorF32x4));
+          case uint32_t(SimdOp::F32x4TruncExperimental):
+            CHECK_EXPERIMENTAL_SIMD();
+            CHECK_NEXT(dispatchVectorUnary(emitVectorUnop, TruncF32x4));
+          case uint32_t(SimdOp::F32x4NearestExperimental):
+            CHECK_EXPERIMENTAL_SIMD();
+            CHECK_NEXT(dispatchVectorUnary(emitVectorUnop, NearestF32x4));
+          case uint32_t(SimdOp::F64x2CeilExperimental):
+            CHECK_EXPERIMENTAL_SIMD();
+            CHECK_NEXT(dispatchVectorUnary(emitVectorUnop, CeilF64x2));
+          case uint32_t(SimdOp::F64x2FloorExperimental):
+            CHECK_EXPERIMENTAL_SIMD();
+            CHECK_NEXT(dispatchVectorUnary(emitVectorUnop, FloorF64x2));
+          case uint32_t(SimdOp::F64x2TruncExperimental):
+            CHECK_EXPERIMENTAL_SIMD();
+            CHECK_NEXT(dispatchVectorUnary(emitVectorUnop, TruncF64x2));
+          case uint32_t(SimdOp::F64x2NearestExperimental):
+            CHECK_EXPERIMENTAL_SIMD();
+            CHECK_NEXT(dispatchVectorUnary(emitVectorUnop, NearestF64x2));
           case uint32_t(SimdOp::I8x16Shl):
             CHECK_NEXT(dispatchVectorVariableShiftWithTwoTemps(ShiftLeftI8x16));
           case uint32_t(SimdOp::I8x16ShrS):
@@ -14676,6 +14879,12 @@ bool BaseCompiler::emitBody() {
             CHECK_NEXT(emitLoadExtend(Scalar::Int32));
           case uint32_t(SimdOp::I64x2LoadU32x2):
             CHECK_NEXT(emitLoadExtend(Scalar::Uint32));
+          case uint32_t(SimdOp::V128Load32ZeroExperimental):
+            CHECK_EXPERIMENTAL_SIMD();
+            CHECK_NEXT(emitLoadZero(Scalar::Float32));
+          case uint32_t(SimdOp::V128Load64ZeroExperimental):
+            CHECK_EXPERIMENTAL_SIMD();
+            CHECK_NEXT(emitLoadZero(Scalar::Float64));
           case uint32_t(SimdOp::V128Store):
             CHECK_NEXT(emitStore(ValType::V128, Scalar::Simd128));
           default:
@@ -14778,7 +14987,7 @@ bool BaseCompiler::emitBody() {
 
       // Thread operations
       case uint16_t(Op::ThreadPrefix): {
-        if (env_.sharedMemoryEnabled == Shareable::False) {
+        if (env_.sharedMemoryEnabled() == Shareable::False) {
           return iter_.unrecognizedOpcode(&op);
         }
         switch (op.b1) {
@@ -14980,6 +15189,7 @@ bool BaseCompiler::emitBody() {
 #undef NEXT
 #undef CHECK_NEXT
 #undef CHECK_POINTER_COUNT
+#undef CHECK_EXPERIMENTAL_SIMD
 #undef dispatchBinary
 #undef dispatchUnary
 #undef dispatchComparison
@@ -15162,8 +15372,7 @@ bool js::wasm::BaselineCompileFunctions(const ModuleEnvironment& env,
     if (!locals.appendAll(env.funcTypes[func.index]->args())) {
       return false;
     }
-    if (!DecodeLocalEntries(d, env.types, env.refTypesEnabled(),
-                            env.gcTypesEnabled(), &locals)) {
+    if (!DecodeLocalEntries(d, env.types, env.features, &locals)) {
       return false;
     }
 

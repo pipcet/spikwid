@@ -120,6 +120,10 @@ extern const nsCString kHttp3Versions[];
 // such as HTTP upgrade which are not supported by HTTP3.
 #define NS_HTTP_DISALLOW_HTTP3 (1 << 22)
 
+// Force a transaction to stay in pending queue until the HTTPSSVC record is
+// available.
+#define NS_HTTP_WAIT_HTTPSSVC_RESULT (1 << 23)
+
 #define NS_HTTP_TRR_FLAGS_FROM_MODE(x) ((static_cast<uint32_t>(x) & 3) << 19)
 
 #define NS_HTTP_TRR_MODE_FROM_FLAGS(x) \
@@ -260,6 +264,32 @@ nsCString ConvertRequestHeadToString(nsHttpRequestHead& aRequestHead,
                                      bool aRequestBodyHasHeaders,
                                      bool aUsingConnect);
 
+template <typename T>
+using SendFunc = std::function<bool(const T&, uint64_t, uint32_t)>;
+
+template <typename T>
+bool SendDataInChunks(const nsCString& aData, uint64_t aOffset, uint32_t aCount,
+                      const SendFunc<T>& aSendFunc) {
+  static uint32_t const kCopyChunkSize = 128 * 1024;
+  uint32_t toRead = std::min<uint32_t>(aCount, kCopyChunkSize);
+
+  uint32_t start = 0;
+  while (aCount) {
+    T data(Substring(aData, start, toRead));
+
+    if (!aSendFunc(data, aOffset, toRead)) {
+      return false;
+    }
+
+    aOffset += toRead;
+    start += toRead;
+    aCount -= toRead;
+    toRead = std::min<uint32_t>(aCount, kCopyChunkSize);
+  }
+
+  return true;
+}
+
 }  // namespace nsHttp
 
 //-----------------------------------------------------------------------------
@@ -342,6 +372,12 @@ void LogHeaders(const char* lineStart);
 // This function should be only used when we get a failed response to the
 // CONNECT method.
 nsresult HttpProxyResponseToErrorCode(uint32_t aStatusCode);
+
+// Given a list of alpn-id, this function returns a supported alpn-id. If both
+// h3 and h2 are enabled, h3 alpn is preferred. This function returns an empty
+// string if no supported alpn-id is found.
+nsCString SelectAlpnFromAlpnList(const nsACString& aAlpnList, bool aNoHttp2,
+                                 bool aNoHttp3);
 
 }  // namespace net
 }  // namespace mozilla

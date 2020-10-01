@@ -25,6 +25,11 @@ function initPage() {
     { websiteUrl: pageUrl.host }
   );
 
+  const baseSupportURL = RPMGetFormatURLPref("app.support.baseURL");
+  document
+    .getElementById("learnMoreLink")
+    .setAttribute("href", baseSupportURL + "https-only-prefs");
+
   document
     .getElementById("openInsecure")
     .addEventListener("click", onOpenInsecureButtonClick);
@@ -42,7 +47,9 @@ function initPage() {
 /*  Button Events  */
 
 function onOpenInsecureButtonClick() {
-  RPMSendAsyncMessage("openInsecure");
+  RPMSendAsyncMessage("openInsecure", {
+    inFrame: window.top != window,
+  });
 }
 
 function onReturnButtonClick() {

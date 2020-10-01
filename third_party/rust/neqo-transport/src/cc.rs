@@ -5,8 +5,9 @@
 // except according to those terms.
 
 // Congestion control
+#![deny(clippy::pedantic)]
 
-use std::cmp::max;
+use std::cmp::{max, min};
 use std::fmt::{self, Display};
 use std::time::{Duration, Instant};
 
@@ -17,12 +18,12 @@ use crate::tracking::SentPacket;
 use neqo_common::{const_max, const_min, qdebug, qinfo, qlog::NeqoQlog, qtrace};
 
 pub const MAX_DATAGRAM_SIZE: usize = PATH_MTU_V6;
-pub const INITIAL_CWND_PKTS: usize = 10;
-const INITIAL_WINDOW: usize = const_min(
-    INITIAL_CWND_PKTS * MAX_DATAGRAM_SIZE,
+pub const CWND_INITIAL_PKTS: usize = 10;
+const CWND_INITIAL: usize = const_min(
+    CWND_INITIAL_PKTS * MAX_DATAGRAM_SIZE,
     const_max(2 * MAX_DATAGRAM_SIZE, 14720),
 );
-pub const MIN_CONG_WINDOW: usize = MAX_DATAGRAM_SIZE * 2;
+pub const CWND_MIN: usize = MAX_DATAGRAM_SIZE * 2;
 /// The number of packets we allow to burst from the pacer.
 pub(crate) const PACING_BURST_SIZE: usize = 2;
 const PERSISTENT_CONG_THRESH: u32 = 3;
@@ -31,9 +32,11 @@ const PERSISTENT_CONG_THRESH: u32 = 3;
 pub struct CongestionControl {
     congestion_window: usize, // = kInitialWindow
     bytes_in_flight: usize,
+    acked_bytes: usize,
     congestion_recovery_start_time: Option<Instant>,
     ssthresh: usize,
     pacer: Option<Pacer>,
+    in_recovery: bool,
 
     qlog: NeqoQlog,
     qlog_curr_cong_state: CongestionState,
@@ -42,11 +45,13 @@ pub struct CongestionControl {
 impl Default for CongestionControl {
     fn default() -> Self {
         Self {
-            congestion_window: INITIAL_WINDOW,
+            congestion_window: CWND_INITIAL,
             bytes_in_flight: 0,
+            acked_bytes: 0,
             congestion_recovery_start_time: None,
-            ssthresh: std::usize::MAX,
+            ssthresh: usize::MAX,
             pacer: None,
+            in_recovery: false,
             qlog: NeqoQlog::disabled(),
             qlog_curr_cong_state: CongestionState::SlowStart,
         }
@@ -67,12 +72,6 @@ impl Display for CongestionControl {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-enum PacketState {
-    Acked,
-    Lost,
-}
-
 impl CongestionControl {
     pub fn set_qlog(&mut self, qlog: NeqoQlog) {
         self.qlog = qlog;
@@ -90,6 +89,12 @@ impl CongestionControl {
         self.ssthresh
     }
 
+    #[cfg(test)]
+    #[must_use]
+    pub fn bif(&self) -> usize {
+        self.bytes_in_flight
+    }
+
     #[must_use]
     pub fn cwnd_avail(&self) -> usize {
         // BIF can be higher than cwnd due to PTO packets, which are sent even
@@ -103,10 +108,17 @@ impl CongestionControl {
             assert!(self.bytes_in_flight >= pkt.size);
             self.bytes_in_flight -= pkt.size;
 
-            if self.in_congestion_recovery(pkt.time_sent, PacketState::Acked) {
-                // Do not increase congestion window in recovery period.
+            if !self.after_recovery_start(pkt.time_sent) {
+                // Do not increase congestion window for packets sent before
+                // recovery start.
                 continue;
             }
+
+            if self.in_recovery {
+                self.in_recovery = false;
+                qlog::metrics_updated(&mut self.qlog, &[QlogMetric::InRecovery(false)]);
+            }
+
             if self.app_limited() {
                 // Do not increase congestion_window if application limited.
                 qlog::congestion_state_updated(
@@ -117,36 +129,98 @@ impl CongestionControl {
                 continue;
             }
 
-            if self.congestion_window < self.ssthresh {
-                self.congestion_window += pkt.size;
-                qinfo!([self], "slow start");
-                qlog::congestion_state_updated(
-                    &mut self.qlog,
-                    &mut self.qlog_curr_cong_state,
-                    CongestionState::SlowStart,
-                );
-            } else {
-                self.congestion_window += (MAX_DATAGRAM_SIZE * pkt.size) / self.congestion_window;
-                qinfo!([self], "congestion avoidance");
-                qlog::congestion_state_updated(
-                    &mut self.qlog,
-                    &mut self.qlog_curr_cong_state,
-                    CongestionState::CongestionAvoidance,
-                );
-            }
-            qlog::metrics_updated(
+            self.acked_bytes += pkt.size;
+        }
+        qtrace!([self], "ACK received, acked_bytes = {}", self.acked_bytes);
+
+        // Slow start, up to the slow start threshold.
+        if self.congestion_window < self.ssthresh {
+            let increase = min(self.ssthresh - self.congestion_window, self.acked_bytes);
+            self.congestion_window += increase;
+            self.acked_bytes -= increase;
+            qinfo!([self], "slow start += {}", increase);
+            qlog::congestion_state_updated(
                 &mut self.qlog,
-                &[
-                    QlogMetric::CongestionWindow(self.congestion_window),
-                    QlogMetric::BytesInFlight(self.bytes_in_flight),
-                ],
+                &mut self.qlog_curr_cong_state,
+                CongestionState::SlowStart,
             );
+        }
+        // Congestion avoidance, above the slow start threshold.
+        if self.acked_bytes >= self.congestion_window {
+            self.acked_bytes -= self.congestion_window;
+            self.congestion_window += MAX_DATAGRAM_SIZE;
+            qinfo!([self], "congestion avoidance += {}", MAX_DATAGRAM_SIZE);
+            qlog::congestion_state_updated(
+                &mut self.qlog,
+                &mut self.qlog_curr_cong_state,
+                CongestionState::CongestionAvoidance,
+            );
+        }
+        qlog::metrics_updated(
+            &mut self.qlog,
+            &[
+                QlogMetric::CongestionWindow(self.congestion_window),
+                QlogMetric::BytesInFlight(self.bytes_in_flight),
+            ],
+        );
+    }
+
+    fn detect_persistent_congestion(
+        &mut self,
+        first_rtt_sample_time: Option<Instant>,
+        prev_largest_acked_sent: Option<Instant>,
+        pto: Duration,
+        lost_packets: &[SentPacket],
+    ) {
+        if first_rtt_sample_time.is_none() {
+            return;
+        }
+
+        let pc_period = pto * PERSISTENT_CONG_THRESH;
+
+        let mut last_pn = 1 << 62; // Impossibly large, but not enough to overflow.
+        let mut start = None;
+
+        // Look for the first lost packet after the previous largest acknowledged.
+        // Ignore packets that weren't ack-eliciting for the start of this range.
+        // Also, make sure to ignore any packets sent before we got an RTT estimate
+        // as we might not have sent PTO packets soon enough after those.
+        let cutoff = max(first_rtt_sample_time, prev_largest_acked_sent);
+        for p in lost_packets
+            .iter()
+            .skip_while(|p| Some(p.time_sent) < cutoff)
+        {
+            if p.pn != last_pn + 1 {
+                // Not a contiguous range of lost packets, start over.
+                start = None;
+            }
+            last_pn = p.pn;
+            if !p.ack_eliciting() {
+                // Not interesting, keep looking.
+                continue;
+            }
+            if let Some(t) = start {
+                if p.time_sent.duration_since(t) > pc_period {
+                    // In persistent congestion.  Stop.
+                    self.congestion_window = CWND_MIN;
+                    self.acked_bytes = 0;
+                    qlog::metrics_updated(
+                        &mut self.qlog,
+                        &[QlogMetric::CongestionWindow(self.congestion_window)],
+                    );
+                    qinfo!([self], "persistent congestion");
+                    return;
+                }
+            } else {
+                start = Some(p.time_sent);
+            }
         }
     }
 
     pub fn on_packets_lost(
         &mut self,
         now: Instant,
+        first_rtt_sample_time: Option<Instant>,
         prev_largest_acked_sent: Option<Instant>,
         pto: Duration,
         lost_packets: &[SentPacket],
@@ -155,7 +229,7 @@ impl CongestionControl {
             return;
         }
 
-        for pkt in lost_packets.iter().filter(|pkt| pkt.cc_in_flight()) {
+        for pkt in lost_packets.iter().filter(|pkt| pkt.ack_eliciting()) {
             assert!(self.bytes_in_flight >= pkt.size);
             self.bytes_in_flight -= pkt.size;
         }
@@ -168,19 +242,12 @@ impl CongestionControl {
 
         let last_lost_pkt = lost_packets.last().unwrap();
         self.on_congestion_event(now, last_lost_pkt.time_sent);
-
-        let congestion_period = pto * PERSISTENT_CONG_THRESH;
-
-        // Simpler to ignore any acked pkts in between first and last lost pkts
-        if let Some(first) = lost_packets
-            .iter()
-            .find(|p| Some(p.time_sent) > prev_largest_acked_sent)
-        {
-            if last_lost_pkt.time_sent.duration_since(first.time_sent) > congestion_period {
-                self.congestion_window = MIN_CONG_WINDOW;
-                qinfo!([self], "persistent congestion");
-            }
-        }
+        self.detect_persistent_congestion(
+            first_rtt_sample_time,
+            prev_largest_acked_sent,
+            pto,
+            lost_packets,
+        );
     }
 
     pub fn discard(&mut self, pkt: &SentPacket) {
@@ -201,7 +268,7 @@ impl CongestionControl {
             .unwrap()
             .spend(pkt.time_sent, rtt, self.congestion_window, pkt.size);
 
-        if !pkt.cc_in_flight() {
+        if !pkt.ack_eliciting() {
             return;
         }
 
@@ -217,35 +284,24 @@ impl CongestionControl {
             &mut self.qlog,
             &[QlogMetric::BytesInFlight(self.bytes_in_flight)],
         );
-
-        debug_assert!(self.bytes_in_flight <= self.congestion_window);
     }
 
     #[must_use]
-    fn in_congestion_recovery(&mut self, sent_time: Instant, packet_state: PacketState) -> bool {
+    fn after_recovery_start(&mut self, sent_time: Instant) -> bool {
         match self.congestion_recovery_start_time {
-            Some(crst) => {
-                if sent_time <= crst {
-                    true
-                } else {
-                    if let PacketState::Acked = packet_state {
-                        qlog::metrics_updated(&mut self.qlog, &[QlogMetric::InRecovery(false)]);
-                        self.congestion_recovery_start_time = None;
-                    }
-                    false
-                }
-            }
-            None => false,
+            Some(crst) => sent_time > crst,
+            None => true,
         }
     }
 
     fn on_congestion_event(&mut self, now: Instant, sent_time: Instant) {
-        // Start a new congestion event if packet was sent after the
-        // start of the previous congestion recovery period.
-        if !self.in_congestion_recovery(sent_time, PacketState::Lost) {
+        // Start a new congestion event if lost packet was sent after the start
+        // of the previous congestion recovery period.
+        if self.after_recovery_start(sent_time) {
             self.congestion_recovery_start_time = Some(now);
             self.congestion_window /= 2; // kLossReductionFactor = 0.5
-            self.congestion_window = max(self.congestion_window, MIN_CONG_WINDOW);
+            self.acked_bytes /= 2;
+            self.congestion_window = max(self.congestion_window, CWND_MIN);
             self.ssthresh = self.congestion_window;
             qinfo!(
                 [self],
@@ -256,20 +312,21 @@ impl CongestionControl {
             qlog::metrics_updated(
                 &mut self.qlog,
                 &[
+                    QlogMetric::CongestionWindow(self.congestion_window),
                     QlogMetric::SsThresh(self.ssthresh),
                     QlogMetric::InRecovery(true),
                 ],
             );
+            self.in_recovery = true;
             qlog::congestion_state_updated(
                 &mut self.qlog,
                 &mut self.qlog_curr_cong_state,
                 CongestionState::Recovery,
             );
-        } else {
-            qdebug!([self], "Cong event but already in recovery");
         }
     }
 
+    #[allow(clippy::unused_self)]
     fn app_limited(&self) -> bool {
         //TODO(agrover): how do we get this info??
         false
@@ -296,5 +353,380 @@ impl CongestionControl {
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::cc::{CongestionControl, CWND_INITIAL, CWND_MIN, PERSISTENT_CONG_THRESH};
+    use crate::packet::{PacketNumber, PacketType};
+    use crate::tracking::SentPacket;
+    use std::convert::TryFrom;
+    use std::rc::Rc;
+    use std::time::{Duration, Instant};
+    use test_fixture::now;
+
+    const PTO: Duration = Duration::from_millis(100);
+    const RTT: Duration = Duration::from_millis(98);
+    const ZERO: Duration = Duration::from_secs(0);
+    const EPSILON: Duration = Duration::from_nanos(1);
+    const GAP: Duration = Duration::from_secs(1);
+    /// The largest time between packets without causing persistent congestion.
+    const SUB_PC: Duration = Duration::from_millis(100 * PERSISTENT_CONG_THRESH as u64);
+    /// The minimum time between packets to cause persistent congestion.
+    /// Uses an odd expression because `Duration` arithmetic isn't `const`.
+    const PC: Duration = Duration::from_nanos(100_000_000 * (PERSISTENT_CONG_THRESH as u64) + 1);
+
+    #[test]
+    fn issue_876() {
+        let mut cc = CongestionControl::default();
+        let time_now = now();
+        let time_before = time_now - Duration::from_millis(100);
+        let time_after1 = time_now + Duration::from_millis(100);
+        let time_after2 = time_now + Duration::from_millis(150);
+        let time_after3 = time_now + Duration::from_millis(175);
+
+        cc.start_pacer(time_now);
+
+        let sent_packets = vec![
+            SentPacket::new(
+                PacketType::Short,
+                1,             // pn
+                time_before,   // time sent
+                true,          // ack eliciting
+                Rc::default(), // tokens
+                103,           // size
+            ),
+            SentPacket::new(
+                PacketType::Short,
+                2,             // pn
+                time_before,   // time sent
+                true,          // ack eliciting
+                Rc::default(), // tokens
+                105,           // size
+            ),
+            SentPacket::new(
+                PacketType::Short,
+                3,             // pn
+                time_after2,   // time sent
+                true,          // ack eliciting
+                Rc::default(), // tokens
+                107,           // size
+            ),
+        ];
+
+        cc.on_packet_sent(&sent_packets[0], RTT);
+        assert_eq!(cc.acked_bytes, 0);
+        assert_eq!(cc.cwnd(), CWND_INITIAL);
+        assert_eq!(cc.ssthresh(), usize::MAX);
+        assert_eq!(cc.bif(), 103);
+
+        cc.on_packet_sent(&sent_packets[1], RTT);
+        assert_eq!(cc.acked_bytes, 0);
+        assert_eq!(cc.cwnd(), CWND_INITIAL);
+        assert_eq!(cc.ssthresh(), usize::MAX);
+        assert_eq!(cc.bif(), 208);
+
+        cc.on_packets_lost(time_after1, Some(time_now), None, PTO, &sent_packets[0..1]);
+
+        // We are now in recovery
+        assert_eq!(cc.acked_bytes, 0);
+        assert_eq!(cc.cwnd(), CWND_INITIAL / 2);
+        assert_eq!(cc.ssthresh(), CWND_INITIAL / 2);
+        assert_eq!(cc.bif(), 105);
+
+        // Send a packet after recovery starts
+        cc.on_packet_sent(&sent_packets[2], RTT);
+        assert_eq!(cc.acked_bytes, 0);
+        assert_eq!(cc.cwnd(), CWND_INITIAL / 2);
+        assert_eq!(cc.ssthresh(), CWND_INITIAL / 2);
+        assert_eq!(cc.bif(), 212);
+
+        // and ack it. cwnd increases slightly
+        cc.on_packets_acked(&sent_packets[2..3]);
+        assert_eq!(cc.acked_bytes, sent_packets[2].size);
+        assert_eq!(cc.cwnd(), CWND_INITIAL / 2);
+        assert_eq!(cc.ssthresh(), CWND_INITIAL / 2);
+        assert_eq!(cc.bif(), 105);
+
+        // Packet from before is lost. Should not hurt cwnd.
+        cc.on_packets_lost(time_after3, Some(time_now), None, PTO, &sent_packets[1..2]);
+        assert_eq!(cc.acked_bytes, sent_packets[2].size);
+        assert_eq!(cc.cwnd(), CWND_INITIAL / 2);
+        assert_eq!(cc.ssthresh(), CWND_INITIAL / 2);
+        assert_eq!(cc.bif(), 0);
+    }
+
+    fn lost(pn: PacketNumber, ack_eliciting: bool, t: Duration) -> SentPacket {
+        SentPacket::new(
+            PacketType::Short,
+            pn,
+            now() + t,
+            ack_eliciting,
+            Rc::default(),
+            100,
+        )
+    }
+
+    fn persistent_congestion(lost_packets: &[SentPacket]) -> bool {
+        let mut cc = CongestionControl::default();
+        cc.start_pacer(now());
+        for p in lost_packets {
+            cc.on_packet_sent(p, RTT);
+        }
+
+        cc.on_packets_lost(now(), Some(now()), None, PTO, lost_packets);
+        if cc.cwnd() == CWND_INITIAL / 2 {
+            false
+        } else if cc.cwnd() == CWND_MIN {
+            true
+        } else {
+            panic!("unexpected cwnd");
+        }
+    }
+
+    /// A span of exactly the PC threshold only reduces the window on loss.
+    #[test]
+    fn persistent_congestion_none() {
+        assert!(!persistent_congestion(&[
+            lost(1, true, ZERO),
+            lost(2, true, SUB_PC),
+        ]));
+    }
+
+    /// A span of just more than the PC threshold causes persistent congestion.
+    #[test]
+    fn persistent_congestion_simple() {
+        assert!(persistent_congestion(&[
+            lost(1, true, ZERO),
+            lost(2, true, PC),
+        ]));
+    }
+
+    /// Both packets need to be ack-eliciting.
+    #[test]
+    fn persistent_congestion_non_ack_eliciting() {
+        assert!(!persistent_congestion(&[
+            lost(1, false, ZERO),
+            lost(2, true, PC),
+        ]));
+        assert!(!persistent_congestion(&[
+            lost(1, true, ZERO),
+            lost(2, false, PC),
+        ]));
+    }
+
+    /// Packets in the middle, of any type, are OK.
+    #[test]
+    fn persistent_congestion_middle() {
+        assert!(persistent_congestion(&[
+            lost(1, true, ZERO),
+            lost(2, false, RTT),
+            lost(3, true, PC),
+        ]));
+        assert!(persistent_congestion(&[
+            lost(1, true, ZERO),
+            lost(2, true, RTT),
+            lost(3, true, PC),
+        ]));
+    }
+
+    /// Leading non-ack-eliciting packets are skipped.
+    #[test]
+    fn persistent_congestion_leading_non_ack_eliciting() {
+        assert!(!persistent_congestion(&[
+            lost(1, false, ZERO),
+            lost(2, true, RTT),
+            lost(3, true, PC),
+        ]));
+        assert!(persistent_congestion(&[
+            lost(1, false, ZERO),
+            lost(2, true, RTT),
+            lost(3, true, RTT + PC),
+        ]));
+    }
+
+    /// Trailing non-ack-eliciting packets aren't relevant.
+    #[test]
+    fn persistent_congestion_trailing_non_ack_eliciting() {
+        assert!(persistent_congestion(&[
+            lost(1, true, ZERO),
+            lost(2, true, PC),
+            lost(3, false, PC + EPSILON),
+        ]));
+        assert!(!persistent_congestion(&[
+            lost(1, true, ZERO),
+            lost(2, true, SUB_PC),
+            lost(3, false, PC),
+        ]));
+    }
+
+    /// Gaps in the middle, of any type, restart the count.
+    #[test]
+    fn persistent_congestion_gap_reset() {
+        assert!(!persistent_congestion(&[
+            lost(1, true, ZERO),
+            lost(3, true, PC),
+        ]));
+        assert!(!persistent_congestion(&[
+            lost(1, true, ZERO),
+            lost(2, true, RTT),
+            lost(4, true, GAP),
+            lost(5, true, GAP + PTO * PERSISTENT_CONG_THRESH),
+        ]));
+    }
+
+    /// A span either side of a gap will cause persistent congestion.
+    #[test]
+    fn persistent_congestion_gap_or() {
+        assert!(persistent_congestion(&[
+            lost(1, true, ZERO),
+            lost(2, true, PC),
+            lost(4, true, GAP),
+            lost(5, true, GAP + PTO),
+        ]));
+        assert!(persistent_congestion(&[
+            lost(1, true, ZERO),
+            lost(2, true, PTO),
+            lost(4, true, GAP),
+            lost(5, true, GAP + PC),
+        ]));
+    }
+
+    /// A gap only restarts after an ack-eliciting packet.
+    #[test]
+    fn persistent_congestion_gap_non_ack_eliciting() {
+        assert!(!persistent_congestion(&[
+            lost(1, true, ZERO),
+            lost(2, true, PTO),
+            lost(4, false, GAP),
+            lost(5, true, GAP + PC),
+        ]));
+        assert!(!persistent_congestion(&[
+            lost(1, true, ZERO),
+            lost(2, true, PTO),
+            lost(4, false, GAP),
+            lost(5, true, GAP + RTT),
+            lost(6, true, GAP + RTT + SUB_PC),
+        ]));
+        assert!(persistent_congestion(&[
+            lost(1, true, ZERO),
+            lost(2, true, PTO),
+            lost(4, false, GAP),
+            lost(5, true, GAP + RTT),
+            lost(6, true, GAP + RTT + PC),
+        ]));
+    }
+
+    /// Get a time, in multiples of `PTO`, relative to `now()`.
+    fn by_pto(t: u32) -> Instant {
+        now() + (PTO * t)
+    }
+
+    /// Make packets that will be made lost.
+    /// `times` is the time of sending, in multiples of `PTO`, relative to `now()`.
+    fn make_lost(times: &[u32]) -> Vec<SentPacket> {
+        times
+            .iter()
+            .enumerate()
+            .map(|(i, &t)| {
+                SentPacket::new(
+                    PacketType::Short,
+                    u64::try_from(i).unwrap(),
+                    by_pto(t),
+                    true,
+                    Rc::default(),
+                    1000,
+                )
+            })
+            .collect::<Vec<_>>()
+    }
+
+    /// Call `detect_persistent_congestion` using times relative to now and the fixed PTO time.
+    /// `last_ack` and `rtt_time` are times in multiples of `PTO`, relative to `now()`,
+    /// for the time of the largest acknowledged and the first RTT sample, respectively.
+    fn persistent_congestion_by_pto(last_ack: u32, rtt_time: u32, lost: &[SentPacket]) -> bool {
+        let mut cc = CongestionControl::default();
+        assert_eq!(cc.cwnd(), CWND_INITIAL);
+
+        let last_ack = Some(by_pto(last_ack));
+        let rtt_time = Some(by_pto(rtt_time));
+
+        // Persistent congestion is never declared if the RTT time is `None`.
+        cc.detect_persistent_congestion(None, None, PTO, lost);
+        assert_eq!(cc.cwnd(), CWND_INITIAL);
+        cc.detect_persistent_congestion(None, last_ack, PTO, lost);
+        assert_eq!(cc.cwnd(), CWND_INITIAL);
+
+        cc.detect_persistent_congestion(rtt_time, last_ack, PTO, lost);
+        cc.cwnd() == CWND_MIN
+    }
+
+    /// No persistent congestion can be had if there are no lost packets.
+    #[test]
+    fn persistent_congestion_no_lost() {
+        let lost = make_lost(&[]);
+        assert!(!persistent_congestion_by_pto(0, 0, &lost));
+    }
+
+    /// No persistent congestion can be had if there is only one lost packet.
+    #[test]
+    fn persistent_congestion_one_lost() {
+        let lost = make_lost(&[1]);
+        assert!(!persistent_congestion_by_pto(0, 0, &lost));
+    }
+
+    /// Persistent congestion can't happen based on old packets.
+    #[test]
+    fn persistent_congestion_past() {
+        // Packets sent prior to either the last acknowledged or the first RTT
+        // sample are not considered.  So 0 is ignored.
+        let lost = make_lost(&[0, PERSISTENT_CONG_THRESH + 1, PERSISTENT_CONG_THRESH + 2]);
+        assert!(!persistent_congestion_by_pto(1, 1, &lost));
+        assert!(!persistent_congestion_by_pto(0, 1, &lost));
+        assert!(!persistent_congestion_by_pto(1, 0, &lost));
+    }
+
+    /// Persistent congestion doesn't start unless the packet is ack-eliciting.
+    #[test]
+    fn persistent_congestion_ack_eliciting() {
+        let mut lost = make_lost(&[1, PERSISTENT_CONG_THRESH + 2]);
+        lost[0] = SentPacket::new(
+            lost[0].pt,
+            lost[0].pn,
+            lost[0].time_sent,
+            false,
+            Rc::default(),
+            lost[0].size,
+        );
+        assert!(!persistent_congestion_by_pto(0, 0, &lost));
+    }
+
+    /// Detect persistent congestion.  Note that the first lost packet needs to have a time
+    /// greater than the previously acknowledged packet AND the first RTT sample.  And the
+    /// difference in times needs to be greater than the persistent congestion threshold.
+    #[test]
+    fn persistent_congestion_min() {
+        let lost = make_lost(&[1, PERSISTENT_CONG_THRESH + 2]);
+        assert!(persistent_congestion_by_pto(0, 0, &lost));
+    }
+
+    /// Make sure that not having a previous largest acknowledged also results
+    /// in detecting persistent congestion.  (This is not expected to happen, but
+    /// the code permits it).
+    #[test]
+    fn persistent_congestion_no_prev_ack() {
+        let lost = make_lost(&[1, PERSISTENT_CONG_THRESH + 2]);
+        let mut cc = CongestionControl::default();
+        cc.detect_persistent_congestion(Some(by_pto(0)), None, PTO, &lost);
+        assert_eq!(cc.cwnd(), CWND_MIN);
+    }
+
+    /// The code asserts on ordering errors.
+    #[test]
+    #[should_panic]
+    fn persistent_congestion_unsorted() {
+        let lost = make_lost(&[PERSISTENT_CONG_THRESH + 2, 1]);
+        assert!(!persistent_congestion_by_pto(0, 0, &lost));
     }
 }

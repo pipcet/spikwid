@@ -337,7 +337,7 @@ void DisplayItemData::BeginUpdate(Layer* aLayer, LayerState aState,
   if (!copy.RemoveElement(aItem->Frame())) {
     AddFrame(aItem->Frame());
     mChangedFrameInvalidations.Or(mChangedFrameInvalidations,
-                                  aItem->Frame()->GetVisualOverflowRect());
+                                  aItem->Frame()->InkOverflowRect());
   }
 
   if (aIsMerged) {
@@ -347,7 +347,7 @@ void DisplayItemData::BeginUpdate(Layer* aLayer, LayerState aState,
       if (!copy.RemoveElement(frame)) {
         AddFrame(frame);
         mChangedFrameInvalidations.Or(mChangedFrameInvalidations,
-                                      frame->GetVisualOverflowRect());
+                                      frame->InkOverflowRect());
       }
     }
   }
@@ -355,7 +355,7 @@ void DisplayItemData::BeginUpdate(Layer* aLayer, LayerState aState,
   for (nsIFrame* frame : copy) {
     RemoveFrame(frame);
     mChangedFrameInvalidations.Or(mChangedFrameInvalidations,
-                                  frame->GetVisualOverflowRect());
+                                  frame->InkOverflowRect());
   }
 }
 
@@ -1643,6 +1643,7 @@ class ContainerState {
     CachedScrollMetadata() : mASR(nullptr), mClip(nullptr) {}
   };
   CachedScrollMetadata mCachedScrollMetadata;
+  std::unordered_set<nsIScrollableFrame*> mScrollFramesToNotify;
 };
 
 class FLBDisplayListIterator : public FlattenedDisplayListIterator {
@@ -1886,7 +1887,7 @@ struct MaskLayerUserData : public LayerUserData {
     mScaleY = aOther.mScaleY;
     mOffset = aOther.mOffset;
     mAppUnitsPerDevPixel = aOther.mAppUnitsPerDevPixel;
-    mRoundedClipRects.SwapElements(aOther.mRoundedClipRects);
+    mRoundedClipRects = std::move(aOther.mRoundedClipRects);
   }
 
   bool operator==(const MaskLayerUserData& aOther) const {
@@ -5457,7 +5458,7 @@ void FrameLayerBuilder::AddPaintedDisplayItem(PaintedLayerData* aLayerData,
     nsIntRegion invalid;
     if (!aItem.mInactiveLayerData->mProps->ComputeDifferences(tmpLayer, invalid,
                                                               nullptr)) {
-      nsRect visible = aItem.mItem->Frame()->GetVisualOverflowRect();
+      nsRect visible = aItem.mItem->Frame()->InkOverflowRect();
       invalid = visible.ToOutsidePixels(paintedData->mAppUnitsPerDevPixel);
     }
     if (aItem.mLayerState == LayerState::LAYER_SVG_EFFECTS) {
@@ -5776,7 +5777,7 @@ void ContainerState::SetupScrollingMetadata(NewLayerEntry* aEntry) {
       metadata = scrollFrame->ComputeScrollMetadata(aEntry->mLayer->Manager(),
                                                     mContainerReferenceFrame,
                                                     Some(mParameters), clip);
-      scrollFrame->NotifyApzTransaction();
+      mScrollFramesToNotify.insert(scrollFrame);
       mCachedScrollMetadata.mASR = asr;
       mCachedScrollMetadata.mClip = clip;
       mCachedScrollMetadata.mMetadata = metadata;
@@ -5908,6 +5909,11 @@ void ContainerState::PostprocessRetainedLayers(
         *aOpaqueRegionForContainer,
         opaqueRegions[opaqueRegionForContainer].mOpaqueRegion);
   }
+
+  for (const auto& it : mScrollFramesToNotify) {
+    it->NotifyApzTransaction();
+  }
+  mScrollFramesToNotify.clear();
 }
 
 void ContainerState::Finish(uint32_t* aTextContentFlags,
@@ -6263,7 +6269,7 @@ already_AddRefed<ContainerLayer> FrameLayerBuilder::BuildContainerLayerFor(
       aChildren->GetClippedBoundsWithRespectToASR(aBuilder, containerASR);
   nsRect childrenVisible =
       aContainerItem ? aContainerItem->GetBuildingRectForChildren()
-                     : aContainerFrame->GetVisualOverflowRectRelativeToSelf();
+                     : aContainerFrame->InkOverflowRectRelativeToSelf();
   if (!ChooseScaleAndSetTransform(
           this, aBuilder, aContainerFrame, aContainerItem,
           bounds.Intersect(childrenVisible), aTransform, aParameters,

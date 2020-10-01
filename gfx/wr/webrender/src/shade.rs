@@ -61,7 +61,7 @@ const PIXEL_LOCAL_STORAGE_FEATURE: &str = "PIXEL_LOCAL_STORAGE";
 pub(crate) enum ShaderKind {
     Primitive,
     Cache(VertexArrayKind),
-    ClipCache,
+    ClipCache(VertexArrayKind),
     Brush,
     Text,
     #[allow(dead_code)]
@@ -191,7 +191,7 @@ impl LazilyCompiledShader {
                         &self.features,
                     )
                 }
-                ShaderKind::ClipCache => {
+                ShaderKind::ClipCache(..) => {
                     create_clip_shader(
                         self.name,
                         device,
@@ -212,7 +212,7 @@ impl LazilyCompiledShader {
                 ShaderKind::Cache(format) => format,
                 ShaderKind::VectorStencil => VertexArrayKind::VectorStencil,
                 ShaderKind::VectorCover => VertexArrayKind::VectorCover,
-                ShaderKind::ClipCache => VertexArrayKind::Clip,
+                ShaderKind::ClipCache(format) => format,
                 ShaderKind::Resolve => VertexArrayKind::Resolve,
                 ShaderKind::Composite => VertexArrayKind::Composite,
                 ShaderKind::Clear => VertexArrayKind::Clear,
@@ -223,7 +223,9 @@ impl LazilyCompiledShader {
                 VertexArrayKind::LineDecoration => &desc::LINE,
                 VertexArrayKind::Gradient => &desc::GRADIENT,
                 VertexArrayKind::Blur => &desc::BLUR,
-                VertexArrayKind::Clip => &desc::CLIP,
+                VertexArrayKind::ClipImage => &desc::CLIP_IMAGE,
+                VertexArrayKind::ClipRect => &desc::CLIP_RECT,
+                VertexArrayKind::ClipBoxShadow => &desc::CLIP_BOX_SHADOW,
                 VertexArrayKind::VectorStencil => &desc::VECTOR_STENCIL,
                 VertexArrayKind::VectorCover => &desc::VECTOR_COVER,
                 VertexArrayKind::Border => &desc::BORDER,
@@ -237,7 +239,7 @@ impl LazilyCompiledShader {
             device.link_program(program, vertex_descriptor)?;
             device.bind_program(program);
             match self.kind {
-                ShaderKind::ClipCache => {
+                ShaderKind::ClipCache(..) => {
                     device.bind_shader_samplers(
                         &program,
                         &[
@@ -536,7 +538,7 @@ pub struct Shaders {
     pub cs_blur_rgba8: LazilyCompiledShader,
     pub cs_border_segment: LazilyCompiledShader,
     pub cs_border_solid: LazilyCompiledShader,
-    pub cs_scale: LazilyCompiledShader,
+    pub cs_scale: Vec<Option<LazilyCompiledShader>>,
     pub cs_line_decoration: LazilyCompiledShader,
     pub cs_gradient: LazilyCompiledShader,
     pub cs_svg_filter: LazilyCompiledShader,
@@ -742,7 +744,7 @@ impl Shaders {
         )?;
 
         let cs_clip_rectangle_slow = LazilyCompiledShader::new(
-            ShaderKind::ClipCache,
+            ShaderKind::ClipCache(VertexArrayKind::ClipRect),
             "cs_clip_rectangle",
             &[],
             device,
@@ -751,7 +753,7 @@ impl Shaders {
         )?;
 
         let cs_clip_rectangle_fast = LazilyCompiledShader::new(
-            ShaderKind::ClipCache,
+            ShaderKind::ClipCache(VertexArrayKind::ClipRect),
             "cs_clip_rectangle",
             &[FAST_PATH_FEATURE],
             device,
@@ -760,7 +762,7 @@ impl Shaders {
         )?;
 
         let cs_clip_box_shadow = LazilyCompiledShader::new(
-            ShaderKind::ClipCache,
+            ShaderKind::ClipCache(VertexArrayKind::ClipBoxShadow),
             "cs_clip_box_shadow",
             &[],
             device,
@@ -769,7 +771,7 @@ impl Shaders {
         )?;
 
         let cs_clip_image = LazilyCompiledShader::new(
-            ShaderKind::ClipCache,
+            ShaderKind::ClipCache(VertexArrayKind::ClipImage),
             "cs_clip_image",
             &[],
             device,
@@ -803,14 +805,36 @@ impl Shaders {
             None
         };
 
-        let cs_scale = LazilyCompiledShader::new(
-            ShaderKind::Cache(VertexArrayKind::Scale),
-            "cs_scale",
-            &[],
-            device,
-            options.precache_flags,
-            &shader_list,
-        )?;
+        let mut cs_scale = Vec::new();
+        let scale_shader_num = IMAGE_BUFFER_KINDS.len();
+        // PrimitiveShader is not clonable. Use push() to initialize the vec.
+        for _ in 0 .. scale_shader_num {
+            cs_scale.push(None);
+        }
+        for image_buffer_kind in &IMAGE_BUFFER_KINDS {
+            if image_buffer_kind.has_platform_support(&gl_type) {
+                let feature_string = image_buffer_kind.get_feature_string();
+
+                let mut features = Vec::new();
+                if feature_string != "" {
+                    features.push(feature_string);
+                }
+
+                let shader = LazilyCompiledShader::new(
+                    ShaderKind::Cache(VertexArrayKind::Scale),
+                    "cs_scale",
+                    &features,
+                    device,
+                    options.precache_flags,
+                    &shader_list,
+                 )?;
+
+                 let index = Self::get_compositing_shader_index(
+                    *image_buffer_kind,
+                 );
+                 cs_scale[index] = Some(shader);
+            }
+        }
 
         // TODO(gw): The split composite + text shader are special cases - the only
         //           shaders used during normal scene rendering that aren't a brush
@@ -1064,6 +1088,16 @@ impl Shaders {
         }
     }
 
+    pub fn get_scale_shader(
+        &mut self,
+        buffer_kind: ImageBufferKind,
+    ) -> &mut LazilyCompiledShader {
+        let shader_index = Self::get_compositing_shader_index(buffer_kind);
+        self.cs_scale[shader_index]
+            .as_mut()
+            .expect("bug: unsupported scale shader requested")
+    }
+
     pub fn get(&mut self, key: &BatchKey, features: BatchFeatures, debug_flags: DebugFlags) -> &mut LazilyCompiledShader {
         match key.kind {
             BatchKind::SplitComposite => {
@@ -1126,7 +1160,11 @@ impl Shaders {
     }
 
     pub fn deinit(self, device: &mut Device) {
-        self.cs_scale.deinit(device);
+        for shader in self.cs_scale {
+            if let Some(shader) = shader {
+                shader.deinit(device);
+            }
+        }
         self.cs_blur_a8.deinit(device);
         self.cs_blur_rgba8.deinit(device);
         self.cs_svg_filter.deinit(device);

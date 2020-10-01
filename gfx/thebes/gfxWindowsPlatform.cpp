@@ -80,6 +80,7 @@
 #include "DriverCrashGuard.h"
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/gfx/DeviceManagerDx.h"
+#include "mozilla/gfx/DisplayConfigWindows.h"
 #include "mozilla/layers/DeviceAttachmentsD3D11.h"
 #include "D3D11Checks.h"
 
@@ -309,7 +310,8 @@ gfxWindowsPlatform::~gfxWindowsPlatform() {
 static void UpdateANGLEConfig() {
   if (!gfxConfig::IsEnabled(Feature::D3D11_COMPOSITING)) {
     gfxConfig::Disable(Feature::D3D11_HW_ANGLE, FeatureStatus::Disabled,
-                       "D3D11 compositing is disabled");
+                       "D3D11 compositing is disabled",
+                       "FEATURE_FAILURE_HW_ANGLE_D3D11_DISABLED"_ns);
   }
 }
 
@@ -319,6 +321,7 @@ void gfxWindowsPlatform::InitAcceleration() {
   DeviceManagerDx::Init();
 
   InitializeConfig();
+  InitGPUProcessSupport();
   // Ensure devices initialization. SharedSurfaceANGLE and
   // SharedSurfaceD3D11Interop use them. The devices are lazily initialized
   // with WebRender to reduce memory usage.
@@ -439,6 +442,7 @@ bool gfxWindowsPlatform::HandleDeviceReset() {
   // XXX Add InitWebRenderConfig() calling.
   InitializeAdvancedLayersConfig();
   if (mInitializedDevices) {
+    InitGPUProcessSupport();
     InitializeDevices();
   }
   UpdateANGLEConfig();
@@ -663,17 +667,11 @@ static const char kFontUtsaah[] = "Utsaah";
 static const char kFontYuGothic[] = "Yu Gothic";
 
 void gfxWindowsPlatform::GetCommonFallbackFonts(
-    uint32_t aCh, uint32_t aNextCh, Script aRunScript,
+    uint32_t aCh, Script aRunScript, eFontPresentation aPresentation,
     nsTArray<const char*>& aFontList) {
-  EmojiPresentation emoji = GetEmojiPresentation(aCh);
-  if (emoji != EmojiPresentation::TextOnly) {
-    if (aNextCh == kVariationSelector16 ||
-        (aNextCh != kVariationSelector15 &&
-         emoji == EmojiPresentation::EmojiDefault)) {
-      // if char is followed by VS16, try for a color emoji glyph
-      aFontList.AppendElement(kFontSegoeUIEmoji);
-      aFontList.AppendElement(kFontTwemojiMozilla);
-    }
+  if (PrefersColor(aPresentation)) {
+    aFontList.AppendElement(kFontSegoeUIEmoji);
+    aFontList.AppendElement(kFontTwemojiMozilla);
   }
 
   // Arial is used as the default fallback for system fallback
@@ -1259,7 +1257,7 @@ static void InitializeANGLEConfig() {
   if (!gfxConfig::IsEnabled(Feature::D3D11_COMPOSITING)) {
     d3d11ANGLE.DisableByDefault(FeatureStatus::Unavailable,
                                 "D3D11 compositing is disabled",
-                                "FEATURE_FAILURE_D3D11_DISABLED"_ns);
+                                "FEATURE_FAILURE_HW_ANGLE_D3D11_DISABLED"_ns);
     return;
   }
 
@@ -1434,7 +1432,7 @@ void gfxWindowsPlatform::InitializeDevices() {
     // initialize any DirectX devices. We do leave them enabled in gfxConfig
     // though. If the GPU process fails to create these devices it will send
     // a message back and we'll update their status.
-    if (InitGPUProcessSupport()) {
+    if (gfxConfig::IsEnabled(Feature::GPU_PROCESS)) {
       return;
     }
 
@@ -1591,11 +1589,11 @@ void gfxWindowsPlatform::InitializeD2D() {
   d2d1_1.SetSuccessful();
 }
 
-bool gfxWindowsPlatform::InitGPUProcessSupport() {
+void gfxWindowsPlatform::InitGPUProcessSupport() {
   FeatureState& gpuProc = gfxConfig::GetFeature(Feature::GPU_PROCESS);
 
   if (!gpuProc.IsEnabled()) {
-    return false;
+    return;
   }
 
   nsCString message;
@@ -1603,14 +1601,14 @@ bool gfxWindowsPlatform::InitGPUProcessSupport() {
   if (!gfxPlatform::IsGfxInfoStatusOkay(nsIGfxInfo::FEATURE_GPU_PROCESS,
                                         &message, failureId)) {
     gpuProc.Disable(FeatureStatus::Blocklisted, message.get(), failureId);
-    return false;
+    return;
   }
 
   if (!gfxConfig::IsEnabled(Feature::D3D11_COMPOSITING)) {
     // Don't use the GPU process if not using D3D11, unless software
     // compositor is allowed
     if (StaticPrefs::layers_gpu_process_allow_software_AtStartup()) {
-      return gpuProc.IsEnabled();
+      return;
     }
     gpuProc.Disable(FeatureStatus::Unavailable,
                     "Not using GPU Process since D3D11 is unavailable",
@@ -1636,7 +1634,6 @@ bool gfxWindowsPlatform::InitGPUProcessSupport() {
   }
 
   // If we're still enabled at this point, the user set the force-enabled pref.
-  return gpuProc.IsEnabled();
 }
 
 bool gfxWindowsPlatform::DwmCompositionEnabled() {
@@ -1820,7 +1817,7 @@ class D3DVsyncSource final : public VsyncSource {
         // Large parts of gecko assume that the refresh driver timestamp
         // must be <= Now() and cannot be in the future.
         MOZ_ASSERT(vsync <= TimeStamp::Now());
-        Display::NotifyVsync(vsync);
+        Display::NotifyVsync(vsync, vsync + mVsyncRate);
 
         // DwmComposition can be dynamically enabled/disabled
         // so we have to check every time that it's available.
@@ -2040,4 +2037,25 @@ void gfxWindowsPlatform::BuildContentDeviceData(ContentDeviceData* aOut) {
 bool gfxWindowsPlatform::CheckVariationFontSupport() {
   // Variation font support is only available on Fall Creators Update or later.
   return IsWin10FallCreatorsUpdateOrLater();
+}
+
+void gfxWindowsPlatform::GetPlatformDisplayInfo(
+    mozilla::widget::InfoObject& aObj) {
+  aObj.DefineProperty("HardwareStretching",
+                      DeviceManagerDx::Get()->CheckHardwareStretchingSupport());
+
+  ScaledResolutionSet scaled;
+  GetScaledResolutions(scaled);
+  if (scaled.IsEmpty()) {
+    return;
+  }
+
+  aObj.DefineProperty("ScaledResolutionCount", scaled.Length());
+  for (size_t i = 0; i < scaled.Length(); ++i) {
+    auto& s = scaled[i];
+    nsPrintfCString name("ScaledResolution%zu", i);
+    nsPrintfCString value("source %dx%d, target %dx%d", s.first.width,
+                          s.first.height, s.second.width, s.second.height);
+    aObj.DefineProperty(name.get(), value.get());
+  }
 }

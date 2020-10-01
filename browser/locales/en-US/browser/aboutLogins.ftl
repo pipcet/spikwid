@@ -76,6 +76,7 @@ login-intro-description = If you saved your logins to { -brand-product-name } on
 login-intro-instruction-fxa = Create or sign in to your { -fxaccount-brand-name } on the device where your logins are saved
 login-intro-instruction-fxa-settings = Make sure you’ve selected the Logins checkbox in { -sync-brand-short-name } Settings
 about-logins-intro-instruction-help = Visit <a data-l10n-name="help-link">{ -lockwise-brand-short-name } Support</a> for more help
+about-logins-intro-import = If your logins are saved in another browser, you can <a data-l10n-name="import-link">import them into { -lockwise-brand-short-name }</a>
 about-logins-intro-import2 = If your logins are saved outside of { -brand-product-name }, you can <a data-l10n-name="import-browser-link">import them from another browser</a> or <a data-l10n-name="import-file-link">from a file</a>
 
 ## Login
@@ -135,9 +136,9 @@ about-logins-export-password-os-auth-dialog-message-win = To export your logins,
 # On MacOS, only provide the reason that account verification is needed. Do not put a complete sentence here.
 about-logins-export-password-os-auth-dialog-message-macosx = export saved logins and passwords
 
-## Master Password notification
+## Primary Password notification
 
-master-password-notification-message = Please enter your master password to view saved logins & passwords
+about-logins-primary-password-notification-message = Please enter your Primary Password to view saved logins & passwords
 master-password-reload-button =
   .label = Log in
   .accesskey = L

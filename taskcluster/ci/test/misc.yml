@@ -2,6 +2,9 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ---
+job-defaults:
+    test-manifest-loader: null  # don't load tests in the taskgraph
+
 geckoview-junit:
     description: "Geckoview junit run"
     suite: geckoview-junit
@@ -49,15 +52,16 @@ test-verify:
             # do not run on ccov or asan
             .*-ccov/.*: []
             .*-asan/.*: []
-            # where shippable is available, do not run on plain opt, except on try
-            (?:windows10-64|windows7-32|linux1804-64|macosx.*64)(?:-qr)?/opt: []
+            .*shippable.*: []
             # do not run on mozilla-central, beta or release: usually just confirms earlier results
-            default: ['autoland']
+            default: ['integration']
     built-projects-only: true
     target:
         by-test-platform:
             android-em-7.*: geckoview-androidTest.apk
             default: null
+    optimization:
+        test-verify: ["test-verify"]
     tier: 2
     mozharness:
         script:
@@ -111,7 +115,6 @@ test-verify-gpu:
     suite:
         category: test-verify
         name: test-verify-gpu
-    schedules-component: test-verify-gpu
     treeherder-symbol: TVg
     loopback-video: true
     virtualization: virtual-with-gpu
@@ -122,11 +125,12 @@ test-verify-gpu:
             # do not run on ccov or asan
             .*-ccov/.*: []
             .*-asan/.*: []
-            # where shippable is available, do not run on plain opt, except on try
-            (?:windows10-64|windows7-32|linux1804-64|macosx.*64)(?:-qr)?/opt: []
+            .*shippable.*: []
             # do not run on mozilla-central, beta or release: usually just confirms earlier results
-            default: ['autoland']
+            default: ['integration']
     built-projects-only: true
+    optimization:
+        test-verify: ["test-verify-gpu"]
     tier: 2
     mozharness:
         script:

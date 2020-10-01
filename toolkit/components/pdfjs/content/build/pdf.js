@@ -325,18 +325,18 @@ var _api = __w_pdfjs_require__(5);
 
 var _util = __w_pdfjs_require__(2);
 
-var _annotation_layer = __w_pdfjs_require__(17);
+var _annotation_layer = __w_pdfjs_require__(19);
 
-var _api_compatibility = __w_pdfjs_require__(8);
+var _api_compatibility = __w_pdfjs_require__(9);
 
-var _worker_options = __w_pdfjs_require__(11);
+var _worker_options = __w_pdfjs_require__(12);
 
-var _text_layer = __w_pdfjs_require__(18);
+var _text_layer = __w_pdfjs_require__(20);
 
-var _svg = __w_pdfjs_require__(19);
+var _svg = __w_pdfjs_require__(21);
 
-const pdfjsVersion = '2.6.123';
-const pdfjsBuild = 'a604973cc';
+const pdfjsVersion = '2.7.81';
+const pdfjsBuild = '120c5c226';
 ;
 
 /***/ }),
@@ -403,12 +403,20 @@ class BaseCanvasFactory {
 exports.BaseCanvasFactory = BaseCanvasFactory;
 
 class DOMCanvasFactory extends BaseCanvasFactory {
+  constructor({
+    ownerDocument = globalThis.document
+  } = {}) {
+    super();
+    this._document = ownerDocument;
+  }
+
   create(width, height) {
     if (width <= 0 || height <= 0) {
       throw new Error("Invalid canvas size");
     }
 
-    const canvas = document.createElement("canvas");
+    const canvas = this._document.createElement("canvas");
+
     const context = canvas.getContext("2d");
     canvas.width = width;
     canvas.height = height;
@@ -844,6 +852,9 @@ exports.arraysToBytes = arraysToBytes;
 exports.assert = assert;
 exports.bytesToString = bytesToString;
 exports.createPromiseCapability = createPromiseCapability;
+exports.escapeString = escapeString;
+exports.encodeToXmlString = encodeToXmlString;
+exports.getModificationDate = getModificationDate;
 exports.getVerbosityLevel = getVerbosityLevel;
 exports.info = info;
 exports.isArrayBuffer = isArrayBuffer;
@@ -1147,7 +1158,8 @@ const UNSUPPORTED_FEATURES = {
   errorOperatorList: "errorOperatorList",
   errorFontToUnicode: "errorFontToUnicode",
   errorFontLoadNative: "errorFontLoadNative",
-  errorFontGetPath: "errorFontGetPath"
+  errorFontGetPath: "errorFontGetPath",
+  errorMarkedContent: "errorMarkedContent"
 };
 exports.UNSUPPORTED_FEATURES = UNSUPPORTED_FEATURES;
 const PasswordResponses = {
@@ -1562,6 +1574,18 @@ function stringToPDFString(str) {
   return strBuf.join("");
 }
 
+function escapeString(str) {
+  return str.replace(/([\(\)\\\n\r])/g, match => {
+    if (match === "\n") {
+      return "\\n";
+    } else if (match === "\r") {
+      return "\\r";
+    }
+
+    return `\\${match}`;
+  });
+}
+
 function stringToUTF8String(str) {
   return decodeURIComponent(escape(str));
 }
@@ -1594,6 +1618,11 @@ function isArrayEqual(arr1, arr2) {
   return arr1.every(function (element, index) {
     return element === arr2[index];
   });
+}
+
+function getModificationDate(date = new Date()) {
+  const buffer = [date.getUTCFullYear().toString(), (date.getUTCMonth() + 1).toString().padStart(2, "0"), date.getUTCDate().toString().padStart(2, "0"), date.getUTCHours().toString().padStart(2, "0"), date.getUTCMinutes().toString().padStart(2, "0"), date.getUTCSeconds().toString().padStart(2, "0")];
+  return buffer.join("");
 }
 
 function createPromiseCapability() {
@@ -1647,6 +1676,57 @@ const createObjectURL = function createObjectURLClosure() {
 }();
 
 exports.createObjectURL = createObjectURL;
+const XMLEntities = {
+  0x3c: "&lt;",
+  0x3e: "&gt;",
+  0x26: "&amp;",
+  0x22: "&quot;",
+  0x27: "&apos;"
+};
+
+function encodeToXmlString(str) {
+  const buffer = [];
+  let start = 0;
+
+  for (let i = 0, ii = str.length; i < ii; i++) {
+    const char = str.codePointAt(i);
+
+    if (0x20 <= char && char <= 0x7e) {
+      const entity = XMLEntities[char];
+
+      if (entity) {
+        if (start < i) {
+          buffer.push(str.substring(start, i));
+        }
+
+        buffer.push(entity);
+        start = i + 1;
+      }
+    } else {
+      if (start < i) {
+        buffer.push(str.substring(start, i));
+      }
+
+      buffer.push(`&#x${char.toString(16).toUpperCase()};`);
+
+      if (char > 0xd7ff && (char < 0xe000 || char > 0xfffd)) {
+        i++;
+      }
+
+      start = i + 1;
+    }
+  }
+
+  if (buffer.length === 0) {
+    return str;
+  }
+
+  if (start < str.length) {
+    buffer.push(str.substring(start, str.length));
+  }
+
+  return buffer.join("");
+}
 
 /***/ }),
 /* 3 */
@@ -1695,21 +1775,25 @@ var _font_loader = __w_pdfjs_require__(6);
 
 var _node_utils = __w_pdfjs_require__(7);
 
-var _api_compatibility = __w_pdfjs_require__(8);
+var _annotation_storage = __w_pdfjs_require__(8);
 
-var _canvas = __w_pdfjs_require__(9);
+var _api_compatibility = __w_pdfjs_require__(9);
 
-var _worker_options = __w_pdfjs_require__(11);
+var _canvas = __w_pdfjs_require__(10);
+
+var _worker_options = __w_pdfjs_require__(12);
 
 var _is_node = __w_pdfjs_require__(4);
 
-var _message_handler = __w_pdfjs_require__(12);
+var _message_handler = __w_pdfjs_require__(13);
 
-var _metadata = __w_pdfjs_require__(13);
+var _metadata = __w_pdfjs_require__(14);
 
-var _transport_stream = __w_pdfjs_require__(15);
+var _optional_content_config = __w_pdfjs_require__(16);
 
-var _webgl = __w_pdfjs_require__(16);
+var _transport_stream = __w_pdfjs_require__(17);
+
+var _webgl = __w_pdfjs_require__(18);
 
 const DEFAULT_RANGE_CHUNK_SIZE = 65536;
 const RENDERING_CANCELLED_TIMEOUT = 100;
@@ -1800,6 +1884,10 @@ function getDocument(src) {
     params.disableFontFace = _api_compatibility.apiCompatibilityParams.disableFontFace || false;
   }
 
+  if (typeof params.ownerDocument === "undefined") {
+    params.ownerDocument = globalThis.document;
+  }
+
   if (typeof params.disableRange !== "boolean") {
     params.disableRange = false;
   }
@@ -1884,7 +1972,7 @@ function _fetchDocument(worker, source, pdfDataRangeTransport, docId) {
 
   return worker.messageHandler.sendWithPromise("GetDocRequest", {
     docId,
-    apiVersion: '2.6.123',
+    apiVersion: '2.7.81',
     source: {
       data: source.data,
       url: source.url,
@@ -2025,6 +2113,10 @@ class PDFDocumentProxy {
     this._transport = transport;
   }
 
+  get annotationStorage() {
+    return (0, _util.shadow)(this, "annotationStorage", new _annotation_storage.AnnotationStorage());
+  }
+
   get numPages() {
     return this._pdfInfo.numPages;
   }
@@ -2081,6 +2173,10 @@ class PDFDocumentProxy {
     return this._transport.getOutline();
   }
 
+  getOptionalContentConfig() {
+    return this._transport.getOptionalContentConfig();
+  }
+
   getPermissions() {
     return this._transport.getPermissions();
   }
@@ -2117,14 +2213,19 @@ class PDFDocumentProxy {
     return this._transport.loadingTask;
   }
 
+  saveDocument(annotationStorage) {
+    return this._transport.saveDocument(annotationStorage);
+  }
+
 }
 
 exports.PDFDocumentProxy = PDFDocumentProxy;
 
 class PDFPageProxy {
-  constructor(pageIndex, pageInfo, transport, pdfBug = false) {
+  constructor(pageIndex, pageInfo, transport, ownerDocument, pdfBug = false) {
     this._pageIndex = pageIndex;
     this._pageInfo = pageInfo;
+    this._ownerDocument = ownerDocument;
     this._transport = transport;
     this._stats = pdfBug ? new _display_utils.StatTimer() : null;
     this._pdfBug = pdfBug;
@@ -2193,7 +2294,9 @@ class PDFPageProxy {
     transform = null,
     imageLayer = null,
     canvasFactory = null,
-    background = null
+    background = null,
+    annotationStorage = null,
+    optionalContentConfigPromise = null
   }) {
     if (this._stats) {
       this._stats.time("Overall");
@@ -2201,6 +2304,10 @@ class PDFPageProxy {
 
     const renderingIntent = intent === "print" ? "print" : "display";
     this.pendingCleanup = false;
+
+    if (!optionalContentConfigPromise) {
+      optionalContentConfigPromise = this._transport.getOptionalContentConfig();
+    }
 
     let intentState = this._intentStates.get(renderingIntent);
 
@@ -2215,7 +2322,9 @@ class PDFPageProxy {
       intentState.streamReaderCancelTimeout = null;
     }
 
-    const canvasFactoryInstance = canvasFactory || new DefaultCanvasFactory();
+    const canvasFactoryInstance = canvasFactory || new DefaultCanvasFactory({
+      ownerDocument: this._ownerDocument
+    });
     const webGLContext = new _webgl.WebGLContext({
       enable: enableWebGL
     });
@@ -2235,7 +2344,8 @@ class PDFPageProxy {
       this._pumpOperatorList({
         pageIndex: this._pageIndex,
         intent: renderingIntent,
-        renderInteractiveForms: renderInteractiveForms === true
+        renderInteractiveForms: renderInteractiveForms === true,
+        annotationStorage: annotationStorage && annotationStorage.getAll() || null
       });
     }
 
@@ -2295,7 +2405,7 @@ class PDFPageProxy {
 
     intentState.renderTasks.push(internalRenderTask);
     const renderTask = internalRenderTask.task;
-    intentState.displayReadyCapability.promise.then(transparency => {
+    Promise.all([intentState.displayReadyCapability.promise, optionalContentConfigPromise]).then(([transparency, optionalContentConfig]) => {
       if (this.pendingCleanup) {
         complete();
         return;
@@ -2305,7 +2415,10 @@ class PDFPageProxy {
         this._stats.time("Rendering");
       }
 
-      internalRenderTask.initializeGraphics(transparency);
+      internalRenderTask.initializeGraphics({
+        transparency,
+        optionalContentConfig
+      });
       internalRenderTask.operatorListChanged();
     }).catch(complete);
     return renderTask;
@@ -2999,7 +3112,8 @@ class WorkerTransport {
     this.commonObjs = new PDFObjects();
     this.fontLoader = new _font_loader.FontLoader({
       docId: loadingTask.docId,
-      onUnsupportedFeature: this._onUnsupportedFeature.bind(this)
+      onUnsupportedFeature: this._onUnsupportedFeature.bind(this),
+      ownerDocument: params.ownerDocument
     });
     this._params = params;
     this.CMapReaderFactory = new params.CMapReaderFactory({
@@ -3092,6 +3206,14 @@ class WorkerTransport {
 
       sink.onCancel = reason => {
         this._fullReader.cancel(reason);
+
+        sink.ready.catch(readyReason => {
+          if (this.destroyed) {
+            return;
+          }
+
+          throw readyReason;
+        });
       };
     });
     messageHandler.on("ReaderHeadersReady", data => {
@@ -3150,6 +3272,13 @@ class WorkerTransport {
 
       sink.onCancel = reason => {
         rangeReader.cancel(reason);
+        sink.ready.catch(readyReason => {
+          if (this.destroyed) {
+            return;
+          }
+
+          throw readyReason;
+        });
       };
     });
     messageHandler.on("GetDoc", ({
@@ -3182,6 +3311,11 @@ class WorkerTransport {
         case "UnknownErrorException":
           reason = new _util.UnknownErrorException(ex.message, ex.details);
           break;
+      }
+
+      if (!(reason instanceof Error)) {
+        const msg = "DocException - expected a valid Error.";
+        (0, _util.warn)(msg);
       }
 
       loadingTask._capability.reject(reason);
@@ -3280,7 +3414,6 @@ class WorkerTransport {
           break;
 
         case "FontPath":
-        case "FontType3Res":
         case "Image":
           this.commonObjs.resolve(id, exportedData);
           break;
@@ -3389,7 +3522,7 @@ class WorkerTransport {
         throw new Error("Transport destroyed");
       }
 
-      const page = new PDFPageProxy(pageIndex, pageInfo, this, this._params.pdfBug);
+      const page = new PDFPageProxy(pageIndex, pageInfo, this, this._params.ownerDocument, this._params.pdfBug);
       this.pageCache[pageIndex] = page;
       return page;
     });
@@ -3409,6 +3542,18 @@ class WorkerTransport {
     return this.messageHandler.sendWithPromise("GetAnnotations", {
       pageIndex,
       intent
+    });
+  }
+
+  saveDocument(annotationStorage) {
+    return this.messageHandler.sendWithPromise("SaveDocument", {
+      numPages: this._numPages,
+      annotationStorage: annotationStorage && annotationStorage.getAll() || null,
+      filename: this._fullReader ? this._fullReader.filename : null
+    }).finally(() => {
+      if (annotationStorage) {
+        annotationStorage.resetModified();
+      }
     });
   }
 
@@ -3456,6 +3601,12 @@ class WorkerTransport {
 
   getOutline() {
     return this.messageHandler.sendWithPromise("GetOutline", null);
+  }
+
+  getOptionalContentConfig() {
+    return this.messageHandler.sendWithPromise("GetOptionalContentConfig", null).then(results => {
+      return new _optional_content_config.OptionalContentConfig(results);
+    });
   }
 
   getPermissions() {
@@ -3616,7 +3767,10 @@ const InternalRenderTask = function InternalRenderTaskClosure() {
       return this.capability.promise.catch(function () {});
     }
 
-    initializeGraphics(transparency = false) {
+    initializeGraphics({
+      transparency = false,
+      optionalContentConfig
+    }) {
       if (this.cancelled) {
         return;
       }
@@ -3642,7 +3796,7 @@ const InternalRenderTask = function InternalRenderTaskClosure() {
         imageLayer,
         background
       } = this.params;
-      this.gfx = new _canvas.CanvasGraphics(canvasContext, this.commonObjs, this.objs, this.canvasFactory, this.webGLContext, imageLayer);
+      this.gfx = new _canvas.CanvasGraphics(canvasContext, this.commonObjs, this.objs, this.canvasFactory, this.webGLContext, imageLayer, optionalContentConfig);
       this.gfx.beginDrawing({
         transform,
         viewport,
@@ -3743,9 +3897,9 @@ const InternalRenderTask = function InternalRenderTaskClosure() {
   return InternalRenderTask;
 }();
 
-const version = '2.6.123';
+const version = '2.7.81';
 exports.version = version;
-const build = 'a604973cc';
+const build = '120c5c226';
 exports.build = build;
 
 /***/ }),
@@ -3765,7 +3919,8 @@ var _util = __w_pdfjs_require__(2);
 class BaseFontLoader {
   constructor({
     docId,
-    onUnsupportedFeature
+    onUnsupportedFeature,
+    ownerDocument = globalThis.document
   }) {
     if (this.constructor === BaseFontLoader) {
       (0, _util.unreachable)("Cannot initialize BaseFontLoader.");
@@ -3773,22 +3928,25 @@ class BaseFontLoader {
 
     this.docId = docId;
     this._onUnsupportedFeature = onUnsupportedFeature;
+    this._document = ownerDocument;
     this.nativeFontFaces = [];
     this.styleElement = null;
   }
 
   addNativeFontFace(nativeFontFace) {
     this.nativeFontFaces.push(nativeFontFace);
-    document.fonts.add(nativeFontFace);
+
+    this._document.fonts.add(nativeFontFace);
   }
 
   insertRule(rule) {
     let styleElement = this.styleElement;
 
     if (!styleElement) {
-      styleElement = this.styleElement = document.createElement("style");
+      styleElement = this.styleElement = this._document.createElement("style");
       styleElement.id = `PDFJS_FONT_STYLE_TAG_${this.docId}`;
-      document.documentElement.getElementsByTagName("head")[0].appendChild(styleElement);
+
+      this._document.documentElement.getElementsByTagName("head")[0].appendChild(styleElement);
     }
 
     const styleSheet = styleElement.sheet;
@@ -3796,8 +3954,8 @@ class BaseFontLoader {
   }
 
   clear() {
-    this.nativeFontFaces.forEach(function (nativeFontFace) {
-      document.fonts.delete(nativeFontFace);
+    this.nativeFontFaces.forEach(nativeFontFace => {
+      this._document.fonts.delete(nativeFontFace);
     });
     this.nativeFontFaces.length = 0;
 
@@ -3858,7 +4016,7 @@ class BaseFontLoader {
   }
 
   get isFontLoadingAPISupported() {
-    const supported = typeof document !== "undefined" && !!document.fonts;
+    const supported = typeof this._document !== "undefined" && !!this._document.fonts;
     return (0, _util.shadow)(this, "isFontLoadingAPISupported", supported);
   }
 
@@ -4042,6 +4200,80 @@ exports.NodeCMapReaderFactory = NodeCMapReaderFactory;
 Object.defineProperty(exports, "__esModule", {
   value: true
 });
+exports.AnnotationStorage = void 0;
+
+class AnnotationStorage {
+  constructor() {
+    this._storage = new Map();
+    this._modified = false;
+    this.onSetModified = null;
+    this.onResetModified = null;
+  }
+
+  getOrCreateValue(key, defaultValue) {
+    if (this._storage.has(key)) {
+      return this._storage.get(key);
+    }
+
+    this._storage.set(key, defaultValue);
+
+    return defaultValue;
+  }
+
+  setValue(key, value) {
+    if (this._storage.get(key) !== value) {
+      this._setModified();
+    }
+
+    this._storage.set(key, value);
+  }
+
+  getAll() {
+    if (this._storage.size === 0) {
+      return null;
+    }
+
+    return Object.fromEntries(this._storage);
+  }
+
+  get size() {
+    return this._storage.size;
+  }
+
+  _setModified() {
+    if (!this._modified) {
+      this._modified = true;
+
+      if (typeof this.onSetModified === "function") {
+        this.onSetModified();
+      }
+    }
+  }
+
+  resetModified() {
+    if (this._modified) {
+      this._modified = false;
+
+      if (typeof this.onResetModified === "function") {
+        this.onResetModified();
+      }
+    }
+  }
+
+}
+
+exports.AnnotationStorage = AnnotationStorage;
+
+/***/ }),
+/* 9 */
+/***/ (function(module, exports, __w_pdfjs_require__) {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
 exports.apiCompatibilityParams = void 0;
 
 var _is_node = __w_pdfjs_require__(4);
@@ -4052,7 +4284,7 @@ const apiCompatibilityParams = Object.freeze(compatibilityParams);
 exports.apiCompatibilityParams = apiCompatibilityParams;
 
 /***/ }),
-/* 9 */
+/* 10 */
 /***/ (function(module, exports, __w_pdfjs_require__) {
 
 "use strict";
@@ -4065,7 +4297,7 @@ exports.CanvasGraphics = void 0;
 
 var _util = __w_pdfjs_require__(2);
 
-var _pattern_helper = __w_pdfjs_require__(10);
+var _pattern_helper = __w_pdfjs_require__(11);
 
 var MIN_FONT_SIZE = 16;
 var MAX_FONT_SIZE = 100;
@@ -4410,6 +4642,7 @@ var CanvasExtraState = function CanvasExtraStateClosure() {
     this.lineWidth = 1;
     this.activeSMask = null;
     this.resumeSMaskCtx = null;
+    this.transferMaps = null;
   }
 
   CanvasExtraState.prototype = {
@@ -4428,7 +4661,7 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
   var EXECUTION_TIME = 15;
   var EXECUTION_STEPS = 10;
 
-  function CanvasGraphics(canvasCtx, commonObjs, objs, canvasFactory, webGLContext, imageLayer) {
+  function CanvasGraphics(canvasCtx, commonObjs, objs, canvasFactory, webGLContext, imageLayer, optionalContentConfig) {
     this.ctx = canvasCtx;
     this.current = new CanvasExtraState();
     this.stateStack = [];
@@ -4449,6 +4682,9 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
     this.smaskStack = [];
     this.smaskCounter = 0;
     this.tempSMask = null;
+    this.contentVisible = true;
+    this.markedContentStack = [];
+    this.optionalContentConfig = optionalContentConfig;
     this.cachedCanvases = new CachedCanvases(this.canvasFactory);
 
     if (canvasCtx) {
@@ -4458,7 +4694,7 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
     this._cachedGetSinglePixelWidth = null;
   }
 
-  function putBinaryImageData(ctx, imgData) {
+  function putBinaryImageData(ctx, imgData, transferMaps = null) {
     if (typeof ImageData !== "undefined" && imgData instanceof ImageData) {
       ctx.putImageData(imgData, 0, 0);
       return;
@@ -4475,6 +4711,25 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
     var src = imgData.data;
     var dest = chunkImgData.data;
     var i, j, thisChunkHeight, elemsInThisChunk;
+    let transferMapRed, transferMapGreen, transferMapBlue, transferMapGray;
+
+    if (transferMaps) {
+      switch (transferMaps.length) {
+        case 1:
+          transferMapRed = transferMaps[0];
+          transferMapGreen = transferMaps[0];
+          transferMapBlue = transferMaps[0];
+          transferMapGray = transferMaps[0];
+          break;
+
+        case 4:
+          transferMapRed = transferMaps[0];
+          transferMapGreen = transferMaps[1];
+          transferMapBlue = transferMaps[2];
+          transferMapGray = transferMaps[3];
+          break;
+      }
+    }
 
     if (imgData.kind === _util.ImageKind.GRAYSCALE_1BPP) {
       var srcLength = src.byteLength;
@@ -4484,13 +4739,19 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
       var white = 0xffffffff;
       var black = _util.IsLittleEndianCached.value ? 0xff000000 : 0x000000ff;
 
+      if (transferMapGray) {
+        if (transferMapGray[0] === 0xff && transferMapGray[0xff] === 0) {
+          [white, black] = [black, white];
+        }
+      }
+
       for (i = 0; i < totalChunks; i++) {
         thisChunkHeight = i < fullChunks ? FULL_CHUNK_HEIGHT : partialChunkHeight;
         destPos = 0;
 
         for (j = 0; j < thisChunkHeight; j++) {
           var srcDiff = srcLength - srcPos;
-          var k = 0;
+          let k = 0;
           var kEnd = srcDiff > fullSrcDiff ? width : srcDiff * 8 - 7;
           var kEndUnrolled = kEnd & ~7;
           var mask = 0;
@@ -4526,12 +4787,30 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
         ctx.putImageData(chunkImgData, 0, i * FULL_CHUNK_HEIGHT);
       }
     } else if (imgData.kind === _util.ImageKind.RGBA_32BPP) {
+      const hasTransferMaps = !!(transferMapRed || transferMapGreen || transferMapBlue);
       j = 0;
       elemsInThisChunk = width * FULL_CHUNK_HEIGHT * 4;
 
       for (i = 0; i < fullChunks; i++) {
         dest.set(src.subarray(srcPos, srcPos + elemsInThisChunk));
         srcPos += elemsInThisChunk;
+
+        if (hasTransferMaps) {
+          for (let k = 0; k < elemsInThisChunk; k += 4) {
+            if (transferMapRed) {
+              dest[k + 0] = transferMapRed[dest[k + 0]];
+            }
+
+            if (transferMapGreen) {
+              dest[k + 1] = transferMapGreen[dest[k + 1]];
+            }
+
+            if (transferMapBlue) {
+              dest[k + 2] = transferMapBlue[dest[k + 2]];
+            }
+          }
+        }
+
         ctx.putImageData(chunkImgData, 0, j);
         j += FULL_CHUNK_HEIGHT;
       }
@@ -4539,9 +4818,27 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
       if (i < totalChunks) {
         elemsInThisChunk = width * partialChunkHeight * 4;
         dest.set(src.subarray(srcPos, srcPos + elemsInThisChunk));
+
+        if (hasTransferMaps) {
+          for (let k = 0; k < elemsInThisChunk; k += 4) {
+            if (transferMapRed) {
+              dest[k + 0] = transferMapRed[dest[k + 0]];
+            }
+
+            if (transferMapGreen) {
+              dest[k + 1] = transferMapGreen[dest[k + 1]];
+            }
+
+            if (transferMapBlue) {
+              dest[k + 2] = transferMapBlue[dest[k + 2]];
+            }
+          }
+        }
+
         ctx.putImageData(chunkImgData, 0, j);
       }
     } else if (imgData.kind === _util.ImageKind.RGB_24BPP) {
+      const hasTransferMaps = !!(transferMapRed || transferMapGreen || transferMapBlue);
       thisChunkHeight = FULL_CHUNK_HEIGHT;
       elemsInThisChunk = width * thisChunkHeight;
 
@@ -4558,6 +4855,22 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
           dest[destPos++] = src[srcPos++];
           dest[destPos++] = src[srcPos++];
           dest[destPos++] = 255;
+        }
+
+        if (hasTransferMaps) {
+          for (let k = 0; k < destPos; k += 4) {
+            if (transferMapRed) {
+              dest[k + 0] = transferMapRed[dest[k + 0]];
+            }
+
+            if (transferMapGreen) {
+              dest[k + 1] = transferMapGreen[dest[k + 1]];
+            }
+
+            if (transferMapBlue) {
+              dest[k + 2] = transferMapBlue[dest[k + 2]];
+            }
+          }
         }
 
         ctx.putImageData(chunkImgData, 0, i * FULL_CHUNK_HEIGHT);
@@ -4825,8 +5138,8 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
       }
     },
     endDrawing: function CanvasGraphics_endDrawing() {
-      if (this.current.activeSMask !== null) {
-        this.endSMaskGroup();
+      while (this.stateStack.length || this.current.activeSMask !== null) {
+        this.restore();
       }
 
       this.ctx.restore();
@@ -4942,6 +5255,9 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
 
             this.tempSMask = null;
             break;
+
+          case "TR":
+            this.current.transferMaps = value;
         }
       }
     },
@@ -4983,7 +5299,7 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
       groupCtx.clearRect(0, 0, groupCtx.canvas.width, groupCtx.canvas.height);
       groupCtx.restore();
     },
-    resumeSMaskGroup: function CanvasGraphics_endSMaskGroup() {
+    resumeSMaskGroup: function CanvasGraphics_resumeSMaskGroup() {
       var groupCtx = this.current.resumeSMaskCtx;
       var currentCtx = this.ctx;
       this.ctx = groupCtx;
@@ -5023,6 +5339,8 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
         this.ctx.restore();
         this.pendingClip = null;
         this._cachedGetSinglePixelWidth = null;
+      } else {
+        this.current.activeSMask = null;
       }
     },
     transform: function CanvasGraphics_transform(a, b, c, d, e, f) {
@@ -5111,19 +5429,21 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
       var strokeColor = this.current.strokeColor;
       ctx.globalAlpha = this.current.strokeAlpha;
 
-      if (strokeColor && strokeColor.hasOwnProperty("type") && strokeColor.type === "Pattern") {
-        ctx.save();
-        const transform = ctx.mozCurrentTransform;
+      if (this.contentVisible) {
+        if (strokeColor && strokeColor.hasOwnProperty("type") && strokeColor.type === "Pattern") {
+          ctx.save();
+          const transform = ctx.mozCurrentTransform;
 
-        const scale = _util.Util.singularValueDecompose2dScale(transform)[0];
+          const scale = _util.Util.singularValueDecompose2dScale(transform)[0];
 
-        ctx.strokeStyle = strokeColor.getPattern(ctx, this);
-        ctx.lineWidth = Math.max(this.getSinglePixelWidth() * MIN_WIDTH_FACTOR, this.current.lineWidth * scale);
-        ctx.stroke();
-        ctx.restore();
-      } else {
-        ctx.lineWidth = Math.max(this.getSinglePixelWidth() * MIN_WIDTH_FACTOR, this.current.lineWidth);
-        ctx.stroke();
+          ctx.strokeStyle = strokeColor.getPattern(ctx, this);
+          ctx.lineWidth = Math.max(this.getSinglePixelWidth() * MIN_WIDTH_FACTOR, this.current.lineWidth * scale);
+          ctx.stroke();
+          ctx.restore();
+        } else {
+          ctx.lineWidth = Math.max(this.getSinglePixelWidth() * MIN_WIDTH_FACTOR, this.current.lineWidth);
+          ctx.stroke();
+        }
       }
 
       if (consumePath) {
@@ -5154,11 +5474,13 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
         needRestore = true;
       }
 
-      if (this.pendingEOFill) {
-        ctx.fill("evenodd");
-        this.pendingEOFill = false;
-      } else {
-        ctx.fill();
+      if (this.contentVisible) {
+        if (this.pendingEOFill) {
+          ctx.fill("evenodd");
+          this.pendingEOFill = false;
+        } else {
+          ctx.fill();
+        }
       }
 
       if (needRestore) {
@@ -5503,15 +5825,15 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
           }
         }
 
-        if (glyph.isInFont || font.missingFile) {
+        if (this.contentVisible && (glyph.isInFont || font.missingFile)) {
           if (simpleFillText && !accent) {
             ctx.fillText(character, scaledX, scaledY);
           } else {
             this.paintChar(character, scaledX, scaledY, patternTransform);
 
             if (accent) {
-              scaledAccentX = scaledX + accent.offset.x / fontSizeScale;
-              scaledAccentY = scaledY - accent.offset.y / fontSizeScale;
+              scaledAccentX = scaledX + fontSize * accent.offset.x / fontSizeScale;
+              scaledAccentY = scaledY - fontSize * accent.offset.y / fontSizeScale;
               this.paintChar(accent.fontChar, scaledAccentX, scaledAccentY, patternTransform);
             }
           }
@@ -5583,12 +5905,14 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
           continue;
         }
 
-        this.processingType3 = glyph;
-        this.save();
-        ctx.scale(fontSize, fontSize);
-        ctx.transform.apply(ctx, fontMatrix);
-        this.executeOperatorList(operatorList);
-        this.restore();
+        if (this.contentVisible) {
+          this.processingType3 = glyph;
+          this.save();
+          ctx.scale(fontSize, fontSize);
+          ctx.transform.apply(ctx, fontMatrix);
+          this.executeOperatorList(operatorList);
+          this.restore();
+        }
 
         var transformed = _util.Util.applyTransform([glyph.width, 0], fontMatrix);
 
@@ -5645,6 +5969,10 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
       this.current.patternFill = false;
     },
     shadingFill: function CanvasGraphics_shadingFill(patternIR) {
+      if (!this.contentVisible) {
+        return;
+      }
+
       var ctx = this.ctx;
       this.save();
       var pattern = (0, _pattern_helper.getShadingPatternFromIR)(patternIR);
@@ -5682,6 +6010,10 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
       (0, _util.unreachable)("Should not call beginImageData");
     },
     paintFormXObjectBegin: function CanvasGraphics_paintFormXObjectBegin(matrix, bbox) {
+      if (!this.contentVisible) {
+        return;
+      }
+
       this.save();
       this.baseTransformStack.push(this.baseTransform);
 
@@ -5700,10 +6032,18 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
       }
     },
     paintFormXObjectEnd: function CanvasGraphics_paintFormXObjectEnd() {
+      if (!this.contentVisible) {
+        return;
+      }
+
       this.restore();
       this.baseTransform = this.baseTransformStack.pop();
     },
     beginGroup: function CanvasGraphics_beginGroup(group) {
+      if (!this.contentVisible) {
+        return;
+      }
+
       this.save();
       var currentCtx = this.ctx;
 
@@ -5785,6 +6125,10 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
       this.current.activeSMask = null;
     },
     endGroup: function CanvasGraphics_endGroup(group) {
+      if (!this.contentVisible) {
+        return;
+      }
+
       this.groupLevel--;
       var groupCtx = this.ctx;
       this.ctx = this.groupStack.pop();
@@ -5833,6 +6177,10 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
       this.restore();
     },
     paintImageMaskXObject: function CanvasGraphics_paintImageMaskXObject(img) {
+      if (!this.contentVisible) {
+        return;
+      }
+
       var ctx = this.ctx;
       var width = img.width,
           height = img.height;
@@ -5869,6 +6217,10 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
     },
 
     paintImageMaskXObjectRepeat(imgData, scaleX, skewX = 0, skewY = 0, scaleY, positions) {
+      if (!this.contentVisible) {
+        return;
+      }
+
       var width = imgData.width;
       var height = imgData.height;
       var fillColor = this.current.fillColor;
@@ -5893,6 +6245,10 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
     },
 
     paintImageMaskXObjectGroup: function CanvasGraphics_paintImageMaskXObjectGroup(images) {
+      if (!this.contentVisible) {
+        return;
+      }
+
       var ctx = this.ctx;
       var fillColor = this.current.fillColor;
       var isPatternFill = this.current.patternFill;
@@ -5917,6 +6273,10 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
       }
     },
     paintImageXObject: function CanvasGraphics_paintImageXObject(objId) {
+      if (!this.contentVisible) {
+        return;
+      }
+
       const imgData = objId.startsWith("g_") ? this.commonObjs.get(objId) : this.objs.get(objId);
 
       if (!imgData) {
@@ -5927,6 +6287,10 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
       this.paintInlineImageXObject(imgData);
     },
     paintImageXObjectRepeat: function CanvasGraphics_paintImageXObjectRepeat(objId, scaleX, scaleY, positions) {
+      if (!this.contentVisible) {
+        return;
+      }
+
       const imgData = objId.startsWith("g_") ? this.commonObjs.get(objId) : this.objs.get(objId);
 
       if (!imgData) {
@@ -5951,6 +6315,10 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
       this.paintInlineImageXObjectGroup(imgData, map);
     },
     paintInlineImageXObject: function CanvasGraphics_paintInlineImageXObject(imgData) {
+      if (!this.contentVisible) {
+        return;
+      }
+
       var width = imgData.width;
       var height = imgData.height;
       var ctx = this.ctx;
@@ -5970,7 +6338,7 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
       } else {
         tmpCanvas = this.cachedCanvases.getCanvas("inlineImage", width, height);
         var tmpCtx = tmpCanvas.context;
-        putBinaryImageData(tmpCtx, imgData);
+        putBinaryImageData(tmpCtx, imgData, this.current.transferMaps);
         imgToPaint = tmpCanvas.canvas;
       }
 
@@ -6018,12 +6386,16 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
       this.restore();
     },
     paintInlineImageXObjectGroup: function CanvasGraphics_paintInlineImageXObjectGroup(imgData, map) {
+      if (!this.contentVisible) {
+        return;
+      }
+
       var ctx = this.ctx;
       var w = imgData.width;
       var h = imgData.height;
       var tmpCanvas = this.cachedCanvases.getCanvas("inlineImage", w, h);
       var tmpCtx = tmpCanvas.context;
-      putBinaryImageData(tmpCtx, imgData);
+      putBinaryImageData(tmpCtx, imgData, this.current.transferMaps);
 
       for (var i = 0, ii = map.length; i < ii; i++) {
         var entry = map[i];
@@ -6047,13 +6419,36 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
       }
     },
     paintSolidColorImageMask: function CanvasGraphics_paintSolidColorImageMask() {
+      if (!this.contentVisible) {
+        return;
+      }
+
       this.ctx.fillRect(0, 0, 1, 1);
     },
     markPoint: function CanvasGraphics_markPoint(tag) {},
     markPointProps: function CanvasGraphics_markPointProps(tag, properties) {},
-    beginMarkedContent: function CanvasGraphics_beginMarkedContent(tag) {},
-    beginMarkedContentProps: function CanvasGraphics_beginMarkedContentProps(tag, properties) {},
-    endMarkedContent: function CanvasGraphics_endMarkedContent() {},
+    beginMarkedContent: function CanvasGraphics_beginMarkedContent(tag) {
+      this.markedContentStack.push({
+        visible: true
+      });
+    },
+    beginMarkedContentProps: function CanvasGraphics_beginMarkedContentProps(tag, properties) {
+      if (tag === "OC") {
+        this.markedContentStack.push({
+          visible: this.optionalContentConfig.isVisible(properties)
+        });
+      } else {
+        this.markedContentStack.push({
+          visible: true
+        });
+      }
+
+      this.contentVisible = this.isContentVisible();
+    },
+    endMarkedContent: function CanvasGraphics_endMarkedContent() {
+      this.markedContentStack.pop();
+      this.contentVisible = this.isContentVisible();
+    },
     beginCompat: function CanvasGraphics_beginCompat() {},
     endCompat: function CanvasGraphics_endCompat() {},
     consumePath: function CanvasGraphics_consumePath() {
@@ -6084,6 +6479,15 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
     getCanvasPosition: function CanvasGraphics_getCanvasPosition(x, y) {
       var transform = this.ctx.mozCurrentTransform;
       return [transform[0] * x + transform[2] * y + transform[4], transform[1] * x + transform[3] * y + transform[5]];
+    },
+    isContentVisible: function CanvasGraphics_isContentVisible() {
+      for (let i = this.markedContentStack.length - 1; i >= 0; i--) {
+        if (!this.markedContentStack[i].visible) {
+          return false;
+        }
+      }
+
+      return true;
     }
   };
 
@@ -6097,7 +6501,7 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
 exports.CanvasGraphics = CanvasGraphics;
 
 /***/ }),
-/* 10 */
+/* 11 */
 /***/ (function(module, exports, __w_pdfjs_require__) {
 
 "use strict";
@@ -6578,7 +6982,7 @@ var TilingPattern = function TilingPatternClosure() {
 exports.TilingPattern = TilingPattern;
 
 /***/ }),
-/* 11 */
+/* 12 */
 /***/ (function(module, exports, __w_pdfjs_require__) {
 
 "use strict";
@@ -6594,7 +6998,7 @@ GlobalWorkerOptions.workerPort = GlobalWorkerOptions.workerPort === undefined ? 
 GlobalWorkerOptions.workerSrc = GlobalWorkerOptions.workerSrc === undefined ? "" : GlobalWorkerOptions.workerSrc;
 
 /***/ }),
-/* 12 */
+/* 13 */
 /***/ (function(module, exports, __w_pdfjs_require__) {
 
 "use strict";
@@ -7095,7 +7499,7 @@ class MessageHandler {
 exports.MessageHandler = MessageHandler;
 
 /***/ }),
-/* 13 */
+/* 14 */
 /***/ (function(module, exports, __w_pdfjs_require__) {
 
 "use strict";
@@ -7108,7 +7512,7 @@ exports.Metadata = void 0;
 
 var _util = __w_pdfjs_require__(2);
 
-var _xml_parser = __w_pdfjs_require__(14);
+var _xml_parser = __w_pdfjs_require__(15);
 
 class Metadata {
   constructor(data) {
@@ -7205,13 +7609,7 @@ class Metadata {
   }
 
   getAll() {
-    const obj = Object.create(null);
-
-    for (const [key, value] of this._metadataMap) {
-      obj[key] = value;
-    }
-
-    return obj;
+    return Object.fromEntries(this._metadataMap);
   }
 
   has(name) {
@@ -7223,7 +7621,7 @@ class Metadata {
 exports.Metadata = Metadata;
 
 /***/ }),
-/* 14 */
+/* 15 */
 /***/ (function(module, exports, __w_pdfjs_require__) {
 
 "use strict";
@@ -7232,7 +7630,10 @@ exports.Metadata = Metadata;
 Object.defineProperty(exports, "__esModule", {
   value: true
 });
-exports.SimpleXMLParser = void 0;
+exports.SimpleXMLParser = exports.SimpleDOMNode = void 0;
+
+var _util = __w_pdfjs_require__(2);
+
 const XMLParserErrorCode = {
   NoError: 0,
   EndOfDocument: -1,
@@ -7266,9 +7667,9 @@ class XMLParserBase {
   _resolveEntities(s) {
     return s.replace(/&([^;]+);/g, (all, entity) => {
       if (entity.substring(0, 2) === "#x") {
-        return String.fromCharCode(parseInt(entity.substring(2), 16));
+        return String.fromCodePoint(parseInt(entity.substring(2), 16));
       } else if (entity.substring(0, 1) === "#") {
-        return String.fromCharCode(parseInt(entity.substring(1), 10));
+        return String.fromCodePoint(parseInt(entity.substring(1), 10));
       }
 
       switch (entity) {
@@ -7573,14 +7974,107 @@ class SimpleDOMNode {
     return this.childNodes && this.childNodes.length > 0;
   }
 
+  searchNode(paths, pos) {
+    if (pos >= paths.length) {
+      return this;
+    }
+
+    const component = paths[pos];
+    const stack = [];
+    let node = this;
+
+    while (true) {
+      if (component.name === node.nodeName) {
+        if (component.pos === 0) {
+          const res = node.searchNode(paths, pos + 1);
+
+          if (res !== null) {
+            return res;
+          }
+        } else if (stack.length === 0) {
+          return null;
+        } else {
+          const [parent] = stack.pop();
+          let siblingPos = 0;
+
+          for (const child of parent.childNodes) {
+            if (component.name === child.nodeName) {
+              if (siblingPos === component.pos) {
+                return child.searchNode(paths, pos + 1);
+              }
+
+              siblingPos++;
+            }
+          }
+
+          return node.searchNode(paths, pos + 1);
+        }
+      }
+
+      if (node.childNodes && node.childNodes.length !== 0) {
+        stack.push([node, 0]);
+        node = node.childNodes[0];
+      } else if (stack.length === 0) {
+        return null;
+      } else {
+        while (stack.length !== 0) {
+          const [parent, currentPos] = stack.pop();
+          const newPos = currentPos + 1;
+
+          if (newPos < parent.childNodes.length) {
+            stack.push([parent, newPos]);
+            node = parent.childNodes[newPos];
+            break;
+          }
+        }
+
+        if (stack.length === 0) {
+          return null;
+        }
+      }
+    }
+  }
+
+  dump(buffer) {
+    if (this.nodeName === "#text") {
+      buffer.push((0, _util.encodeToXmlString)(this.nodeValue));
+      return;
+    }
+
+    buffer.push(`<${this.nodeName}`);
+
+    if (this.attributes) {
+      for (const attribute of this.attributes) {
+        buffer.push(` ${attribute.name}=\"${(0, _util.encodeToXmlString)(attribute.value)}\"`);
+      }
+    }
+
+    if (this.hasChildNodes()) {
+      buffer.push(">");
+
+      for (const child of this.childNodes) {
+        child.dump(buffer);
+      }
+
+      buffer.push(`</${this.nodeName}>`);
+    } else if (this.nodeValue) {
+      buffer.push(`>${(0, _util.encodeToXmlString)(this.nodeValue)}</${this.nodeName}>`);
+    } else {
+      buffer.push("/>");
+    }
+  }
+
 }
 
+exports.SimpleDOMNode = SimpleDOMNode;
+
 class SimpleXMLParser extends XMLParserBase {
-  constructor() {
+  constructor(hasAttributes = false) {
     super();
     this._currentFragment = null;
     this._stack = null;
     this._errorCode = XMLParserErrorCode.NoError;
+    this._hasAttributes = hasAttributes;
   }
 
   parseFromString(data) {
@@ -7633,6 +8127,10 @@ class SimpleXMLParser extends XMLParserBase {
     const node = new SimpleDOMNode(name);
     node.childNodes = [];
 
+    if (this._hasAttributes) {
+      node.attributes = attributes;
+    }
+
     this._currentFragment.push(node);
 
     if (isEmpty) {
@@ -7666,7 +8164,176 @@ class SimpleXMLParser extends XMLParserBase {
 exports.SimpleXMLParser = SimpleXMLParser;
 
 /***/ }),
-/* 15 */
+/* 16 */
+/***/ (function(module, exports, __w_pdfjs_require__) {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+exports.OptionalContentConfig = void 0;
+
+var _util = __w_pdfjs_require__(2);
+
+class OptionalContentGroup {
+  constructor(name, intent) {
+    this.visible = true;
+    this.name = name;
+    this.intent = intent;
+  }
+
+}
+
+class OptionalContentConfig {
+  constructor(data) {
+    this.name = null;
+    this.creator = null;
+    this._order = null;
+    this._groups = new Map();
+
+    if (data === null) {
+      return;
+    }
+
+    this.name = data.name;
+    this.creator = data.creator;
+    this._order = data.order;
+
+    for (const group of data.groups) {
+      this._groups.set(group.id, new OptionalContentGroup(group.name, group.intent));
+    }
+
+    if (data.baseState === "OFF") {
+      for (const group of this._groups) {
+        group.visible = false;
+      }
+    }
+
+    for (const on of data.on) {
+      this._groups.get(on).visible = true;
+    }
+
+    for (const off of data.off) {
+      this._groups.get(off).visible = false;
+    }
+  }
+
+  isVisible(group) {
+    if (group.type === "OCG") {
+      if (!this._groups.has(group.id)) {
+        (0, _util.warn)(`Optional content group not found: ${group.id}`);
+        return true;
+      }
+
+      return this._groups.get(group.id).visible;
+    } else if (group.type === "OCMD") {
+      if (group.expression) {
+        (0, _util.warn)("Visibility expression not supported yet.");
+      }
+
+      if (!group.policy || group.policy === "AnyOn") {
+        for (const id of group.ids) {
+          if (!this._groups.has(id)) {
+            (0, _util.warn)(`Optional content group not found: ${id}`);
+            return true;
+          }
+
+          if (this._groups.get(id).visible) {
+            return true;
+          }
+        }
+
+        return false;
+      } else if (group.policy === "AllOn") {
+        for (const id of group.ids) {
+          if (!this._groups.has(id)) {
+            (0, _util.warn)(`Optional content group not found: ${id}`);
+            return true;
+          }
+
+          if (!this._groups.get(id).visible) {
+            return false;
+          }
+        }
+
+        return true;
+      } else if (group.policy === "AnyOff") {
+        for (const id of group.ids) {
+          if (!this._groups.has(id)) {
+            (0, _util.warn)(`Optional content group not found: ${id}`);
+            return true;
+          }
+
+          if (!this._groups.get(id).visible) {
+            return true;
+          }
+        }
+
+        return false;
+      } else if (group.policy === "AllOff") {
+        for (const id of group.ids) {
+          if (!this._groups.has(id)) {
+            (0, _util.warn)(`Optional content group not found: ${id}`);
+            return true;
+          }
+
+          if (this._groups.get(id).visible) {
+            return false;
+          }
+        }
+
+        return true;
+      }
+
+      (0, _util.warn)(`Unknown optional content policy ${group.policy}.`);
+      return true;
+    }
+
+    (0, _util.warn)(`Unknown group type ${group.type}.`);
+    return true;
+  }
+
+  setVisibility(id, visible = true) {
+    if (!this._groups.has(id)) {
+      (0, _util.warn)(`Optional content group not found: ${id}`);
+      return;
+    }
+
+    this._groups.get(id).visible = !!visible;
+  }
+
+  getOrder() {
+    if (!this._groups.size) {
+      return null;
+    }
+
+    if (this._order) {
+      return this._order.slice();
+    }
+
+    return Array.from(this._groups.keys());
+  }
+
+  getGroups() {
+    if (!this._groups.size) {
+      return null;
+    }
+
+    return Object.fromEntries(this._groups);
+  }
+
+  getGroup(id) {
+    return this._groups.get(id) || null;
+  }
+
+}
+
+exports.OptionalContentConfig = OptionalContentConfig;
+
+/***/ }),
+/* 17 */
 /***/ (function(module, exports, __w_pdfjs_require__) {
 
 "use strict";
@@ -8021,7 +8688,7 @@ class PDFDataTransportStreamRangeReader {
 }
 
 /***/ }),
-/* 16 */
+/* 18 */
 /***/ (function(module, exports, __w_pdfjs_require__) {
 
 "use strict";
@@ -8468,7 +9135,7 @@ var WebGLUtils = function WebGLUtilsClosure() {
 }();
 
 /***/ }),
-/* 17 */
+/* 19 */
 /***/ (function(module, exports, __w_pdfjs_require__) {
 
 "use strict";
@@ -8482,6 +9149,8 @@ exports.AnnotationLayer = void 0;
 var _display_utils = __w_pdfjs_require__(1);
 
 var _util = __w_pdfjs_require__(2);
+
+var _annotation_storage = __w_pdfjs_require__(8);
 
 class AnnotationElementFactory {
   static create(parameters) {
@@ -8580,6 +9249,7 @@ class AnnotationElement {
     this.imageResourcesPath = parameters.imageResourcesPath;
     this.renderInteractiveForms = parameters.renderInteractiveForms;
     this.svgFactory = parameters.svgFactory;
+    this.annotationStorage = parameters.annotationStorage;
 
     if (isRenderable) {
       this.container = this._createContainer(ignoreBorder);
@@ -8598,7 +9268,7 @@ class AnnotationElement {
     const rect = _util.Util.normalizeRect([data.rect[0], page.view[3] - data.rect[1] + page.view[1], data.rect[2], page.view[3] - data.rect[3] + page.view[1]]);
 
     container.style.transform = `matrix(${viewport.transform.join(",")})`;
-    container.style.transformOrigin = `-${rect[0]}px -${rect[1]}px`;
+    container.style.transformOrigin = `${-rect[0]}px ${-rect[1]}px`;
 
     if (!ignoreBorder && data.borderStyle.width > 0) {
       container.style.borderWidth = `${data.borderStyle.width}px`;
@@ -8786,19 +9456,29 @@ class TextWidgetAnnotationElement extends WidgetAnnotationElement {
 
   render() {
     const TEXT_ALIGNMENT = ["left", "center", "right"];
+    const storage = this.annotationStorage;
+    const id = this.data.id;
     this.container.className = "textWidgetAnnotation";
     let element = null;
 
     if (this.renderInteractiveForms) {
+      const textContent = storage.getOrCreateValue(id, this.data.fieldValue);
+
       if (this.data.multiLine) {
         element = document.createElement("textarea");
-        element.textContent = this.data.fieldValue;
+        element.textContent = textContent;
       } else {
         element = document.createElement("input");
         element.type = "text";
-        element.setAttribute("value", this.data.fieldValue);
+        element.setAttribute("value", textContent);
       }
 
+      element.addEventListener("input", function (event) {
+        storage.setValue(id, event.target.value);
+      });
+      element.addEventListener("blur", function (event) {
+        event.target.setSelectionRange(0, 0);
+      });
       element.disabled = this.data.readOnly;
       element.name = this.data.fieldName;
 
@@ -8866,16 +9546,23 @@ class CheckboxWidgetAnnotationElement extends WidgetAnnotationElement {
   }
 
   render() {
+    const storage = this.annotationStorage;
+    const data = this.data;
+    const id = data.id;
+    const value = storage.getOrCreateValue(id, data.fieldValue && data.fieldValue !== "Off");
     this.container.className = "buttonWidgetAnnotation checkBox";
     const element = document.createElement("input");
-    element.disabled = this.data.readOnly;
+    element.disabled = data.readOnly;
     element.type = "checkbox";
     element.name = this.data.fieldName;
 
-    if (this.data.fieldValue && this.data.fieldValue !== "Off") {
+    if (value) {
       element.setAttribute("checked", true);
     }
 
+    element.addEventListener("change", function (event) {
+      storage.setValue(id, event.target.checked);
+    });
     this.container.appendChild(element);
     return this.container;
   }
@@ -8889,15 +9576,30 @@ class RadioButtonWidgetAnnotationElement extends WidgetAnnotationElement {
 
   render() {
     this.container.className = "buttonWidgetAnnotation radioButton";
+    const storage = this.annotationStorage;
+    const data = this.data;
+    const id = data.id;
+    const value = storage.getOrCreateValue(id, data.fieldValue === data.buttonValue);
     const element = document.createElement("input");
-    element.disabled = this.data.readOnly;
+    element.disabled = data.readOnly;
     element.type = "radio";
-    element.name = this.data.fieldName;
+    element.name = data.fieldName;
 
-    if (this.data.fieldValue === this.data.buttonValue) {
+    if (value) {
       element.setAttribute("checked", true);
     }
 
+    element.addEventListener("change", function (event) {
+      const name = event.target.name;
+
+      for (const radio of document.getElementsByName(name)) {
+        if (radio !== event.target) {
+          storage.setValue(radio.parentNode.getAttribute("data-annotation-id"), false);
+        }
+      }
+
+      storage.setValue(id, event.target.checked);
+    });
     this.container.appendChild(element);
     return this.container;
   }
@@ -8920,6 +9622,9 @@ class ChoiceWidgetAnnotationElement extends WidgetAnnotationElement {
 
   render() {
     this.container.className = "choiceWidgetAnnotation";
+    const storage = this.annotationStorage;
+    const id = this.data.id;
+    storage.getOrCreateValue(id, this.data.fieldValue.length > 0 ? this.data.fieldValue[0] : null);
     const selectElement = document.createElement("select");
     selectElement.disabled = this.data.readOnly;
     selectElement.name = this.data.fieldName;
@@ -8937,13 +9642,18 @@ class ChoiceWidgetAnnotationElement extends WidgetAnnotationElement {
       optionElement.textContent = option.displayValue;
       optionElement.value = option.exportValue;
 
-      if (this.data.fieldValue.includes(option.displayValue)) {
+      if (this.data.fieldValue.includes(option.exportValue)) {
         optionElement.setAttribute("selected", true);
       }
 
       selectElement.appendChild(optionElement);
     }
 
+    selectElement.addEventListener("input", function (event) {
+      const options = event.target.options;
+      const value = options[options.selectedIndex].value;
+      storage.setValue(id, value);
+    });
     this.container.appendChild(selectElement);
     return this.container;
   }
@@ -8979,10 +9689,12 @@ class PopupAnnotationElement extends AnnotationElement {
       modificationDate: this.data.modificationDate,
       contents: this.data.contents
     });
-    const parentLeft = parseFloat(parentElement.style.left);
-    const parentWidth = parseFloat(parentElement.style.width);
-    this.container.style.transformOrigin = `-${parentLeft + parentWidth}px -${parentElement.style.top}`;
-    this.container.style.left = `${parentLeft + parentWidth}px`;
+    const parentTop = parseFloat(parentElement.style.top),
+          parentLeft = parseFloat(parentElement.style.left),
+          parentWidth = parseFloat(parentElement.style.width);
+    const popupLeft = parentLeft + parentWidth;
+    this.container.style.transformOrigin = `${-popupLeft}px ${-parentTop}px`;
+    this.container.style.left = `${popupLeft}px`;
     this.container.appendChild(popup.render());
     return this.container;
   }
@@ -9477,8 +10189,9 @@ class AnnotationLayer {
         linkService: parameters.linkService,
         downloadManager: parameters.downloadManager,
         imageResourcesPath: parameters.imageResourcesPath || "",
-        renderInteractiveForms: parameters.renderInteractiveForms || false,
-        svgFactory: new _display_utils.DOMSVGFactory()
+        renderInteractiveForms: typeof parameters.renderInteractiveForms === "boolean" ? parameters.renderInteractiveForms : true,
+        svgFactory: new _display_utils.DOMSVGFactory(),
+        annotationStorage: parameters.annotationStorage || new _annotation_storage.AnnotationStorage()
       });
 
       if (element.isRenderable) {
@@ -9504,7 +10217,7 @@ class AnnotationLayer {
 exports.AnnotationLayer = AnnotationLayer;
 
 /***/ }),
-/* 18 */
+/* 20 */
 /***/ (function(module, exports, __w_pdfjs_require__) {
 
 "use strict";
@@ -9951,6 +10664,7 @@ var renderTextLayer = function renderTextLayerClosure() {
     this._textContent = textContent;
     this._textContentStream = textContentStream;
     this._container = container;
+    this._document = container.ownerDocument;
     this._viewport = viewport;
     this._textDivs = textDivs || [];
     this._textContentItemsStr = textContentItemsStr || [];
@@ -10057,7 +10771,9 @@ var renderTextLayer = function renderTextLayerClosure() {
     _render: function TextLayer_render(timeout) {
       const capability = (0, _util.createPromiseCapability)();
       let styleCache = Object.create(null);
-      const canvas = document.createElement("canvas");
+
+      const canvas = this._document.createElement("canvas");
+
       canvas.mozOpaque = true;
       this._layoutTextCtx = canvas.getContext("2d", {
         alpha: false
@@ -10199,7 +10915,7 @@ var renderTextLayer = function renderTextLayerClosure() {
 exports.renderTextLayer = renderTextLayer;
 
 /***/ }),
-/* 19 */
+/* 21 */
 /***/ (function(module, exports, __w_pdfjs_require__) {
 
 "use strict";

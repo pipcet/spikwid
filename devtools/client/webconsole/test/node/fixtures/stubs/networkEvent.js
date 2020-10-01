@@ -25,7 +25,7 @@ rawPackets.set(`GET request`, {
   "node": null,
   "actor": "server0.conn0.netEvent4",
   "discardRequestBody": true,
-  "discardResponseBody": true,
+  "discardResponseBody": false,
   "startedDateTime": "2019-11-04T11:06:34.542Z",
   "request": {
     "url": "http://example.com/inexistent.html",
@@ -36,14 +36,14 @@ rawPackets.set(`GET request`, {
   "cause": {
     "type": "img",
     "loadingDocumentUri": "http://example.com/browser/devtools/client/webconsole/test/browser/stub-generators/test-network-event.html",
+    "stacktraceAvailable": true,
     "lastFrame": {
       "filename": "http://example.com/browser/devtools/client/webconsole/test/browser/stub-generators/test-network-event.html",
       "lineNumber": 3,
       "columnNumber": 1,
       "functionName": "triggerPacket",
       "asyncCause": null
-    },
-    "stacktraceAvailable": true
+    }
   },
   "response": {
     "httpVersion": "HTTP/1.1",
@@ -55,6 +55,7 @@ rawPackets.set(`GET request`, {
     "content": {
       "mimeType": "text/html; charset=utf-8"
     },
+    "waitingTime": 1,
     "bodySize": 418,
     "transferredSize": 578
   },
@@ -72,7 +73,9 @@ rawPackets.set(`GET request`, {
     "responseHeaders",
     "responseStart",
     "securityInfo"
-  ]
+  ],
+  "totalTime": 2,
+  "securityState": "insecure"
 });
 
 rawPackets.set(`GET request update`, {
@@ -93,14 +96,14 @@ rawPackets.set(`GET request update`, {
   "cause": {
     "type": "img",
     "loadingDocumentUri": "http://example.com/browser/devtools/client/webconsole/test/browser/stub-generators/test-network-event.html",
+    "stacktraceAvailable": true,
     "lastFrame": {
       "filename": "http://example.com/browser/devtools/client/webconsole/test/browser/stub-generators/test-network-event.html",
       "lineNumber": 3,
       "columnNumber": 1,
       "functionName": "triggerPacket",
       "asyncCause": null
-    },
-    "stacktraceAvailable": true
+    }
   },
   "response": {
     "httpVersion": "HTTP/1.1",
@@ -112,6 +115,7 @@ rawPackets.set(`GET request update`, {
     "content": {
       "mimeType": "text/html; charset=utf-8"
     },
+    "waitingTime": 1,
     "bodySize": 418,
     "transferredSize": 578
   },
@@ -130,7 +134,6 @@ rawPackets.set(`GET request update`, {
     "responseStart",
     "securityInfo"
   ],
-  "updateType": "responseContent",
   "totalTime": 3,
   "securityState": "insecure"
 });
@@ -142,7 +145,7 @@ rawPackets.set(`XHR GET request`, {
   "node": null,
   "actor": "server0.conn0.netEvent21",
   "discardRequestBody": true,
-  "discardResponseBody": true,
+  "discardResponseBody": false,
   "startedDateTime": "2020-07-07T14:41:14.612Z",
   "request": {
     "url": "http://example.com/inexistent.html",
@@ -153,14 +156,14 @@ rawPackets.set(`XHR GET request`, {
   "cause": {
     "type": "xhr",
     "loadingDocumentUri": "http://example.com/browser/devtools/client/webconsole/test/browser/stub-generators/test-network-event.html",
+    "stacktraceAvailable": true,
     "lastFrame": {
       "filename": "http://example.com/browser/devtools/client/webconsole/test/browser/stub-generators/test-network-event.html",
       "lineNumber": 4,
       "columnNumber": 5,
       "functionName": "triggerPacket",
       "asyncCause": null
-    },
-    "stacktraceAvailable": true
+    }
   },
   "response": {
     "httpVersion": "HTTP/1.1",
@@ -172,6 +175,7 @@ rawPackets.set(`XHR GET request`, {
     "content": {
       "mimeType": "text/html; charset=utf-8"
     },
+    "waitingTime": 2,
     "bodySize": 418,
     "transferredSize": 578
   },
@@ -189,7 +193,9 @@ rawPackets.set(`XHR GET request`, {
     "responseHeaders",
     "responseStart",
     "securityInfo"
-  ]
+  ],
+  "totalTime": 1,
+  "securityState": "insecure"
 });
 
 rawPackets.set(`XHR GET request update`, {
@@ -209,14 +215,14 @@ rawPackets.set(`XHR GET request update`, {
   "cause": {
     "type": "xhr",
     "loadingDocumentUri": "http://example.com/browser/devtools/client/webconsole/test/browser/stub-generators/test-network-event.html",
+    "stacktraceAvailable": true,
     "lastFrame": {
       "filename": "http://example.com/browser/devtools/client/webconsole/test/browser/stub-generators/test-network-event.html",
       "lineNumber": 4,
       "columnNumber": 5,
       "functionName": "triggerPacket",
       "asyncCause": null
-    },
-    "stacktraceAvailable": true
+    }
   },
   "response": {
     "httpVersion": "HTTP/1.1",
@@ -228,6 +234,7 @@ rawPackets.set(`XHR GET request update`, {
     "content": {
       "mimeType": "text/html; charset=utf-8"
     },
+    "waitingTime": 2,
     "bodySize": 418,
     "transferredSize": 578
   },
@@ -245,7 +252,6 @@ rawPackets.set(`XHR GET request update`, {
     "responseStart",
     "securityInfo"
   ],
-  "updateType": "responseContent",
   "totalTime": 1,
   "securityState": "insecure"
 });
@@ -257,7 +263,7 @@ rawPackets.set(`XHR POST request`, {
   "node": null,
   "actor": "server0.conn0.netEvent36",
   "discardRequestBody": true,
-  "discardResponseBody": true,
+  "discardResponseBody": false,
   "startedDateTime": "2019-11-04T11:06:35.007Z",
   "request": {
     "url": "http://example.com/inexistent.html",
@@ -268,14 +274,14 @@ rawPackets.set(`XHR POST request`, {
   "cause": {
     "type": "xhr",
     "loadingDocumentUri": "http://example.com/browser/devtools/client/webconsole/test/browser/stub-generators/test-network-event.html",
+    "stacktraceAvailable": true,
     "lastFrame": {
       "filename": "http://example.com/browser/devtools/client/webconsole/test/browser/stub-generators/test-network-event.html",
       "lineNumber": 4,
       "columnNumber": 5,
       "functionName": "triggerPacket",
       "asyncCause": null
-    },
-    "stacktraceAvailable": true
+    }
   },
   "response": {
     "httpVersion": "HTTP/1.1",
@@ -287,6 +293,7 @@ rawPackets.set(`XHR POST request`, {
     "content": {
       "mimeType": "text/html; charset=utf-8"
     },
+    "waitingTime": 2,
     "bodySize": 418,
     "transferredSize": 578
   },
@@ -304,7 +311,9 @@ rawPackets.set(`XHR POST request`, {
     "responseHeaders",
     "responseStart",
     "securityInfo"
-  ]
+  ],
+  "totalTime": 1,
+  "securityState": "insecure"
 });
 
 rawPackets.set(`XHR POST request update`, {
@@ -324,14 +333,14 @@ rawPackets.set(`XHR POST request update`, {
   "cause": {
     "type": "xhr",
     "loadingDocumentUri": "http://example.com/browser/devtools/client/webconsole/test/browser/stub-generators/test-network-event.html",
+    "stacktraceAvailable": true,
     "lastFrame": {
       "filename": "http://example.com/browser/devtools/client/webconsole/test/browser/stub-generators/test-network-event.html",
       "lineNumber": 4,
       "columnNumber": 5,
       "functionName": "triggerPacket",
       "asyncCause": null
-    },
-    "stacktraceAvailable": true
+    }
   },
   "response": {
     "httpVersion": "HTTP/1.1",
@@ -343,6 +352,7 @@ rawPackets.set(`XHR POST request update`, {
     "content": {
       "mimeType": "text/html; charset=utf-8"
     },
+    "waitingTime": 2,
     "bodySize": 418,
     "transferredSize": 578
   },
@@ -360,7 +370,6 @@ rawPackets.set(`XHR POST request update`, {
     "responseStart",
     "securityInfo"
   ],
-  "updateType": "responseContent",
   "totalTime": 2,
   "securityState": "insecure"
 });

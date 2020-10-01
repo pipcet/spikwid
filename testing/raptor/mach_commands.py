@@ -138,8 +138,8 @@ class RaptorRunner(MozbuildObject):
     def make_config(self):
         default_actions = [
             'populate-webroot',
-            'install-chromium-distribution',
             'create-virtualenv',
+            'install-chromium-distribution',
             'run-tests'
         ]
         self.config = {
@@ -181,7 +181,30 @@ class RaptorRunner(MozbuildObject):
             self.config.update({
                 'browsertime_node': browsertime.node_path(),
                 'browsertime_browsertimejs': browsertime.browsertime_path(),
+                'browsertime_vismet_script': browsertime.visualmetrics_path(),
             })
+
+            def _browsertime_exists():
+                return (
+                    os.path.exists(self.config["browsertime_browsertimejs"]) and
+                    os.path.exists(self.config["browsertime_vismet_script"])
+                )
+            # Check if browsertime scripts exist and try to install them if
+            # they aren't
+            if not _browsertime_exists():
+                # TODO: Make this "integration" nicer in the near future
+                print("Missing browsertime files...attempting to install")
+                subprocess.check_call([
+                    os.path.join(self.topsrcdir, "mach"),
+                    "browsertime",
+                    "--setup",
+                    "--clobber"
+                ])
+                if not _browsertime_exists():
+                    raise Exception(
+                        "Failed installation attempt. Cannot find browsertime scripts. "
+                        "Run `./mach browsertime --setup --clobber` to set it up."
+                    )
         finally:
             sys.path = sys.path[1:]
 
@@ -232,10 +255,15 @@ class MachRaptor(MachCommandBase):
 
         if is_android:
             from mozrunner.devices.android_device import (verify_android_device, InstallIntent)
-            from mozdevice import ADBAndroid
+            from mozdevice import ADBDeviceFactory
             install = InstallIntent.NO if kwargs.pop('noinstall', False) else InstallIntent.YES
+            verbose = False
+            if kwargs.get('log_mach_verbose') or kwargs.get('log_tbpl_level') == 'debug' or \
+               kwargs.get('log_mach_level') == 'debug' or kwargs.get('log_raw_level') == 'debug':
+                verbose = True
             if not verify_android_device(build_obj, install=install,
                                          app=kwargs['binary'],
+                                         verbose=verbose,
                                          xre=True):  # Equivalent to 'run_local' = True.
                 return 1
 
@@ -248,7 +276,7 @@ class MachRaptor(MachCommandBase):
 
         try:
             if kwargs['power_test'] and is_android:
-                device = ADBAndroid(verbose=True)
+                device = ADBDeviceFactory(verbose=True)
                 disable_charging(device)
             return raptor.run_test(sys.argv[2:], kwargs)
         except BinaryNotFoundException as e:

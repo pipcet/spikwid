@@ -11,6 +11,18 @@ ChromeUtils.defineModuleGetter(
   "resource://gre/modules/AppConstants.jsm"
 );
 
+ChromeUtils.defineModuleGetter(
+  this,
+  "DEFAULT_SITES",
+  "resource://activity-stream/lib/DefaultSites.jsm"
+);
+
+ChromeUtils.defineModuleGetter(
+  this,
+  "Region",
+  "resource://gre/modules/Region.jsm"
+);
+
 // NB: Eagerly load modules that will be loaded/constructed/initialized in the
 // common case to avoid the overhead of wrapping and detecting lazy loading.
 const { actionCreators: ac, actionTypes: at } = ChromeUtils.import(
@@ -97,52 +109,16 @@ ChromeUtils.defineModuleGetter(
   "resource://activity-stream/lib/DiscoveryStreamFeed.jsm"
 );
 
-const DEFAULT_SITES = new Map([
-  // This first item is the global list fallback for any unexpected geos
-  [
-    "",
-    "https://www.youtube.com/,https://www.facebook.com/,https://www.wikipedia.org/,https://www.reddit.com/,https://www.amazon.com/,https://twitter.com/",
-  ],
-  [
-    "US",
-    "https://www.youtube.com/,https://www.facebook.com/,https://www.amazon.com/,https://www.reddit.com/,https://www.wikipedia.org/,https://twitter.com/",
-  ],
-  [
-    "CA",
-    "https://www.youtube.com/,https://www.facebook.com/,https://www.reddit.com/,https://www.wikipedia.org/,https://www.amazon.ca/,https://twitter.com/",
-  ],
-  [
-    "DE",
-    "https://www.youtube.com/,https://www.facebook.com/,https://www.amazon.de/,https://www.ebay.de/,https://www.wikipedia.org/,https://www.reddit.com/",
-  ],
-  [
-    "PL",
-    "https://www.youtube.com/,https://www.facebook.com/,https://allegro.pl/,https://www.wikipedia.org/,https://www.olx.pl/,https://www.wykop.pl/",
-  ],
-  [
-    "RU",
-    "https://vk.com/,https://www.youtube.com/,https://ok.ru/,https://www.avito.ru/,https://www.aliexpress.com/,https://www.wikipedia.org/",
-  ],
-  [
-    "GB",
-    "https://www.youtube.com/,https://www.facebook.com/,https://www.reddit.com/,https://www.amazon.co.uk/,https://www.bbc.co.uk/,https://www.ebay.co.uk/",
-  ],
-  [
-    "FR",
-    "https://www.youtube.com/,https://www.facebook.com/,https://www.wikipedia.org/,https://www.amazon.fr/,https://www.leboncoin.fr/,https://twitter.com/",
-  ],
-  [
-    "CN",
-    "https://www.baidu.com/,https://www.zhihu.com/,https://www.ifeng.com/,https://weibo.com/,https://www.ctrip.com/,https://www.iqiyi.com/",
-  ],
-]);
-const GEO_PREF = "browser.search.region";
 const REGION_STORIES_CONFIG =
   "browser.newtabpage.activity-stream.discoverystream.region-stories-config";
+const REGION_STORIES_BLOCK =
+  "browser.newtabpage.activity-stream.discoverystream.region-stories-block";
 const REGION_SPOCS_CONFIG =
   "browser.newtabpage.activity-stream.discoverystream.region-spocs-config";
 const REGION_LAYOUT_CONFIG =
   "browser.newtabpage.activity-stream.discoverystream.region-layout-config";
+const LOCALE_LIST_CONFIG =
+  "browser.newtabpage.activity-stream.discoverystream.locale-list-config";
 
 // Determine if spocs should be shown for a geo/locale
 function showSpocs({ geo }) {
@@ -464,7 +440,6 @@ const PREFS_CONFIG = new Map([
         enabled: true,
         type: "remote-settings",
         bucket: "cfr-fxa",
-        frequency: { custom: [{ period: "daily", cap: 1 }] },
         updateCycleInMs: 3600000,
       }),
     },
@@ -607,9 +582,19 @@ const FEEDS_DATA = [
       "System pref that fetches content recommendations from a configurable content provider",
     // Dynamically determine if Pocket should be shown for a geo / locale
     getValue: ({ geo, locale }) => {
+      const preffedRegionsBlockString =
+        Services.prefs.getStringPref(REGION_STORIES_BLOCK) || "";
       const preffedRegionsString =
         Services.prefs.getStringPref(REGION_STORIES_CONFIG) || "";
+      const preffedLocaleListString =
+        Services.prefs.getStringPref(LOCALE_LIST_CONFIG) || "";
+      const preffedBlockRegions = preffedRegionsBlockString
+        .split(",")
+        .map(s => s.trim());
       const preffedRegions = preffedRegionsString.split(",").map(s => s.trim());
+      const preffedLocales = preffedLocaleListString
+        .split(",")
+        .map(s => s.trim());
       const locales = {
         US: ["en-CA", "en-GB", "en-US"],
         CA: ["en-CA", "en-GB", "en-US"],
@@ -619,8 +604,8 @@ const FEEDS_DATA = [
         IN: ["en-CA", "en-GB", "en-US"],
         IE: ["en-CA", "en-GB", "en-US"],
         ZA: ["en-CA", "en-GB", "en-US"],
-        CH: ["de", "fr", "it"],
-        BE: ["fr", "de"],
+        CH: ["de"],
+        BE: ["de"],
         DE: ["de"],
         AT: ["de"],
         IT: ["it"],
@@ -629,9 +614,12 @@ const FEEDS_DATA = [
         PL: ["pl"],
         JP: ["ja", "ja-JP-mac"],
       }[geo];
-      return (
-        preffedRegions.includes(geo) && !!locales && locales.includes(locale)
-      );
+
+      const regionBlocked = preffedBlockRegions.includes(geo);
+      const localeEnabled = locale && preffedLocales.includes(locale);
+      const regionEnabled =
+        preffedRegions.includes(geo) && !!locales && locales.includes(locale);
+      return !regionBlocked && (localeEnabled || regionEnabled);
     },
   },
   {
@@ -783,7 +771,7 @@ this.ActivityStream = class ActivityStream {
 
   uninit() {
     if (this.geo === "") {
-      Services.prefs.removeObserver(GEO_PREF, this);
+      Services.obs.removeObserver(this, Region.REGION_TOPIC);
     }
 
     this.store.uninit();
@@ -792,11 +780,11 @@ this.ActivityStream = class ActivityStream {
 
   _updateDynamicPrefs() {
     // Save the geo pref if we have it
-    if (Services.prefs.prefHasUserValue(GEO_PREF)) {
-      this.geo = Services.prefs.getStringPref(GEO_PREF);
+    if (Region.home) {
+      this.geo = Region.home;
     } else if (this.geo !== "") {
       // Watch for geo changes and use a dummy value for now
-      Services.prefs.addObserver(GEO_PREF, this);
+      Services.obs.addObserver(this, Region.REGION_TOPIC);
       this.geo = "";
     }
 
@@ -840,11 +828,9 @@ this.ActivityStream = class ActivityStream {
 
   observe(subject, topic, data) {
     switch (topic) {
-      case "nsPref:changed":
-        // We should only expect one geo change, so update and stop observing
-        if (data === GEO_PREF) {
+      case Region.REGION_TOPIC:
+        if (data === Region.REGION_UPDATED) {
           this._updateDynamicPrefs();
-          Services.prefs.removeObserver(GEO_PREF, this);
         }
         break;
     }

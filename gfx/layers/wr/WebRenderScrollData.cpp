@@ -10,6 +10,7 @@
 #include "LayersLogging.h"
 #include "mozilla/layers/LayersMessageUtils.h"
 #include "mozilla/layers/WebRenderLayerManager.h"
+#include "mozilla/ToString.h"
 #include "mozilla/Unused.h"
 #include "nsDisplayList.h"
 #include "nsTArray.h"
@@ -123,10 +124,10 @@ void WebRenderLayerScrollData::Dump(const WebRenderScrollData& aOwner) const {
                   Stringify(aOwner.GetScrollMetadata(i)).c_str());
   }
   printf_stderr("  ancestor transform: %s\n",
-                Stringify(mAncestorTransform).c_str());
+                ToString(mAncestorTransform).c_str());
   printf_stderr("  transform: %s perspective: %d visible: %s\n",
-                Stringify(mTransform).c_str(), mTransformIsPerspective,
-                Stringify(mVisibleRegion).c_str());
+                ToString(mTransform).c_str(), mTransformIsPerspective,
+                ToString(mVisibleRegion).c_str());
   printf_stderr("  event regions override: 0x%x\n", mEventRegionsOverride);
   if (mReferentId) {
     printf_stderr("  ref layers id: 0x%" PRIx64 "\n", uint64_t(*mReferentId));
@@ -141,8 +142,8 @@ void WebRenderLayerScrollData::Dump(const WebRenderScrollData& aOwner) const {
                 " inner: %s outer: %s\n",
                 mStickyPosScrollContainerId,
                 mStickyPositionAnimationId.valueOr(0),
-                Stringify(mStickyScrollRangeInner).c_str(),
-                Stringify(mStickyScrollRangeOuter).c_str());
+                ToString(mStickyScrollRangeInner).c_str(),
+                ToString(mStickyScrollRangeOuter).c_str());
   printf_stderr("  fixed/sticky side bits: 0x%x\n", (int)mFixedPositionSides);
 }
 
@@ -215,7 +216,7 @@ void WebRenderScrollData::ApplyUpdates(ScrollUpdatesMap& aUpdates,
                                        uint32_t aPaintSequenceNumber) {
   for (auto it = aUpdates.Iter(); !it.Done(); it.Next()) {
     if (Maybe<size_t> index = HasMetadataFor(it.Key())) {
-      mScrollMetadatas[*index].GetMetrics().UpdatePendingScrollInfo(it.Data());
+      mScrollMetadatas[*index].UpdatePendingScrollInfo(it.Data());
     }
   }
   mPaintSequenceNumber = aPaintSequenceNumber;

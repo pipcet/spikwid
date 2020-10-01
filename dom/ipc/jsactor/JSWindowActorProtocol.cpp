@@ -179,13 +179,15 @@ NS_IMETHODIMP JSWindowActorProtocol::HandleEvent(Event* aEvent) {
   }
 
   // Ensure our actor is present.
-  RefPtr<JSActor> actor = wgc->GetActor(mName, IgnoreErrors());
-  if (!actor) {
+  AutoJSAPI jsapi;
+  jsapi.Init();
+  RefPtr<JSActor> actor = wgc->GetActor(jsapi.cx(), mName, IgnoreErrors());
+  if (!actor || NS_WARN_IF(!actor->GetWrapperPreserveColor())) {
     return NS_OK;
   }
 
   // Build our event listener & call it.
-  JS::Rooted<JSObject*> global(RootingCx(),
+  JS::Rooted<JSObject*> global(jsapi.cx(),
                                JS::GetNonCCWObjectGlobal(actor->GetWrapper()));
   RefPtr<EventListener> eventListener =
       new EventListener(actor->GetWrapper(), global, nullptr, nullptr);
@@ -203,7 +205,17 @@ NS_IMETHODIMP JSWindowActorProtocol::Observe(nsISupports* aSubject,
 
   if (!inner) {
     nsCOMPtr<nsPIDOMWindowOuter> outer = do_QueryInterface(aSubject);
-    if (NS_WARN_IF(!outer) || NS_WARN_IF(!outer->GetCurrentInnerWindow())) {
+    if (NS_WARN_IF(!outer)) {
+      nsContentUtils::LogSimpleConsoleError(
+          NS_ConvertUTF8toUTF16(nsPrintfCString(
+              "JSWindowActor %s: expected window subject for topic '%s'.",
+              mName.get(), aTopic)),
+          "JSActor",
+          /* aFromPrivateWindow */ false,
+          /* aFromChromeContext */ true);
+      return NS_ERROR_FAILURE;
+    }
+    if (NS_WARN_IF(!outer->GetCurrentInnerWindow())) {
       return NS_ERROR_FAILURE;
     }
     wgc = outer->GetCurrentInnerWindow()->GetWindowGlobalChild();
@@ -216,13 +228,15 @@ NS_IMETHODIMP JSWindowActorProtocol::Observe(nsISupports* aSubject,
   }
 
   // Ensure our actor is present.
-  RefPtr<JSActor> actor = wgc->GetActor(mName, IgnoreErrors());
-  if (!actor) {
+  AutoJSAPI jsapi;
+  jsapi.Init();
+  RefPtr<JSActor> actor = wgc->GetActor(jsapi.cx(), mName, IgnoreErrors());
+  if (!actor || NS_WARN_IF(!actor->GetWrapperPreserveColor())) {
     return NS_OK;
   }
 
   // Build a observer callback.
-  JS::Rooted<JSObject*> global(RootingCx(),
+  JS::Rooted<JSObject*> global(jsapi.cx(),
                                JS::GetNonCCWObjectGlobal(actor->GetWrapper()));
   RefPtr<MozObserverCallback> observerCallback =
       new MozObserverCallback(actor->GetWrapper(), global, nullptr, nullptr);

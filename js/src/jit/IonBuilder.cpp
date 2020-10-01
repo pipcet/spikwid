@@ -12,6 +12,7 @@
 #include <algorithm>
 
 #include "builtin/Eval.h"
+#include "builtin/ModuleObject.h"
 #include "builtin/TypedObject.h"
 #include "frontend/SourceNotes.h"
 #include "jit/BaselineFrame.h"
@@ -22,12 +23,15 @@
 #include "jit/JitSpewer.h"
 #include "jit/Lowering.h"
 #include "jit/MIRGraph.h"
+#include "js/experimental/JitInfo.h"  // JSJitInfo
+#include "js/Object.h"                // JS::GetReservedSlot
+#include "js/ScalarType.h"            // js::Scalar::Type
 #include "util/CheckedArithmetic.h"
 #include "vm/ArgumentsObject.h"
+#include "vm/BuiltinObjectKind.h"
 #include "vm/BytecodeIterator.h"
 #include "vm/BytecodeLocation.h"
 #include "vm/BytecodeUtil.h"
-#include "vm/EnvironmentObject.h"
 #include "vm/Instrumentation.h"
 #include "vm/Opcodes.h"
 #include "vm/PlainObject.h"  // js::PlainObject
@@ -173,7 +177,7 @@ IonBuilder::IonBuilder(JSContext* analysisContext, MIRGenerator& mirGen,
       inlineCallInfo_(nullptr),
       maybeFallbackFunctionGetter_(nullptr) {
   script_ = info_->script();
-  pc = info_->startPC();
+  pc = script_->code();
 
   // The script must have a JitScript. Compilation requires a BaselineScript
   // too.
@@ -1265,7 +1269,7 @@ AbortReasonOr<Ok> IonBuilder::initEnvironmentChain(MDefinition* callee) {
 
   // Update the environment slot from UndefinedValue only after initial
   // environment is created so that bailout doesn't see a partial env.
-  // See: |InitFromBailout|
+  // See: |BaselineStackBuilder::buildBaselineFrame|
   current->setEnvironmentChain(env);
   return Ok();
 }
@@ -2011,6 +2015,7 @@ AbortReasonOr<Ok> IonBuilder::inspectOpcode(JSOp op, bool* restarted) {
 
     case JSOp::InitElem:
     case JSOp::InitHiddenElem:
+    case JSOp::InitLockedElem:
       return jsop_initelem();
 
     case JSOp::InitElemInc:
@@ -2275,7 +2280,7 @@ AbortReasonOr<Ok> IonBuilder::inspectOpcode(JSOp op, bool* restarted) {
       return jsop_setfunname(GET_UINT8(pc));
 
     case JSOp::PushLexicalEnv:
-      return jsop_pushlexicalenv(GET_UINT32_INDEX(pc));
+      return jsop_pushlexicalenv(GET_GCTHING_INDEX(pc));
 
     case JSOp::PopLexicalEnv:
       current->setEnvironmentChain(walkEnvironmentChain(1));
@@ -2304,6 +2309,9 @@ AbortReasonOr<Ok> IonBuilder::inspectOpcode(JSOp op, bool* restarted) {
 
     case JSOp::HasOwn:
       return jsop_hasown();
+
+    case JSOp::CheckPrivateField:
+      return jsop_checkprivatefield();
 
     case JSOp::SetRval:
       MOZ_ASSERT(!script()->noScriptRval());
@@ -2382,8 +2390,8 @@ AbortReasonOr<Ok> IonBuilder::inspectOpcode(JSOp op, bool* restarted) {
     case JSOp::ObjWithProto:
       return jsop_objwithproto();
 
-    case JSOp::FunctionProto:
-      return jsop_functionproto();
+    case JSOp::BuiltinObject:
+      return jsop_builtinobject();
 
     case JSOp::CheckReturn:
       return jsop_checkreturn();
@@ -2450,12 +2458,6 @@ AbortReasonOr<Ok> IonBuilder::inspectOpcode(JSOp op, bool* restarted) {
       // === !! WARNING WARNING WARNING !! ===
       // Do you really want to sacrifice performance by not implementing this
       // operation in the optimizing compiler?
-      break;
-
-    // Private Fields
-    case JSOp::InitPrivateElem:
-    case JSOp::GetPrivateElem:
-    case JSOp::SetPrivateElem:
       break;
 
     case JSOp::ForceInterpreter:
@@ -3936,19 +3938,6 @@ AbortReasonOr<Ok> IonBuilder::jsop_tostring() {
   }
   return Ok();
 }
-
-class AutoAccumulateReturns {
-  MIRGraph& graph_;
-  MIRGraphReturns* prev_;
-
- public:
-  AutoAccumulateReturns(MIRGraph& graph, MIRGraphReturns& returns)
-      : graph_(graph) {
-    prev_ = graph_.returnAccumulator();
-    graph_.setReturnAccumulator(&returns);
-  }
-  ~AutoAccumulateReturns() { graph_.setReturnAccumulator(prev_); }
-};
 
 IonBuilder::InliningResult IonBuilder::inlineScriptedCall(CallInfo& callInfo,
                                                           JSFunction* target) {
@@ -5701,8 +5690,6 @@ bool IonBuilder::ensureArrayIteratorPrototypeNextNotModified() {
 AbortReasonOr<Ok> IonBuilder::jsop_optimize_spreadcall() {
   MDefinition* arr = current->peek(-1);
 
-  // Assuming optimization isn't available doesn't affect correctness.
-  // TODO: Investigate dynamic checks.
   bool result = false;
   do {
     // Inline with MIsPackedArray if the conditions described in
@@ -5712,11 +5699,6 @@ AbortReasonOr<Ok> IonBuilder::jsop_optimize_spreadcall() {
     // The argument is an array.
     TemporaryTypeSet* types = arr->resultTypeSet();
     if (!types || types->getKnownClass(constraints()) != &ArrayObject::class_) {
-      break;
-    }
-
-    // The array has no hole.
-    if (types->hasObjectFlags(constraints(), OBJECT_FLAG_NON_PACKED)) {
       break;
     }
 
@@ -5755,11 +5737,13 @@ AbortReasonOr<Ok> IonBuilder::jsop_optimize_spreadcall() {
     auto* ins = MIsPackedArray::New(alloc(), arr);
     current->add(ins);
     current->push(ins);
-  } else {
-    arr->setImplicitlyUsedUnchecked();
-    pushConstant(BooleanValue(false));
+    return Ok();
   }
-  return Ok();
+
+  auto* ins = MOptimizeSpreadCallCache::New(alloc(), arr);
+  current->add(ins);
+  current->push(ins);
+  return resumeAfter(ins);
 }
 
 AbortReasonOr<Ok> IonBuilder::jsop_funapplyarray(uint32_t argc) {
@@ -6392,10 +6376,6 @@ AbortReasonOr<Ok> IonBuilder::jsop_compare(JSOp op, MDefinition* left,
   bool emitted = false;
 
   if (!forceInlineCaches()) {
-    MOZ_TRY(compareTryCharacter(&emitted, op, left, right));
-    if (emitted) {
-      return Ok();
-    }
     MOZ_TRY(compareTrySpecialized(&emitted, op, left, right));
     if (emitted) {
       return Ok();
@@ -6426,79 +6406,6 @@ AbortReasonOr<Ok> IonBuilder::jsop_compare(JSOp op, MDefinition* left,
     MOZ_TRY(resumeAfter(ins));
   }
 
-  return Ok();
-}
-
-AbortReasonOr<Ok> IonBuilder::compareTryCharacter(bool* emitted, JSOp op,
-                                                  MDefinition* left,
-                                                  MDefinition* right) {
-  MOZ_ASSERT(*emitted == false);
-
-  // |str[i]| is compiled as |MFromCharCode(MCharCodeAt(str, i))|.
-  auto isCharAccess = [](MDefinition* ins) {
-    return ins->isFromCharCode() &&
-           ins->toFromCharCode()->input()->isCharCodeAt();
-  };
-
-  if (left->isConstant() || right->isConstant()) {
-    // Try to optimize |MConstant(string) <compare> (MFromCharCode MCharCodeAt)|
-    // as |MConstant(charcode) <compare> MCharCodeAt|.
-    MConstant* constant;
-    MDefinition* operand;
-    if (left->isConstant()) {
-      constant = left->toConstant();
-      operand = right;
-    } else {
-      constant = right->toConstant();
-      operand = left;
-    }
-
-    if (constant->type() != MIRType::String ||
-        constant->toString()->length() != 1 || !isCharAccess(operand)) {
-      return Ok();
-    }
-
-    char16_t charCode = constant->toString()->asAtom().latin1OrTwoByteChar(0);
-    constant->setImplicitlyUsedUnchecked();
-
-    MConstant* charCodeConst = MConstant::New(alloc(), Int32Value(charCode));
-    current->add(charCodeConst);
-
-    MDefinition* charCodeAt = operand->toFromCharCode()->input();
-    operand->setImplicitlyUsedUnchecked();
-
-    if (left == constant) {
-      left = charCodeConst;
-      right = charCodeAt;
-    } else {
-      left = charCodeAt;
-      right = charCodeConst;
-    }
-  } else if (isCharAccess(left) && isCharAccess(right)) {
-    // Try to optimize |(MFromCharCode MCharCodeAt) <compare> (MFromCharCode
-    // MCharCodeAt)| as |MCharCodeAt <compare> MCharCodeAt|.
-
-    MDefinition* leftCharCodeAt = left->toFromCharCode()->input();
-    left->setImplicitlyUsedUnchecked();
-
-    MDefinition* rightCharCodeAt = right->toFromCharCode()->input();
-    right->setImplicitlyUsedUnchecked();
-
-    left = leftCharCodeAt;
-    right = rightCharCodeAt;
-  } else {
-    return Ok();
-  }
-
-  MCompare* ins = MCompare::New(alloc(), left, right, op);
-  ins->setCompareType(MCompare::Compare_Int32);
-  ins->cacheOperandMightEmulateUndefined(constraints());
-
-  current->add(ins);
-  current->push(ins);
-
-  MOZ_ASSERT(!ins->isEffectful());
-  *emitted = true;
   return Ok();
 }
 
@@ -6882,7 +6789,8 @@ AbortReasonOr<Ok> IonBuilder::jsop_newobject() {
 }
 
 AbortReasonOr<Ok> IonBuilder::jsop_initelem() {
-  MOZ_ASSERT(JSOp(*pc) == JSOp::InitElem || JSOp(*pc) == JSOp::InitHiddenElem);
+  MOZ_ASSERT(JSOp(*pc) == JSOp::InitElem || JSOp(*pc) == JSOp::InitHiddenElem ||
+             JSOp(*pc) == JSOp::InitLockedElem);
 
   MDefinition* value = current->pop();
   MDefinition* id = current->pop();
@@ -9774,7 +9682,7 @@ AbortReasonOr<Ok> IonBuilder::jsop_checkobjcoercible() {
   MCheckObjCoercible* check = MCheckObjCoercible::New(alloc(), current->pop());
   current->add(check);
   current->push(check);
-  return Ok();
+  return resumeAfter(check);
 }
 
 AbortReasonOr<Ok> IonBuilder::jsop_checkclassheritage() {
@@ -10870,7 +10778,7 @@ AbortReasonOr<Ok> IonBuilder::getPropTryCommonGetter(bool* emitted,
         if (singleton && jitinfo->aliasSet() == JSJitInfo::AliasNone) {
           size_t slot = jitinfo->slotIndex;
           *emitted = true;
-          pushConstant(GetReservedSlot(singleton, slot));
+          pushConstant(JS::GetReservedSlot(singleton, slot));
           return Ok();
         }
 
@@ -11740,15 +11648,6 @@ AbortReasonOr<Ok> IonBuilder::jsop_regexp(RegExpObject* reobj) {
 }
 
 AbortReasonOr<Ok> IonBuilder::jsop_object(JSObject* obj) {
-  if (mirGen_.options.cloneSingletons()) {
-    MCloneLiteral* clone =
-        MCloneLiteral::New(alloc(), constant(ObjectValue(*obj)));
-    current->add(clone);
-    current->push(clone);
-    return resumeAfter(clone);
-  }
-
-  realm->setSingletonsAsValues();
   pushConstant(ObjectValue(*obj));
   return Ok();
 }
@@ -11839,7 +11738,7 @@ AbortReasonOr<Ok> IonBuilder::jsop_setfunname(uint8_t prefixKind) {
   return resumeAfter(ins);
 }
 
-AbortReasonOr<Ok> IonBuilder::jsop_pushlexicalenv(uint32_t index) {
+AbortReasonOr<Ok> IonBuilder::jsop_pushlexicalenv(GCThingIndex index) {
   MOZ_ASSERT(usesEnvironmentChain());
 
   LexicalScope* scope = &script()->getScope(index)->as<LexicalScope>();
@@ -12050,18 +11949,20 @@ AbortReasonOr<Ok> IonBuilder::jsop_functionthis() {
                  "JSOp::FunctionThis would need non-syntactic global");
   }
 
+  LexicalEnvironmentObject* globalLexical =
+      &script()->global().lexicalEnvironment();
+  JSObject* globalThis = globalLexical->thisObject();
+
   if (IsNullOrUndefined(def->type())) {
-    LexicalEnvironmentObject* globalLexical =
-        &script()->global().lexicalEnvironment();
-    pushConstant(ObjectValue(*globalLexical->thisObject()));
+    pushConstant(ObjectValue(*globalThis));
     return Ok();
   }
 
-  MBoxNonStrictThis* thisObj = MBoxNonStrictThis::New(alloc(), def);
+  MBoxNonStrictThis* thisObj = MBoxNonStrictThis::New(alloc(), def, globalThis);
   current->add(thisObj);
   current->push(thisObj);
 
-  return resumeAfter(thisObj);
+  return Ok();
 }
 
 AbortReasonOr<Ok> IonBuilder::jsop_globalthis() {
@@ -12411,6 +12312,18 @@ AbortReasonOr<Ok> IonBuilder::jsop_hasown() {
   return Ok();
 }
 
+AbortReasonOr<Ok> IonBuilder::jsop_checkprivatefield() {
+  MDefinition* id = current->peek(-1);
+  MDefinition* obj = current->peek(-2);
+
+  MCheckPrivateFieldCache* ins = MCheckPrivateFieldCache::New(alloc(), obj, id);
+  current->add(ins);
+  current->push(ins);
+
+  MOZ_TRY(resumeAfter(ins));
+  return Ok();
+}
+
 AbortReasonOr<bool> IonBuilder::hasOnProtoChain(TypeSet::ObjectKey* key,
                                                 JSObject* protoObject,
                                                 bool* onProto) {
@@ -12572,7 +12485,8 @@ AbortReasonOr<Ok> IonBuilder::jsop_instanceof() {
       return Ok();
     }
 
-    MInstanceOf* ins = MInstanceOf::New(alloc(), obj, protoObject);
+    MConstant* protoConst = constant(ObjectValue(*protoObject));
+    MInstanceOf* ins = MInstanceOf::New(alloc(), obj, protoConst);
 
     current->add(ins);
     current->push(ins);
@@ -12611,7 +12525,7 @@ AbortReasonOr<Ok> IonBuilder::jsop_instanceof() {
       return Ok();
     }
 
-    MInstanceOf* ins = MInstanceOf::New(alloc(), obj, protoObject);
+    MInstanceOf* ins = MInstanceOf::New(alloc(), obj, protoConst);
     current->add(ins);
     current->push(ins);
     return resumeAfter(ins);
@@ -12708,17 +12622,17 @@ AbortReasonOr<Ok> IonBuilder::jsop_objwithproto() {
   return resumeAfter(ins);
 }
 
-AbortReasonOr<Ok> IonBuilder::jsop_functionproto() {
-  JSProtoKey key = JSProto_Function;
+AbortReasonOr<Ok> IonBuilder::jsop_builtinobject() {
+  auto kind = BuiltinObjectKind(GET_UINT8(pc));
 
-  // Bake in the prototype if it exists.
-  if (JSObject* proto = script()->global().maybeGetPrototype(key)) {
-    pushConstant(ObjectValue(*proto));
+  // Bake in the built-in if it exists.
+  if (JSObject* builtin = MaybeGetBuiltinObject(&script()->global(), kind)) {
+    pushConstant(ObjectValue(*builtin));
     return Ok();
   }
 
   // Otherwise emit code to generate it.
-  auto* ins = MFunctionProto::New(alloc());
+  auto* ins = MBuiltinObject::New(alloc(), kind);
   current->add(ins);
   current->push(ins);
   return resumeAfter(ins);

@@ -54,7 +54,7 @@
 #include "js/UniquePtr.h"
 #include "util/Memory.h"
 #include "util/Windows.h"
-#include "vm/HelperThreads.h"
+#include "vm/HelperThreadState.h"
 #include "vm/Realm.h"
 #include "vm/TraceLogging.h"
 #ifdef MOZ_VTUNE
@@ -174,8 +174,11 @@ bool JitRuntime::generateTrampolines(JSContext* cx) {
   static_assert(sizeof(JitFrameLayout) == sizeof(WasmToJSJitFrameLayout),
                 "thus a rectifier frame can be used with a wasm frame");
 
-  JitSpew(JitSpew_Codegen, "# Emitting sequential arguments rectifier");
-  generateArgumentsRectifier(masm);
+  JitSpew(JitSpew_Codegen, "# Emitting arguments rectifier");
+  generateArgumentsRectifier(masm, ArgumentsRectifierKind::Normal);
+
+  JitSpew(JitSpew_Codegen, "# Emitting trial inlining arguments rectifier");
+  generateArgumentsRectifier(masm, ArgumentsRectifierKind::TrialInlining);
 
   JitSpew(JitSpew_Codegen, "# Emitting EnterJIT sequence");
   generateEnterJIT(cx, masm);
@@ -735,7 +738,7 @@ void IonScript::trace(JSTracer* trc) {
 }
 
 /* static */
-void IonScript::writeBarrierPre(Zone* zone, IonScript* ionScript) {
+void IonScript::preWriteBarrier(Zone* zone, IonScript* ionScript) {
   if (zone->needsIncrementalBarrier()) {
     ionScript->trace(zone->barrierTracer());
   }
@@ -1690,6 +1693,10 @@ static AbortReason IonCompile(JSContext* cx, HandleScript script,
     script->ionScript()->setRecompiling();
   }
 
+  if (osrPc) {
+    script->jitScript()->setHadIonOSR();
+  }
+
   WarpSnapshot* snapshot = nullptr;
   if (JitOptions.warpBuilder) {
     AbortReasonOr<WarpSnapshot*> result =
@@ -2044,6 +2051,10 @@ MethodStatus jit::CanEnterIon(JSContext* cx, RunState& state) {
         CanEnterBaselineMethod<BaselineTier::Compiler>(cx, state);
     if (status != Method_Compiled) {
       return status;
+    }
+    // Bytecode analysis may forbid compilation for a script.
+    if (!script->canIonCompile()) {
+      return Method_CantCompile;
     }
   }
 
@@ -2703,12 +2714,12 @@ void jit::Invalidate(JSContext* cx, JSScript* script, bool resetUses,
     }
 
     // Construct the descriptive string.
-    UniqueChars buf = JS_smprintf("Invalidate %s:%u:%u", filename,
-                                  script->lineno(), script->column());
+    UniqueChars buf =
+        JS_smprintf("%s:%u:%u", filename, script->lineno(), script->column());
 
     // Ignore the event on allocation failure.
     if (buf) {
-      cx->runtime()->geckoProfiler().markEvent(buf.get());
+      cx->runtime()->geckoProfiler().markEvent("Invalidate", buf.get());
     }
   }
 

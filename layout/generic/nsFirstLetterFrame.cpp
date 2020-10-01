@@ -15,6 +15,7 @@
 #include "mozilla/RestyleManager.h"
 #include "mozilla/ServoStyleSet.h"
 #include "nsIContent.h"
+#include "nsLayoutUtils.h"
 #include "nsLineLayout.h"
 #include "nsGkAtoms.h"
 #include "nsFrameManager.h"
@@ -123,19 +124,19 @@ nscoord nsFirstLetterFrame::GetPrefISize(gfxContext* aRenderingContext) {
 }
 
 /* virtual */
-LogicalSize nsFirstLetterFrame::ComputeSize(
+nsIFrame::SizeComputationResult nsFirstLetterFrame::ComputeSize(
     gfxContext* aRenderingContext, WritingMode aWM, const LogicalSize& aCBSize,
     nscoord aAvailableISize, const LogicalSize& aMargin,
-    const LogicalSize& aBorder, const LogicalSize& aPadding,
-    ComputeSizeFlags aFlags) {
+    const LogicalSize& aBorderPadding, ComputeSizeFlags aFlags) {
   if (GetPrevInFlow()) {
     // We're wrapping the text *after* the first letter, so behave like an
     // inline frame.
-    return LogicalSize(aWM, NS_UNCONSTRAINEDSIZE, NS_UNCONSTRAINEDSIZE);
+    return {LogicalSize(aWM, NS_UNCONSTRAINEDSIZE, NS_UNCONSTRAINEDSIZE),
+            AspectRatioUsage::None};
   }
   return nsContainerFrame::ComputeSize(aRenderingContext, aWM, aCBSize,
-                                       aAvailableISize, aMargin, aBorder,
-                                       aPadding, aFlags);
+                                       aAvailableISize, aMargin, aBorderPadding,
+                                       aFlags);
 }
 
 void nsFirstLetterFrame::Reflow(nsPresContext* aPresContext,
@@ -258,9 +259,9 @@ void nsFirstLetterFrame::Reflow(nsPresContext* aPresContext,
       if (!IsFloating()) {
         CreateNextInFlow(kid);
         // And then push it to our overflow list
-        const nsFrameList& overflow = mFrames.RemoveFramesAfter(kid);
+        nsFrameList overflow = mFrames.RemoveFramesAfter(kid);
         if (overflow.NotEmpty()) {
-          SetOverflowFrames(overflow);
+          SetOverflowFrames(std::move(overflow));
         }
       } else if (!kid->GetNextInFlow()) {
         // For floating first letter frames (if a continuation wasn't already

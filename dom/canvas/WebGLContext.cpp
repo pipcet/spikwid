@@ -34,6 +34,7 @@
 #include "mozilla/dom/WebGLContextEvent.h"
 #include "mozilla/EnumeratedArrayCycleCollection.h"
 #include "mozilla/EnumeratedRange.h"
+#include "mozilla/gfx/gfxVars.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/ProcessPriorityManager.h"
 #include "mozilla/ScopeExit.h"
@@ -45,7 +46,6 @@
 #include "nsDisplayList.h"
 #include "nsError.h"
 #include "nsIClassInfoImpl.h"
-#include "nsIGfxInfo.h"
 #include "nsIWidget.h"
 #include "nsServiceManagerUtils.h"
 #include "SharedSurfaceGL.h"
@@ -93,18 +93,6 @@
 #include "mozilla/dom/WebGLRenderingContextBinding.h"
 
 namespace mozilla {
-
-static bool IsFeatureInBlacklist(const nsCOMPtr<nsIGfxInfo>& gfxInfo,
-                                 int32_t feature,
-                                 nsCString* const out_blacklistId) {
-  int32_t status;
-  if (!NS_SUCCEEDED(gfxUtils::ThreadSafeGetFeatureStatus(
-          gfxInfo, feature, *out_blacklistId, &status))) {
-    return false;
-  }
-
-  return status != nsIGfxInfo::FEATURE_STATUS_OK;
-}
 
 WebGLContextOptions::WebGLContextOptions() {
   // Set default alpha state based on preference.
@@ -158,20 +146,6 @@ WebGLContext::WebGLContext(HostWebGLContext& host,
       mRequestedSize(desc.size) {
   host.mContext = this;
   const FuncScope funcScope(*this, "<Create>");
-
-  if (mOptions.antialias && !StaticPrefs::webgl_msaa_force()) {
-    const nsCOMPtr<nsIGfxInfo> gfxInfo = services::GetGfxInfo();
-
-    nsCString blocklistId;
-    if (IsFeatureInBlacklist(gfxInfo, nsIGfxInfo::FEATURE_WEBGL_MSAA,
-                             &blocklistId)) {
-      GenerateWarning(
-          "getContext: Disallowing antialiased backbuffers due to "
-          "blacklisting. (%s)",
-          blocklistId.BeginReading());
-      mOptions.antialias = false;
-    }
-  }
 }
 
 WebGLContext::~WebGLContext() { DestroyResourcesAndContext(); }
@@ -208,10 +182,6 @@ void WebGLContext::DestroyResourcesAndContext() {
   mQuerySlot_TimeElapsed = nullptr;
 
   mIndexedUniformBufferBindings.clear();
-
-  if (mAvailabilityRunnable) {
-    mAvailabilityRunnable->Run();
-  }
 
   //////
 
@@ -271,37 +241,6 @@ void WebGLContext::OnMemoryPressure() {
   if (shouldLoseContext) LoseContext();
 }
 
-//
-// nsICanvasRenderingContextInternal
-//
-
-static bool HasAcceleratedLayers(const nsCOMPtr<nsIGfxInfo>& gfxInfo) {
-  int32_t status;
-
-  nsCString discardFailureId;
-  gfxUtils::ThreadSafeGetFeatureStatus(gfxInfo,
-                                       nsIGfxInfo::FEATURE_DIRECT3D_9_LAYERS,
-                                       discardFailureId, &status);
-  if (status) return true;
-  gfxUtils::ThreadSafeGetFeatureStatus(gfxInfo,
-                                       nsIGfxInfo::FEATURE_DIRECT3D_10_LAYERS,
-                                       discardFailureId, &status);
-  if (status) return true;
-  gfxUtils::ThreadSafeGetFeatureStatus(gfxInfo,
-                                       nsIGfxInfo::FEATURE_DIRECT3D_10_1_LAYERS,
-                                       discardFailureId, &status);
-  if (status) return true;
-  gfxUtils::ThreadSafeGetFeatureStatus(gfxInfo,
-                                       nsIGfxInfo::FEATURE_DIRECT3D_11_LAYERS,
-                                       discardFailureId, &status);
-  if (status) return true;
-  gfxUtils::ThreadSafeGetFeatureStatus(
-      gfxInfo, nsIGfxInfo::FEATURE_OPENGL_LAYERS, discardFailureId, &status);
-  if (status) return true;
-
-  return false;
-}
-
 // --
 
 bool WebGLContext::CreateAndInitGL(
@@ -320,15 +259,9 @@ bool WebGLContext::CreateAndInitGL(
 
   // WebGL2 is separately blocked:
   if (IsWebGL2() && !forceEnabled) {
-    const nsCOMPtr<nsIGfxInfo> gfxInfo = services::GetGfxInfo();
-    const auto feature = nsIGfxInfo::FEATURE_WEBGL2;
-
     FailureReason reason;
-    if (IsFeatureInBlacklist(gfxInfo, feature, &reason.key)) {
-      reason.info =
-          "Refused to create WebGL2 context because of blacklist"
-          " entry: ";
-      reason.info.Append(reason.key);
+    if (!gfx::gfxVars::AllowWebgl2()) {
+      reason.info = "AllowWebgl2:false restricts context creation on this system.";
       out_failReasons->push_back(reason);
       GenerateWarning("%s", reason.info.BeginReading());
       return false;
@@ -379,18 +312,9 @@ bool WebGLContext::CreateAndInitGL(
     }
   }
 
-#ifdef XP_MACOSX
-  const nsCOMPtr<nsIGfxInfo> gfxInfo = services::GetGfxInfo();
-  nsString vendorID, deviceID;
-
-  // Avoid crash for Intel HD Graphics 3000 on OSX. (Bug 1413269)
-  gfxInfo->GetAdapterVendorID(vendorID);
-  gfxInfo->GetAdapterDeviceID(deviceID);
-  if (vendorID.EqualsLiteral("0x8086") &&
-      (deviceID.EqualsLiteral("0x0116") || deviceID.EqualsLiteral("0x0126"))) {
+  if (!gfx::gfxVars::WebglAllowCoreProfile()) {
     flags |= gl::CreateContextFlags::REQUIRE_COMPAT_PROFILE;
   }
-#endif
 
   // --
 
@@ -412,15 +336,9 @@ bool WebGLContext::CreateAndInitGL(
 #endif
 
   if (tryNativeGL && !forceEnabled) {
-    const nsCOMPtr<nsIGfxInfo> gfxInfo = services::GetGfxInfo();
-    const auto feature = nsIGfxInfo::FEATURE_WEBGL_OPENGL;
-
     FailureReason reason;
-    if (IsFeatureInBlacklist(gfxInfo, feature, &reason.key)) {
-      reason.info =
-          "Refused to create native OpenGL context because of blacklist"
-          " entry: ";
-      reason.info.Append(reason.key);
+    if (!gfx::gfxVars::WebglAllowWindowsNativeGl()) {
+      reason.info = "WebglAllowWindowsNativeGl:false restricts context creation on this system.";
 
       out_failReasons->push_back(reason);
 
@@ -586,16 +504,6 @@ RefPtr<WebGLContext> WebGLContext::Create(HostWebGLContext& host,
         failureId = "FEATURE_FAILURE_WEBGL_DISABLED"_ns;
       }
       return Err("WebGL is currently disabled.");
-    }
-
-    if (desc.options.failIfMajorPerformanceCaveat) {
-      nsCOMPtr<nsIGfxInfo> gfxInfo = services::GetGfxInfo();
-      if (!HasAcceleratedLayers(gfxInfo)) {
-        failureId = "FEATURE_FAILURE_WEBGL_PERF_CAVEAT"_ns;
-        return Err(
-            "failIfMajorPerformanceCaveat: Compositor is not"
-            " hardware-accelerated.");
-      }
     }
 
     // Alright, now let's start trying.
@@ -1029,9 +937,9 @@ Maybe<layers::SurfaceDescriptor> WebGLContext::GetFrontBuffer(
   return front->ToSurfaceDescriptor();
 }
 
-RefPtr<gfx::DataSourceSurface> WebGLContext::GetFrontBufferSnapshot() {
+bool WebGLContext::FrontBufferSnapshotInto(Range<uint8_t> dest) {
   const auto& front = mSwapChain.FrontBuffer();
-  if (!front) return nullptr;
+  if (!front) return false;
 
   // -
 
@@ -1076,32 +984,13 @@ RefPtr<gfx::DataSourceSurface> WebGLContext::GetFrontBufferSnapshot() {
   });
 
   const auto& size = front->mDesc.size;
-  const auto surfFormat = mOptions.alpha ? gfx::SurfaceFormat::B8G8R8A8
-                                         : gfx::SurfaceFormat::B8G8R8X8;
-  const auto stride = size.width * 4;
-  RefPtr<gfx::DataSourceSurface> surf =
-      gfx::Factory::CreateDataSourceSurfaceWithStride(size, surfFormat, stride,
-                                                      /*zero=*/true);
-  MOZ_ASSERT(surf);
-  if (NS_WARN_IF(!surf)) return nullptr;
+  const size_t stride = size.width * 4;
+  MOZ_ASSERT(dest.length() == stride * size.height);
+  gl->fReadPixels(0, 0, size.width, size.height, LOCAL_GL_RGBA,
+                  LOCAL_GL_UNSIGNED_BYTE, dest.begin().get());
+  gfxUtils::ConvertBGRAtoRGBA(dest.begin().get(), stride * size.height);
 
-  // -
-
-  {
-    const gfx::DataSourceSurface::ScopedMap map(
-        surf, gfx::DataSourceSurface::READ_WRITE);
-    if (!map.IsMapped()) {
-      MOZ_ASSERT(false);
-      return nullptr;
-    }
-    MOZ_ASSERT(map.GetStride() == stride);
-
-    gl->fReadPixels(0, 0, size.width, size.height, LOCAL_GL_RGBA,
-                    LOCAL_GL_UNSIGNED_BYTE, map.GetData());
-    gfxUtils::ConvertBGRAtoRGBA(map.GetData(), stride * size.height);
-  }
-
-  return surf;
+  return true;
 }
 
 void WebGLContext::ClearVRSwapChain() { mWebVRSwapChain.ClearPool(); }
@@ -1212,6 +1101,7 @@ void WebGLContext::LoseContext(const webgl::ContextLossReason reason) {
   printf_stderr("WebGL(%p)::LoseContext(%u)\n", this,
                 static_cast<uint32_t>(reason));
   mIsContextLost = true;
+  mLruPosition = {};
   mHost->OnContextLoss(reason);
 }
 
@@ -1411,48 +1301,6 @@ uint64_t IndexedBufferBinding::ByteCount() const {
 
 ////////////////////////////////////////
 
-ScopedUnpackReset::ScopedUnpackReset(const WebGLContext* const webgl)
-    : mWebGL(webgl) {
-  const auto& gl = mWebGL->gl;
-  // clang-format off
-  if (mWebGL->mPixelStore.mUnpackAlignment != 4) gl->fPixelStorei(LOCAL_GL_UNPACK_ALIGNMENT, 4);
-
-  if (mWebGL->IsWebGL2()) {
-    if (mWebGL->mPixelStore.mUnpackRowLength   != 0) gl->fPixelStorei(LOCAL_GL_UNPACK_ROW_LENGTH  , 0);
-    if (mWebGL->mPixelStore.mUnpackImageHeight != 0) gl->fPixelStorei(LOCAL_GL_UNPACK_IMAGE_HEIGHT, 0);
-    if (mWebGL->mPixelStore.mUnpackSkipPixels  != 0) gl->fPixelStorei(LOCAL_GL_UNPACK_SKIP_PIXELS , 0);
-    if (mWebGL->mPixelStore.mUnpackSkipRows    != 0) gl->fPixelStorei(LOCAL_GL_UNPACK_SKIP_ROWS   , 0);
-    if (mWebGL->mPixelStore.mUnpackSkipImages  != 0) gl->fPixelStorei(LOCAL_GL_UNPACK_SKIP_IMAGES , 0);
-
-    if (mWebGL->mBoundPixelUnpackBuffer) gl->fBindBuffer(LOCAL_GL_PIXEL_UNPACK_BUFFER, 0);
-  }
-  // clang-format on
-}
-
-ScopedUnpackReset::~ScopedUnpackReset() {
-  const auto& gl = mWebGL->gl;
-  // clang-format off
-  gl->fPixelStorei(LOCAL_GL_UNPACK_ALIGNMENT, mWebGL->mPixelStore.mUnpackAlignment);
-
-  if (mWebGL->IsWebGL2()) {
-    gl->fPixelStorei(LOCAL_GL_UNPACK_ROW_LENGTH  , mWebGL->mPixelStore.mUnpackRowLength  );
-    gl->fPixelStorei(LOCAL_GL_UNPACK_IMAGE_HEIGHT, mWebGL->mPixelStore.mUnpackImageHeight);
-    gl->fPixelStorei(LOCAL_GL_UNPACK_SKIP_PIXELS , mWebGL->mPixelStore.mUnpackSkipPixels );
-    gl->fPixelStorei(LOCAL_GL_UNPACK_SKIP_ROWS   , mWebGL->mPixelStore.mUnpackSkipRows   );
-    gl->fPixelStorei(LOCAL_GL_UNPACK_SKIP_IMAGES , mWebGL->mPixelStore.mUnpackSkipImages );
-
-    GLuint pbo = 0;
-    if (mWebGL->mBoundPixelUnpackBuffer) {
-        pbo = mWebGL->mBoundPixelUnpackBuffer->mGLName;
-    }
-
-    gl->fBindBuffer(LOCAL_GL_PIXEL_UNPACK_BUFFER, pbo);
-  }
-  // clang-format on
-}
-
-////////////////////
-
 ScopedFBRebinder::~ScopedFBRebinder() {
   const auto fnName = [&](WebGLFramebuffer* fb) {
     return fb ? fb->mGLName : 0;
@@ -1541,54 +1389,6 @@ uint64_t AvailGroups(const uint64_t totalAvailItems,
 
 ////////////////////////////////////////////////////////////////////////////////
 
-CheckedUint32 WebGLContext::GetUnpackSize(bool isFunc3D, uint32_t width,
-                                          uint32_t height, uint32_t depth,
-                                          uint8_t bytesPerPixel) {
-  if (!width || !height || !depth) return 0;
-
-  ////////////////
-
-  const auto& maybeRowLength = mPixelStore.mUnpackRowLength;
-  const auto& maybeImageHeight = mPixelStore.mUnpackImageHeight;
-
-  const auto usedPixelsPerRow =
-      CheckedUint32(mPixelStore.mUnpackSkipPixels) + width;
-  const auto stridePixelsPerRow =
-      (maybeRowLength ? CheckedUint32(maybeRowLength) : usedPixelsPerRow);
-
-  const auto usedRowsPerImage =
-      CheckedUint32(mPixelStore.mUnpackSkipRows) + height;
-  const auto strideRowsPerImage =
-      (maybeImageHeight ? CheckedUint32(maybeImageHeight) : usedRowsPerImage);
-
-  const uint32_t skipImages = (isFunc3D ? mPixelStore.mUnpackSkipImages : 0);
-  const CheckedUint32 usedImages = CheckedUint32(skipImages) + depth;
-
-  ////////////////
-
-  CheckedUint32 strideBytesPerRow = bytesPerPixel * stridePixelsPerRow;
-  strideBytesPerRow =
-      RoundUpToMultipleOf(strideBytesPerRow, mPixelStore.mUnpackAlignment);
-
-  const CheckedUint32 strideBytesPerImage =
-      strideBytesPerRow * strideRowsPerImage;
-
-  ////////////////
-
-  CheckedUint32 usedBytesPerRow = bytesPerPixel * usedPixelsPerRow;
-  // Don't round this to the alignment, since alignment here is really just used
-  // for establishing stride, particularly in WebGL 1, where you can't set
-  // ROW_LENGTH.
-
-  CheckedUint32 totalBytes = strideBytesPerImage * (usedImages - 1);
-  totalBytes += strideBytesPerRow * (usedRowsPerImage - 1);
-  totalBytes += usedBytesPerRow;
-
-  return totalBytes;
-}
-
-////////////////////////////////////////////////////////////////////////////////
-
 const char* WebGLContext::FuncName() const {
   const char* ret;
   if (MOZ_LIKELY(mFuncScope)) {
@@ -1660,20 +1460,19 @@ already_AddRefed<dom::Promise> ClientWebGLContext::MakeXRCompatible(
 
 // --
 
-webgl::AvailabilityRunnable* WebGLContext::EnsureAvailabilityRunnable() {
+webgl::AvailabilityRunnable& ClientWebGLContext::EnsureAvailabilityRunnable()
+    const {
   if (!mAvailabilityRunnable) {
-    RefPtr<webgl::AvailabilityRunnable> runnable =
-        new webgl::AvailabilityRunnable(this);
-
-    NS_DispatchToCurrentThread(runnable.forget());
+    mAvailabilityRunnable = new webgl::AvailabilityRunnable(this);
+    auto forgettable = mAvailabilityRunnable;
+    NS_DispatchToCurrentThread(forgettable.forget());
   }
-  return mAvailabilityRunnable;
+  return *mAvailabilityRunnable;
 }
 
-webgl::AvailabilityRunnable::AvailabilityRunnable(WebGLContext* const webgl)
-    : Runnable("webgl::AvailabilityRunnable"), mWebGL(webgl) {
-  mWebGL->mAvailabilityRunnable = this;
-}
+webgl::AvailabilityRunnable::AvailabilityRunnable(
+    const ClientWebGLContext* const webgl)
+    : Runnable("webgl::AvailabilityRunnable"), mWebGL(webgl) {}
 
 webgl::AvailabilityRunnable::~AvailabilityRunnable() {
   MOZ_ASSERT(mQueries.empty());
@@ -1682,16 +1481,20 @@ webgl::AvailabilityRunnable::~AvailabilityRunnable() {
 
 nsresult webgl::AvailabilityRunnable::Run() {
   for (const auto& cur : mQueries) {
+    if (!cur) continue;
     cur->mCanBeAvailable = true;
   }
   mQueries.clear();
 
   for (const auto& cur : mSyncs) {
+    if (!cur) continue;
     cur->mCanBeAvailable = true;
   }
   mSyncs.clear();
 
-  mWebGL->mAvailabilityRunnable = nullptr;
+  if (mWebGL) {
+    mWebGL->mAvailabilityRunnable = nullptr;
+  }
   return NS_OK;
 }
 
@@ -1734,17 +1537,24 @@ Maybe<std::string> WebGLContext::GetString(const GLenum pname) const {
   const WebGLContext::FuncScope funcScope(*this, "getParameter");
   if (IsContextLost()) return {};
 
+  const auto FromRaw = [](const char* const raw) -> Maybe<std::string> {
+    if (!raw) return {};
+    return Some(std::string(raw));
+  };
+
   switch (pname) {
     case LOCAL_GL_EXTENSIONS: {
       if (!gl->IsCoreProfile()) {
         const auto rawExt = (const char*)gl->fGetString(LOCAL_GL_EXTENSIONS);
-        return Some(std::string(rawExt));
+        return FromRaw(rawExt);
       }
       std::string ret;
       const auto& numExts = gl->GetIntAs<GLuint>(LOCAL_GL_NUM_EXTENSIONS);
       for (GLuint i = 0; i < numExts; i++) {
         const auto rawExt =
             (const char*)gl->fGetStringi(LOCAL_GL_EXTENSIONS, i);
+        if (!rawExt) continue;
+
         if (i > 0) {
           ret += " ";
         }
@@ -1757,7 +1567,7 @@ Maybe<std::string> WebGLContext::GetString(const GLenum pname) const {
     case LOCAL_GL_VENDOR:
     case LOCAL_GL_VERSION: {
       const auto raw = (const char*)gl->fGetString(pname);
-      return Some(std::string(raw));
+      return FromRaw(raw);
     }
 
     case dom::MOZ_debug_Binding::WSI_INFO: {
@@ -2079,6 +1889,10 @@ webgl::LinkActiveInfo GetLinkActiveInfo(
   return ret;
 }
 
+nsCString ToCString(const std::string& s) {
+  return nsCString(s.data(), s.size());
+}
+
 webgl::CompileResult WebGLContext::GetCompileResult(
     const WebGLShader& shader) const {
   webgl::CompileResult ret;
@@ -2087,11 +1901,12 @@ webgl::CompileResult WebGLContext::GetCompileResult(
     const auto& info = shader.CompileResults();
     if (!info) return;
     if (!info->mValid) {
-      ret.log = info->mInfoLog;
+      ret.log = info->mInfoLog.c_str();
       return;
     }
-    ret.translatedSource = info->mObjectCode;
-    ret.log = shader.CompileLog();
+    // TODO: These could be large and should be made fallible.
+    ret.translatedSource = ToCString(info->mObjectCode);
+    ret.log = ToCString(shader.CompileLog());
     if (!shader.IsCompiled()) return;
     ret.success = true;
   }();
@@ -2102,7 +1917,7 @@ webgl::LinkResult WebGLContext::GetLinkResult(const WebGLProgram& prog) const {
   webgl::LinkResult ret;
   [&]() {
     ret.pending = false;  // Link status polling not yet implemented.
-    ret.log = prog.LinkLog();
+    ret.log = ToCString(prog.LinkLog());
     const auto& info = prog.LinkInfo();
     if (!info) return;
     ret.success = true;

@@ -8,19 +8,23 @@
 
 #include <algorithm>
 #include <stdint.h>  // for UINT32_MAX, uintptr_t
+#include "IndexedDBCommon.h"
 #include "IndexedDatabase.h"
 #include "IndexedDatabaseInlines.h"
 #include "IndexedDatabaseManager.h"
 #include "js/Array.h"        // JS::NewArrayObject
 #include "js/ArrayBuffer.h"  // JS::{IsArrayBufferObject,NewArrayBuffer{,WithContents},GetArrayBufferLengthAndData}
 #include "js/Date.h"
+#include "js/experimental/TypedData.h"  // JS_IsArrayBufferViewObject, JS_GetObjectAsArrayBufferView
 #include "js/MemoryFunctions.h"
+#include "js/Object.h"  // JS::GetBuiltinClass
 #include "js/Value.h"
 #include "jsfriendapi.h"
 #include "mozilla/Casting.h"
 #include "mozilla/CheckedInt.h"
 #include "mozilla/EndianUtils.h"
 #include "mozilla/FloatingPoint.h"
+#include "mozilla/ResultExtensions.h"
 #include "mozilla/ReverseIterator.h"
 #include "mozIStorageStatement.h"
 #include "mozIStorageValueArray.h"
@@ -411,7 +415,7 @@ IDBResult<void, IDBSpecialValue::Invalid> Key::EncodeJSValInternal(
     JS::RootedObject object(aCx, &aVal.toObject());
 
     js::ESClass builtinClass;
-    if (!js::GetBuiltinClass(aCx, object, &builtinClass)) {
+    if (!JS::GetBuiltinClass(aCx, object, &builtinClass)) {
       IDB_REPORT_INTERNAL_ERR();
       return {SpecialValues::Exception,
               ErrorResult{NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR}};
@@ -483,9 +487,8 @@ nsresult Key::DecodeJSValInternal(const EncodedDataType*& aPos,
     uint32_t index = 0;
     JS::Rooted<JS::Value> val(aCx);
     while (aPos < aEnd && *aPos - aTypeOffset != eTerminator) {
-      nsresult rv = DecodeJSValInternal(aPos, aEnd, aCx, aTypeOffset, &val,
-                                        aRecursionDepth + 1);
-      NS_ENSURE_SUCCESS(rv, rv);
+      IDB_TRY(DecodeJSValInternal(aPos, aEnd, aCx, aTypeOffset, &val,
+                                  aRecursionDepth + 1));
 
       aTypeOffset = 0;
 

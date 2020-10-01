@@ -9,9 +9,9 @@
 
 #include <unordered_map>
 
-#include "base/platform_thread.h"                    // for PlatformThreadId
-#include "mozilla/layers/AsyncCompositionManager.h"  // for AsyncTransform
+#include "base/platform_thread.h"  // for PlatformThreadId
 #include "mozilla/layers/APZUtils.h"
+#include "mozilla/layers/SampleTime.h"
 #include "mozilla/StaticMutex.h"
 #include "mozilla/StaticPtr.h"
 #include "Units.h"
@@ -60,11 +60,11 @@ class APZSampler {
       const wr::WrWindowId& aWindowId, wr::Transaction* aTxn,
       const wr::WrPipelineIdEpochs* aEpochsBeingRendered);
 
-  void SetSampleTime(const TimeStamp& aSampleTime);
+  void SetSampleTime(const SampleTime& aSampleTime);
   void SampleForWebRender(wr::TransactionWrapper& aTxn,
                           const wr::WrPipelineIdEpochs* aEpochsBeingRendered);
 
-  bool AdvanceAnimations(const TimeStamp& aSampleTime);
+  bool AdvanceAnimations(const SampleTime& aSampleTime);
 
   /**
    * Compute the updated shadow transform for a scroll thumb layer that
@@ -99,6 +99,15 @@ class APZSampler {
   bool HasUnusedAsyncTransform(const LayerMetricsWrapper& aLayer);
 
   /**
+   * Similar to above GetCurrentAsyncTransform, but get the current transform
+   * with LayersId and ViewID.
+   * NOTE: This function should NOT be called on the compositor thread.
+   */
+  AsyncTransform GetCurrentAsyncTransform(
+      const LayersId& aLayersId, const ScrollableLayerGuid::ViewID& aScrollId,
+      AsyncTransformComponents aComponents) const;
+
+  /**
    * Returns the composition bounds of the APZC correspoinding to the pair of
    * |aLayersId| and |aScrollId|.
    */
@@ -107,6 +116,8 @@ class APZSampler {
       const ScrollableLayerGuid::ViewID& aScrollId) const;
 
   ScrollableLayerGuid GetGuid(const LayerMetricsWrapper& aLayer);
+
+  GeckoViewMetrics GetGeckoViewMetrics(const LayerMetricsWrapper& aLayer) const;
 
   ScreenMargin GetGeckoFixedLayerMargins() const;
 
@@ -152,7 +163,7 @@ class APZSampler {
 
   Mutex mSampleTimeLock;
   // Can only be accessed or modified while holding mSampleTimeLock.
-  TimeStamp mSampleTime;
+  SampleTime mSampleTime;
 };
 
 }  // namespace layers

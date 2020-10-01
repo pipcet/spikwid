@@ -77,12 +77,6 @@ function evalInTab(tab, string) {
   return jsonrpc(tab, "_eval", [string]);
 }
 
-function callInTab(tab, name) {
-  info("Calling function with name '" + name + "' in tab.");
-
-  return jsonrpc(tab, "call", [name, Array.prototype.slice.call(arguments, 2)]);
-}
-
 function connect(client) {
   info("Connecting client.");
   return client.connect();
@@ -128,14 +122,9 @@ function waitForWorkerListChanged(targetFront) {
   return targetFront.once("workerListChanged");
 }
 
-function attachThread(workerTargetFront, options) {
-  info("Attaching to thread.");
-  return workerTargetFront.attachThread(options);
-}
-
-async function waitForWorkerClose(workerTargetFront) {
+async function waitForWorkerClose(workerDescriptorFront) {
   info("Waiting for worker to close.");
-  await workerTargetFront.once("close");
+  await workerDescriptorFront.once("close");
   info("Worker did close.");
 }
 
@@ -189,10 +178,10 @@ async function initWorkerDebugger(TAB_URL, WORKER_URL) {
   await createWorkerInTab(tab, WORKER_URL);
 
   const { workers } = await listWorkers(target);
-  const workerTargetFront = findWorker(workers, WORKER_URL);
+  const workerDescriptorFront = findWorker(workers, WORKER_URL);
 
   const toolbox = await gDevTools.showToolbox(
-    workerTargetFront,
+    workerDescriptorFront,
     "jsdebugger",
     Toolbox.HostType.WINDOW
   );
@@ -208,7 +197,7 @@ async function initWorkerDebugger(TAB_URL, WORKER_URL) {
     client,
     tab,
     target,
-    workerTargetFront,
+    workerDescriptorFront,
     toolbox,
     gDebugger,
   };

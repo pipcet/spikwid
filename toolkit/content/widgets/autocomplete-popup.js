@@ -346,10 +346,8 @@
         height = lastRowRect.bottom - firstRowRect.top + this._rlbPadding;
       }
 
-      let currentHeight = this.richlistbox.getBoundingClientRect().height;
-      if (height <= currentHeight) {
-        this._collapseUnusedItems();
-      }
+      this._collapseUnusedItems();
+
       this.richlistbox.style.removeProperty("height");
       // We need to get the ceiling of the calculated value to ensure that the box fully contains
       // all of its contents and doesn't cause a scrollbar since nsIBoxObject only expects a
@@ -403,6 +401,7 @@
             "autofill-clear-button",
             "autofill-insecureWarning",
             "generatedPassword",
+            "importableLearnMore",
             "importableLogins",
             "insecureWarning",
             "loginsFooter",
@@ -433,6 +432,11 @@
               break;
             case "autofill-insecureWarning":
               options = { is: "autocomplete-creditcard-insecure-field" };
+              break;
+            case "importableLearnMore":
+              options = {
+                is: "autocomplete-importable-learn-more-richlistitem",
+              };
               break;
             case "importableLogins":
               options = { is: "autocomplete-importable-logins-richlistitem" };

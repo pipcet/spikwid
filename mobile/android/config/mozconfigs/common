@@ -28,10 +28,13 @@ if [ -z "$NO_NDK" -a -z "$USE_ARTIFACT" ]; then
     # We use our own clang instead of the NDK's clang.
     CC="$MOZ_FETCHES_DIR/clang/bin/clang"
     CXX="$MOZ_FETCHES_DIR/clang/bin/clang++"
+    CFLAGS="$CFLAGS -fcrash-diagnostics-dir=${UPLOAD_PATH}"
+    CXXFLAGS="$CXXFLAGS -fcrash-diagnostics-dir=${UPLOAD_PATH}"
     ac_add_options --with-android-ndk="$MOZ_FETCHES_DIR/android-ndk"
     # Make sure that any host binaries we build use whatever libraries clang
     # linked against, rather than what's on the system.
     mk_add_options "export LD_LIBRARY_PATH=$MOZ_FETCHES_DIR/clang/lib"
+    export DUMP_SYMS="$MOZ_FETCHES_DIR/dump_syms/dump_syms"
     # Enable static analysis plugin
     export ENABLE_CLANG_PLUGIN=1
 fi

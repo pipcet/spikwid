@@ -19,6 +19,8 @@
 #include "nsRect.h"
 #include "Units.h"
 
+class nsFrameLoader;
+
 namespace mozilla {
 
 namespace dom {
@@ -55,7 +57,7 @@ class RemoteBrowser : public nsISupports {
   virtual BrowsingContext* GetBrowsingContext() const = 0;
   virtual nsILoadContext* GetLoadContext() const = 0;
 
-  virtual void LoadURL(nsIURI* aURI, nsIPrincipal* aTriggeringPrincipal) = 0;
+  virtual void LoadURL(nsDocShellLoadState* aLoadState) = 0;
   virtual void ResumeLoad(uint64_t aPendingSwitchId) = 0;
   virtual void DestroyStart() = 0;
   virtual void DestroyComplete() = 0;

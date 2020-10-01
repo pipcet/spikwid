@@ -85,6 +85,8 @@ class MacOSFontEntry final : public gfxFontEntry {
 
   static void DestroyBlobFunc(void* aUserData);
 
+  bool CheckForColorGlyphs();
+
   CGFontRef
       mFontRef;  // owning reference to the CGFont, released on destruction
 
@@ -219,7 +221,8 @@ class gfxMacPlatformFontList final : public gfxPlatformFontList {
 
   void GetFacesInitDataForFamily(
       const mozilla::fontlist::Family* aFamily,
-      nsTArray<mozilla::fontlist::Face::InitData>& aFaces) const override;
+      nsTArray<mozilla::fontlist::Face::InitData>& aFaces,
+      bool aLoadCmaps) const override;
 
   void ReadFaceNamesForFamily(mozilla::fontlist::Family* aFamily,
                               bool aNeedFullnamePostscriptNames) override;

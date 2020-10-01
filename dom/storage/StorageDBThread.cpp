@@ -28,6 +28,7 @@
 #include "nsVariant.h"
 #include "mozilla/EventQueue.h"
 #include "mozilla/IOInterposer.h"
+#include "mozilla/OriginAttributes.h"
 #include "mozilla/ThreadEventQueue.h"
 #include "mozilla/Services.h"
 #include "mozilla/Tokenizer.h"
@@ -869,7 +870,7 @@ const nsCString StorageDBThread::DBOperation::OriginNoSuffix() const {
     return mCache->OriginNoSuffix();
   }
 
-  return EmptyCString();
+  return ""_ns;
 }
 
 const nsCString StorageDBThread::DBOperation::OriginSuffix() const {
@@ -877,7 +878,7 @@ const nsCString StorageDBThread::DBOperation::OriginSuffix() const {
     return mCache->OriginSuffix();
   }
 
-  return EmptyCString();
+  return ""_ns;
 }
 
 const nsCString StorageDBThread::DBOperation::Origin() const {

@@ -81,11 +81,8 @@ class nsImageFrame : public nsAtomicContainerFrame, public nsIReflowCallback {
   nscoord GetMinISize(gfxContext* aRenderingContext) final;
   nscoord GetPrefISize(gfxContext* aRenderingContext) final;
   mozilla::IntrinsicSize GetIntrinsicSize() final { return mIntrinsicSize; }
-  mozilla::AspectRatio GetComputedIntrinsicRatio() const {
+  mozilla::AspectRatio GetIntrinsicRatio() const final {
     return mIntrinsicRatio;
-  }
-  mozilla::AspectRatio GetIntrinsicRatio() final {
-    return GetComputedIntrinsicRatio();
   }
   void Reflow(nsPresContext*, ReflowOutput&, const ReflowInput&,
               nsReflowStatus&) override;
@@ -221,11 +218,13 @@ class nsImageFrame : public nsAtomicContainerFrame, public nsIReflowCallback {
     return !HasAnyStateBits(NS_FRAME_FIRST_REFLOW);
   }
 
-  mozilla::LogicalSize ComputeSize(
-      gfxContext* aRenderingContext, mozilla::WritingMode aWritingMode,
-      const mozilla::LogicalSize& aCBSize, nscoord aAvailableISize,
-      const mozilla::LogicalSize& aMargin, const mozilla::LogicalSize& aBorder,
-      const mozilla::LogicalSize& aPadding, ComputeSizeFlags aFlags) final;
+  SizeComputationResult ComputeSize(gfxContext* aRenderingContext,
+                                    mozilla::WritingMode aWM,
+                                    const mozilla::LogicalSize& aCBSize,
+                                    nscoord aAvailableISize,
+                                    const mozilla::LogicalSize& aMargin,
+                                    const mozilla::LogicalSize& aBorderPadding,
+                                    mozilla::ComputeSizeFlags aFlags) final;
 
   bool IsServerImageMap();
 
@@ -360,6 +359,9 @@ class nsImageFrame : public nsAtomicContainerFrame, public nsIReflowCallback {
   nsCOMPtr<imgIContainer> mPrevImage;
   nsSize mComputedSize;
   mozilla::IntrinsicSize mIntrinsicSize;
+
+  // Stores mImage's intrinsic ratio, or a default AspectRatio if there's no
+  // intrinsic ratio.
   mozilla::AspectRatio mIntrinsicRatio;
 
   const Kind mKind;

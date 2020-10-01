@@ -5,7 +5,9 @@
 from __future__ import absolute_import, print_function, unicode_literals
 
 import argparse
+from datetime import datetime, timedelta
 import logging
+from operator import itemgetter
 import sys
 
 from mach.decorators import (
@@ -18,24 +20,35 @@ from mach.decorators import (
 from mozbuild.base import MachCommandBase, MozbuildObject
 
 
+def _get_busted_bugs(payload):
+    import requests
+    payload = dict(payload)
+    payload['include_fields'] = 'id,summary,last_change_time,resolution'
+    payload['blocks'] = 1543241
+    response = requests.get('https://bugzilla.mozilla.org/rest/bug', payload)
+    response.raise_for_status()
+    return response.json().get('bugs', [])
+
+
 @CommandProvider
 class BustedProvider(MachCommandBase):
     @Command('busted', category='misc',
              description='Query known bugs in our tooling, and file new ones.')
     def busted_default(self):
-        import requests
-        payload = {'include_fields': 'id,summary,last_change_time',
-                   'blocks': 1543241,
-                   'resolution': '---'}
-        response = requests.get('https://bugzilla.mozilla.org/rest/bug', payload)
-        response.raise_for_status()
-        json_response = response.json()
-        if 'bugs' in json_response and len(json_response['bugs']) > 0:
-            # Display most recently modifed bugs first.
-            bugs = sorted(json_response['bugs'], key=lambda item: item['last_change_time'],
-                          reverse=True)
-            for bug in bugs:
-                print("Bug %s - %s" % (bug['id'], bug['summary']))
+        unresolved = _get_busted_bugs({'resolution': '---'})
+        creation_time = datetime.now() - timedelta(days=15)
+        creation_time = creation_time.strftime('%Y-%m-%dT%H-%M-%SZ')
+        resolved = _get_busted_bugs({'creation_time': creation_time})
+        resolved = [bug for bug in resolved if bug['resolution']]
+        all_bugs = sorted(
+            unresolved + resolved, key=itemgetter('last_change_time'),
+            reverse=True)
+        if all_bugs:
+            for bug in all_bugs:
+                print("[%s] Bug %s - %s" % (
+                    'UNRESOLVED' if not bug['resolution']
+                    else 'RESOLVED - %s' % bug['resolution'], bug['id'],
+                    bug['summary']))
         else:
             print("No known tooling issues found.")
 
@@ -84,26 +97,6 @@ class BustedProvider(MachCommandBase):
         uri = ('https://bugzilla.mozilla.org/enter_bug.cgi?'
                'product=%s&component=%s&blocked=1543241' % (product, component))
         webbrowser.open_new_tab(uri)
-
-
-@CommandProvider
-class UUIDProvider(object):
-    @Command('uuid', category='misc',
-             description='Generate a uuid.')
-    @CommandArgument('--format', '-f', choices=['idl', 'cpp', 'c++'],
-                     help='Output format for the generated uuid.')
-    def uuid(self, format=None):
-        import uuid
-        u = uuid.uuid4()
-        if format in [None, 'idl']:
-            print(u)
-            if format is None:
-                print('')
-        if format in [None, 'cpp', 'c++']:
-            u = u.hex
-            print('{ 0x%s, 0x%s, 0x%s, \\' % (u[0:8], u[8:12], u[12:16]))
-            pairs = tuple(map(lambda n: u[n:n+2], range(16, 32, 2)))
-            print(('  { ' + '0x%s, ' * 7 + '0x%s } }') % pairs)
 
 
 MACH_PASTEBIN_DURATIONS = {
@@ -227,7 +220,7 @@ appropriate highlighter.
 
 
 @CommandProvider
-class PastebinProvider(object):
+class PastebinProvider(MachCommandBase):
     @Command('pastebin', category='misc',
              description=MACH_PASTEBIN_DESCRIPTION)
     @CommandArgument('--list-highlighters', action='store_true',
@@ -330,49 +323,74 @@ class PastebinProvider(object):
         return 1
 
 
-def mozregression_import():
-    # Lazy loading of mozregression.
-    # Note that only the mach_interface module should be used from this file.
-    try:
-        import mozregression.mach_interface
-    except ImportError:
-        return None
-    return mozregression.mach_interface
+class PypiBasedTool:
+    """
+    Helper for loading a tool that is hosted on pypi. The package is expected
+    to expose a `mach_interface` module which has `new_release_on_pypi`,
+    `parser`, and `run` functions.
+    """
+
+    def __init__(self, module_name, pypi_name=None):
+        self.name = module_name
+        self.pypi_name = pypi_name or module_name
+
+    def _import(self):
+        # Lazy loading of the tools mach interface.
+        # Note that only the mach_interface module should be used from this file.
+        import importlib
+        try:
+            return importlib.import_module('%s.mach_interface' % self.name)
+        except ImportError:
+            return None
+
+    def create_parser(self, subcommand=None):
+        # Create the command line parser.
+        # If the tool is not installed, or not up to date, it will
+        # first be installed.
+        cmd = MozbuildObject.from_environment()
+        cmd.activate_virtualenv()
+        tool = self._import()
+        if not tool:
+            # The tool is not here at all, install it
+            cmd.virtualenv_manager.install_pip_package(self.pypi_name)
+            print("%s was installed. please re-run your"
+                  " command. If you keep getting this message please "
+                  " manually run: 'pip install -U %s'." % (self.pypi_name, self.pypi_name))
+        else:
+            # Check if there is a new release available
+            release = tool.new_release_on_pypi()
+            if release:
+                print(release)
+                # there is one, so install it. Note that install_pip_package
+                # does not work here, so just run pip directly.
+                cmd.virtualenv_manager._run_pip([
+                    'install',
+                    '%s==%s' % (self.pypi_name, release)
+                ])
+                print("%s was updated to version %s. please"
+                      " re-run your command." % (self.pypi_name, release))
+            else:
+                # Tool is up to date, return the parser.
+                if subcommand:
+                    return tool.parser(subcommand)
+                else:
+                    return tool.parser()
+        # exit if we updated or installed mozregression because
+        # we may have already imported mozregression and running it
+        # as this may cause issues.
+        sys.exit(0)
+
+    def run(self, **options):
+        tool = self._import()
+        tool.run(options)
 
 
 def mozregression_create_parser():
     # Create the mozregression command line parser.
     # if mozregression is not installed, or not up to date, it will
     # first be installed.
-    cmd = MozbuildObject.from_environment()
-    cmd._activate_virtualenv()
-    mozregression = mozregression_import()
-    if not mozregression:
-        # mozregression is not here at all, install it
-        cmd.virtualenv_manager.install_pip_package('mozregression')
-        print("mozregression was installed. please re-run your"
-              " command. If you keep getting this message please "
-              " manually run: 'pip install -U mozregression'.")
-    else:
-        # check if there is a new release available
-        release = mozregression.new_release_on_pypi()
-        if release:
-            print(release)
-            # there is one, so install it. Note that install_pip_package
-            # does not work here, so just run pip directly.
-            cmd.virtualenv_manager._run_pip([
-                'install',
-                'mozregression==%s' % release
-            ])
-            print("mozregression was updated to version %s. please"
-                  " re-run your command." % release)
-        else:
-            # mozregression is up to date, return the parser.
-            return mozregression.parser()
-    # exit if we updated or installed mozregression because
-    # we may have already imported mozregression and running it
-    # as this may cause issues.
-    sys.exit(0)
+    loader = PypiBasedTool("mozregression")
+    return loader.create_parser()
 
 
 @CommandProvider
@@ -383,9 +401,9 @@ class MozregressionCommand(MachCommandBase):
                           " and inbound builds."),
              parser=mozregression_create_parser)
     def run(self, **options):
-        self._activate_virtualenv()
-        mozregression = mozregression_import()
-        mozregression.run(options)
+        self.activate_virtualenv()
+        mozregression = PypiBasedTool("mozregression")
+        mozregression.run(**options)
 
 
 @CommandProvider
@@ -429,3 +447,41 @@ class NodeCommands(MachCommandBase):
             pass_thru=True,  # Avoid eating npm output/error messages
             ensure_exit_code=False,  # Don't throw on non-zero exit code.
         )
+
+
+def logspam_create_parser(subcommand):
+    # Create the logspam command line parser.
+    # if logspam is not installed, or not up to date, it will
+    # first be installed.
+    loader = PypiBasedTool("logspam", "mozilla-log-spam")
+    return loader.create_parser(subcommand)
+
+
+from functools import partial
+
+
+@CommandProvider
+class LogspamCommand(MachCommandBase):
+    @Command('logspam',
+             category='misc',
+             description=("Warning categorizer for treeherder test runs."))
+    def logspam(self):
+        pass
+
+    @SubCommand('logspam', 'report', parser=partial(logspam_create_parser, "report"))
+    def report(self, **options):
+        self.activate_virtualenv()
+        logspam = PypiBasedTool("logspam")
+        logspam.run(command="report", **options)
+
+    @SubCommand('logspam', 'bisect', parser=partial(logspam_create_parser, "bisect"))
+    def bisect(self, **options):
+        self.activate_virtualenv()
+        logspam = PypiBasedTool("logspam")
+        logspam.run(command="bisect", **options)
+
+    @SubCommand('logspam', 'file', parser=partial(logspam_create_parser, "file"))
+    def create(self, **options):
+        self.activate_virtualenv()
+        logspam = PypiBasedTool("logspam")
+        logspam.run(command="file", **options)

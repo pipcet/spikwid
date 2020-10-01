@@ -17,6 +17,7 @@ class TestParameters(unittest.TestCase):
 
     vals = {
         'app_version': 'app_version',
+        'backstop': False,
         'base_repository': 'base_repository',
         'build_date': 0,
         'build_number': 0,
@@ -31,6 +32,7 @@ class TestParameters(unittest.TestCase):
         'message': 'message',
         'moz_build_date': 'moz_build_date',
         'next_version': 'next_version',
+        'optimize_strategies': None,
         'optimize_target_tasks': False,
         'owner': 'owner',
         'phabricator_diff': 'phabricator_diff',
@@ -38,7 +40,8 @@ class TestParameters(unittest.TestCase):
         'pushdate': 0,
         'pushlog_id': 'pushlog_id',
         'release_enable_emefree': False,
-        'release_enable_partners': False,
+        'release_enable_partner_repack': False,
+        'release_enable_partner_attribution': False,
         'release_eta': None,
         'release_history': {},
         'release_partners': [],

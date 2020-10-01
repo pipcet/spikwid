@@ -9,7 +9,7 @@
 
 #include "mozilla/Attributes.h"
 #include "mozilla/dom/SVGElement.h"
-#include "FilterSupport.h"
+#include "FilterDescription.h"
 #include "nsImageLoadingContent.h"
 #include "SVGAnimatedLength.h"
 #include "SVGAnimatedNumber.h"
@@ -90,10 +90,6 @@ class SVGFE : public SVGFEBase {
                          nsINode** aResult) const override = 0;
 
   virtual bool HasValidDimensions() const override;
-
-  bool IsNodeOfType(uint32_t aFlags) const override {
-    return !(aFlags & ~eFILTER);
-  }
 
   virtual SVGAnimatedString& GetResultImageName() = 0;
   // Return a list of all image names used as sources. Default is to

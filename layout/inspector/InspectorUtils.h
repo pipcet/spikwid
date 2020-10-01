@@ -133,7 +133,8 @@ class InspectorUtils {
   //
   // NOTE: Converting a color to RGBA may be lossy when converting from some
   // formats e.g. CMYK.
-  static void ColorToRGBA(GlobalObject& aGlobal, const nsACString& aColorString,
+  static void ColorToRGBA(GlobalObject&, const nsACString& aColorString,
+                          const Document*,
                           Nullable<InspectorRGBATuple>& aResult);
 
   // Check whether a given color is a valid CSS color.
@@ -238,6 +239,7 @@ class InspectorUtils {
 
   static Element* ContainingBlockOf(GlobalObject&, Element&);
 
+  MOZ_CAN_RUN_SCRIPT
   static already_AddRefed<nsINodeList> GetOverflowingChildrenOfElement(
       GlobalObject& aGlobal, Element& element);
 

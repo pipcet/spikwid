@@ -294,6 +294,7 @@
     handleSearchCommand(aEvent, aEngine, aForceNewTab) {
       let where = "current";
       let params;
+      const newTabPref = Services.prefs.getBoolPref("browser.search.openintab");
 
       // Open ctrl/cmd clicks on one-off buttons in a new background tab.
       if (
@@ -304,13 +305,21 @@
           return;
         }
         where = whereToOpenLink(aEvent, false, true);
+        if (
+          newTabPref &&
+          !aEvent.altKey &&
+          !aEvent.getModifierState("AltGraph") &&
+          where == "current" &&
+          !gBrowser.selectedTab.isEmpty
+        ) {
+          where = "tab";
+        }
       } else if (aForceNewTab) {
         where = "tab";
         if (Services.prefs.getBoolPref("browser.tabs.loadInBackground")) {
           where += "-background";
         }
       } else {
-        let newTabPref = Services.prefs.getBoolPref("browser.search.openintab");
         if (
           (aEvent instanceof KeyboardEvent &&
             (aEvent.altKey || aEvent.getModifierState("AltGraph"))) ^
@@ -329,7 +338,6 @@
           };
         }
       }
-
       this.handleSearchCommandWhere(aEvent, aEngine, where, params);
     }
 
@@ -385,6 +393,7 @@
 
     doSearch(aData, aWhere, aEngine, aParams, aOneOff) {
       let textBox = this._textbox;
+      let engine = aEngine || this.currentEngine;
 
       // Save the current value in the form history
       if (
@@ -397,6 +406,7 @@
             op: "bump",
             fieldname: textBox.getAttribute("autocompletesearchparam"),
             value: aData,
+            source: engine.name,
           },
           {
             handleError(aError) {
@@ -408,7 +418,6 @@
         );
       }
 
-      let engine = aEngine || this.currentEngine;
       let submission = engine.getSubmission(aData, null, "searchbar");
       let telemetrySearchDetails = this.telemetrySearchDetails;
       this.telemetrySearchDetails = null;
@@ -420,6 +429,7 @@
         isOneOff: aOneOff,
         isSuggestion: !aOneOff && telemetrySearchDetails,
         selection: telemetrySearchDetails,
+        url: submission.uri,
       };
       BrowserSearch.recordSearchInTelemetry(engine, "searchbar", details);
       // null parameter below specifies HTML response for search

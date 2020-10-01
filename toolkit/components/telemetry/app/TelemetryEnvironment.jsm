@@ -262,7 +262,16 @@ const DEFAULT_ENVIRONMENT_PREFS = new Map([
   ["extensions.enabledScopes", { what: RECORD_PREF_VALUE }],
   ["extensions.blocklist.enabled", { what: RECORD_PREF_VALUE }],
   ["extensions.formautofill.addresses.enabled", { what: RECORD_PREF_VALUE }],
+  [
+    "extensions.formautofill.addresses.capture.enabled",
+    { what: RECORD_PREF_VALUE },
+  ],
   ["extensions.formautofill.creditCards.enabled", { what: RECORD_PREF_VALUE }],
+  [
+    "extensions.formautofill.creditCards.available",
+    { what: RECORD_PREF_VALUE },
+  ],
+  ["extensions.formautofill.creditCards.used", { what: RECORD_PREF_VALUE }],
   ["extensions.strictCompatibility", { what: RECORD_PREF_VALUE }],
   ["extensions.update.enabled", { what: RECORD_PREF_VALUE }],
   ["extensions.update.url", { what: RECORD_PREF_VALUE }],
@@ -325,7 +334,6 @@ const PREF_DISTRIBUTOR = "app.distributor";
 const PREF_DISTRIBUTOR_CHANNEL = "app.distributor.channel";
 const PREF_APP_PARTNER_BRANCH = "app.partner.";
 const PREF_PARTNER_ID = "mozilla.partner.id";
-const PREF_SEARCH_COHORT = "browser.search.cohort";
 
 const COMPOSITOR_CREATED_TOPIC = "compositor:created";
 const COMPOSITOR_PROCESS_ABORTED_TOPIC = "compositor:process-aborted";
@@ -1451,13 +1459,6 @@ EnvironmentCache.prototype = {
       this._currentEnvironment.settings.defaultPrivateSearchEngineData = {
         ...defaultEngineInfo.defaultPrivateSearchEngineData,
       };
-    }
-
-    // Record the cohort identifier used for search defaults A/B testing.
-    if (Services.prefs.prefHasUserValue(PREF_SEARCH_COHORT)) {
-      const searchCohort = Services.prefs.getCharPref(PREF_SEARCH_COHORT);
-      this._currentEnvironment.settings.searchCohort = searchCohort;
-      TelemetryEnvironment.setExperimentActive("searchCohort", searchCohort);
     }
   },
 

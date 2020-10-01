@@ -61,6 +61,7 @@ def get_app_version(product_dir='browser'):
 
 base_schema = Schema({
     Required('app_version'): text_type,
+    Required('backstop'): bool,
     Required('base_repository'): text_type,
     Required('build_date'): int,
     Required('build_number'): int,
@@ -79,6 +80,7 @@ base_schema = Schema({
     Required('message'): text_type,
     Required('moz_build_date'): text_type,
     Required('next_version'): Any(None, text_type),
+    Required('optimize_strategies'): Any(None, text_type),
     Required('optimize_target_tasks'): bool,
     Required('owner'): text_type,
     Required('phabricator_diff'): Any(None, text_type),
@@ -86,7 +88,8 @@ base_schema = Schema({
     Required('pushdate'): int,
     Required('pushlog_id'): text_type,
     Required('release_enable_emefree'): bool,
-    Required('release_enable_partners'): bool,
+    Required('release_enable_partner_repack'): bool,
+    Required('release_enable_partner_attribution'): bool,
     Required('release_eta'): Any(None, text_type),
     Required('release_history'): {text_type: dict},
     Required('release_partners'): Any(None, [text_type]),
@@ -147,6 +150,7 @@ class Parameters(ReadOnlyDict):
 
         defaults = {
             'app_version': get_app_version(),
+            'backstop': False,
             'base_repository': 'https://hg.mozilla.org/mozilla-unified',
             'build_date': seconds_from_epoch,
             'build_number': 1,
@@ -161,6 +165,7 @@ class Parameters(ReadOnlyDict):
             'message': '',
             'moz_build_date': six.ensure_text(now.strftime("%Y%m%d%H%M%S")),
             'next_version': None,
+            'optimize_strategies': None,
             'optimize_target_tasks': True,
             'owner': 'nobody@mozilla.com',
             'phabricator_diff': None,
@@ -168,7 +173,8 @@ class Parameters(ReadOnlyDict):
             'pushdate': seconds_from_epoch,
             'pushlog_id': '0',
             'release_enable_emefree': False,
-            'release_enable_partners': False,
+            'release_enable_partner_repack': False,
+            'release_enable_partner_attribution': False,
             'release_eta': '',
             'release_history': {},
             'release_partners': [],

@@ -133,6 +133,18 @@
                  data-l10n-id="addon-badge-recommended2"
                  hidden>
               </a>
+              <a class="addon-badge addon-badge-line"
+                 is="support-link"
+                 support-page="recommended-extensions-program"
+                 data-l10n-id="addon-badge-line"
+                 hidden>
+              </a>
+              <a class="addon-badge addon-badge-verified"
+                 is="support-link"
+                 support-page="recommended-extensions-program"
+                 data-l10n-id="addon-badge-verified"
+                 hidden>
+              </a>
               <a class="addon-badge addon-badge-private-browsing-allowed"
                  is="support-link"
                  support-page="extensions-pb"
@@ -153,6 +165,10 @@
             <span class="addon-description" tabindex="-1"></span>
           </div>
         </div>
+        <message-bar class="update-postponed-bar" align="center" hidden>
+          <span class="description" data-l10n-id="install-postponed-message"></span>
+          <button action="install-postponed" data-l10n-id="install-postponed-button"></button>
+        </message-bar>
         <message-bar class="addon-card-message" align="center" hidden>
           <span></span>
           <button action="link"></button>

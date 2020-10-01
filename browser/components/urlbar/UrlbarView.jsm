@@ -14,6 +14,7 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   Services: "resource://gre/modules/Services.jsm",
   UrlbarPrefs: "resource:///modules/UrlbarPrefs.jsm",
   UrlbarProvidersManager: "resource:///modules/UrlbarProvidersManager.jsm",
+  UrlbarSearchOneOffs: "resource:///modules/UrlbarSearchOneOffs.jsm",
   UrlbarTokenizer: "resource:///modules/UrlbarTokenizer.jsm",
   UrlbarUtils: "resource:///modules/UrlbarUtils.jsm",
 });
@@ -68,6 +69,10 @@ class UrlbarView {
     this._rows.addEventListener("overflow", this);
     this._rows.addEventListener("underflow", this);
 
+    // `noresults` is used to style the one-offs without their usual top border
+    // when no results are present.
+    this.panel.setAttribute("noresults", "true");
+
     this.controller.setView(this);
     this.controller.addQueryListener(this);
     // This is used by autoOpen to avoid flickering results when reopening
@@ -83,15 +88,23 @@ class UrlbarView {
 
   get oneOffSearchButtons() {
     if (!this._oneOffSearchButtons) {
-      this._oneOffSearchButtons = new this.window.SearchOneOffs(
-        this.panel.querySelector(".search-one-offs")
-      );
+      this._oneOffSearchButtons = new UrlbarSearchOneOffs(this);
       this._oneOffSearchButtons.addEventListener(
         "SelectedOneOffButtonChanged",
         this
       );
     }
     return this._oneOffSearchButtons;
+  }
+
+  /**
+   * @returns {boolean}
+   *   Whether the update2 one-offs are used.
+   */
+  get oneOffsRefresh() {
+    return (
+      UrlbarPrefs.get("update2") && UrlbarPrefs.get("update2.oneOffsRefresh")
+    );
   }
 
   /**
@@ -358,6 +371,8 @@ class UrlbarView {
 
   clear() {
     this._rows.textContent = "";
+    this.panel.setAttribute("noresults", "true");
+    this._selectElement(null, { updateInput: false });
   }
 
   /**
@@ -418,8 +433,6 @@ class UrlbarView {
       this.input.getAttribute("pageproxystate") == "valid"
     ) {
       if (
-        // Do not show Top Sites in private windows.
-        !this.input.isPrivate &&
         !this.isOpen &&
         ["mousedown", "command"].includes(queryOptions.event.type)
       ) {
@@ -487,17 +500,29 @@ class UrlbarView {
 
   onQueryFinished(queryContext) {
     this._cancelRemoveStaleRowsTimer();
-    if (!this._queryWasCancelled) {
-      // If the query has not been canceled and returned some results, remove
-      // stale rows immediately. If no results were returned, just clear and
-      // close the view.
-      if (this._queryUpdatedResults) {
-        this._removeStaleRows();
-      } else {
-        this.clear();
-        this.close();
-      }
+    if (this._queryWasCancelled) {
+      return;
     }
+
+    // If the query finished and it returned some results, remove stale rows.
+    if (this._queryUpdatedResults) {
+      this._removeStaleRows();
+      return;
+    }
+
+    // The query didn't return any results.  Clear the view.
+    this.clear();
+
+    // If search mode isn't active, close the view.
+    if (!this.input.searchMode) {
+      this.close();
+      return;
+    }
+
+    // Search mode is active.  Make sure the view is open and the one-offs are
+    // enabled.
+    this.oneOffSearchButtons.enable(true);
+    this._openPanel();
   }
 
   onQueryResults(queryContext) {
@@ -518,21 +543,20 @@ class UrlbarView {
         updateInput: false,
       });
 
-      // Hide the one-off search buttons if the search string is empty, or
-      // starts with a potential @ search alias or the search restriction
-      // character.
-      let trimmedValue = queryContext.searchString.trim();
-      this._enableOrDisableOneOffSearches(
-        ((UrlbarPrefs.get("update2") &&
-          UrlbarPrefs.get("update2.oneOffsRefresh")) ||
-          trimmedValue) &&
-          trimmedValue[0] != "@" &&
-          (trimmedValue[0] != UrlbarTokenizer.RESTRICT.SEARCH ||
-            trimmedValue.length != 1)
+      // Show the one-off search buttons unless any of the following are true:
+      //
+      // * The update 2 refresh is enabled but the first result is a search tip
+      // * The update 2 refresh is disabled and the search string is empty
+      // * The search string starts with an `@` or search restriction character
+      this.oneOffSearchButtons.enable(
+        ((this.oneOffsRefresh &&
+          firstResult.providerName != "UrlbarProviderSearchTips") ||
+          queryContext.trimmedSearchString) &&
+          queryContext.trimmedSearchString[0] != "@" &&
+          (queryContext.trimmedSearchString[0] !=
+            UrlbarTokenizer.RESTRICT.SEARCH ||
+            queryContext.trimmedSearchString.length != 1)
       );
-
-      // Notify the input, so it can make adjustments based on the first result.
-      this.input.onFirstResult(firstResult);
     }
 
     if (
@@ -608,18 +632,6 @@ class UrlbarView {
     } else {
       throw new Error("Unrecognized UrlbarView event: " + event.type);
     }
-  }
-
-  /**
-   * This is called when a one-off is clicked and when "search in new tab"
-   * is selected from a one-off context menu.
-   * @param {Event} event
-   * @param {nsISearchEngine} engine
-   * @param {string} where
-   * @param {object} params
-   */
-  handleOneOffSearch(event, engine, where, params) {
-    this.input.handleCommand(event, where, params);
   }
 
   static dynamicViewTemplatesByName = new Map();
@@ -1066,11 +1078,7 @@ class UrlbarView {
     }
 
     let title = item._elements.get("title");
-    this._addTextContentWithHighlights(
-      title,
-      result.title,
-      result.titleHighlights
-    );
+    this._setResultTitle(result, title);
 
     if (result.payload.tail && result.payload.tailOffsetIndex > 0) {
       this._fillTailSuggestionPrefix(item, result);
@@ -1103,42 +1111,79 @@ class UrlbarView {
       );
     }
 
-    let action = "";
+    let action = item._elements.get("action");
+    let actionSetter = null;
     let isVisitAction = false;
     let setURL = false;
     switch (result.type) {
       case UrlbarUtils.RESULT_TYPE.TAB_SWITCH:
-        action = UrlbarUtils.strings.GetStringFromName("switchToTab2");
+        actionSetter = () => {
+          this.document.l10n.setAttributes(
+            action,
+            "urlbar-result-action-switch-tab"
+          );
+        };
         setURL = true;
         break;
       case UrlbarUtils.RESULT_TYPE.REMOTE_TAB:
-        action = result.payload.device;
+        actionSetter = () => {
+          action.removeAttribute("data-l10n-id");
+          action.textContent = result.payload.device;
+        };
         setURL = true;
         break;
       case UrlbarUtils.RESULT_TYPE.SEARCH:
         if (result.payload.inPrivateWindow) {
           if (result.payload.isPrivateEngine) {
-            action = UrlbarUtils.strings.formatStringFromName(
-              "searchInPrivateWindowWithEngine",
-              [result.payload.engine]
-            );
+            actionSetter = () => {
+              this.document.l10n.setAttributes(
+                action,
+                "urlbar-result-action-search-in-private-w-engine",
+                { engine: result.payload.engine }
+              );
+            };
           } else {
-            action = UrlbarUtils.strings.GetStringFromName(
-              "searchInPrivateWindow"
-            );
+            actionSetter = () => {
+              this.document.l10n.setAttributes(
+                action,
+                "urlbar-result-action-search-in-private"
+              );
+            };
           }
-        } else {
-          action = UrlbarUtils.strings.formatStringFromName(
-            "searchWithEngine",
-            [result.payload.engine]
-          );
+        } else if (result.providerName == "TabToSearch") {
+          actionSetter = () => {
+            this.document.l10n.setAttributes(
+              action,
+              UrlbarUtils.WEB_ENGINE_NAMES.has(result.payload.engine)
+                ? "urlbar-result-action-tabtosearch-web"
+                : "urlbar-result-action-tabtosearch-other-engine",
+              { engine: result.payload.engine }
+            );
+          };
+        } else if (!this._shouldLocalizeSearchResultTitle(result)) {
+          // _shouldLocalizeSearchResultTitle is a temporary function that will
+          // be in place only during the update2 transitions. Right now it
+          // returns if the result is a keyword offer result and meets some
+          // other conditions. Post-update2 the conditional above will only
+          // check if the result is a keyword offer. Keyword offer results don't
+          // have action text.
+          actionSetter = () => {
+            this.document.l10n.setAttributes(
+              action,
+              "urlbar-result-action-search-w-engine",
+              { engine: result.payload.engine }
+            );
+          };
         }
         break;
       case UrlbarUtils.RESULT_TYPE.KEYWORD:
         isVisitAction = result.payload.input.trim() == result.payload.keyword;
         break;
       case UrlbarUtils.RESULT_TYPE.OMNIBOX:
-        action = result.payload.content;
+        actionSetter = () => {
+          action.removeAttribute("data-l10n-id");
+          action.textContent = result.payload.content;
+        };
         break;
       default:
         if (result.heuristic) {
@@ -1168,12 +1213,24 @@ class UrlbarView {
     }
 
     if (isVisitAction) {
-      action = UrlbarUtils.strings.GetStringFromName("visit");
+      actionSetter = () => {
+        this.document.l10n.setAttributes(action, "urlbar-result-action-visit");
+      };
       title.setAttribute("isurl", "true");
     } else {
       title.removeAttribute("isurl");
     }
-    item._elements.get("action").textContent = action;
+
+    if (actionSetter) {
+      actionSetter();
+      item._originalActionSetter = actionSetter;
+    } else {
+      item._originalActionSetter = () => {
+        action.removeAttribute("data-l10n-id");
+        action.textContent = "";
+      };
+      item._originalActionSetter();
+    }
 
     if (!title.hasAttribute("isurl")) {
       title.setAttribute("dir", "auto");
@@ -1181,16 +1238,36 @@ class UrlbarView {
       title.removeAttribute("dir");
     }
 
-    item._elements.get("titleSeparator").hidden = !action && !setURL;
+    item._elements.get("titleSeparator").hidden = !actionSetter && !setURL;
   }
 
-  _iconForSearchResult(result, engineOverride = null) {
+  /**
+   * Returns true if we should localize a result's title. This is a helper
+   * function for the update2 transition period. It can be removed when the
+   * update2 pref is removed. At that point, its callers can instead just check
+   * !!result.payload.keywordOffer.
+   * @param {UrlbarResult} result A search result.
+   * @returns {boolean} True if we should localize a title for search results.
+   */
+  _shouldLocalizeSearchResultTitle(result) {
+    if (
+      result.type != UrlbarUtils.RESULT_TYPE.SEARCH ||
+      !result.payload.keywordOffer
+    ) {
+      return false;
+    }
+
+    return (
+      UrlbarPrefs.get("update2") ||
+      result.payload.keywordOffer == UrlbarUtils.KEYWORD_OFFER.HIDE
+    );
+  }
+
+  _iconForSearchResult(result, iconUrlOverride = null) {
     return (
       (result.source == UrlbarUtils.RESULT_SOURCE.HISTORY &&
         UrlbarUtils.ICON.HISTORY) ||
-      (engineOverride &&
-        engineOverride.iconURI &&
-        engineOverride.iconURI.spec) ||
+      iconUrlOverride ||
       result.payload.icon ||
       UrlbarUtils.ICON.SEARCH_GLASS
     );
@@ -1274,15 +1351,22 @@ class UrlbarView {
   }
 
   _updateIndices() {
+    let visibleRowsExist = false;
     for (let i = 0; i < this._rows.children.length; i++) {
       let item = this._rows.children[i];
       item.result.rowIndex = i;
+      visibleRowsExist = visibleRowsExist || this._isElementVisible(item);
     }
     let selectableElement = this._getFirstSelectableElement();
     let uiIndex = 0;
     while (selectableElement) {
       selectableElement.elementIndex = uiIndex++;
       selectableElement = this._getNextSelectableElement(selectableElement);
+    }
+    if (visibleRowsExist) {
+      this.panel.removeAttribute("noresults");
+    } else {
+      this.panel.setAttribute("noresults", "true");
     }
   }
 
@@ -1357,8 +1441,11 @@ class UrlbarView {
     this._setAccessibleFocus(setAccessibleFocus && item);
     this._selectedElement = item;
 
+    let result = item?.closest(".urlbarView-row")?.result;
     if (updateInput) {
-      this.input.setValueFromResult(item?.result);
+      this.input.setValueFromResult(result);
+    } else {
+      this.input.setResultForCurrentValue(result);
     }
   }
 
@@ -1531,6 +1618,35 @@ class UrlbarView {
   }
 
   /**
+   * Sets `result`'s title in `titleNode`'s DOM.
+   * @param {UrlbarResult} result
+   *   The result for which the title is being set.
+   * @param {Node} titleNode
+   *   The DOM node for the result's tile.
+   */
+  _setResultTitle(result, titleNode) {
+    if (this._shouldLocalizeSearchResultTitle(result)) {
+      // Keyword offers are the only result that require a localized title.
+      // We localize the title instead of using the action text as a title
+      // because some keyword offer results use both a title and action text
+      // (e.g. tab-to-search).
+      this.document.l10n.setAttributes(
+        titleNode,
+        "urlbar-result-action-search-w-engine",
+        { engine: result.payload.engine }
+      );
+      return;
+    }
+
+    titleNode.removeAttribute("data-l10n-id");
+    this._addTextContentWithHighlights(
+      titleNode,
+      result.title,
+      result.titleHighlights
+    );
+  }
+
+  /**
    * Adds text content to a node, placing substrings that should be highlighted
    * inside <em> nodes.
    *
@@ -1585,20 +1701,6 @@ class UrlbarView {
 
     let tailPrefixCharNode = item._elements.get("tailPrefixChar");
     tailPrefixCharNode.textContent = result.payload.tailPrefix;
-  }
-
-  _enableOrDisableOneOffSearches(enable = true) {
-    if (enable) {
-      this.oneOffSearchButtons.telemetryOrigin = "urlbar";
-      this.oneOffSearchButtons.style.display = "";
-      this.oneOffSearchButtons.textbox = this.input.inputField;
-      this.oneOffSearchButtons.view = this;
-    } else {
-      this.oneOffSearchButtons.telemetryOrigin = null;
-      this.oneOffSearchButtons.style.display = "none";
-      this.oneOffSearchButtons.textbox = null;
-      this.oneOffSearchButtons.view = null;
-    }
   }
 
   _enableOrDisableRowWrap() {
@@ -1700,20 +1802,93 @@ class UrlbarView {
 
     // Update all search suggestion results to use the newly selected engine, or
     // if no engine is selected, revert to their original engines.
-    let engine =
-      this.oneOffSearchButtons.selectedButton &&
-      this.oneOffSearchButtons.selectedButton.engine;
+    let engine = this.oneOffSearchButtons.selectedButton?.engine;
+    let source = this.oneOffSearchButtons.selectedButton?.source;
+    switch (source) {
+      case UrlbarUtils.RESULT_SOURCE.BOOKMARKS:
+        source = {
+          attribute: "bookmarks",
+          l10nId: "urlbar-result-action-search-bookmarks",
+          icon: "chrome://browser/skin/bookmark.svg",
+        };
+        break;
+      case UrlbarUtils.RESULT_SOURCE.HISTORY:
+        source = {
+          attribute: "history",
+          l10nId: "urlbar-result-action-search-history",
+          icon: "chrome://browser/skin/history.svg",
+        };
+        break;
+      case UrlbarUtils.RESULT_SOURCE.TABS:
+        source = {
+          attribute: "tabs",
+          l10nId: "urlbar-result-action-search-tabs",
+          icon: "chrome://browser/skin/tab.svg",
+        };
+        break;
+      default:
+        source = null;
+        break;
+    }
 
     for (let item of this._rows.children) {
       let result = item.result;
+
+      if (!result.heuristic && result.type != UrlbarUtils.RESULT_TYPE.SEARCH) {
+        continue;
+      }
+
+      let action = item.querySelector(".urlbarView-action");
+      let favicon = item.querySelector(".urlbarView-favicon");
+
+      // If a one-off button is the only selection, force the heuristic result
+      // to show its action text, so the engine name is visible.
+      if (result.heuristic && !this.selectedElement && (source || engine)) {
+        item.setAttribute("show-action-text", "true");
+      } else {
+        item.removeAttribute("show-action-text");
+      }
+
+      if (source) {
+        // Update the result action text.
+        this.document.l10n.setAttributes(action, source.l10nId);
+        item._actionOverride = true;
+        // Update the result favicon.
+        if (result.heuristic) {
+          item.setAttribute("source", source.attribute);
+          favicon.src = this._iconForSearchResult(result, source?.icon);
+        }
+        // When a local one-off is selected we're done.
+        continue;
+      }
+
+      // If we replaced the action while a local one-off button was selected,
+      // now it should be restored. This happens for example if a local one-off
+      // is selected, and then the user presses DOWN to go to the next result.
+      if (item._actionOverride) {
+        if (item._originalActionSetter) {
+          item._originalActionSetter();
+          if (result.heuristic) {
+            favicon.src = result.payload.icon || UrlbarUtils.ICON.DEFAULT;
+          }
+        } else {
+          Cu.reportError("An item is missing the action setter");
+        }
+        item._actionOverride = false;
+        item.removeAttribute("source");
+      }
+
       if (
         result.type != UrlbarUtils.RESULT_TYPE.SEARCH ||
         (!result.heuristic &&
-          (!result.payload.suggestion || result.payload.isSearchHistory) &&
+          (!result.payload.suggestion ||
+            (result.type == UrlbarUtils.RESULT_TYPE.SEARCH &&
+              result.source == UrlbarUtils.RESULT_SOURCE.HISTORY)) &&
           (!result.payload.inPrivateWindow || result.payload.isPrivateEngine))
       ) {
         continue;
       }
+
       if (engine) {
         if (!result.payload.originalEngine) {
           result.payload.originalEngine = result.payload.engine;
@@ -1723,33 +1898,30 @@ class UrlbarView {
         result.payload.engine = result.payload.originalEngine;
         delete result.payload.originalEngine;
       }
-      // If a one-off button is the only selection, force the heuristic result
-      // to show its action text, so the engine name is visible.
-      if (result.heuristic && engine && !this.selectedElement) {
-        item.setAttribute("show-action-text", "true");
-      } else {
-        item.removeAttribute("show-action-text");
-      }
+
+      // Update the result action text.
       if (!result.payload.inPrivateWindow) {
-        let action = item.querySelector(".urlbarView-action");
-        action.textContent = UrlbarUtils.strings.formatStringFromName(
-          "searchWithEngine",
-          [(engine && engine.name) || result.payload.engine]
+        this.document.l10n.setAttributes(
+          action,
+          "urlbar-result-action-search-w-engine",
+          { engine: (engine && engine.name) || result.payload.engine }
         );
       }
-      // If we just changed the engine from the original engine and it had an
-      // icon, then make sure the result now uses the new engine's icon or
-      // failing that the default icon.  If we changed it back to the original
-      // engine, go back to the original or default icon.
-      let favicon = item.querySelector(".urlbarView-favicon");
-      if (engine && result.payload.icon) {
-        favicon.src =
-          (engine.iconURI && engine.iconURI.spec) ||
-          UrlbarUtils.ICON.SEARCH_GLASS;
-      } else if (!engine) {
-        favicon.src = result.payload.icon || UrlbarUtils.ICON.SEARCH_GLASS;
+
+      // Update result favicons.
+      if (
+        // Don't update the favicon on non-heuristic results when update2 is
+        // enabled.
+        !this.oneOffsRefresh ||
+        result.heuristic ||
+        (result.payload.inPrivateWindow && !result.payload.isPrivateEngine)
+      ) {
+        // If we just changed the engine from the original engine and it had an
+        // icon, then make sure the result now uses the new engine's icon or
+        // failing that the default icon.  If we changed it back to the original
+        // engine, go back to the original or default icon.
+        favicon.src = this._iconForSearchResult(result, engine?.iconURI?.spec);
       }
-      favicon.src = this._iconForSearchResult(result, engine);
     }
   }
 

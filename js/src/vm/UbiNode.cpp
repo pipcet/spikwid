@@ -332,31 +332,6 @@ const char* Concrete<JSObject>::jsObjectClassName() const {
   return Concrete::get().getClass()->name;
 }
 
-bool Concrete<JSObject>::jsObjectConstructorName(
-    JSContext* cx, UniqueTwoByteChars& outName) const {
-  JSAtom* name = Concrete::get().maybeConstructorDisplayAtom();
-  if (!name) {
-    outName.reset(nullptr);
-    return true;
-  }
-
-  auto len = JS_GetStringLength(name);
-  auto size = len + 1;
-
-  outName.reset(cx->pod_malloc<char16_t>(size * sizeof(char16_t)));
-  if (!outName) {
-    return false;
-  }
-
-  mozilla::Range<char16_t> chars(outName.get(), size);
-  if (!JS_CopyStringChars(cx, chars, name)) {
-    return false;
-  }
-
-  outName[len] = '\0';
-  return true;
-}
-
 JS::Compartment* Concrete<JSObject>::compartment() const {
   return Concrete::get().compartment();
 }
@@ -412,7 +387,7 @@ bool RootList::init(CompartmentSet& debuggees) {
   if (!tracer.okay) {
     return false;
   }
-  TraceIncomingCCWs(&tracer, debuggees);
+  js::gc::TraceIncomingCCWs(&tracer, debuggees);
   if (!tracer.okay) {
     return false;
   }

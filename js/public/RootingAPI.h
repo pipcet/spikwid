@@ -10,7 +10,6 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/EnumeratedArray.h"
-#include "mozilla/GuardObjects.h"
 #include "mozilla/LinkedList.h"
 #include "mozilla/Maybe.h"
 
@@ -23,6 +22,7 @@
 #include "js/GCAnnotations.h"
 #include "js/GCPolicyAPI.h"
 #include "js/GCTypeMacros.h"  // JS_FOR_EACH_PUBLIC_{,TAGGED_}GC_POINTER_TYPE
+#include "js/HashTable.h"
 #include "js/HeapAPI.h"
 #include "js/ProfilingStack.h"
 #include "js/Realm.h"
@@ -831,7 +831,8 @@ struct JS_PUBLIC_API MovableCellHasher {
   static bool ensureHash(const Lookup& l);
   static HashNumber hash(const Lookup& l);
   static bool match(const Key& k, const Lookup& l);
-  static void rekey(Key& k, const Key& newKey) { k = newKey; }
+  // The rekey hash policy method is not provided since you dont't need to
+  // rekey any more when using this policy.
 };
 
 template <typename T>
@@ -851,7 +852,6 @@ struct JS_PUBLIC_API MovableCellHasher<JS::Heap<T>> {
   static bool match(const Key& k, const Lookup& l) {
     return MovableCellHasher<T>::match(k.unbarrieredGet(), l);
   }
-  static void rekey(Key& k, const Key& newKey) { k.unsafeSet(newKey); }
 };
 
 }  // namespace js

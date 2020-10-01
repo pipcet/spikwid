@@ -135,25 +135,6 @@ uint32_t SVGPathData::CountItems() const {
 }
 #endif
 
-bool SVGPathData::GetSegmentLengths(nsTArray<double>* aLengths) const {
-  aLengths->Clear();
-  SVGPathTraversalState state;
-
-  uint32_t i = 0;
-  while (i < mData.Length()) {
-    state.length = 0.0;
-    SVGPathSegUtils::TraversePathSegment(&mData[i], state);
-    // XXX(Bug 1631371) Check if this should use a fallible operation as it
-    // pretended earlier.
-    aLengths->AppendElement(state.length);
-    i += 1 + SVGPathSegUtils::ArgCountForType(mData[i]);
-  }
-
-  MOZ_ASSERT(i == mData.Length(), "Very, very bad - mData corrupt");
-
-  return true;
-}
-
 bool SVGPathData::GetDistancesFromOriginToEndsOfVisibleSegments(
     FallibleTArray<double>* aOutput) const {
   SVGPathTraversalState state;
@@ -181,8 +162,7 @@ bool SVGPathData::GetDistancesFromOriginToEndsOfVisibleSegments(
     // this case an equal amount of time is spent on each path segment,
     // except on moveto segments which are jumped over immediately.
 
-    if (i == 0 ||
-        (segType != PATHSEG_MOVETO_ABS && segType != PATHSEG_MOVETO_REL)) {
+    if (i == 0 || !IsMoveto(segType)) {
       if (!aOutput->AppendElement(state.length, fallible)) {
         return false;
       }
@@ -499,8 +479,7 @@ already_AddRefed<Path> SVGPathData::BuildPath(PathBuilder* aBuilder,
                          // seg anyway
     }
 
-    subpathContainsNonMoveTo =
-        segType != PATHSEG_MOVETO_ABS && segType != PATHSEG_MOVETO_REL;
+    subpathContainsNonMoveTo = !IsMoveto(segType);
     i += argCount;
     prevSegType = segType;
     segStart = segEnd;

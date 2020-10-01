@@ -16,6 +16,7 @@
 #include "mozilla/layers/AndroidHardwareBuffer.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/StaticPrefs_gfx.h"
+#include "mozilla/StaticPrefs_webgl.h"
 
 #include "gfx2DGlue.h"
 #include "gfxFT2FontList.h"
@@ -103,6 +104,8 @@ gfxAndroidPlatform::gfxAndroidPlatform() {
 gfxAndroidPlatform::~gfxAndroidPlatform() {
   FT_Done_Library(gPlatformFTLibrary);
   gPlatformFTLibrary = nullptr;
+  layers::AndroidHardwareBufferManager::Shutdown();
+  layers::AndroidHardwareBufferApi::Shutdown();
 }
 
 void gfxAndroidPlatform::InitAcceleration() {
@@ -111,9 +114,14 @@ void gfxAndroidPlatform::InitAcceleration() {
     if (StaticPrefs::gfx_use_ahardwarebuffer_content_AtStartup()) {
       gfxVars::SetUseAHardwareBufferContent(true);
     }
+    if (StaticPrefs::webgl_enable_ahardwarebuffer()) {
+      gfxVars::SetUseAHardwareBufferSharedSurface(true);
+    }
   }
-  if (gfx::gfxVars::UseAHardwareBufferContent()) {
+  if (gfx::gfxVars::UseAHardwareBufferContent() ||
+      gfxVars::UseAHardwareBufferSharedSurface()) {
     layers::AndroidHardwareBufferApi::Init();
+    layers::AndroidHardwareBufferManager::Init();
   }
 }
 
@@ -156,21 +164,15 @@ static bool IsJapaneseLocale() {
 }
 
 void gfxAndroidPlatform::GetCommonFallbackFonts(
-    uint32_t aCh, uint32_t aNextCh, Script aRunScript,
+    uint32_t aCh, Script aRunScript, eFontPresentation aPresentation,
     nsTArray<const char*>& aFontList) {
   static const char kDroidSansJapanese[] = "Droid Sans Japanese";
   static const char kMotoyaLMaru[] = "MotoyaLMaru";
   static const char kNotoSansCJKJP[] = "Noto Sans CJK JP";
   static const char kNotoColorEmoji[] = "Noto Color Emoji";
 
-  EmojiPresentation emoji = GetEmojiPresentation(aCh);
-  if (emoji != EmojiPresentation::TextOnly) {
-    if (aNextCh == kVariationSelector16 ||
-        (aNextCh != kVariationSelector15 &&
-         emoji == EmojiPresentation::EmojiDefault)) {
-      // if char is followed by VS16, try for a color emoji glyph
-      aFontList.AppendElement(kNotoColorEmoji);
-    }
+  if (PrefersColor(aPresentation)) {
+    aFontList.AppendElement(kNotoColorEmoji);
   }
 
   if (IS_IN_BMP(aCh)) {
@@ -297,7 +299,10 @@ class AndroidVsyncSource final : public VsyncSource {
     using Base::DisposeNative;
 
     static void NotifyVsync() {
-      GetDisplayInstance().NotifyVsync(TimeStamp::Now());
+      Display& display = GetDisplayInstance();
+      TimeStamp vsyncTime = TimeStamp::Now();
+      TimeStamp outputTime = vsyncTime + display.GetVsyncRate();
+      display.NotifyVsync(vsyncTime, outputTime);
     }
   };
 
@@ -306,6 +311,9 @@ class AndroidVsyncSource final : public VsyncSource {
     Display()
         : mJavaVsync(java::VsyncSource::INSTANCE()), mObservingVsync(false) {
       JavaVsyncSupport::Init();  // To register native methods.
+
+      float fps = mJavaVsync->GetRefreshRate();
+      mVsyncDuration = TimeDuration::FromMilliseconds(1000.0 / fps);
     }
 
     ~Display() { DisableVsync(); }
@@ -324,12 +332,7 @@ class AndroidVsyncSource final : public VsyncSource {
       if (mObservingVsync) {
         return;
       }
-      bool ok = mJavaVsync->ObserveVsync(true);
-      if (ok && !mVsyncDuration) {
-        float fps = mJavaVsync->GetRefreshRate();
-        mVsyncDuration = TimeDuration::FromMilliseconds(1000.0 / fps);
-      }
-      mObservingVsync = ok;
+      mObservingVsync = mJavaVsync->ObserveVsync(true);
       MOZ_ASSERT(mObservingVsync);
     }
 

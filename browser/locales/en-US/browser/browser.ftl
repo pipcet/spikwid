@@ -110,6 +110,12 @@ urlbar-tip-icon-description =
 urlbar-search-tips-onboard = Type less, find more: Search { $engineName } right from your address bar.
 urlbar-search-tips-redirect-2 = Start your search in the address bar to see suggestions from { $engineName } and your browsing history.
 
+## Local search mode indicator labels in the urlbar
+
+urlbar-search-mode-bookmarks = Bookmarks
+urlbar-search-mode-tabs = Tabs
+urlbar-search-mode-history = History
+
 ##
 
 urlbar-geolocation-blocked =
@@ -158,6 +164,51 @@ page-action-remove-from-urlbar =
 page-action-remove-extension =
     .label = Remove Extension
 
+## Page Action menu
+
+# Variables
+# $tabCount (integer) - Number of tabs selected
+page-action-send-tabs-panel =
+  .label = { $tabCount ->
+      [1] Send Tab to Device
+     *[other] Send { $tabCount } Tabs to Device
+  }
+page-action-send-tabs-urlbar =
+  .tooltiptext = { $tabCount ->
+      [1] Send Tab to Device
+     *[other] Send { $tabCount } Tabs to Device
+  }
+page-action-pocket-panel =
+  .label = Save Page to { -pocket-brand-name }
+page-action-copy-url-panel =
+  .label = Copy Link
+page-action-copy-url-urlbar =
+  .tooltiptext = Copy Link
+page-action-email-link-panel =
+  .label = Email Link…
+page-action-email-link-urlbar =
+  .tooltiptext = Email Link…
+page-action-share-url-panel =
+  .label = Share
+page-action-share-url-urlbar =
+  .tooltiptext = Share
+page-action-share-more-panel =
+  .label = More…
+page-action-send-tab-not-ready =
+  .label = Syncing Devices…
+# "Pin" is being used as a metaphor for expressing the fact that these tabs
+# are "pinned" to the left edge of the tabstrip. Really we just want the
+# string to express the idea that this is a lightweight and reversible
+# action that keeps your tab where you can reach it easily.
+page-action-pin-tab-panel =
+  .label = Pin Tab
+page-action-pin-tab-urlbar =
+  .tooltiptext = Pin Tab
+page-action-unpin-tab-panel =
+  .label = Unpin Tab
+page-action-unpin-tab-urlbar =
+  .tooltiptext = Unpin Tab
+
 ## Auto-hide Context Menu
 
 full-screen-autohide =
@@ -169,7 +220,7 @@ full-screen-exit =
 
 ## Search Engine selection buttons (one-offs)
 
-# This string prompts the user to use the list of one-click search engines in
+# This string prompts the user to use the list of search shortcuts in
 # the Urlbar and searchbar.
 search-one-offs-with-title = This time, search with:
 
@@ -189,6 +240,27 @@ search-one-offs-context-set-as-default =
 search-one-offs-context-set-as-default-private =
     .label = Set as Default Search Engine for Private Windows
     .accesskey = P
+
+# Search engine one-off buttons with an @alias shortcut/keyword.
+# Variables:
+#  $engineName (String): The name of the engine.
+#  $alias (String): The @alias shortcut/keyword.
+search-one-offs-engine-with-alias =
+    .tooltiptext = { $engineName } ({ $alias })
+
+## Local search mode one-off buttons
+## Variables:
+##  $restrict (String): The restriction token corresponding to the search mode.
+##    Restriction tokens are special characters users can type in the urlbar to
+##    restrict their searches to certain sources (e.g., "*" to search only
+##    bookmarks).
+
+search-one-offs-bookmarks =
+    .tooltiptext = Bookmarks ({ $restrict })
+search-one-offs-tabs =
+    .tooltiptext = Tabs ({ $restrict })
+search-one-offs-history =
+    .tooltiptext = History ({ $restrict })
 
 ## Bookmark Panel
 
@@ -300,10 +372,48 @@ enable-devtools-popup-description = To use the F12 shortcut, first open DevTools
 
 ## URL Bar
 
-urlbar-default-placeholder =
-  .defaultPlaceholder = Search or enter address
+# This placeholder is used when not in search mode and the user's default search
+# engine is unknown.
 urlbar-placeholder =
   .placeholder = Search or enter address
+
+# This placeholder is used in search mode with search engines that search the
+# entire web.
+# Variables
+#  $name (String): the name of a search engine that searches the entire Web
+#  (e.g. Google).
+urlbar-placeholder-search-mode-web-2 =
+  .placeholder = Search the Web
+  .aria-label = Search with { $name }
+
+# This placeholder is used in search mode with search engines that search a
+# specific site (e.g., Amazon).
+# Variables
+#  $name (String): the name of a search engine that searches a specific site
+#  (e.g. Amazon).
+urlbar-placeholder-search-mode-other-engine =
+  .placeholder = Enter search terms
+  .aria-label = Search { $name }
+
+# This placeholder is used when searching bookmarks.
+urlbar-placeholder-search-mode-other-bookmarks =
+  .placeholder = Enter search terms
+  .aria-label = Search bookmarks
+
+# This placeholder is used when searching history.
+urlbar-placeholder-search-mode-other-history =
+  .placeholder = Enter search terms
+  .aria-label = Search history
+
+# This placeholder is used when searching open tabs.
+urlbar-placeholder-search-mode-other-tabs =
+  .placeholder = Enter search terms
+  .aria-label = Search tabs
+
+# Variables
+#  $name (String): the name of the user's default search engine
+urlbar-placeholder-with-name =
+  .placeholder = Search with { $name } or enter address
 urlbar-remote-control-notification-anchor =
   .tooltiptext = Browser is under remote control
 urlbar-permissions-granted =
@@ -321,3 +431,58 @@ urlbar-page-action-button =
   .tooltiptext = Page actions
 urlbar-pocket-button =
   .tooltiptext = Save to { -pocket-brand-name }
+
+## Action text shown in urlbar results, usually appended after the search
+## string or the url, like "result value - action text".
+
+# Used when the private browsing engine differs from the default engine.
+# The "with" format was chosen because the search engine name can end with
+# "Search", and we would like to avoid strings like "Search MSN Search".
+# Variables
+#  $engine (String): the name of a search engine
+urlbar-result-action-search-in-private-w-engine = Search with { $engine } in a Private Window
+# Used when the private browsing engine is the same as the default engine.
+urlbar-result-action-search-in-private = Search in a Private Window
+# The "with" format was chosen because the search engine name can end with
+# "Search", and we would like to avoid strings like "Search MSN Search".
+# Variables
+#  $engine (String): the name of a search engine
+urlbar-result-action-search-w-engine = Search with { $engine }
+urlbar-result-action-switch-tab = Switch to Tab
+urlbar-result-action-visit = Visit
+
+## Action text shown in urlbar results, usually appended after the search
+## string or the url, like "result value - action text".
+## In these actions "Search" is a verb, followed by where the search is performed.
+
+urlbar-result-action-search-bookmarks = Search Bookmarks
+urlbar-result-action-search-history = Search History
+urlbar-result-action-search-tabs = Search Tabs
+# Variables
+#  $engine (String): the name of a search engine that searches the entire Web
+#  (e.g. Google).
+urlbar-result-action-tabtosearch-web = Search with { $engine } directly from the address bar
+# Variables
+#  $engine (String): the name of a search engine that searches a specific site
+#  (e.g. Amazon).
+urlbar-result-action-tabtosearch-other-engine = Search { $engine } directly from the address bar
+
+## Full Screen and Pointer Lock UI
+
+# Please ensure that the domain stays in the `<span data-l10n-name="domain">` markup.
+# Variables
+#  $domain (String): the domain that is full screen, e.g. "mozilla.org"
+fullscreen-warning-domain = <span data-l10n-name="domain">{ $domain }</span> is now full screen
+fullscreen-warning-no-domain = This document is now full screen
+
+
+fullscreen-exit-button = Exit Full Screen (Esc)
+# "esc" is lowercase on mac keyboards, but uppercase elsewhere.
+fullscreen-exit-mac-button = Exit Full Screen (esc)
+
+# Please ensure that the domain stays in the `<span data-l10n-name="domain">` markup.
+# Variables
+#  $domain (String): the domain that is using pointer-lock, e.g. "mozilla.org"
+pointerlock-warning-domain = <span data-l10n-name="domain">{ $domain }</span> has control of your pointer. Press Esc to take back control.
+pointerlock-warning-no-domain = This document has control of your pointer. Press Esc to take back control.
+

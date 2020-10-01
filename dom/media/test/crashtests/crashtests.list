@@ -100,7 +100,9 @@ load 1411322.html
 load 1450845.html
 load disconnect-wrong-destination.html
 load analyser-channels-1.html
+load audiocontext-after-unload-1.html
 skip-if(verify&&isDebugBuild&&gtkWidget) load audiocontext-double-suspend.html
+skip-if(Android) load audioworkletnode-after-unload-1.html # Needs secure context
 load buffer-source-duration-1.html
 skip-if(verify&&isDebugBuild&&gtkWidget) load buffer-source-ended-1.html
 load buffer-source-resampling-start-1.html
@@ -137,3 +139,4 @@ load 1594466.html
 load 1604941.html
 skip-if(!winWidget) load 1608286.html
 load channel-count-in-metadata-different-than-in-content.mp4 # Bug 1584959
+load mp4_box_emptyrange.mp4 # Bug 1667480

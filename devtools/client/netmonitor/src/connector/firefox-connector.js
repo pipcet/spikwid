@@ -149,54 +149,91 @@ class FirefoxConnector {
     this.responsiveFront = await this.currentTarget.getFront("responsive");
   }
 
-  async onResourceAvailable({ resourceType, targetFront, resource }) {
-    const { TYPES } = this.toolbox.resourceWatcher;
-    if (resourceType === TYPES.DOCUMENT_EVENT) {
-      this.onDocEvent(resource);
-      return;
-    }
+  async onResourceAvailable(resources) {
+    for (const resource of resources) {
+      const { TYPES } = this.toolbox.resourceWatcher;
 
-    if (resourceType === TYPES.NETWORK_EVENT) {
-      this.dataProvider.onNetworkResourceAvailable(resource);
+      if (resource.resourceType === TYPES.DOCUMENT_EVENT) {
+        this.onDocEvent(resource);
+        continue;
+      }
+
+      if (resource.resourceType === TYPES.NETWORK_EVENT) {
+        this.dataProvider.onNetworkResourceAvailable(resource);
+        continue;
+      }
+
+      if (resource.resourceType === TYPES.NETWORK_EVENT_STACKTRACE) {
+        this.dataProvider.onStackTraceAvailable(resource);
+        continue;
+      }
+
+      if (resource.resourceType === TYPES.WEBSOCKET) {
+        const { wsMessageType } = resource;
+
+        switch (wsMessageType) {
+          case "webSocketOpened": {
+            this.dataProvider.onWebSocketOpened(
+              resource.httpChannelId,
+              resource.effectiveURI,
+              resource.protocols,
+              resource.extensions
+            );
+            break;
+          }
+          case "webSocketClosed": {
+            this.dataProvider.onWebSocketClosed(
+              resource.httpChannelId,
+              resource.wasClean,
+              resource.code,
+              resource.reason
+            );
+            break;
+          }
+          case "frameReceived": {
+            this.dataProvider.onFrameReceived(
+              resource.httpChannelId,
+              resource.data
+            );
+            break;
+          }
+          case "frameSent": {
+            this.dataProvider.onFrameSent(
+              resource.httpChannelId,
+              resource.data
+            );
+            break;
+          }
+        }
+      }
     }
   }
 
-  async onResourceUpdated({ resourceType, targetFront, resource }) {
-    if (resourceType === this.toolbox.resourceWatcher.TYPES.NETWORK_EVENT) {
-      this.dataProvider.onNetworkResourceUpdated(resource);
+  async onResourceUpdated(updates) {
+    for (const { resource, update } of updates) {
+      if (
+        resource.resourceType ===
+        this.toolbox.resourceWatcher.TYPES.NETWORK_EVENT
+      ) {
+        this.dataProvider.onNetworkResourceUpdated(resource, update);
+      }
     }
   }
 
   async addListeners(ignoreExistingResources = false) {
-    await this.toolbox.resourceWatcher.watchResources(
-      [this.toolbox.resourceWatcher.TYPES.NETWORK_EVENT],
-      {
-        onAvailable: this.onResourceAvailable,
-        onUpdated: this.onResourceUpdated,
-        ignoreExistingResources,
-      }
-    );
-    // Support for WebSocket monitoring is currently hidden behind this pref.
+    const targetResources = [
+      this.toolbox.resourceWatcher.TYPES.NETWORK_EVENT,
+      this.toolbox.resourceWatcher.TYPES.NETWORK_EVENT_STACKTRACE,
+    ];
     if (Services.prefs.getBoolPref("devtools.netmonitor.features.webSockets")) {
-      try {
-        // Initialize WebSocket front to intercept websocket traffic.
-        const webSocketFront = await this.currentTarget.getFront("webSocket");
-        webSocketFront.startListening();
-
-        webSocketFront.on(
-          "webSocketOpened",
-          this.dataProvider.onWebSocketOpened
-        );
-        webSocketFront.on(
-          "webSocketClosed",
-          this.dataProvider.onWebSocketClosed
-        );
-        webSocketFront.on("frameReceived", this.dataProvider.onFrameReceived);
-        webSocketFront.on("frameSent", this.dataProvider.onFrameSent);
-      } catch (e) {
-        // Support for FF68 or older
-      }
+      targetResources.push(this.toolbox.resourceWatcher.TYPES.WEBSOCKET);
     }
+
+    await this.toolbox.resourceWatcher.watchResources(targetResources, {
+      onAvailable: this.onResourceAvailable,
+      onUpdated: this.onResourceUpdated,
+      ignoreExistingResources,
+    });
 
     // Support for EventSource monitoring is currently hidden behind this pref.
     if (
@@ -217,25 +254,16 @@ class FirefoxConnector {
 
   removeListeners() {
     this.toolbox.resourceWatcher.unwatchResources(
-      [this.toolbox.resourceWatcher.TYPES.NETWORK_EVENT],
+      [
+        this.toolbox.resourceWatcher.TYPES.NETWORK_EVENT,
+        this.toolbox.resourceWatcher.TYPES.NETWORK_EVENT_STACKTRACE,
+        this.toolbox.resourceWatcher.TYPES.WEBSOCKET,
+      ],
       {
         onAvailable: this.onResourceAvailable,
         onUpdated: this.onResourceUpdated,
       }
     );
-    const webSocketFront = this.currentTarget.getCachedFront("webSocket");
-    if (webSocketFront) {
-      webSocketFront.off(
-        "webSocketOpened",
-        this.dataProvider.onWebSocketOpened
-      );
-      webSocketFront.off(
-        "webSocketClosed",
-        this.dataProvider.onWebSocketClosed
-      );
-      webSocketFront.off("frameReceived", this.dataProvider.onFrameReceived);
-      webSocketFront.off("frameSent", this.dataProvider.onFrameSent);
-    }
 
     const eventSourceFront = this.currentTarget.getCachedFront("eventSource");
     if (eventSourceFront) {
@@ -309,23 +337,28 @@ class FirefoxConnector {
   /**
    * The "DOMContentLoaded" and "Load" events sent by the console actor.
    *
-   * @param {object} marker
+   * @param {object} resource The DOCUMENT_EVENT resource
    */
-  onDocEvent(event) {
-    if (event.name === "dom-loading") {
+  onDocEvent(resource) {
+    if (!resource.targetFront.isTopLevel) {
+      // Only handle document events for the top level target.
+      return;
+    }
+
+    if (resource.name === "dom-loading") {
       // Netmonitor does not support dom-loading event yet.
       return;
     }
 
     if (this.actions) {
-      this.actions.addTimingMarker(event);
+      this.actions.addTimingMarker(resource);
     }
 
-    if (event.name === "dom-complete") {
+    if (resource.name === "dom-complete") {
       this.navigate();
     }
 
-    this.emitForTests(TEST_EVENTS.TIMELINE_EVENT, event);
+    this.emitForTests(TEST_EVENTS.TIMELINE_EVENT, resource);
   }
 
   /**

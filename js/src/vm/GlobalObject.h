@@ -27,6 +27,7 @@
 #include "js/ErrorReport.h"
 #include "js/PropertyDescriptor.h"
 #include "js/RootingAPI.h"
+#include "js/ScalarType.h"  // js::Scalar::Type
 #include "js/TypeDecls.h"
 #include "js/Value.h"
 #include "vm/JSContext.h"
@@ -39,6 +40,7 @@
 #include "vm/StringType.h"
 
 struct JSFunctionSpec;
+class JSJitInfo;
 struct JSPrincipals;
 struct JSPropertySpec;
 
@@ -198,6 +200,13 @@ class GlobalObject : public NativeObject {
       return nullptr;
     }
     return &global->getPrototype(key).toObject();
+  }
+
+  JSObject* maybeGetConstructor(JSProtoKey protoKey) const {
+    MOZ_ASSERT(JSProto_Null < protoKey);
+    MOZ_ASSERT(protoKey < JSProto_LIMIT);
+    const Value& v = getConstructor(protoKey);
+    return v.isObject() ? &v.toObject() : nullptr;
   }
 
   JSObject* maybeGetPrototype(JSProtoKey protoKey) const {
@@ -918,7 +927,7 @@ class GlobalObject : public NativeObject {
   }
   void clearSourceURLSHolder() {
     // This is called at the start of shrinking GCs, so avoids barriers.
-    getSlotRef(SOURCE_URLS).unsafeSet(UndefinedValue());
+    getSlotRef(SOURCE_URLS).unbarrieredSet(UndefinedValue());
   }
 
   // A class used in place of a prototype during off-thread parsing.

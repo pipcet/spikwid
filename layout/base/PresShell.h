@@ -40,7 +40,7 @@
 #include "nsPresArena.h"
 #include "nsPresContext.h"
 #include "nsRect.h"
-#include "nsRefreshDriver.h"
+#include "nsRefreshObservers.h"
 #include "nsStringFwd.h"
 #include "nsStubDocumentObserver.h"
 #include "nsTHashtable.h"
@@ -73,6 +73,7 @@ class nsITimer;
 class nsPIDOMWindowOuter;
 class nsPresShellEventCB;
 class nsRange;
+class nsRefreshDriver;
 class nsRegion;
 class nsView;
 class nsViewManager;
@@ -85,6 +86,8 @@ class WeakFrame;
 class ZoomConstraintsClient;
 
 struct nsCallbackEventRequest;
+
+enum class ScrollableDirection;
 
 namespace mozilla {
 class AccessibleCaretEventHub;
@@ -349,18 +352,10 @@ class PresShell final : public nsStubDocumentObserver,
 
  public:
   /**
-   * Returns true if this document has a potentially zoomable viewport,
-   * allowing for its layout and visual viewports to diverge.
+   * Note that the assumptions that determine whether we need a mobile viewport
+   * manager may have changed.
    */
-  bool GetIsViewportOverridden() const {
-    return (mMobileViewportManager != nullptr);
-  }
-
-  /**
-   * Note that the assumptions that determine whether we have a potentially
-   * zoomable viewport may have changed.
-   */
-  void UpdateViewportOverridden(bool aAfterInitialization);
+  void MaybeRecreateMobileViewportManager(bool aAfterInitialization);
 
   /**
    * Returns true if this document uses mobile viewport sizing (including
@@ -384,9 +379,7 @@ class PresShell final : public nsStubDocumentObserver,
   /**
    * Return true if the presshell expects layout flush.
    */
-  bool IsLayoutFlushObserver() {
-    return GetPresContext()->RefreshDriver()->IsLayoutFlushObserver(this);
-  }
+  bool IsLayoutFlushObserver();
 
   /**
    * Called when document load completes.
@@ -437,15 +430,6 @@ class PresShell final : public nsStubDocumentObserver,
    */
   nsIScrollableFrame* GetScrollableFrameToScroll(
       ScrollableDirection aDirection);
-
-  /**
-   * Gets nearest ancestor scrollable frame from aFrame.  The frame is
-   * scrollable with overflow:scroll or overflow:auto in some direction when
-   * aDirection is eEither.  Otherwise, this returns a nearest frame that is
-   * scrollable in the specified direction.
-   */
-  nsIScrollableFrame* GetNearestScrollableFrame(nsIFrame* aFrame,
-                                                ScrollableDirection aDirection);
 
   /**
    * Returns the page sequence frame associated with the frame hierarchy.
@@ -1150,7 +1134,8 @@ class PresShell final : public nsStubDocumentObserver,
         dom::Document_Binding::KEYPRESS_EVENT_MODEL_SPLIT;
   }
 
-  bool AddRefreshObserver(nsARefreshObserver* aObserver, FlushType aFlushType);
+  bool AddRefreshObserver(nsARefreshObserver* aObserver, FlushType aFlushType,
+                          const char* aObserverDescription);
   bool RemoveRefreshObserver(nsARefreshObserver* aObserver,
                              FlushType aFlushType);
 
@@ -1689,6 +1674,8 @@ class PresShell final : public nsStubDocumentObserver,
   nsIFrame* GetDrawEventTargetFrame() { return mDrawEventTargetFrame; }
 #endif
 
+  bool GetZoomableByAPZ() const;
+
  private:
   ~PresShell();
 
@@ -1920,13 +1907,8 @@ class PresShell final : public nsStubDocumentObserver,
    public:
     NS_INLINE_DECL_REFCOUNTING(nsSynthMouseMoveEvent, override)
 
-    void Revoke() {
-      if (mPresShell) {
-        mPresShell->GetPresContext()->RefreshDriver()->RemoveRefreshObserver(
-            this, FlushType::Display);
-        mPresShell = nullptr;
-      }
-    }
+    void Revoke();
+
     MOZ_CAN_RUN_SCRIPT
     void WillRefresh(TimeStamp aTime) override {
       if (mPresShell) {

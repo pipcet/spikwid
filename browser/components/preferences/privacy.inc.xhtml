@@ -395,6 +395,17 @@
   <label><html:h2 data-l10n-id="pane-privacy-logins-and-passwords-header" data-l10n-attrs="searchkeywords"/></label>
 
   <vbox id="passwordSettings">
+    <hbox id="passwordManagerExtensionContent"
+          class="extension-controlled"
+          align="center"
+          hidden="true">
+          <description control="disablePasswordManagerExtension"
+                       flex="1"/>
+          <button id="disablePasswordManagerExtension"
+                  class="extension-controlled-button accessory-button"
+                  data-l10n-id="disable-extension"
+                  hidden="true" />
+    </hbox>
     <hbox>
       <vbox flex="1">
         <hbox>
@@ -457,23 +468,34 @@
       </vbox>
     </hbox>
   </vbox>
-  <hbox id="masterPasswordRow">
-    <checkbox id="useMasterPassword"
-              data-l10n-id="forms-master-pw-use"
-              flex="1"/>
-    <!-- Please don't remove the wrapping hbox/vbox/box for these elements. It's used to properly compute the search tooltip position. -->
-    <hbox>
-      <button id="changeMasterPassword"
-              is="highlightable-button"
-              class="accessory-button"
-              data-l10n-id="forms-master-pw-change"/>
+  <vbox>
+    <hbox id="masterPasswordRow" align="center">
+      <checkbox id="useMasterPassword"
+                data-l10n-id="forms-primary-pw-use"
+                class="tail-with-learn-more"/>
+      <label id="primaryPasswordLearnMoreLink" class="learnMore" is="text-link"
+             flex="1"
+             data-l10n-id="forms-primary-pw-learn-more-link"/>
+      <spacer flex="1"/>
+      <!-- Please don't remove the wrapping hbox/vbox/box for these elements. It's used to properly compute the search tooltip position. -->
+      <hbox>
+        <button id="changeMasterPassword"
+                is="highlightable-button"
+                class="accessory-button"
+                search-l10n-ids="forms-master-pw-change.label"
+                data-l10n-id="forms-primary-pw-change"/>
+      </hbox>
     </hbox>
-  </hbox>
+    <description class="indent tip-caption"
+                 data-l10n-id="forms-primary-pw-former-name"
+                 data-l10n-attrs="hidden"
+                 flex="1"/>
+  </vbox>
   <!--
     Those two strings are meant to be invisible and will be used exclusively to provide
     localization for an alert window.
   -->
-  <label id="fips-title" hidden="true" data-l10n-id="forms-master-pw-fips-title"></label>
+  <label id="fips-title" hidden="true" data-l10n-id="forms-primary-pw-fips-title"></label>
   <label id="fips-desc" hidden="true" data-l10n-id="forms-master-pw-fips-desc"></label>
 </groupbox>
 
@@ -809,15 +831,6 @@
     </hbox>
   </hbox>
 
-  <vbox id="a11yPermissionsBox">
-    <hbox flex="1" align="center">
-      <checkbox id="a11yPrivacyCheckbox" class="tail-with-learn-more"
-                data-l10n-id="permissions-a11y-privacy-checkbox"/>
-      <label id="a11yLearnMoreLink" class="learnMore" is="text-link"
-             data-l10n-id="permissions-a11y-privacy-link"/>
-    </hbox>
-  </vbox>
-
 </groupbox>
 
 <!-- Firefox Data Collection and Use -->
@@ -970,7 +983,7 @@
                   certmgr-tab-ca.label,
                   certmgr-mine,
                   certmgr-people,
-                  certmgr-servers,
+                  certmgr-server,
                   certmgr-ca,
                   certmgr-cert-name.label,
                   certmgr-token-name.label,
@@ -1005,14 +1018,9 @@
 <!-- HTTPS-ONLY Mode -->
 <groupbox id="httpsOnlyBox" data-category="panePrivacy" hidden="true" hidehttpsonly="true">
   <label><html:h2 data-l10n-id="httpsonly-header"/></label>
-  <vbox data-subcategory="httpsonly">
-    <hbox align="start">
-      <image id="httpsOnlyShield"/>
-      <vbox flex="1">
-        <label id="httpsOnlyDescription" data-l10n-id="httpsonly-description"/>
-        <label id="httpsOnlyLearnMore" data-l10n-id="httpsonly-learn-more" class="learnMore" is="text-link"/>
-      </vbox>
-    </hbox>
+  <vbox data-subcategory="httpsonly" flex="1">
+    <label id="httpsOnlyDescription" data-l10n-id="httpsonly-description"/>
+    <label id="httpsOnlyLearnMore" data-l10n-id="httpsonly-learn-more" class="learnMore" is="text-link"/>
   </vbox>
   <vbox>
     <!-- Please don't remove the wrapping hbox/vbox/box for these elements. It's used to properly compute the search tooltip position. -->

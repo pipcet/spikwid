@@ -1,4 +1,6 @@
+/* clang-format off */
 /* -*- Mode: Objective-C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* clang-format on */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -78,14 +80,19 @@ static nsDataHashtable<nsUint64HashKey, MOXTextMarkerDelegate*> sDelegates;
   uint32_t characterCount =
       mGeckoDocAccessible.IsProxy()
           ? mGeckoDocAccessible.AsProxy()->CharacterCount()
-          : mGeckoDocAccessible.AsAccessible()->Document()->AsHyperText()->CharacterCount();
+          : mGeckoDocAccessible.AsAccessible()
+                ->Document()
+                ->AsHyperText()
+                ->CharacterCount();
   GeckoTextMarker geckoTextPoint(mGeckoDocAccessible, characterCount);
   return geckoTextPoint.CreateAXTextMarker();
 }
 
 - (id)moxSelectedTextMarkerRange {
-  return mSelection && GeckoTextMarkerRange(mGeckoDocAccessible, mSelection).IsValid() ? mSelection
-                                                                                       : nil;
+  return mSelection &&
+                 GeckoTextMarkerRange(mGeckoDocAccessible, mSelection).IsValid()
+             ? mSelection
+             : nil;
 }
 
 - (NSString*)moxStringForTextMarkerRange:(id)textMarkerRange {
@@ -106,7 +113,12 @@ static nsDataHashtable<nsUint64HashKey, MOXTextMarkerDelegate*> sDelegates;
     }
   }
 
-  mozilla::a11y::GeckoTextMarkerRange range(mGeckoDocAccessible, textMarkerRange);
+  mozilla::a11y::GeckoTextMarkerRange range(mGeckoDocAccessible,
+                                            textMarkerRange);
+  if (!range.IsValid()) {
+    return @"";
+  }
+
   return range.Text();
 }
 
@@ -123,10 +135,189 @@ static nsDataHashtable<nsUint64HashKey, MOXTextMarkerDelegate*> sDelegates;
   GeckoTextMarker p1(mGeckoDocAccessible, textMarkers[0]);
   GeckoTextMarker p2(mGeckoDocAccessible, textMarkers[1]);
 
+  if (!p1.IsValid() || !p2.IsValid()) {
+    // If either marker is invalid, return nil.
+    return nil;
+  }
+
   bool ordered = p1 < p2;
   GeckoTextMarkerRange range(ordered ? p1 : p2, ordered ? p2 : p1);
 
   return range.CreateAXTextMarkerRange();
+}
+
+- (id)moxStartTextMarkerForTextMarkerRange:(id)textMarkerRange {
+  mozilla::a11y::GeckoTextMarkerRange range(mGeckoDocAccessible,
+                                            textMarkerRange);
+
+  return range.IsValid() ? range.mStart.CreateAXTextMarker() : nil;
+}
+
+- (id)moxEndTextMarkerForTextMarkerRange:(id)textMarkerRange {
+  mozilla::a11y::GeckoTextMarkerRange range(mGeckoDocAccessible,
+                                            textMarkerRange);
+
+  return range.IsValid() ? range.mEnd.CreateAXTextMarker() : nil;
+}
+
+- (id)moxLeftWordTextMarkerRangeForTextMarker:(id)textMarker {
+  GeckoTextMarker geckoTextMarker(mGeckoDocAccessible, textMarker);
+  if (!geckoTextMarker.IsValid()) {
+    return nil;
+  }
+
+  return geckoTextMarker.Range(EWhichRange::eLeftWord)
+      .CreateAXTextMarkerRange();
+}
+
+- (id)moxRightWordTextMarkerRangeForTextMarker:(id)textMarker {
+  GeckoTextMarker geckoTextMarker(mGeckoDocAccessible, textMarker);
+  if (!geckoTextMarker.IsValid()) {
+    return nil;
+  }
+
+  return geckoTextMarker.Range(EWhichRange::eRightWord)
+      .CreateAXTextMarkerRange();
+}
+
+- (id)moxLineTextMarkerRangeForTextMarker:(id)textMarker {
+  GeckoTextMarker geckoTextMarker(mGeckoDocAccessible, textMarker);
+  if (!geckoTextMarker.IsValid()) {
+    return nil;
+  }
+
+  return geckoTextMarker.Range(EWhichRange::eLine).CreateAXTextMarkerRange();
+}
+
+- (id)moxLeftLineTextMarkerRangeForTextMarker:(id)textMarker {
+  GeckoTextMarker geckoTextMarker(mGeckoDocAccessible, textMarker);
+  if (!geckoTextMarker.IsValid()) {
+    return nil;
+  }
+
+  return geckoTextMarker.Range(EWhichRange::eLeftLine)
+      .CreateAXTextMarkerRange();
+}
+
+- (id)moxRightLineTextMarkerRangeForTextMarker:(id)textMarker {
+  GeckoTextMarker geckoTextMarker(mGeckoDocAccessible, textMarker);
+  if (!geckoTextMarker.IsValid()) {
+    return nil;
+  }
+
+  return geckoTextMarker.Range(EWhichRange::eRightLine)
+      .CreateAXTextMarkerRange();
+}
+
+- (id)moxParagraphTextMarkerRangeForTextMarker:(id)textMarker {
+  GeckoTextMarker geckoTextMarker(mGeckoDocAccessible, textMarker);
+  if (!geckoTextMarker.IsValid()) {
+    return nil;
+  }
+
+  return geckoTextMarker.Range(EWhichRange::eParagraph)
+      .CreateAXTextMarkerRange();
+}
+
+// override
+- (id)moxStyleTextMarkerRangeForTextMarker:(id)textMarker {
+  GeckoTextMarker geckoTextMarker(mGeckoDocAccessible, textMarker);
+  if (!geckoTextMarker.IsValid()) {
+    return nil;
+  }
+
+  return geckoTextMarker.Range(EWhichRange::eStyle).CreateAXTextMarkerRange();
+}
+
+- (id)moxNextTextMarkerForTextMarker:(id)textMarker {
+  GeckoTextMarker geckoTextMarker(mGeckoDocAccessible, textMarker);
+  if (!geckoTextMarker.IsValid()) {
+    return nil;
+  }
+
+  if (!geckoTextMarker.Next()) {
+    return nil;
+  }
+
+  return geckoTextMarker.CreateAXTextMarker();
+}
+
+- (id)moxPreviousTextMarkerForTextMarker:(id)textMarker {
+  GeckoTextMarker geckoTextMarker(mGeckoDocAccessible, textMarker);
+  if (!geckoTextMarker.IsValid()) {
+    return nil;
+  }
+
+  if (!geckoTextMarker.Previous()) {
+    return nil;
+  }
+
+  return geckoTextMarker.CreateAXTextMarker();
+}
+
+- (NSAttributedString*)moxAttributedStringForTextMarkerRange:
+    (id)textMarkerRange {
+  return [[[NSAttributedString alloc]
+      initWithString:[self moxStringForTextMarkerRange:textMarkerRange]]
+      autorelease];
+}
+
+- (NSValue*)moxBoundsForTextMarkerRange:(id)textMarkerRange {
+  mozilla::a11y::GeckoTextMarkerRange range(mGeckoDocAccessible,
+                                            textMarkerRange);
+  if (!range.IsValid()) {
+    return nil;
+  }
+
+  return range.Bounds();
+}
+
+- (NSNumber*)moxIndexForTextMarker:(id)textMarker {
+  GeckoTextMarker geckoTextMarker(mGeckoDocAccessible, textMarker);
+  if (!geckoTextMarker.IsValid()) {
+    return nil;
+  }
+
+  GeckoTextMarkerRange range(GeckoTextMarker(mGeckoDocAccessible, 0),
+                             geckoTextMarker);
+
+  return @(range.Length());
+}
+
+- (id)moxTextMarkerForIndex:(NSNumber*)index {
+  GeckoTextMarker geckoTextMarker = GeckoTextMarker::MarkerFromIndex(
+      mGeckoDocAccessible, [index integerValue]);
+  if (!geckoTextMarker.IsValid()) {
+    return nil;
+  }
+
+  return geckoTextMarker.CreateAXTextMarker();
+}
+
+- (id)moxUIElementForTextMarker:(id)textMarker {
+  GeckoTextMarker geckoTextMarker(mGeckoDocAccessible, textMarker);
+  if (!geckoTextMarker.IsValid()) {
+    return nil;
+  }
+
+  return GetNativeFromGeckoAccessible(geckoTextMarker.Leaf());
+}
+
+- (id)moxTextMarkerRangeForUIElement:(id)element {
+  if (![element isKindOfClass:[mozAccessible class]]) {
+    return nil;
+  }
+
+  GeckoTextMarkerRange range([element geckoAccessible]);
+  return range.CreateAXTextMarkerRange();
+}
+
+- (void)moxSetSelectedTextMarkerRange:(id)textMarkerRange {
+  mozilla::a11y::GeckoTextMarkerRange range(mGeckoDocAccessible,
+                                            textMarkerRange);
+  if (range.IsValid()) {
+    range.Select();
+  }
 }
 
 @end

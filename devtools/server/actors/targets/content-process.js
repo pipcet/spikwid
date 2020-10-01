@@ -24,11 +24,12 @@ const { ActorClassWithSpec, Actor } = require("devtools/shared/protocol");
 const {
   contentProcessTargetSpec,
 } = require("devtools/shared/specs/targets/content-process");
+const Targets = require("devtools/server/actors/targets/index");
 
 loader.lazyRequireGetter(
   this,
-  "WorkerTargetActorList",
-  "devtools/server/actors/worker/worker-target-actor-list",
+  "WorkerDescriptorActorList",
+  "devtools/server/actors/worker/worker-descriptor-actor-list",
   true
 );
 loader.lazyRequireGetter(
@@ -71,7 +72,7 @@ const ContentProcessTargetActor = ActorClassWithSpec(contentProcessTargetSpec, {
     this._consoleScope = sandbox;
 
     this._workerList = null;
-    this._workerTargetActorPool = null;
+    this._workerDescriptorActorPool = null;
     this._onWorkerListChanged = this._onWorkerListChanged.bind(this);
 
     // Try to destroy the Content Process Target when the content process shuts down.
@@ -85,6 +86,8 @@ const ContentProcessTargetActor = ActorClassWithSpec(contentProcessTargetSpec, {
     this.destroyObserver = this.destroy.bind(this);
     Services.obs.addObserver(this.destroyObserver, "xpcom-shutdown");
   },
+
+  targetType: Targets.TYPES.FRAME,
 
   get isRootActor() {
     return true;
@@ -152,7 +155,7 @@ const ContentProcessTargetActor = ActorClassWithSpec(contentProcessTargetSpec, {
 
   ensureWorkerList() {
     if (!this._workerList) {
-      this._workerList = new WorkerTargetActorList(this.conn, {});
+      this._workerList = new WorkerDescriptorActorList(this.conn, {});
     }
     return this._workerList;
   },
@@ -168,11 +171,11 @@ const ContentProcessTargetActor = ActorClassWithSpec(contentProcessTargetSpec, {
 
         // Do not destroy the pool before transfering ownership to the newly created
         // pool, so that we do not accidentally destroy actors that are still in use.
-        if (this._workerTargetActorPool) {
-          this._workerTargetActorPool.destroy();
+        if (this._workerDescriptorActorPool) {
+          this._workerDescriptorActorPool.destroy();
         }
 
-        this._workerTargetActorPool = pool;
+        this._workerDescriptorActorPool = pool;
         this._workerList.onListChanged = this._onWorkerListChanged;
 
         return {
@@ -192,7 +195,7 @@ const ContentProcessTargetActor = ActorClassWithSpec(contentProcessTargetSpec, {
   },
 
   destroy: function() {
-    if (!this.actorID) {
+    if (this.isDestroyed()) {
       return;
     }
     Actor.prototype.destroy.call(this);

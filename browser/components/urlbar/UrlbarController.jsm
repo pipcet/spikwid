@@ -19,7 +19,6 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   UrlbarProvidersManager: "resource:///modules/UrlbarProvidersManager.jsm",
   UrlbarTokenizer: "resource:///modules/UrlbarTokenizer.jsm",
   UrlbarUtils: "resource:///modules/UrlbarUtils.jsm",
-  URLBAR_SELECTED_RESULT_TYPES: "resource:///modules/BrowserUsageTelemetry.jsm",
 });
 
 const TELEMETRY_1ST_RESULT = "PLACES_AUTOCOMPLETE_1ST_RESULT_TIME_MS";
@@ -180,10 +179,13 @@ class UrlbarController {
       TelemetryStopwatch.finish(TELEMETRY_6_FIRST_RESULTS, queryContext);
     }
 
-    if (queryContext.lastResultCount == 0 && queryContext.results.length) {
-      if (queryContext.results[0].autofill) {
-        this.input.autofillFirstResult(queryContext.results[0]);
+    if (queryContext.firstResultChanged) {
+      // Notify the input so it can make adjustments based on the first result.
+      if (this.input.onFirstResult(queryContext.results[0])) {
+        // The input canceled the query and started a new one.
+        return;
       }
+
       // The first time we receive results try to connect to the heuristic
       // result.
       this.speculativeConnect(
@@ -318,10 +320,14 @@ class UrlbarController {
       case KeyEvent.DOM_VK_TAB:
         // It's always possible to tab through results when the urlbar was
         // focused with the mouse, or has a search string.
+        // We allow tabbing without a search string when in search mode preview,
+        // since that means the user has interacted with the Urlbar since
+        // opening it.
         // When there's no search string, we want to focus the next toolbar item
         // instead, for accessibility reasons.
         let allowTabbingThroughResults =
           this.input.focusedViaMousedown ||
+          this.input.searchMode?.isPreview ||
           (this.input.value &&
             this.input.getAttribute("pageproxystate") != "valid");
         if (
@@ -373,14 +379,31 @@ class UrlbarController {
         }
         event.preventDefault();
         break;
-      case KeyEvent.DOM_VK_LEFT:
       case KeyEvent.DOM_VK_RIGHT:
-      case KeyEvent.DOM_VK_HOME:
       case KeyEvent.DOM_VK_END:
+        this.input.maybePromoteResultToSearchMode({
+          entry: "typed",
+        });
+      // Fall through.
+      case KeyEvent.DOM_VK_LEFT:
+      case KeyEvent.DOM_VK_HOME:
         this.view.removeAccessibleFocus();
         break;
-      case KeyEvent.DOM_VK_DELETE:
       case KeyEvent.DOM_VK_BACK_SPACE:
+        if (
+          this.input.searchMode &&
+          this.input.selectionStart == 0 &&
+          this.input.selectionEnd == 0 &&
+          !event.shiftKey
+        ) {
+          this.input.setSearchMode({});
+          this.input.startQuery({
+            allowAutofill: false,
+            event,
+          });
+        }
+      // Fall through.
+      case KeyEvent.DOM_VK_DELETE:
         if (!this.view.isOpen) {
           break;
         }
@@ -502,7 +525,7 @@ class UrlbarController {
     // Do not modify existing telemetry types.  To add a new type:
     //
     // * Set telemetryType appropriately below.
-    // * Add the type to BrowserUsageTelemetry.URLBAR_SELECTED_RESULT_TYPES.
+    // * Add the type to UrlbarUtils.SELECTED_RESULT_TYPES.
     // * See n_values in Histograms.json for FX_URLBAR_SELECTED_RESULT_TYPE_2
     //   and FX_URLBAR_SELECTED_RESULT_INDEX_BY_TYPE_2.  If your new type causes
     //   the number of types to become larger than n_values, you'll need to
@@ -518,6 +541,8 @@ class UrlbarController {
       case UrlbarUtils.RESULT_TYPE.SEARCH:
         if (result.source == UrlbarUtils.RESULT_SOURCE.HISTORY) {
           telemetryType = "formhistory";
+        } else if (result.providerName == "TabToSearch") {
+          telemetryType = "tabtosearch";
         } else {
           telemetryType = result.payload.suggestion
             ? "searchsuggestion"
@@ -567,10 +592,10 @@ class UrlbarController {
     Services.telemetry
       .getHistogramById("FX_URLBAR_SELECTED_RESULT_INDEX")
       .add(resultIndex);
-    if (telemetryType in URLBAR_SELECTED_RESULT_TYPES) {
+    if (telemetryType in UrlbarUtils.SELECTED_RESULT_TYPES) {
       Services.telemetry
         .getHistogramById("FX_URLBAR_SELECTED_RESULT_TYPE_2")
-        .add(URLBAR_SELECTED_RESULT_TYPES[telemetryType]);
+        .add(UrlbarUtils.SELECTED_RESULT_TYPES[telemetryType]);
       Services.telemetry
         .getKeyedHistogramById("FX_URLBAR_SELECTED_RESULT_INDEX_BY_TYPE_2")
         .add(telemetryType, resultIndex);
@@ -612,11 +637,15 @@ class UrlbarController {
     queryContext.results.splice(index, 1);
     this.notify(NOTIFICATIONS.QUERY_RESULT_REMOVED, index);
 
-    // form history
+    // Form history or url restyled as search.
     if (selectedResult.type == UrlbarUtils.RESULT_TYPE.SEARCH) {
       if (!queryContext.formHistoryName) {
         return false;
       }
+      // Generate the search url to remove it from browsing history.
+      let { url } = UrlbarUtils.getUrlFromResult(selectedResult);
+      PlacesUtils.history.remove(url).catch(Cu.reportError);
+      // Now remove form history.
       FormHistory.update(
         {
           op: "remove",
@@ -632,7 +661,7 @@ class UrlbarController {
       return true;
     }
 
-    // Places history
+    // Remove browsing history entries from Places.
     PlacesUtils.history
       .remove(selectedResult.payload.url)
       .catch(Cu.reportError);
@@ -713,6 +742,7 @@ class TelemetryEvent {
       return;
     }
     const validEvents = [
+      "click",
       "command",
       "drop",
       "input",
@@ -888,6 +918,9 @@ class TelemetryEvent {
         case UrlbarUtils.RESULT_TYPE.SEARCH:
           if (row.result.source == UrlbarUtils.RESULT_SOURCE.HISTORY) {
             return "formhistory";
+          }
+          if (row.result.providerName == "TabToSearch") {
+            return "tabtosearch";
           }
           return row.result.payload.suggestion ? "searchsuggestion" : "search";
         case UrlbarUtils.RESULT_TYPE.URL:

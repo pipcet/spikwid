@@ -8,11 +8,12 @@ from __future__ import absolute_import
 
 import os
 
-from mozdevice import ADBDevice
+from mozdevice import ADBDeviceFactory
 
 from logger.logger import RaptorLogger
 from performance_tuning import tune_performance
 from perftest import PerftestAndroid
+from power import enable_charging, disable_charging
 
 from .base import Browsertime
 
@@ -34,16 +35,21 @@ class BrowsertimeAndroid(PerftestAndroid, Browsertime):
     file ourselves. Also note when using playback, the nss certificate db is created as usual when
     mitmproxy is started (and saved in the profile) so it is already included in the profile that
     browsertime/geckodriver copies onto the device.
+    XXX: bc: This doesn't work with scoped storage in Android 10 since the shell owns the profile
+    directory that is pushed to the device and the profile can no longer be on the sdcard. But when
+    geckodriver's android.rs defines the profile to be located on internal storage, it will be
+    owned by shell but if we are attempting to eliminate root, then when we run shell commands
+    as the app, they will fail due to the app being unable to write to the shell owned profile
+    directory.
     """
 
     def __init__(self, app, binary, activity=None, intent=None, **kwargs):
         super(BrowsertimeAndroid, self).__init__(
             app, binary, profile_class="firefox", **kwargs
         )
-
         self.config.update({"activity": activity, "intent": intent})
-        self.remote_test_root = "/data/local/tmp/tests/raptor"
-        self.remote_profile = os.path.join(self.remote_test_root, "profile")
+        self.remote_test_root = None
+        self.remote_profile = None
 
     @property
     def browsertime_args(self):
@@ -53,6 +59,14 @@ class BrowsertimeAndroid(PerftestAndroid, Browsertime):
                 '--android',
             ]
         else:
+            activity = self.config["activity"]
+            if self.config["app"] == "fenix":
+                LOG.info(
+                    "Changing initial activity to "
+                    "`mozilla.telemetry.glean.debug.GleanDebugActivity`"
+                )
+                activity = "mozilla.telemetry.glean.debug.GleanDebugActivity"
+
             args_list = [
                 "--browser", "firefox",
                 "--android",
@@ -61,15 +75,30 @@ class BrowsertimeAndroid(PerftestAndroid, Browsertime):
                 # actually do things on an Android device.
                 "--firefox.binaryPath", self.browsertime_node,
                 "--firefox.android.package", self.config["binary"],
-                "--firefox.android.activity", self.config["activity"],
+                "--firefox.android.activity", activity,
             ]
 
-        # if running on Fenix we must add the intent as we use a special non-default one there
+        # Setup power testing
+        if self.config["power_test"]:
+            args_list.extend(["--androidPower", "true"])
+
+        # If running on Fenix we must add the intent as we use a special non-default one there
         if self.config["app"] == "fenix" and self.config.get("intent") is not None:
             args_list.extend(["--firefox.android.intentArgument=-a"])
             args_list.extend(
                 ["--firefox.android.intentArgument", self.config["intent"]]
             )
+
+            # Change glean ping names in all cases on Fenix
+            args_list.extend([
+                "--firefox.android.intentArgument=--es",
+                "--firefox.android.intentArgument=startNext",
+                "--firefox.android.intentArgument=" + self.config["activity"],
+                "--firefox.android.intentArgument=--esa",
+                "--firefox.android.intentArgument=sourceTags",
+                "--firefox.android.intentArgument=automation",
+            ])
+
             args_list.extend(["--firefox.android.intentArgument=-d"])
             args_list.extend(["--firefox.android.intentArgument", str("about:blank")])
 
@@ -117,12 +146,15 @@ class BrowsertimeAndroid(PerftestAndroid, Browsertime):
 
     def setup_adb_device(self):
         if self.device is None:
-            self.device = ADBDevice(verbose=True)
+            self.device = ADBDeviceFactory(verbose=True)
             if not self.config.get("disable_perf_tuning", False):
                 tune_performance(self.device, log=LOG)
 
         self.clear_app_data()
         self.set_debug_app_flag()
+        self.device.run_as_package = self.config['binary']
+        self.remote_test_root = os.path.join(self.device.test_root, "raptor")
+        self.remote_profile = os.path.join(self.remote_test_root, "profile")
 
     def run_test_setup(self, test):
         super(BrowsertimeAndroid, self).run_test_setup(test)
@@ -138,9 +170,15 @@ class BrowsertimeAndroid(PerftestAndroid, Browsertime):
 
         if self.config['app'] == "chrome-m":
             # Make sure that chrome is enabled on the device
-            self.device.shell_output("pm enable com.android.chrome", root=True)
+            self.device.shell_output("pm enable com.android.chrome")
 
-        return super(BrowsertimeAndroid, self).run_tests(tests, test_names)
+        try:
+            if self.config["power_test"]:
+                disable_charging(self.device)
+            return super(BrowsertimeAndroid, self).run_tests(tests, test_names)
+        finally:
+            if self.config["power_test"]:
+                enable_charging(self.device)
 
     def run_test_teardown(self, test):
         LOG.info("removing reverse socket connections")

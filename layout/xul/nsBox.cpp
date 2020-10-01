@@ -19,6 +19,7 @@
 #include "nsGkAtoms.h"
 #include "nsITheme.h"
 #include "nsBoxLayout.h"
+#include "nsLayoutUtils.h"
 #include "FrameLayerBuilder.h"
 #include "mozilla/dom/Attr.h"
 #include "mozilla/dom/Element.h"
@@ -255,13 +256,10 @@ nsresult nsIFrame::XULLayout(nsBoxLayoutState& aState) {
   return NS_OK;
 }
 
-bool nsIFrame::DoesClipChildren() {
+bool nsIFrame::DoesClipChildrenInBothAxes() {
   const nsStyleDisplay* display = StyleDisplay();
-  NS_ASSERTION(
-      (display->mOverflowY == StyleOverflow::MozHiddenUnscrollable) ==
-          (display->mOverflowX == StyleOverflow::MozHiddenUnscrollable),
-      "If one overflow is -moz-hidden-unscrollable, the other should be too");
-  return display->mOverflowX == StyleOverflow::MozHiddenUnscrollable;
+  return display->mOverflowX == StyleOverflow::Clip &&
+         display->mOverflowY == StyleOverflow::Clip;
 }
 
 nsresult nsIFrame::SyncXULLayout(nsBoxLayoutState& aBoxLayoutState) {
@@ -283,14 +281,14 @@ nsresult nsIFrame::SyncXULLayout(nsBoxLayoutState& aBoxLayoutState) {
 
   ReflowChildFlags flags = GetXULLayoutFlags() | aBoxLayoutState.LayoutFlags();
 
-  nsRect visualOverflow;
+  nsRect inkOverflow;
 
   if (XULComputesOwnOverflowArea()) {
-    visualOverflow = GetVisualOverflowRect();
+    inkOverflow = InkOverflowRect();
   } else {
     nsRect rect(nsPoint(0, 0), GetSize());
     nsOverflowAreas overflowAreas(rect, rect);
-    if (!DoesClipChildren() && !IsXULCollapsed()) {
+    if (!DoesClipChildrenInBothAxes() && !IsXULCollapsed()) {
       // See if our child frames caused us to overflow after being laid
       // out. If so, store the overflow area.  This normally can't happen
       // in XUL, but it can happen with the CSS 'outline' property and
@@ -300,7 +298,7 @@ nsresult nsIFrame::SyncXULLayout(nsBoxLayoutState& aBoxLayoutState) {
     }
 
     FinishAndStoreOverflow(overflowAreas, GetSize());
-    visualOverflow = overflowAreas.VisualOverflow();
+    inkOverflow = overflowAreas.InkOverflow();
   }
 
   nsView* view = GetView();
@@ -308,7 +306,7 @@ nsresult nsIFrame::SyncXULLayout(nsBoxLayoutState& aBoxLayoutState) {
     // Make sure the frame's view is properly sized and positioned and has
     // things like opacity correct
     nsContainerFrame::SyncFrameViewAfterReflow(presContext, this, view,
-                                               visualOverflow, flags);
+                                               inkOverflow, flags);
   }
 
   return NS_OK;

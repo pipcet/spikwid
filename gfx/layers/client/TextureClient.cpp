@@ -1062,12 +1062,14 @@ bool TextureClient::InitIPDLActor(CompositableForwarder* aForwarder) {
       if (currentTexFwd && currentTexFwd != aForwarder->GetTextureForwarder()) {
         gfxCriticalError()
             << "Attempt to move a texture to a different channel CF.";
+        MOZ_ASSERT_UNREACHABLE("unexpected to be called");
         return false;
       }
       if (currentFwd && currentFwd->GetCompositorBackendType() !=
                             aForwarder->GetCompositorBackendType()) {
         gfxCriticalError()
             << "Attempt to move a texture to different compositor backend.";
+        MOZ_ASSERT_UNREACHABLE("unexpected to be called");
         return false;
       }
       if (ShadowLayerForwarder* forwarder = aForwarder->AsLayerForwarder()) {
@@ -1490,8 +1492,8 @@ already_AddRefed<gfx::DataSourceSurface> TextureClient::GetAsSurface() {
 
 void TextureClient::PrintInfo(std::stringstream& aStream, const char* aPrefix) {
   aStream << aPrefix;
-  aStream << nsPrintfCString("TextureClient (0x%p)", this).get();
-  AppendToString(aStream, GetSize(), " [size=", "]");
+  aStream << nsPrintfCString("TextureClient (0x%p)", this).get()
+          << " [size=" << GetSize() << "]";
   AppendToString(aStream, GetFormat(), " [format=", "]");
   AppendToString(aStream, mFlags, " [flags=", "]");
 

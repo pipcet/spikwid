@@ -9,6 +9,7 @@
 
 #include "jit/IonTypes.h"
 #include "jit/JitAllocPolicy.h"
+#include "js/ScalarType.h"  // js::Scalar::Type
 
 namespace js {
 namespace jit {
@@ -456,16 +457,6 @@ class MixPolicy final : public TypePolicy {
 class CallSetElementPolicy final : public TypePolicy {
  public:
   constexpr CallSetElementPolicy() = default;
-  EMPTY_DATA_;
-  MOZ_MUST_USE bool adjustInputs(TempAllocator& alloc,
-                                 MInstruction* def) const override;
-};
-
-// First operand will be boxed to a Value (except for an object)
-// Second operand (if specified) will forcefully be unboxed to an object
-class InstanceOfPolicy final : public TypePolicy {
- public:
-  constexpr InstanceOfPolicy() = default;
   EMPTY_DATA_;
   MOZ_MUST_USE bool adjustInputs(TempAllocator& alloc,
                                  MInstruction* def) const override;

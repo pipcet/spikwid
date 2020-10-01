@@ -36,6 +36,7 @@
 #include "nsJSEnvironment.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/DebuggerUtilsBinding.h"
+#include "mozilla/ProfilerMarkers.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -120,7 +121,7 @@ class nsHtml5ExecutorFlusher : public Runnable {
         nsCOMPtr<nsIRunnable> flusher = this;
         if (NS_SUCCEEDED(
                 doc->Dispatch(TaskCategory::Network, flusher.forget()))) {
-          PROFILER_ADD_MARKER("HighPrio blocking parser flushing(1)", DOM);
+          PROFILER_MARKER_UNTYPED("HighPrio blocking parser flushing(1)", DOM);
           return NS_OK;
         }
       }
@@ -360,7 +361,7 @@ nsHtml5StreamParser::SetupDecodingAndWriteSniffingBufferAndCurrentSegment(
     mUnicodeDecoder = mEncoding->NewDecoderWithBOMRemoval();
   }
   if (mSniffingBuffer) {
-    rv = WriteStreamBytes(MakeSpan(mSniffingBuffer.get(), mSniffingLength));
+    rv = WriteStreamBytes(Span(mSniffingBuffer.get(), mSniffingLength));
     NS_ENSURE_SUCCESS(rv, rv);
     mSniffingBuffer = nullptr;
   }
@@ -506,7 +507,7 @@ void nsHtml5StreamParser::FinalizeSniffingWithDetector(
     Span<const uint8_t> aFromSegment, uint32_t aCountToSniffingLimit,
     bool aEof) {
   if (mSniffingBuffer) {
-    FeedDetector(MakeSpan(mSniffingBuffer.get(), mSniffingLength), false);
+    FeedDetector(Span(mSniffingBuffer.get(), mSniffingLength), false);
   }
   if (mFeedChardet && !aFromSegment.IsEmpty()) {
     // Avoid buffer boundary-dependent behavior.
@@ -1516,7 +1517,7 @@ nsresult nsHtml5StreamParser::CopySegmentsToParser(
     uint32_t aToOffset, uint32_t aCount, uint32_t* aWriteCount) {
   nsHtml5StreamParser* parser = static_cast<nsHtml5StreamParser*>(aClosure);
 
-  parser->DoDataAvailable(AsBytes(MakeSpan(aFromSegment, aCount)));
+  parser->DoDataAvailable(AsBytes(Span(aFromSegment, aCount)));
   // Assume DoDataAvailable consumed all available bytes.
   *aWriteCount = aCount;
   return NS_OK;
@@ -1846,7 +1847,7 @@ void nsHtml5StreamParser::ContinueAfterScripts(nsHtml5Tokenizer* aTokenizer,
       nsContentUtils::ReportToConsole(
           nsIScriptError::warningFlag, "DOM Events"_ns,
           mExecutor->GetDocument(), nsContentUtils::eDOM_PROPERTIES,
-          "SpeculationFailed", nsTArray<nsString>(), nullptr, EmptyString(),
+          "SpeculationFailed", nsTArray<nsString>(), nullptr, u""_ns,
           speculation->GetStartLineNumber());
 
       nsHtml5OwningUTF16Buffer* buffer = mFirstBuffer->next;

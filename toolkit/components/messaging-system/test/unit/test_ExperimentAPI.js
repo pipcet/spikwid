@@ -6,9 +6,6 @@ const { ExperimentAPI } = ChromeUtils.import(
 const { ExperimentFakes } = ChromeUtils.import(
   "resource://testing-common/MSTestUtils.jsm"
 );
-const { FileTestUtils } = ChromeUtils.import(
-  "resource://testing-common/FileTestUtils.jsm"
-);
 const { TestUtils } = ChromeUtils.import(
   "resource://testing-common/TestUtils.jsm"
 );
@@ -42,11 +39,15 @@ add_task(async function test_getExperiment_slug() {
   sandbox.restore();
 });
 
-add_task(async function test_getExperiment_group() {
+add_task(async function test_getExperiment_feature() {
   const sandbox = sinon.createSandbox();
   const manager = ExperimentFakes.manager();
   const expected = ExperimentFakes.experiment("foo", {
-    branch: { slug: "treatment", value: { title: "hi" }, groups: ["blue"] },
+    branch: {
+      slug: "treatment",
+      value: { title: "hi" },
+      feature: { featureId: "cfr", enabled: true },
+    },
   });
 
   await manager.onStartup();
@@ -57,12 +58,12 @@ add_task(async function test_getExperiment_group() {
 
   // Wait to sync to child
   await TestUtils.waitForCondition(
-    () => ExperimentAPI.getExperiment({ group: "blue" }),
+    () => ExperimentAPI.getExperiment({ featureId: "cfr" }),
     "Wait for child to sync"
   );
 
   Assert.deepEqual(
-    ExperimentAPI.getExperiment({ group: "blue" }),
+    ExperimentAPI.getExperiment({ featureId: "cfr" }),
     expected,
     "should return an experiment by slug"
   );
@@ -76,9 +77,13 @@ add_task(async function test_getExperiment_group() {
 add_task(async function test_getValue() {
   const sandbox = sinon.createSandbox();
   const manager = ExperimentFakes.manager();
-  const value = { title: "hi" };
+  const feature = {
+    featureId: "aboutwelcome",
+    enabled: true,
+    value: { title: "hi" },
+  };
   const expected = ExperimentFakes.experiment("foo", {
-    branch: { slug: "treatment", value },
+    branch: { slug: "treatment", feature },
   });
 
   await manager.onStartup();
@@ -93,17 +98,67 @@ add_task(async function test_getValue() {
   );
 
   Assert.deepEqual(
-    ExperimentAPI.getValue({ slug: "foo" }),
-    value,
+    ExperimentAPI.getFeatureValue("aboutwelcome"),
+    feature.value,
     "should return an experiment value by slug"
   );
 
   Assert.equal(
-    ExperimentAPI.getValue({ slug: "doesnotexist" }),
+    ExperimentAPI.getFeatureValue("doesnotexist"),
     undefined,
     "should return undefined if the experiment is not found"
   );
 
+  sandbox.restore();
+});
+
+/**
+ * #isFeatureEnabled
+ */
+
+add_task(async function test_isFeatureEnabledDefault() {
+  const sandbox = sinon.createSandbox();
+  const manager = ExperimentFakes.manager();
+  const FEATURE_ENABLED_DEFAULT = true;
+  const expected = ExperimentFakes.experiment("foo");
+
+  await manager.onStartup();
+
+  sandbox.stub(ExperimentAPI, "_store").get(() => manager.store);
+
+  manager.store.addExperiment(expected);
+
+  Assert.deepEqual(
+    ExperimentAPI.isFeatureEnabled("aboutwelcome", FEATURE_ENABLED_DEFAULT),
+    FEATURE_ENABLED_DEFAULT,
+    "should return enabled true as default"
+  );
+  sandbox.restore();
+});
+
+add_task(async function test_isFeatureEnabled() {
+  const sandbox = sinon.createSandbox();
+  const manager = ExperimentFakes.manager();
+  const feature = {
+    featureId: "aboutwelcome",
+    enabled: false,
+    value: null,
+  };
+  const expected = ExperimentFakes.experiment("foo", {
+    branch: { slug: "treatment", feature },
+  });
+
+  await manager.onStartup();
+
+  sandbox.stub(ExperimentAPI, "_store").get(() => manager.store);
+
+  manager.store.addExperiment(expected);
+
+  Assert.deepEqual(
+    ExperimentAPI.isFeatureEnabled("aboutwelcome", true),
+    feature.enabled,
+    "should return feature as disabled"
+  );
   sandbox.restore();
 });
 
@@ -182,7 +237,7 @@ add_task(async function test_event_updates_content() {
   sandbox.stub(ExperimentAPI, "_store").get(() => ExperimentFakes.childStore());
 
   // Set update cb
-  ExperimentAPI.on("update:foo", updateEventCbStub);
+  ExperimentAPI.on("child-store-update:foo", updateEventCbStub);
 
   // Add some data
   manager.store.addExperiment(expected);
@@ -205,7 +260,7 @@ add_task(async function test_event_updates_content() {
   );
 
   // Remove the update listener
-  ExperimentAPI.off("update:foo", updateEventCbStub);
+  ExperimentAPI.off("child-store-update:foo", updateEventCbStub);
   // Trigger another change
   manager.store.updateExperiment("foo", { active: true });
 
@@ -241,7 +296,7 @@ add_task(async function test_event_updates_main() {
   sandbox.stub(ExperimentAPI, "_store").get(() => manager.store);
 
   // Set update cb
-  ExperimentAPI.on("update:foo", updateEventCbStub);
+  ExperimentAPI.on("parent-store-update:foo", updateEventCbStub);
 
   // Add some data
   manager.store.addExperiment(expected);
@@ -258,7 +313,7 @@ add_task(async function test_event_updates_main() {
   );
 
   // Remove the update listener
-  ExperimentAPI.off("update:foo", updateEventCbStub);
+  ExperimentAPI.off("parent-store-update:foo", updateEventCbStub);
   // Trigger another change
   manager.store.updateExperiment("foo", { active: true });
 

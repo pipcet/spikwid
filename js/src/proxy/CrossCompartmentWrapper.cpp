@@ -7,6 +7,7 @@
 #include "mozilla/ScopeExit.h"
 
 #include "gc/PublicIterators.h"
+#include "js/friend/WindowProxy.h"  // js::IsWindow, js::IsWindowProxy
 #include "js/Wrapper.h"
 #include "proxy/DeadObjectProxy.h"
 #include "vm/Iteration.h"
@@ -601,6 +602,9 @@ void js::RemapDeadWrapper(JSContext* cx, HandleObject wobj,
   // Before swapping, this wrapper came out of rewrap(), which enforces the
   // invariant that the wrapper in the map points directly to the key.
   MOZ_ASSERT(Wrapper::wrappedObject(wobj) == newTarget);
+
+  // Update the incremental weakmap marking state.
+  wobj->zone()->afterAddDelegate(wobj);
 
   // Update the entry in the compartment's wrapper map to point to the old
   // wrapper, which has now been updated (via reuse or swap).

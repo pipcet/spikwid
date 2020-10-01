@@ -570,7 +570,7 @@ void gfxShapedText::SetupClusterBoundaries(uint32_t aOffset,
                                            uint32_t aLength) {
   CompressedGlyph* glyphs = GetCharacterGlyphs() + aOffset;
 
-  CompressedGlyph extendCluster = CompressedGlyph::MakeComplex(false, true, 0);
+  CompressedGlyph extendCluster = CompressedGlyph::MakeComplex(false, true);
 
   ClusterIterator iter(aString, aLength);
 
@@ -630,18 +630,19 @@ gfxShapedText::DetailedGlyph* gfxShapedText::AllocateDetailedGlyphs(
   return mDetailedGlyphs->Allocate(aIndex, aCount);
 }
 
-void gfxShapedText::SetGlyphs(uint32_t aIndex, CompressedGlyph aGlyph,
-                              const DetailedGlyph* aGlyphs) {
-  NS_ASSERTION(!aGlyph.IsSimpleGlyph(), "Simple glyphs not handled here");
-  NS_ASSERTION(aIndex > 0 || aGlyph.IsLigatureGroupStart(),
-               "First character can't be a ligature continuation!");
+void gfxShapedText::SetDetailedGlyphs(uint32_t aIndex, uint32_t aGlyphCount,
+                                      const DetailedGlyph* aGlyphs) {
+  CompressedGlyph& g = GetCharacterGlyphs()[aIndex];
 
-  uint32_t glyphCount = aGlyph.GetGlyphCount();
-  if (glyphCount > 0) {
-    DetailedGlyph* details = AllocateDetailedGlyphs(aIndex, glyphCount);
-    memcpy(details, aGlyphs, sizeof(DetailedGlyph) * glyphCount);
+  MOZ_ASSERT(aIndex > 0 || g.IsLigatureGroupStart(),
+             "First character can't be a ligature continuation!");
+
+  if (aGlyphCount > 0) {
+    DetailedGlyph* details = AllocateDetailedGlyphs(aIndex, aGlyphCount);
+    memcpy(details, aGlyphs, sizeof(DetailedGlyph) * aGlyphCount);
   }
-  GetCharacterGlyphs()[aIndex] = aGlyph;
+
+  g.SetGlyphCount(aGlyphCount);
 }
 
 #define ZWNJ 0x200C
@@ -652,26 +653,25 @@ static inline bool IsIgnorable(uint32_t aChar) {
 
 void gfxShapedText::SetMissingGlyph(uint32_t aIndex, uint32_t aChar,
                                     gfxFont* aFont) {
+  CompressedGlyph& g = GetCharacterGlyphs()[aIndex];
   uint8_t category = GetGeneralCategory(aChar);
   if (category >= HB_UNICODE_GENERAL_CATEGORY_SPACING_MARK &&
       category <= HB_UNICODE_GENERAL_CATEGORY_NON_SPACING_MARK) {
-    GetCharacterGlyphs()[aIndex].SetComplex(false, true, 0);
+    g.SetComplex(false, true);
   }
 
-  DetailedGlyph* details = AllocateDetailedGlyphs(aIndex, 1);
-
-  details->mGlyphID = aChar;
-  if (IsIgnorable(aChar)) {
-    // Setting advance width to zero will prevent drawing the hexbox
-    details->mAdvance = 0;
-  } else {
+  // Leaving advance as zero will prevent drawing the hexbox for ignorables.
+  int32_t advance = 0;
+  if (!IsIgnorable(aChar)) {
     gfxFloat width =
         std::max(aFont->GetMetrics(nsFontMetrics::eHorizontal).aveCharWidth,
                  gfxFloat(gfxFontMissingGlyphs::GetDesiredMinWidth(
                      aChar, mAppUnitsPerDevUnit)));
-    details->mAdvance = uint32_t(width * mAppUnitsPerDevUnit);
+    advance = int32_t(width * mAppUnitsPerDevUnit);
   }
-  GetCharacterGlyphs()[aIndex].SetMissing(1);
+  DetailedGlyph detail = {aChar, advance, gfx::Point()};
+  SetDetailedGlyphs(aIndex, 1, &detail);
+  g.SetMissing();
 }
 
 bool gfxShapedText::FilterIfIgnorable(uint32_t aIndex, uint32_t aCh) {
@@ -681,15 +681,15 @@ bool gfxShapedText::FilterIfIgnorable(uint32_t aIndex, uint32_t aCh) {
     // if they're followed by additional characters in the same cluster.
     // Some fonts use them to carry the width of a whole cluster of
     // combining jamos; see bug 1238243.
+    auto* charGlyphs = GetCharacterGlyphs();
     if (GetGenCategory(aCh) == nsUGenCategory::kLetter &&
-        aIndex + 1 < GetLength() &&
-        !GetCharacterGlyphs()[aIndex + 1].IsClusterStart()) {
+        aIndex + 1 < GetLength() && !charGlyphs[aIndex + 1].IsClusterStart()) {
       return false;
     }
-    DetailedGlyph* details = AllocateDetailedGlyphs(aIndex, 1);
-    details->mGlyphID = aCh;
-    details->mAdvance = 0;
-    GetCharacterGlyphs()[aIndex].SetMissing(1);
+    // A compressedGlyph that is set to MISSING but has no DetailedGlyphs list
+    // will be zero-width/invisible, which is what we want here.
+    CompressedGlyph& g = charGlyphs[aIndex];
+    g.SetComplex(g.IsClusterStart(), g.IsLigatureGroupStart()).SetMissing();
     return true;
   }
   return false;
@@ -712,9 +712,11 @@ void gfxShapedText::AdjustAdvancesForSyntheticBold(float aSynBoldOffset,
         } else {
           // rare case, tested by making this the default
           uint32_t glyphIndex = glyphData->GetSimpleGlyph();
-          glyphData->SetComplex(true, true, 1);
+          // convert the simple CompressedGlyph to an empty complex record
+          glyphData->SetComplex(true, true);
+          // then set its details (glyph ID with its new advance)
           DetailedGlyph detail = {glyphIndex, advance, gfx::Point()};
-          SetGlyphs(i, *glyphData, &detail);
+          SetDetailedGlyphs(i, 1, &detail);
         }
       }
     } else {
@@ -2404,6 +2406,40 @@ bool gfxFont::RenderColorGlyph(DrawTarget* aDrawTarget, gfxContext* aContext,
                             aDrawOptions);
   }
   return true;
+}
+
+bool gfxFont::HasColorGlyphFor(uint32_t aCh, uint32_t aNextCh) {
+  // Bitmap fonts are assumed to provide "color" glyphs for all supported chars.
+  gfxFontEntry* fe = GetFontEntry();
+  if (fe->HasColorBitmapTable()) {
+    return true;
+  }
+  // Use harfbuzz shaper to look up the default glyph ID for the character.
+  if (!mHarfBuzzShaper) {
+    mHarfBuzzShaper = MakeUnique<gfxHarfBuzzShaper>(this);
+  }
+  auto* shaper = static_cast<gfxHarfBuzzShaper*>(mHarfBuzzShaper.get());
+  if (!shaper->Initialize()) {
+    return false;
+  }
+  uint32_t gid = 0;
+  if (gfxFontUtils::IsVarSelector(aNextCh)) {
+    gid = shaper->GetVariationGlyph(aCh, aNextCh);
+  }
+  if (!gid) {
+    gid = shaper->GetNominalGlyph(aCh);
+  }
+  if (!gid) {
+    return false;
+  }
+  // Check if there is a COLR/CPAL or SVG glyph for this ID.
+  if (fe->TryGetColorGlyphs() && fe->HasColorLayersForGlyph(gid)) {
+    return true;
+  }
+  if (fe->TryGetSVGData(this) && fe->HasSVGGlyph(gid)) {
+    return true;
+  }
+  return false;
 }
 
 static void UnionRange(gfxFloat aX, gfxFloat* aDestMin, gfxFloat* aDestMax) {

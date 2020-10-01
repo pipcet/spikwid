@@ -17,6 +17,7 @@ use std::sync::mpsc::Receiver;
 use time;
 use webrender;
 use webrender::api::*;
+use webrender::render_api::*;
 use webrender::api::units::*;
 use webrender::{DebugFlags, RenderResults, ShaderPrecacheFlags};
 use crate::{WindowWrapper, NotifierEvent};
@@ -588,7 +589,7 @@ impl Wrench {
     pub fn send_lists(
         &mut self,
         frame_number: u32,
-        display_lists: Vec<(PipelineId, LayoutSize, BuiltDisplayList)>,
+        display_lists: Vec<(PipelineId, BuiltDisplayList)>,
         scroll_offsets: &HashMap<ExternalScrollId, LayoutPoint>,
     ) {
         let root_background_color = Some(ColorF::new(1.0, 1.0, 1.0, 1.0));

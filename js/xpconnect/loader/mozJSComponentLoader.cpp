@@ -21,6 +21,8 @@
 #include "js/Array.h"  // JS::GetArrayLength, JS::IsArrayObject
 #include "js/CharacterEncoding.h"
 #include "js/CompilationAndEvaluation.h"
+#include "js/friend/JSMEnvironment.h"  // JS::ExecuteInJSMEnvironment, JS::GetJSMEnvironmentOfScriptedCaller, JS::NewJSMEnvironment
+#include "js/Object.h"                 // JS::GetCompartment
 #include "js/Printf.h"
 #include "js/PropertySpec.h"
 #include "js/SourceText.h"  // JS::SourceText
@@ -49,9 +51,9 @@
 
 #include "mozilla/scache/StartupCache.h"
 #include "mozilla/scache/StartupCacheUtils.h"
+#include "mozilla/ClearOnShutdown.h"
 #include "mozilla/MacroForEach.h"
 #include "mozilla/Preferences.h"
-#include "mozilla/Omnijar.h"
 #include "mozilla/ResultExtensions.h"
 #include "mozilla/ScriptPreloader.h"
 #include "mozilla/ScopeExit.h"
@@ -258,7 +260,6 @@ class MOZ_STACK_CLASS ComponentLoaderInfo {
   }
 
   const nsACString& Key() { return mLocation; }
-  nsresult EnsureKey() { return NS_OK; }
 
   MOZ_MUST_USE nsresult GetLocation(nsCString& aLocation) {
     nsresult rv = EnsureURI();
@@ -307,14 +308,6 @@ mozJSComponentLoader::~mozJSComponentLoader() {
 }
 
 StaticRefPtr<mozJSComponentLoader> mozJSComponentLoader::sSelf;
-
-nsresult mozJSComponentLoader::ReallyInit() {
-  MOZ_ASSERT(!mInitialized);
-
-  mInitialized = true;
-
-  return NS_OK;
-}
 
 // For terrible compatibility reasons, we need to consider both the global
 // lexical environment and the global of modules when searching for exported
@@ -382,15 +375,10 @@ const mozilla::Module* mozJSComponentLoader::LoadModule(FileLocation& aFile) {
   nsresult rv = info.EnsureURI();
   NS_ENSURE_SUCCESS(rv, nullptr);
 
-  if (!mInitialized) {
-    rv = ReallyInit();
-    if (NS_FAILED(rv)) {
-      return nullptr;
-    }
-  }
+  mInitialized = true;
 
-  AUTO_PROFILER_TEXT_MARKER_CAUSE("JS XPCOM", spec, JS, Nothing(),
-                                  profiler_get_backtrace());
+  AUTO_PROFILER_MARKER_TEXT("JS XPCOM", JS.WithOptions(MarkerStack::Capture()),
+                            spec);
   AUTO_PROFILER_LABEL_DYNAMIC_NSCSTRING("mozJSComponentLoader::LoadModule",
                                         OTHER, spec);
 
@@ -494,7 +482,7 @@ const mozilla::Module* mozJSComponentLoader::LoadModule(FileLocation& aFile) {
 
 void mozJSComponentLoader::FindTargetObject(JSContext* aCx,
                                             MutableHandleObject aTargetObject) {
-  aTargetObject.set(js::GetJSMEnvironmentOfScriptedCaller(aCx));
+  aTargetObject.set(JS::GetJSMEnvironmentOfScriptedCaller(aCx));
 
   // The above could fail if the scripted caller is not a component/JSM (it
   // could be a DOM scope, for instance).
@@ -507,8 +495,7 @@ void mozJSComponentLoader::FindTargetObject(JSContext* aCx,
     aTargetObject.set(JS::GetScriptedCallerGlobal(aCx));
 
     // Return nullptr if the scripted caller is in a different compartment.
-    if (js::GetObjectCompartment(aTargetObject) !=
-        js::GetContextCompartment(aCx)) {
+    if (JS::GetCompartment(aTargetObject) != js::GetContextCompartment(aCx)) {
       aTargetObject.set(nullptr);
     }
   }
@@ -619,7 +606,7 @@ JSObject* mozJSComponentLoader::PrepareObjectForLocation(
 
   JSAutoRealm ar(aCx, thisObj);
 
-  thisObj = js::NewJSMEnvironment(aCx);
+  thisObj = JS::NewJSMEnvironment(aCx);
   NS_ENSURE_TRUE(thisObj, nullptr);
 
   *aRealFile = false;
@@ -672,10 +659,6 @@ JSObject* mozJSComponentLoader::PrepareObjectForLocation(
 
 static mozilla::Result<nsCString, nsresult> ReadScript(
     ComponentLoaderInfo& aInfo) {
-  // We're going to cache the XDR encoded script data - suspend writes via the
-  // CacheAwareZipReader, otherwise we'll end up redundantly caching scripts.
-  AutoSuspendStartupCacheWrites suspendScache;
-
   MOZ_TRY(aInfo.EnsureScriptChannel());
 
   nsCOMPtr<nsIInputStream> scriptStream;
@@ -737,15 +720,7 @@ nsresult mozJSComponentLoader::ObjectForLocation(
   // to loading the script, since we can always slow-load.
 
   bool writeToCache = false;
-
-  // Since we are intending to cache these buffers in the script preloader
-  // already, caching them in the StartupCache tends to be redundant. This
-  // ought to be addressed, but as in bug 1627075 we extended the
-  // StartupCache to be multi-process, we just didn't want to propagate
-  // this problem into yet more processes, so we pretend the StartupCache
-  // doesn't exist if we're not the parent process.
-  StartupCache* cache =
-      XRE_IsParentProcess() ? StartupCache::GetSingleton() : nullptr;
+  StartupCache* cache = StartupCache::GetSingleton();
 
   aInfo.EnsureResolvedURI();
 
@@ -783,7 +758,8 @@ nsresult mozJSComponentLoader::ObjectForLocation(
     options.setNoScriptRval(true)
         .setForceStrictMode()
         .setFileAndLine(nativePath.get(), 1)
-        .setSourceIsLazy(cache || ScriptPreloader::GetSingleton().Active());
+        .setSourceIsLazy(cache || ScriptPreloader::GetSingleton().Active())
+        .setNonSyntacticScope(true);
 
     if (realFile) {
       AutoMemMap map;
@@ -796,7 +772,7 @@ nsresult mozJSComponentLoader::ObjectForLocation(
       JS::SourceText<mozilla::Utf8Unit> srcBuf;
       if (srcBuf.init(cx, buf.get(), map.size(),
                       JS::SourceOwnership::Borrowed)) {
-        script = CompileForNonSyntacticScope(cx, options, srcBuf);
+        script = Compile(cx, options, srcBuf);
       } else {
         MOZ_ASSERT(!script);
       }
@@ -807,7 +783,7 @@ nsresult mozJSComponentLoader::ObjectForLocation(
       JS::SourceText<mozilla::Utf8Unit> srcBuf;
       if (srcBuf.init(cx, str.get(), str.Length(),
                       JS::SourceOwnership::Borrowed)) {
-        script = CompileForNonSyntacticScope(cx, options, srcBuf);
+        script = Compile(cx, options, srcBuf);
       } else {
         MOZ_ASSERT(!script);
       }
@@ -847,6 +823,7 @@ nsresult mozJSComponentLoader::ObjectForLocation(
   aTableScript.set(script);
 
   {  // Scope for AutoEntryScript
+    AutoAllowLegacyScriptExecution exemption;
 
     // We're going to run script via JS_ExecuteScript, so we need an
     // AutoEntryScript. This is Gecko-specific and not in any spec.
@@ -859,7 +836,7 @@ nsresult mozJSComponentLoader::ObjectForLocation(
       JS::RootedValue rval(cx);
       executeOk = JS::CloneAndExecuteScript(aescx, script, &rval);
     } else {
-      executeOk = js::ExecuteInJSMEnvironment(aescx, script, obj);
+      executeOk = JS::ExecuteInJSMEnvironment(aescx, script, obj);
     }
 
     if (!executeOk) {
@@ -964,16 +941,8 @@ nsresult mozJSComponentLoader::IsModuleLoaded(const nsACString& aLocation,
                                               bool* retval) {
   MOZ_ASSERT(nsContentUtils::IsCallerChrome());
 
-  nsresult rv;
-  if (!mInitialized) {
-    rv = ReallyInit();
-    NS_ENSURE_SUCCESS(rv, rv);
-  }
-
+  mInitialized = true;
   ComponentLoaderInfo info(aLocation);
-  rv = info.EnsureKey();
-  NS_ENSURE_SUCCESS(rv, rv);
-
   *retval = !!mImports.Get(info.Key());
   return NS_OK;
 }
@@ -1001,8 +970,6 @@ nsresult mozJSComponentLoader::GetModuleImportStack(const nsACString& aLocation,
   MOZ_ASSERT(mInitialized);
 
   ComponentLoaderInfo info(aLocation);
-  nsresult rv = info.EnsureKey();
-  NS_ENSURE_SUCCESS(rv, rv);
 
   ModuleEntry* mod;
   if (!mImports.Get(info.Key(), &mod)) {
@@ -1212,24 +1179,24 @@ nsresult mozJSComponentLoader::Import(JSContext* aCx,
                                       JS::MutableHandleObject aModuleGlobal,
                                       JS::MutableHandleObject aModuleExports,
                                       bool aIgnoreExports) {
-  nsresult rv;
-  if (!mInitialized) {
-    rv = ReallyInit();
-    NS_ENSURE_SUCCESS(rv, rv);
-  }
+  mInitialized = true;
 
-  AUTO_PROFILER_TEXT_MARKER_CAUSE("ChromeUtils.import", aLocation, JS,
-                                  Nothing(), profiler_get_backtrace());
+  AUTO_PROFILER_MARKER_TEXT("ChromeUtils.import",
+                            JS.WithOptions(MarkerStack::Capture()), aLocation);
 
   ComponentLoaderInfo info(aLocation);
 
-  rv = info.EnsureKey();
-  NS_ENSURE_SUCCESS(rv, rv);
-
+  nsresult rv;
   ModuleEntry* mod;
   UniquePtr<ModuleEntry> newEntry;
   if (!mImports.Get(info.Key(), &mod) &&
       !mInProgressImports.Get(info.Key(), &mod)) {
+    // We're trying to import a new JSM, but we're late in shutdown and this
+    // will likely not succeed and might even crash, so fail here.
+    if (PastShutdownPhase(ShutdownPhase::ShutdownFinal)) {
+      return NS_ERROR_ILLEGAL_DURING_SHUTDOWN;
+    }
+
     newEntry = MakeUnique<ModuleEntry>(RootingContext::get(aCx));
 
     // Note: This implies EnsureURI().
@@ -1324,15 +1291,12 @@ nsresult mozJSComponentLoader::Import(JSContext* aCx,
 }
 
 nsresult mozJSComponentLoader::Unload(const nsACString& aLocation) {
-  nsresult rv;
-
   if (!mInitialized) {
     return NS_OK;
   }
 
   ComponentLoaderInfo info(aLocation);
-  rv = info.EnsureKey();
-  NS_ENSURE_SUCCESS(rv, rv);
+
   ModuleEntry* mod;
   if (mImports.Get(info.Key(), &mod)) {
     mLocations.Remove(mod->resolvedURL);

@@ -43,7 +43,7 @@ HTMLEmbedElement::~HTMLEmbedElement() {
   HTMLObjectElement::OnFocusBlurPlugin(this, false);
 #endif
   UnregisterActivityObserver();
-  DestroyImageLoadingContent();
+  nsImageLoadingContent::Destroy();
 }
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(HTMLEmbedElement)
@@ -123,7 +123,7 @@ nsresult HTMLEmbedElement::AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
   if (aNamespaceID == kNameSpaceID_None &&
       aName == nsGkAtoms::allowfullscreen && mFrameLoader) {
     if (auto* bc = mFrameLoader->GetExtantBrowsingContext()) {
-      bc->SetFullscreenAllowedByOwner(AllowFullscreen());
+      MOZ_ALWAYS_SUCCEEDS(bc->SetFullscreenAllowedByOwner(AllowFullscreen()));
     }
   }
 
@@ -261,7 +261,7 @@ uint32_t HTMLEmbedElement::GetCapabilities() const {
 }
 
 void HTMLEmbedElement::DestroyContent() {
-  nsObjectLoadingContent::DestroyContent();
+  nsObjectLoadingContent::Destroy();
   nsGenericHTMLElement::DestroyContent();
 }
 

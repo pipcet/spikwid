@@ -251,6 +251,14 @@ JSObject* AudioContext::WrapObject(JSContext* aCx,
   }
 }
 
+static bool CheckFullyActive(nsPIDOMWindowInner* aWindow, ErrorResult& aRv) {
+  if (!aWindow->IsFullyActive()) {
+    aRv.ThrowInvalidStateError("The document is not fully active.");
+    return false;
+  }
+  return true;
+}
+
 /* static */
 already_AddRefed<AudioContext> AudioContext::Constructor(
     const GlobalObject& aGlobal, const AudioContextOptions& aOptions,
@@ -261,17 +269,26 @@ already_AddRefed<AudioContext> AudioContext::Constructor(
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
   }
-
-  float sampleRate = MediaTrackGraph::REQUEST_DEFAULT_SAMPLE_RATE;
-  if (aOptions.mSampleRate > 0 &&
-      (aOptions.mSampleRate - WebAudioUtils::MinSampleRate < 0.0 ||
-       WebAudioUtils::MaxSampleRate - aOptions.mSampleRate < 0.0)) {
-    aRv.ThrowNotSupportedError(nsPrintfCString(
-        "Sample rate %g is not in the range [%u, %u]", aOptions.mSampleRate,
-        WebAudioUtils::MinSampleRate, WebAudioUtils::MaxSampleRate));
+  /**
+   * If the current settings object’s responsible document is NOT fully
+   * active, throw an InvalidStateError and abort these steps.
+   */
+  if (!CheckFullyActive(window, aRv)) {
     return nullptr;
   }
-  sampleRate = aOptions.mSampleRate;
+
+  if (aOptions.mSampleRate.WasPassed() &&
+      (aOptions.mSampleRate.Value() < WebAudioUtils::MinSampleRate ||
+       aOptions.mSampleRate.Value() > WebAudioUtils::MaxSampleRate)) {
+    aRv.ThrowNotSupportedError(nsPrintfCString(
+        "Sample rate %g is not in the range [%u, %u]",
+        aOptions.mSampleRate.Value(), WebAudioUtils::MinSampleRate,
+        WebAudioUtils::MaxSampleRate));
+    return nullptr;
+  }
+  float sampleRate = aOptions.mSampleRate.WasPassed()
+                         ? aOptions.mSampleRate.Value()
+                         : MediaTrackGraph::REQUEST_DEFAULT_SAMPLE_RATE;
 
   RefPtr<AudioContext> object =
       new AudioContext(window, false, 2, 0, sampleRate);
@@ -301,6 +318,13 @@ already_AddRefed<AudioContext> AudioContext::Constructor(
       do_QueryInterface(aGlobal.GetAsSupports());
   if (!window) {
     aRv.Throw(NS_ERROR_FAILURE);
+    return nullptr;
+  }
+  /**
+   * If the current settings object’s responsible document is NOT fully
+   * active, throw an InvalidStateError and abort these steps.
+   */
+  if (!CheckFullyActive(window, aRv)) {
     return nullptr;
   }
 
@@ -521,19 +545,9 @@ already_AddRefed<PeriodicWave> AudioContext::CreatePeriodicWave(
   aRealData.ComputeState();
   aImagData.ComputeState();
 
-  if (aRealData.Length() != aImagData.Length()) {
-    aRv.ThrowIndexSizeError("\"real\" and \"imag\" must be the same length");
-    return nullptr;
-  }
-
-  if (aRealData.Length() == 0) {
-    aRv.ThrowIndexSizeError("\"real\" and \"imag\" are both empty arrays");
-    return nullptr;
-  }
-
   RefPtr<PeriodicWave> periodicWave = new PeriodicWave(
-      this, aRealData.Data(), aImagData.Data(), aImagData.Length(),
-      aConstraints.mDisableNormalization, aRv);
+      this, aRealData.Data(), aRealData.Length(), aImagData.Data(),
+      aImagData.Length(), aConstraints.mDisableNormalization, aRv);
   if (aRv.Failed()) {
     return nullptr;
   }
@@ -1255,8 +1269,8 @@ AudioContext::CollectReports(nsIHandleReportCallback* aHandleReport,
     int64_t amount = node->SizeOfIncludingThis(MallocSizeOf);
     nsPrintfCString domNodePath("explicit/webaudio/audio-node/%s/dom-nodes",
                                 node->NodeType());
-    aHandleReport->Callback(EmptyCString(), domNodePath, KIND_HEAP, UNITS_BYTES,
-                            amount, nodeDescription, aData);
+    aHandleReport->Callback(""_ns, domNodePath, KIND_HEAP, UNITS_BYTES, amount,
+                            nodeDescription, aData);
   }
 
   int64_t amount = SizeOfIncludingThis(MallocSizeOf);

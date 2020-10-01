@@ -15,6 +15,7 @@ use crate::{AppError, ConnectionError, Error, Res, TransportError, ERROR_APPLICA
 
 use std::cmp::{min, Ordering};
 use std::convert::TryFrom;
+use std::ops::RangeInclusive;
 
 #[allow(clippy::module_name_repetitions)]
 pub type FrameType = u64;
@@ -447,7 +448,9 @@ impl Frame {
                 reason_phrase,
             } => {
                 enc.encode_varint(error_code.code());
-                enc.encode_varint(*frame_type);
+                if let CloseError::Transport(_) = error_code {
+                    enc.encode_varint(*frame_type);
+                }
                 enc.encode_vvec(reason_phrase);
             }
             Self::HandshakeDone => (),
@@ -478,13 +481,13 @@ impl Frame {
         largest_acked: u64,
         first_ack_range: u64,
         ack_ranges: &[AckRange],
-    ) -> Res<Vec<(u64, u64)>> {
-        let mut acked_ranges = Vec::new();
+    ) -> Res<Vec<RangeInclusive<u64>>> {
+        let mut acked_ranges = Vec::with_capacity(ack_ranges.len() + 1);
 
         if largest_acked < first_ack_range {
             return Err(Error::FrameEncodingError);
         }
-        acked_ranges.push((largest_acked, largest_acked - first_ack_range));
+        acked_ranges.push((largest_acked - first_ack_range)..=largest_acked);
         if !ack_ranges.is_empty() && largest_acked < first_ack_range + 1 {
             return Err(Error::FrameEncodingError);
         }
@@ -502,7 +505,7 @@ impl Frame {
             if cur < r.range {
                 return Err(Error::FrameEncodingError);
             }
-            acked_ranges.push((cur, cur - r.range));
+            acked_ranges.push((cur - r.range)..=cur);
 
             if cur > r.range + 1 {
                 cur -= r.range + 1;
@@ -625,9 +628,11 @@ impl Frame {
                 })
             }
             FRAME_TYPE_NEW_TOKEN => {
-                Ok(Self::NewToken {
-                    token: d!(dec.decode_vvec()).to_vec(), // TODO(mt) unnecessary copy
-                })
+                let token = d!(dec.decode_vvec()).to_vec();
+                if token.is_empty() {
+                    return Err(Error::FrameEncodingError);
+                }
+                Ok(Self::NewToken { token })
             }
             FRAME_TYPE_STREAM..=FRAME_TYPE_STREAM_MAX => {
                 let s = dv!(dec);
@@ -719,10 +724,17 @@ impl Frame {
                 Ok(Self::PathResponse { data: datav })
             }
             FRAME_TYPE_CONNECTION_CLOSE_TRANSPORT | FRAME_TYPE_CONNECTION_CLOSE_APPLICATION => {
+                let error_code = CloseError::from_type_bit(t, d!(dec.decode_varint()));
+                let frame_type = if t == FRAME_TYPE_CONNECTION_CLOSE_TRANSPORT {
+                    dv!(dec)
+                } else {
+                    0
+                };
+                let reason_phrase = d!(dec.decode_vvec()).to_vec(); // TODO(mt) unnecessary copy
                 Ok(Self::ConnectionClose {
-                    error_code: CloseError::from_type_bit(t, d!(dec.decode_varint())),
-                    frame_type: dv!(dec),
-                    reason_phrase: d!(dec.decode_vvec()).to_vec(), // TODO(mt) unnecessary copy
+                    error_code,
+                    frame_type,
+                    reason_phrase,
                 })
             }
             FRAME_TYPE_HANDSHAKE_DONE => Ok(Self::HandshakeDone),
@@ -814,12 +826,21 @@ mod tests {
     }
 
     #[test]
-    fn test_new_token() {
+    fn new_token() {
         let f = Frame::NewToken {
             token: vec![0x12, 0x34, 0x56],
         };
 
         enc_dec(&f, "0703123456");
+    }
+
+    #[test]
+    fn empty_new_token() {
+        let mut dec = Decoder::from(&[0x07, 0x00][..]);
+        assert_eq!(
+            Frame::decode(&mut dec).unwrap_err(),
+            Error::FrameEncodingError
+        );
     }
 
     #[test]
@@ -973,22 +994,25 @@ mod tests {
     }
 
     #[test]
-    fn test_connection_close() {
-        let mut f = Frame::ConnectionClose {
+    fn connection_close_transport() {
+        let f = Frame::ConnectionClose {
             error_code: CloseError::Transport(0x5678),
             frame_type: 0x1234,
             reason_phrase: vec![0x01, 0x02, 0x03],
         };
 
         enc_dec(&f, "1c80005678523403010203");
+    }
 
-        f = Frame::ConnectionClose {
+    #[test]
+    fn connection_close_application() {
+        let f = Frame::ConnectionClose {
             error_code: CloseError::Application(0x5678),
-            frame_type: 0x1234,
+            frame_type: 0,
             reason_phrase: vec![0x01, 0x02, 0x03],
         };
 
-        enc_dec(&f, "1d80005678523403010203");
+        enc_dec(&f, "1d8000567803010203");
     }
 
     #[test]
@@ -1055,7 +1079,7 @@ mod tests {
     fn test_decode_ack_frame() {
         let res = Frame::decode_ack_frame(7, 2, &[AckRange { gap: 0, range: 3 }]);
         assert!(res.is_ok());
-        assert_eq!(res.unwrap(), vec![(7, 5), (3, 0)]);
+        assert_eq!(res.unwrap(), vec![5..=7, 0..=3]);
     }
 
     #[test]

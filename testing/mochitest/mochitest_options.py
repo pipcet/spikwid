@@ -7,7 +7,7 @@ from argparse import ArgumentParser, SUPPRESS
 from distutils.util import strtobool
 from distutils import spawn
 from itertools import chain
-from urlparse import urlparse
+from six.moves.urllib.parse import urlparse
 import json
 import os
 import tempfile
@@ -597,6 +597,11 @@ class MochitestArguments(ArgumentContainer):
           "help": "Run tests in verification mode: Run many times in different "
                   "ways, to see if there are intermittent failures.",
           }],
+        [["--verify-fission"],
+         {"action": "store_true",
+          "default": False,
+          "help": "Run tests once without Fission, once with Fission",
+          }],
         [["--verify-max-time"],
          {"type": int,
           "default": 3600,
@@ -860,7 +865,6 @@ class MochitestArguments(ArgumentContainer):
         if options.enable_fission:
             options.extraPrefs.append("fission.autostart=true")
             options.extraPrefs.append("dom.serviceWorkers.parent_intercept=true")
-            options.extraPrefs.append("browser.tabs.documentchannel=true")
 
         options.leakThresholds = {
             "default": options.defaultLeakThreshold,
@@ -930,7 +934,7 @@ class AndroidArguments(ArgumentContainer):
          {"dest": "remoteTestRoot",
           "default": None,
           "help": "Remote directory to use as test root "
-                  "(eg. /mnt/sdcard/tests or /data/local/tests).",
+                  "(eg. /data/local/tmp/test_root).",
           "suppress": True,
           }],
         [["--enable-coverage"],

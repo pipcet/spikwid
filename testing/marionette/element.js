@@ -5,20 +5,7 @@
 "use strict";
 /* global XPCNativeWrapper */
 
-const { assert } = ChromeUtils.import("chrome://marionette/content/assert.js");
-const { atom } = ChromeUtils.import("chrome://marionette/content/atom.js");
-const {
-  InvalidArgumentError,
-  InvalidSelectorError,
-  NoSuchElementError,
-  StaleElementReferenceError,
-} = ChromeUtils.import("chrome://marionette/content/error.js");
-const { pprint } = ChromeUtils.import("chrome://marionette/content/format.js");
-const { PollPromise } = ChromeUtils.import(
-  "chrome://marionette/content/sync.js"
-);
-
-this.EXPORTED_SYMBOLS = [
+const EXPORTED_SYMBOLS = [
   "ChromeWebElement",
   "ContentWebElement",
   "ContentWebFrame",
@@ -26,6 +13,25 @@ this.EXPORTED_SYMBOLS = [
   "element",
   "WebElement",
 ];
+
+const { XPCOMUtils } = ChromeUtils.import(
+  "resource://gre/modules/XPCOMUtils.jsm"
+);
+
+XPCOMUtils.defineLazyModuleGetters(this, {
+  assert: "chrome://marionette/content/assert.js",
+  atom: "chrome://marionette/content/atom.js",
+  error: "chrome://marionette/content/error.js",
+  PollPromise: "chrome://marionette/content/sync.js",
+  pprint: "chrome://marionette/content/format.js",
+});
+
+XPCOMUtils.defineLazyServiceGetter(
+  this,
+  "uuidGen",
+  "@mozilla.org/uuid-generator;1",
+  "nsIUUIDGenerator"
+);
 
 const ORDERED_NODE_ITERATOR_TYPE = 5;
 const FIRST_ORDERED_NODE_TYPE = 9;
@@ -47,10 +53,6 @@ const XUL_SELECTED_ELS = new Set([
   "richlistitem",
   "tab",
 ]);
-
-const uuidGen = Cc["@mozilla.org/uuid-generator;1"].getService(
-  Ci.nsIUUIDGenerator
-);
 
 /**
  * This module provides shared functionality for dealing with DOM-
@@ -105,7 +107,7 @@ element.Store = class {
   /**
    * Make a collection of elements seen.
    *
-   * The oder of the returned web element references is guaranteed to
+   * The order of the returned web element references is guaranteed to
    * match that of the collection passed in.
    *
    * @param {NodeList} els
@@ -197,7 +199,7 @@ element.Store = class {
    *     Web element reference to find the associated {@link Element}
    *     of.
    * @param {WindowProxy} win
-   *     Current browsing context, which may differ from the associate
+   *     Current browsing context, which may differ from the associated
    *     browsing context of <var>el</var>.
    *
    * @returns {(Element|XULElement)}
@@ -218,7 +220,7 @@ element.Store = class {
       throw new TypeError(pprint`Expected web element, got: ${webEl}`);
     }
     if (!this.has(webEl)) {
-      throw new NoSuchElementError(
+      throw new error.NoSuchElementError(
         "Web element reference not seen before: " + webEl.uuid
       );
     }
@@ -232,7 +234,7 @@ element.Store = class {
     }
 
     if (element.isStale(el, win)) {
-      throw new StaleElementReferenceError(
+      throw new error.StaleElementReferenceError(
         pprint`The element reference of ${el || webEl.uuid} is stale; ` +
           "either the element is no longer attached to the DOM, " +
           "it is not in the current frame context, " +
@@ -241,6 +243,129 @@ element.Store = class {
     }
 
     return el;
+  }
+};
+
+/**
+ * Stores known/seen web element references and their associated
+ * ContentDOMReference ElementIdentifiers.
+ *
+ * The ContentDOMReference ElementIdentifier is augmented with a WebElement
+ * reference, so in Marionette's IPC it looks like the following example:
+ *
+ * { browsingContextId: 9,
+ *   id: 0.123,
+ *   webElRef: {element-6066-11e4-a52e-4f735466cecf: <uuid>} }
+ *
+ * For use in parent process in conjunction with ContentDOMReference in content.
+ * Implements all `element.Store` methods for duck typing.
+ *
+ * @class
+ * @memberof element
+ */
+element.ReferenceStore = class {
+  constructor() {
+    // uuid -> { id, browsingContextId, webElRef }
+    this.refs = new Map();
+    // id -> webElRef
+    this.domRefs = new Map();
+  }
+
+  clear() {
+    this.refs.clear();
+    this.domRefs.clear();
+  }
+
+  /**
+   * Make a collection of elements seen.
+   *
+   * The order of the returned web element references is guaranteed to
+   * match that of the collection passed in.
+   *
+   * @param {Array.<ElementIdentifer>} elIds
+   *     Sequence of ids to add to set of seen elements.
+   *
+   * @return {Array.<WebElement>}
+   *     List of the web element references associated with each element
+   *     from <var>els</var>.
+   */
+  addAll(elIds) {
+    return [...elIds].map(elId => this.add(elId));
+  }
+
+  /**
+   * Make an element seen.
+   *
+   * @param {ElementIdentifier} elId
+   *    {id, browsingContextId} to add to set of seen elements.
+   *
+   * @return {WebElement}
+   *     Web element reference associated with element.
+   *
+   */
+  add(elId) {
+    if (!elId.id || !elId.browsingContextId) {
+      throw new TypeError(pprint`Expected ElementIdentifier, got: ${elId}`);
+    }
+    if (this.domRefs.has(elId.id)) {
+      return WebElement.fromJSON(this.domRefs.get(elId.id));
+    }
+    const webEl = WebElement.fromJSON(elId.webElRef);
+    this.refs.set(webEl.uuid, elId);
+    this.domRefs.set(elId.id, elId.webElRef);
+    return webEl;
+  }
+
+  /**
+   * Determine if the provided web element reference is in the store.
+   *
+   * Unlike when getting the element, a staleness check is not
+   * performed.
+   *
+   * @param {WebElement} webEl
+   *     Element's associated web element reference.
+   *
+   * @return {boolean}
+   *     True if element is in the store, false otherwise.
+   *
+   * @throws {TypeError}
+   *     If <var>webEl</var> is not a {@link WebElement}.
+   */
+  has(webEl) {
+    if (!(webEl instanceof WebElement)) {
+      throw new TypeError(pprint`Expected web element, got: ${webEl}`);
+    }
+    return this.refs.has(webEl.uuid);
+  }
+
+  /**
+   * Retrieve a DOM {@link Element} or a {@link XULElement} by its
+   * unique {@link WebElement} reference.
+   *
+   * @param {WebElement} webEl
+   *     Web element reference to find the associated {@link Element}
+   *     of.
+   * @returns {ElementIdentifier}
+   *     ContentDOMReference identifier
+   *
+   * @throws {TypeError}
+   *     If <var>webEl</var> is not a {@link WebElement}.
+   * @throws {NoSuchElementError}
+   *     If the web element reference <var>uuid</var> has not been
+   *     seen before.
+   */
+  get(webEl) {
+    if (!(webEl instanceof WebElement)) {
+      throw new TypeError(pprint`Expected web element, got: ${webEl}`);
+    }
+    const elId = this.refs.get(webEl.uuid);
+    if (!elId) {
+      throw new error.NoSuchElementError(
+        "Web element reference not seen before: " + webEl.uuid
+      );
+    }
+
+    return elId;
   }
 };
 
@@ -327,7 +452,7 @@ element.find = function(container, strategy, selector, opts = {}) {
       // and findElements when bug 1254486 is addressed
       if (!opts.all && (!foundEls || foundEls.length == 0)) {
         let msg = `Unable to locate element: ${selector}`;
-        reject(new NoSuchElementError(msg));
+        reject(new error.NoSuchElementError(msg));
       }
 
       if (opts.all) {
@@ -355,7 +480,7 @@ function find_(
   try {
     res = searchFn(strategy, selector, rootNode, startNode);
   } catch (e) {
-    throw new InvalidSelectorError(
+    throw new error.InvalidSelectorError(
       `Given ${strategy} expression "${selector}" is invalid: ${e}`
     );
   }
@@ -547,11 +672,11 @@ function findElement(strategy, selector, document, startNode = undefined) {
       try {
         return startNode.querySelector(selector);
       } catch (e) {
-        throw new InvalidSelectorError(`${e.message}: "${selector}"`);
+        throw new error.InvalidSelectorError(`${e.message}: "${selector}"`);
       }
   }
 
-  throw new InvalidSelectorError(`No such strategy: ${strategy}`);
+  throw new error.InvalidSelectorError(`No such strategy: ${strategy}`);
 }
 
 /**
@@ -611,7 +736,7 @@ function findElements(strategy, selector, document, startNode = undefined) {
       return startNode.querySelectorAll(selector);
 
     default:
-      throw new InvalidSelectorError(`No such strategy: ${strategy}`);
+      throw new error.InvalidSelectorError(`No such strategy: ${strategy}`);
   }
 }
 
@@ -1401,7 +1526,7 @@ class WebElement {
       return new ChromeWebElement(uuid);
     }
 
-    throw new InvalidArgumentError(
+    throw new error.InvalidArgumentError(
       "Expected DOM window/element " + pprint`or XUL element, got: ${node}`
     );
   }
@@ -1424,6 +1549,9 @@ class WebElement {
    */
   static fromJSON(json) {
     assert.object(json);
+    if (json instanceof WebElement) {
+      return json;
+    }
     let keys = Object.keys(json);
 
     for (let key of keys) {
@@ -1442,7 +1570,7 @@ class WebElement {
       }
     }
 
-    throw new InvalidArgumentError(
+    throw new error.InvalidArgumentError(
       pprint`Expected web element reference, got: ${json}`
     );
   }
@@ -1482,7 +1610,7 @@ class WebElement {
         return new ContentWebElement(uuid);
 
       default:
-        throw new InvalidArgumentError("Unknown context: " + context);
+        throw new error.InvalidArgumentError("Unknown context: " + context);
     }
   }
 
@@ -1538,7 +1666,7 @@ class ContentWebElement extends WebElement {
     const { Identifier } = ContentWebElement;
 
     if (!(Identifier in json)) {
-      throw new InvalidArgumentError(
+      throw new error.InvalidArgumentError(
         pprint`Expected web element reference, got: ${json}`
       );
     }
@@ -1562,7 +1690,7 @@ class ContentWebWindow extends WebElement {
 
   static fromJSON(json) {
     if (!(ContentWebWindow.Identifier in json)) {
-      throw new InvalidArgumentError(
+      throw new error.InvalidArgumentError(
         pprint`Expected web window reference, got: ${json}`
       );
     }
@@ -1585,7 +1713,7 @@ class ContentWebFrame extends WebElement {
 
   static fromJSON(json) {
     if (!(ContentWebFrame.Identifier in json)) {
-      throw new InvalidArgumentError(
+      throw new error.InvalidArgumentError(
         pprint`Expected web frame reference, got: ${json}`
       );
     }
@@ -1607,7 +1735,7 @@ class ChromeWebElement extends WebElement {
 
   static fromJSON(json) {
     if (!(ChromeWebElement.Identifier in json)) {
-      throw new InvalidArgumentError(
+      throw new error.InvalidArgumentError(
         "Expected chrome element reference " +
           pprint`for XUL element, got: ${json}`
       );

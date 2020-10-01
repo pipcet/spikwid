@@ -8,7 +8,7 @@
 // incoming STREAM frames.
 
 use std::cell::RefCell;
-use std::cmp::{max, min};
+use std::cmp::max;
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
 use std::mem;
@@ -73,21 +73,21 @@ impl RxStreamOrderer {
 
             match (new_start > prev_start, new_end > prev_end) {
                 (true, true) => {
-                    // PPPPPP    ->  PP
-                    //   NNNNNN        NNNNNN
-                    // Truncate prev if overlap. Insert new.
+                    // PPPPPP    ->  PPPPPP
+                    //   NNNNNN            NN
+                    // Add a range containing only new data
                     // (In-order frames will take this path, with no overlap)
                     let overlap = prev_end.saturating_sub(new_start);
-                    if overlap != 0 {
-                        let truncate_to = new_data.len() - overlap as usize;
-                        prev_vec.truncate(truncate_to)
-                    }
                     qtrace!(
                         "New frame {}-{} received, overlap: {}",
                         new_start,
                         new_end,
                         overlap
                     );
+                    if overlap != 0 {
+                        new_data.drain(..overlap as usize);
+                        return self.inbound_frame(prev_end, new_data);
+                    }
                     (true, None)
                 }
                 (true, false) => {
@@ -102,17 +102,18 @@ impl RxStreamOrderer {
                     (false, None)
                 }
                 (false, true) => {
-                    // PPPP      ->  NNNNNN
-                    // NNNNNN
-                    // Drop Prev, Insert New
+                    // PPPP      ->  PPPP
+                    // NNNNNN            NN
                     qtrace!(
-                        "New frame with {}-{} replaces existing {}-{}",
+                        "New frame with {}-{} overlaps with existing {}-{}",
                         new_start,
                         new_end,
                         prev_start,
                         prev_end
                     );
-                    (true, Some(prev_start))
+                    let overlap = prev_end.saturating_sub(new_start);
+                    new_data.drain(..overlap as usize);
+                    return self.inbound_frame(prev_end, new_data);
                 }
                 (false, false) => {
                     // PPPPPP    ->  PPPPPP
@@ -170,7 +171,9 @@ impl RxStreamOrderer {
                 self.data_ranges.remove(&start);
             }
 
-            self.data_ranges.insert(new_start, new_data);
+            if !new_data.is_empty() {
+                self.data_ranges.insert(new_start, new_data);
+            }
         };
 
         Ok(())
@@ -224,39 +227,42 @@ impl RxStreamOrderer {
     /// Copy received data (if any) into the buffer. Returns bytes copied.
     fn read(&mut self, buf: &mut [u8]) -> usize {
         qtrace!("Reading {} bytes, {} available", buf.len(), self.buffered());
-        let mut buf_remaining = buf.len();
         let mut copied = 0;
 
         for (&range_start, range_data) in &mut self.data_ranges {
+            let mut keep = false;
             if self.retired >= range_start {
-                // Frame data has some new contig bytes after some old bytes
-
-                // Convert to offset into data vec and move past bytes we
-                // already have
+                // Frame data has new contiguous bytes.
                 let copy_offset =
                     usize::try_from(max(range_start, self.retired) - range_start).unwrap();
-                let copy_bytes = min(range_data.len() - copy_offset, buf_remaining);
-                let copy_slc = &mut range_data[copy_offset..copy_offset + copy_bytes];
-                buf[copied..copied + copy_bytes].copy_from_slice(copy_slc);
-                copied += copy_bytes;
-                buf_remaining -= copy_bytes;
-                self.retired += copy_bytes as u64;
+                assert!(range_data.len() >= copy_offset);
+                let available = range_data.len() - copy_offset;
+                let space = buf.len() - copied;
+                let copy_bytes = if available > space {
+                    keep = true;
+                    space
+                } else {
+                    available
+                };
+
+                if copy_bytes > 0 {
+                    let copy_slc = &range_data[copy_offset..copy_offset + copy_bytes];
+                    buf[copied..copied + copy_bytes].copy_from_slice(copy_slc);
+                    copied += copy_bytes;
+                    self.retired += u64::try_from(copy_bytes).unwrap();
+                }
             } else {
-                break; // we're missing bytes
+                // The data in the buffer isn't contiguous.
+                keep = true;
+            }
+            if keep {
+                let mut keep = self.data_ranges.split_off(&range_start);
+                mem::swap(&mut self.data_ranges, &mut keep);
+                return copied;
             }
         }
 
-        // Remove map items that are consumed
-        let to_remove = self
-            .data_ranges
-            .iter()
-            .take_while(|(start, data)| self.retired >= *start + data.len() as u64)
-            .map(|(k, _)| *k)
-            .collect::<Vec<_>>();
-        for key in to_remove {
-            self.data_ranges.remove(&key);
-        }
-
+        self.data_ranges.clear();
         copied
     }
 
@@ -556,6 +562,243 @@ impl RecvStream {
 mod tests {
     use super::*;
     use crate::frame::Frame;
+    use std::ops::Range;
+
+    fn recv_ranges(ranges: &[Range<u64>], available: usize) {
+        const ZEROES: &[u8] = &[0; 100];
+
+        let mut s = RxStreamOrderer::default();
+        for r in ranges {
+            let data = ZEROES[..usize::try_from(r.end - r.start).unwrap()].to_vec();
+            s.inbound_frame(r.start, data).unwrap();
+        }
+
+        let mut buf = vec![0xff; 100];
+        let mut total_recvd = 0;
+        loop {
+            let recvd = s.read(&mut buf);
+            total_recvd += recvd;
+            if recvd == 0 {
+                assert_eq!(total_recvd, available);
+                break;
+            }
+        }
+    }
+
+    #[test]
+    fn recv_noncontiguous() {
+        // Non-contiguous with the start, no data available.
+        recv_ranges(&[10..20], 0);
+    }
+
+    /// Overlaps with the start of a 10..20 range of bytes.
+    #[test]
+    fn recv_overlap_start() {
+        // Overlap the start, with a larger new value.
+        // More overlap than not.
+        recv_ranges(&[10..20, 4..18, 0..4], 20);
+        // Overlap the start, with a larger new value.
+        // Less overlap than not.
+        recv_ranges(&[10..20, 2..15, 0..2], 20);
+        // Overlap the start, with a smaller new value.
+        // More overlap than not.
+        recv_ranges(&[10..20, 8..14, 0..8], 20);
+        // Overlap the start, with a smaller new value.
+        // Less overlap than not.
+        recv_ranges(&[10..20, 6..13, 0..6], 20);
+
+        // Again with some of the first range split in two.
+        recv_ranges(&[10..11, 11..20, 4..18, 0..4], 20);
+        recv_ranges(&[10..11, 11..20, 2..15, 0..2], 20);
+        recv_ranges(&[10..11, 11..20, 8..14, 0..8], 20);
+        recv_ranges(&[10..11, 11..20, 6..13, 0..6], 20);
+
+        // Again with a gap in the first range.
+        recv_ranges(&[10..11, 12..20, 4..18, 0..4], 20);
+        recv_ranges(&[10..11, 12..20, 2..15, 0..2], 20);
+        recv_ranges(&[10..11, 12..20, 8..14, 0..8], 20);
+        recv_ranges(&[10..11, 12..20, 6..13, 0..6], 20);
+    }
+
+    /// Overlaps with the end of a 10..20 range of bytes.
+    #[test]
+    fn recv_overlap_end() {
+        // Overlap the end, with a larger new value.
+        // More overlap than not.
+        recv_ranges(&[10..20, 12..25, 0..10], 25);
+        // Overlap the end, with a larger new value.
+        // Less overlap than not.
+        recv_ranges(&[10..20, 17..33, 0..10], 33);
+        // Overlap the end, with a smaller new value.
+        // More overlap than not.
+        recv_ranges(&[10..20, 15..21, 0..10], 21);
+        // Overlap the end, with a smaller new value.
+        // Less overlap than not.
+        recv_ranges(&[10..20, 17..25, 0..10], 25);
+
+        // Again with some of the first range split in two.
+        recv_ranges(&[10..19, 19..20, 12..25, 0..10], 25);
+        recv_ranges(&[10..19, 19..20, 17..33, 0..10], 33);
+        recv_ranges(&[10..19, 19..20, 15..21, 0..10], 21);
+        recv_ranges(&[10..19, 19..20, 17..25, 0..10], 25);
+
+        // Again with a gap in the first range.
+        recv_ranges(&[10..18, 19..20, 12..25, 0..10], 25);
+        recv_ranges(&[10..18, 19..20, 17..33, 0..10], 33);
+        recv_ranges(&[10..18, 19..20, 15..21, 0..10], 21);
+        recv_ranges(&[10..18, 19..20, 17..25, 0..10], 25);
+    }
+
+    /// Complete overlaps with the start of a 10..20 range of bytes.
+    #[test]
+    fn recv_overlap_complete() {
+        // Complete overlap, more at the end.
+        recv_ranges(&[10..20, 9..23, 0..9], 23);
+        // Complete overlap, more at the start.
+        recv_ranges(&[10..20, 3..23, 0..3], 23);
+        // Complete overlap, to end.
+        recv_ranges(&[10..20, 5..20, 0..5], 20);
+        // Complete overlap, from start.
+        recv_ranges(&[10..20, 10..27, 0..10], 27);
+        // Complete overlap, from 0 and more.
+        recv_ranges(&[10..20, 0..23], 23);
+
+        // Again with the first range split in two.
+        recv_ranges(&[10..14, 14..20, 9..23, 0..9], 23);
+        recv_ranges(&[10..14, 14..20, 3..23, 0..3], 23);
+        recv_ranges(&[10..14, 14..20, 5..20, 0..5], 20);
+        recv_ranges(&[10..14, 14..20, 10..27, 0..10], 27);
+        recv_ranges(&[10..14, 14..20, 0..23], 23);
+
+        // Again with the a gap in the first range.
+        recv_ranges(&[10..13, 14..20, 9..23, 0..9], 23);
+        recv_ranges(&[10..13, 14..20, 3..23, 0..3], 23);
+        recv_ranges(&[10..13, 14..20, 5..20, 0..5], 20);
+        recv_ranges(&[10..13, 14..20, 10..27, 0..10], 27);
+        recv_ranges(&[10..13, 14..20, 0..23], 23);
+    }
+
+    /// An overlap with no new bytes.
+    #[test]
+    fn recv_overlap_duplicate() {
+        recv_ranges(&[10..20, 11..12, 0..10], 20);
+        recv_ranges(&[10..20, 10..15, 0..10], 20);
+        recv_ranges(&[10..20, 14..20, 0..10], 20);
+        // Now with the first range split.
+        recv_ranges(&[10..14, 14..20, 10..15, 0..10], 20);
+        recv_ranges(&[10..15, 16..20, 21..25, 10..25, 0..10], 25);
+    }
+
+    /// Reading exactly one chunk works, when the next chunk starts immediately.
+    #[test]
+    fn stop_reading_at_chunk() {
+        const CHUNK_SIZE: usize = 10;
+        const EXTRA_SIZE: usize = 3;
+        let mut s = RxStreamOrderer::new();
+
+        // Add three chunks.
+        s.inbound_frame(0, vec![0; CHUNK_SIZE]).unwrap();
+        let offset = u64::try_from(CHUNK_SIZE).unwrap();
+        s.inbound_frame(offset, vec![0; EXTRA_SIZE]).unwrap();
+        let offset = u64::try_from(CHUNK_SIZE + EXTRA_SIZE).unwrap();
+        s.inbound_frame(offset, vec![0; EXTRA_SIZE]).unwrap();
+
+        // Read, providing only enough space for the first.
+        let mut buf = vec![0; 100];
+        let count = s.read(&mut buf[..CHUNK_SIZE]);
+        assert_eq!(count, CHUNK_SIZE);
+        let count = s.read(&mut buf[..]);
+        assert_eq!(count, EXTRA_SIZE * 2);
+    }
+
+    #[test]
+    fn recv_overlap_while_reading() {
+        let mut s = RxStreamOrderer::new();
+
+        // Add a chunk
+        s.inbound_frame(0, vec![0; 150]).unwrap();
+        assert_eq!(s.data_ranges.get(&0).unwrap().len(), 150);
+        // Read, providing only enough space for the first.
+        let mut buf = vec![0; 100];
+        let count = s.read(&mut buf);
+        assert_eq!(count, 100);
+        assert_eq!(s.retired, 100);
+
+        // Add a second frame that overlaps.
+        // This shouldn't truncate the first frame, as we're already
+        // Reading from it.
+        s.inbound_frame(120, vec![0; 60]).unwrap();
+        assert_eq!(s.data_ranges.get(&0).unwrap().len(), 150);
+        assert_eq!(s.data_ranges.get(&150).unwrap().len(), 30);
+        // Read second part of first frame and all of the second frame
+        let count = s.read(&mut buf);
+        assert_eq!(count, 80);
+    }
+
+    /// Reading exactly one chunk works, when there is a gap.
+    #[test]
+    fn stop_reading_at_gap() {
+        const CHUNK_SIZE: usize = 10;
+        const EXTRA_SIZE: usize = 3;
+        let mut s = RxStreamOrderer::new();
+
+        // Add three chunks.
+        s.inbound_frame(0, vec![0; CHUNK_SIZE]).unwrap();
+        let offset = u64::try_from(CHUNK_SIZE + EXTRA_SIZE).unwrap();
+        s.inbound_frame(offset, vec![0; EXTRA_SIZE]).unwrap();
+
+        // Read, providing only enough space for the first chunk.
+        let mut buf = vec![0; 100];
+        let count = s.read(&mut buf[..CHUNK_SIZE]);
+        assert_eq!(count, CHUNK_SIZE);
+
+        // Now fill the gap and ensure that everything can be read.
+        let offset = u64::try_from(CHUNK_SIZE).unwrap();
+        s.inbound_frame(offset, vec![0; EXTRA_SIZE]).unwrap();
+        let count = s.read(&mut buf[..]);
+        assert_eq!(count, EXTRA_SIZE * 2);
+    }
+
+    /// Reading exactly one chunk works, when there is a gap.
+    #[test]
+    fn stop_reading_in_chunk() {
+        const CHUNK_SIZE: usize = 10;
+        const EXTRA_SIZE: usize = 3;
+        let mut s = RxStreamOrderer::new();
+
+        // Add two chunks.
+        s.inbound_frame(0, vec![0; CHUNK_SIZE]).unwrap();
+        let offset = u64::try_from(CHUNK_SIZE).unwrap();
+        s.inbound_frame(offset, vec![0; EXTRA_SIZE]).unwrap();
+
+        // Read, providing only enough space for some of the first chunk.
+        let mut buf = vec![0; 100];
+        let count = s.read(&mut buf[..CHUNK_SIZE - EXTRA_SIZE]);
+        assert_eq!(count, CHUNK_SIZE - EXTRA_SIZE);
+
+        let count = s.read(&mut buf[..]);
+        assert_eq!(count, EXTRA_SIZE * 2);
+    }
+
+    /// Read one byte at a time.
+    #[test]
+    fn read_byte_at_a_time() {
+        const CHUNK_SIZE: usize = 10;
+        const EXTRA_SIZE: usize = 3;
+        let mut s = RxStreamOrderer::new();
+
+        // Add two chunks.
+        s.inbound_frame(0, vec![0; CHUNK_SIZE]).unwrap();
+        let offset = u64::try_from(CHUNK_SIZE).unwrap();
+        s.inbound_frame(offset, vec![0; EXTRA_SIZE]).unwrap();
+
+        let mut buf = vec![0; 1];
+        for _ in 0..CHUNK_SIZE + EXTRA_SIZE {
+            let count = s.read(&mut buf[..]);
+            assert_eq!(count, 1);
+        }
+        assert_eq!(0, s.read(&mut buf[..]));
+    }
 
     #[test]
     fn test_stream_rx() {
@@ -628,10 +871,10 @@ mod tests {
             let mut i = s.state.recv_buf().unwrap().data_ranges.iter();
             let item = i.next().unwrap();
             assert_eq!(*item.0, 0);
-            assert_eq!(item.1.len(), 2);
-            let item = i.next().unwrap();
-            assert_eq!(*item.0, 2);
             assert_eq!(item.1.len(), 6);
+            let item = i.next().unwrap();
+            assert_eq!(*item.0, 6);
+            assert_eq!(item.1.len(), 2);
         }
 
         // Test (true, false) case
@@ -640,10 +883,10 @@ mod tests {
             let mut i = s.state.recv_buf().unwrap().data_ranges.iter();
             let item = i.next().unwrap();
             assert_eq!(*item.0, 0);
-            assert_eq!(item.1.len(), 2);
-            let item = i.next().unwrap();
-            assert_eq!(*item.0, 2);
             assert_eq!(item.1.len(), 6);
+            let item = i.next().unwrap();
+            assert_eq!(*item.0, 6);
+            assert_eq!(item.1.len(), 2);
         }
 
         // Test (false, true) case
@@ -652,10 +895,10 @@ mod tests {
             let mut i = s.state.recv_buf().unwrap().data_ranges.iter();
             let item = i.next().unwrap();
             assert_eq!(*item.0, 0);
-            assert_eq!(item.1.len(), 2);
+            assert_eq!(item.1.len(), 6);
             let item = i.next().unwrap();
-            assert_eq!(*item.0, 2);
-            assert_eq!(item.1.len(), 8);
+            assert_eq!(*item.0, 6);
+            assert_eq!(item.1.len(), 2);
         }
 
         // Test (false, false) case
@@ -664,14 +907,14 @@ mod tests {
             let mut i = s.state.recv_buf().unwrap().data_ranges.iter();
             let item = i.next().unwrap();
             assert_eq!(*item.0, 0);
-            assert_eq!(item.1.len(), 2);
+            assert_eq!(item.1.len(), 6);
             let item = i.next().unwrap();
-            assert_eq!(*item.0, 2);
-            assert_eq!(item.1.len(), 8);
+            assert_eq!(*item.0, 6);
+            assert_eq!(item.1.len(), 2);
         }
 
         assert_eq!(s.read(&mut buf).unwrap(), (10, false));
-        assert_eq!(buf[..10], [1, 1, 4, 4, 4, 4, 4, 4, 4, 4]);
+        assert_eq!(buf[..10], [1, 1, 1, 1, 1, 1, 2, 2, 4, 4]);
 
         // Test truncation/span-drop on insert
         s.inbound_stream_frame(false, 100, vec![6; 6]).unwrap();
@@ -701,7 +944,7 @@ mod tests {
 
     #[test]
     fn test_stream_flowc_update() {
-        let flow_mgr = Rc::new(RefCell::new(FlowMgr::default()));
+        let flow_mgr = Rc::default();
         let conn_events = ConnectionEvents::default();
 
         let frame1 = vec![0; RX_STREAM_DATA_WINDOW as usize];

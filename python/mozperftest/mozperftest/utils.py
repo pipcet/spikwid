@@ -6,7 +6,6 @@ import contextlib
 from datetime import datetime, date, timedelta
 import sys
 import os
-import random
 from io import StringIO
 from redo import retry
 import requests
@@ -18,7 +17,10 @@ import importlib
 
 
 RETRY_SLEEP = 10
-MULTI_TASK_ROOT = "https://firefox-ci-tc.services.mozilla.com/api/index/v1/tasks/"
+API_ROOT = "https://firefox-ci-tc.services.mozilla.com/api/index/v1"
+MULTI_REVISION_ROOT = f"{API_ROOT}/namespaces"
+MULTI_TASK_ROOT = f"{API_ROOT}/tasks"
+ON_TRY = "MOZ_AUTOMATION" in os.environ
 
 
 @contextlib.contextmanager
@@ -71,6 +73,17 @@ def silence(layer=None):
             print(stderr)
 
 
+def simple_platform():
+    plat = host_platform()
+
+    if plat.startswith("win"):
+        return "win"
+    elif plat.startswith("linux"):
+        return "linux"
+    else:
+        return "mac"
+
+
 def host_platform():
     is_64bits = sys.maxsize > 2 ** 32
 
@@ -83,12 +96,11 @@ def host_platform():
     elif sys.platform.startswith("darwin"):
         return "darwin"
 
-    raise ValueError("sys.platform is not yet supported: {}".format(sys.platform))
+    raise ValueError(f"platform not yet supported: {sys.platform}")
 
 
 class MachLogger:
-    """Wrapper around the mach logger to make logging simpler.
-    """
+    """Wrapper around the mach logger to make logging simpler."""
 
     def __init__(self, mach_cmd):
         self._logger = mach_cmd.log
@@ -142,7 +154,15 @@ def install_package(virtualenv_manager, package, ignore_failure=False):
     return False
 
 
-def build_test_list(tests, randomized=False):
+# on try, we create tests packages where tests, like
+# xpcshell tests, don't have the same path.
+# see - python/mozbuild/mozbuild/action/test_archive.py
+# this mapping will map paths when running there.
+# The key is the source path, and the value the ci path
+_TRY_MAPPING = {Path("netwerk"): Path("xpcshell", "tests", "netwerk")}
+
+
+def build_test_list(tests):
     """Collects tests given a list of directories, files and URLs.
 
     Returns a tuple containing the list of tests found and a temp dir for tests
@@ -162,20 +182,25 @@ def build_test_list(tests, randomized=False):
             res.append(str(target))
             continue
 
-        test = Path(test)
+        p_test = Path(test)
+        if ON_TRY and not p_test.resolve().exists():
+            # until we have pathlib.Path.is_relative_to() (3.9)
+            for src_path, ci_path in _TRY_MAPPING.items():
+                src_path, ci_path = str(src_path), str(ci_path)
+                if test.startswith(src_path):
+                    p_test = Path(test.replace(src_path, ci_path))
+                    break
+
+        test = p_test.resolve()
 
         if test.is_file():
             res.append(str(test))
         elif test.is_dir():
             for file in test.rglob("perftest_*.js"):
                 res.append(str(file))
-    if not randomized:
-        res.sort()
-    else:
-        # random shuffling is used to make sure
-        # we don't always run tests in the same order
-        random.shuffle(res)
-
+        else:
+            raise FileNotFoundError(str(test))
+    res.sort()
     return res, temp_dir
 
 
@@ -238,14 +263,20 @@ def convert_day(day):
     return day
 
 
-def get_multi_tasks_url(route, day="yesterday"):
+def get_revision_namespace_url(route, day="yesterday"):
+    """Builds a URL to obtain all the namespaces of a given build route for a single day."""
+    day = convert_day(day)
+    return f"""{MULTI_REVISION_ROOT}/{route}.{day}.revision"""
+
+
+def get_multi_tasks_url(route, revision, day="yesterday"):
     """Builds a URL to obtain all the tasks of a given build route for a single day.
 
     If previous is true, then we get builds from the previous day,
     otherwise, we look at the current day.
     """
     day = convert_day(day)
-    return f"""{MULTI_TASK_ROOT}{route}.{day}.revision"""
+    return f"""{MULTI_TASK_ROOT}/{route}.{day}.revision.{revision}"""
 
 
 def strtobool(val):
