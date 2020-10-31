@@ -42,7 +42,6 @@ function TargetMixin(parentClass) {
       this._forceChrome = false;
 
       this.destroy = this.destroy.bind(this);
-      this._onNewSource = this._onNewSource.bind(this);
 
       this.threadFront = null;
 
@@ -58,7 +57,28 @@ function TargetMixin(parentClass) {
       // [typeName:string => Front instance]
       this.fronts = new Map();
 
-      this._setupRemoteListeners();
+      // `resource-available-form` events can be emitted by target actors before the
+      // ResourceWatcher could add event listeners. The target front will cache those
+      // events until the ResourceWatcher has added the listeners.
+      this._resourceCache = [];
+      this._onResourceAvailable = this._onResourceAvailable.bind(this);
+      // In order to avoid destroying the `_resourceCache`, we need to call `super.on()`
+      // instead of `this.on()`.
+      super.on("resource-available-form", this._onResourceAvailable);
+
+      this._addListeners();
+    }
+
+    on(eventName, listener) {
+      if (eventName === "resource-available-form" && this._resourceCache) {
+        this.off("resource-available-form", this._onResourceAvailable);
+        for (const cache of this._resourceCache) {
+          listener(cache);
+        }
+        this._resourceCache = null;
+      }
+
+      super.on(eventName, listener);
     }
 
     /**
@@ -391,7 +411,10 @@ function TargetMixin(parentClass) {
     }
 
     get isWorkerTarget() {
-      return this.typeName === "workerDescriptor";
+      // XXX Remove the check on `workerDescriptor` as part of Bug 1667404.
+      return (
+        this.typeName === "workerTarget" || this.typeName === "workerDescriptor"
+      );
     }
 
     get isLegacyAddon() {
@@ -515,7 +538,13 @@ function TargetMixin(parentClass) {
       if (this.isDestroyedOrBeingDestroyed()) {
         return;
       }
-      await this.attach();
+
+      // WorkerTargetFront don't have an attach function as the related console and thread
+      // actors are created right away (from devtools/server/startup/worker.js)
+      if (this.attach) {
+        await this.attach();
+      }
+
       const isBrowserToolbox = targetList.targetFront.isParentProcess;
       const isNonTopLevelFrameTarget =
         !this.isTopLevel && this.targetType === targetList.TYPES.FRAME;
@@ -566,39 +595,33 @@ function TargetMixin(parentClass) {
 
       await this.threadFront.attach(options);
 
-      this.threadFront.on("newSource", this._onNewSource);
-
       return this.threadFront;
     }
 
-    // Listener for "newSource" event fired by the thread actor
-    _onNewSource(packet) {
-      this.emit("source-updated", packet);
-    }
-
     /**
-     * Setup listeners for remote debugging, updating existing ones as necessary.
+     * Setup listeners.
      */
-    _setupRemoteListeners() {
+    _addListeners() {
       this.client.on("closed", this.destroy);
 
+      // `tabDetached` is sent by all target targets types: frame, process and workers.
+      // This is sent when the target is destroyed:
+      // * the target context destroys itself (the tab closes for ex, or the worker shuts down)
+      //   in this case, it may be the connector that send this event in the name of the target actor
+      // * the target actor is destroyed, but the target context stays up and running (for ex, when we call Watcher.unwatchTargets)
+      // * the DevToolsServerConnection closes (client closes the connection)
       this.on("tabDetached", this.destroy);
     }
 
     /**
-     * Teardown listeners for remote debugging.
+     * Teardown listeners.
      */
-    _teardownRemoteListeners() {
-      // Remove listeners set in _setupRemoteListeners
+    _removeListeners() {
+      // Remove listeners set in _addListeners
       if (this.client) {
         this.client.off("closed", this.destroy);
       }
       this.off("tabDetached", this.destroy);
-
-      // Remove listeners set in attachThread
-      if (this.threadFront) {
-        this.threadFront.off("newSource", this._onNewSource);
-      }
 
       // Remove listeners set in attachConsole
       if (this.removeOnInspectObjectListener) {
@@ -659,7 +682,7 @@ function TargetMixin(parentClass) {
         }
       }
 
-      this._teardownRemoteListeners();
+      this._removeListeners();
 
       this.threadFront = null;
 
@@ -708,10 +731,14 @@ function TargetMixin(parentClass) {
      *        The type of the target front ("worker", "browsing-context", ...)
      */
     logDetachError(e, targetType) {
-      const noSuchActorError = e?.message.includes("noSuchActor");
+      const ignoredError =
+        e?.message.includes("noSuchActor") ||
+        e?.message.includes("Connection closed");
 
-      // Silence exceptions for already destroyed actors, ie noSuchActor errors.
-      if (noSuchActorError) {
+      // Silence exceptions for already destroyed actors and fronts:
+      // - "noSuchActor" errors from the server
+      // - "Connection closed" errors from the client, when purging requests
+      if (ignoredError) {
         return;
       }
 
@@ -735,6 +762,12 @@ function TargetMixin(parentClass) {
 
       this._title = null;
       this._url = null;
+    }
+
+    _onResourceAvailable(resources) {
+      if (this._resourceCache) {
+        this._resourceCache.push(resources);
+      }
     }
 
     toString() {

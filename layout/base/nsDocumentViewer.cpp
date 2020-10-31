@@ -408,8 +408,7 @@ class nsDocumentViewer final : public nsIContentViewer,
 
   nsresult PrintPreviewScrollToPageForOldUI(int16_t aType, int32_t aPageNum);
 
-  std::tuple<const nsIFrame*, int32_t> GetCurrentSheetFrameAndPageNumber()
-      const;
+  std::tuple<const nsIFrame*, int32_t> GetCurrentSheetFrameAndNumber() const;
 
  protected:
   // Returns the current viewmanager.  Might be null.
@@ -1161,10 +1160,9 @@ nsDocumentViewer::LoadComplete(nsresult aStatus) {
       }
     }
   }
-  // Release the JS bytecode cache from its wait on the load event, and
-  // potentially dispatch the encoding of the bytecode.
-  if (mDocument && mDocument->ScriptLoader()) {
-    mDocument->ScriptLoader()->LoadEventFired();
+
+  if (mDocument && !restoring) {
+    mDocument->LoadEventFired();
   }
 
   // It's probably a good idea to GC soon since we have finished loading.
@@ -1203,6 +1201,11 @@ bool nsDocumentViewer::GetIsStopped() { return mStopped; }
 NS_IMETHODIMP
 nsDocumentViewer::PermitUnload(PermitUnloadAction aAction,
                                bool* aPermitUnload) {
+  // We're going to be running JS and nested event loops, which could cause our
+  // DocShell to be destroyed. Make sure we stay alive until the end of the
+  // function.
+  RefPtr<nsDocumentViewer> kungFuDeathGrip(this);
+
   if (StaticPrefs::dom_disable_beforeunload()) {
     aAction = eDontPromptAndUnload;
   }
@@ -2407,7 +2410,7 @@ mozilla::dom::Selection* nsDocumentViewer::GetDocumentSelection() {
  * ============================================================================
  */
 
-NS_IMETHODIMP nsDocumentViewer::ClearSelection() {
+MOZ_CAN_RUN_SCRIPT_BOUNDARY NS_IMETHODIMP nsDocumentViewer::ClearSelection() {
   // use nsCopySupport::GetSelectionForCopy() ?
   RefPtr<mozilla::dom::Selection> selection = GetDocumentSelection();
   if (!selection) {
@@ -2628,12 +2631,6 @@ nsDocumentViewer::SetAuthorStyleDisabled(bool aStyleDisabled) {
   if (mPresShell) {
     mPresShell->SetAuthorStyleDisabled(aStyleDisabled);
   }
-
-  auto children = [aStyleDisabled](nsDocumentViewer* aChild) {
-    aChild->SetAuthorStyleDisabled(aStyleDisabled);
-  };
-
-  CallChildren(children);
   return NS_OK;
 }
 
@@ -3213,7 +3210,7 @@ nsresult nsDocumentViewer::PrintPreviewScrollToPageForOldUI(int16_t aType,
   }
 
   // in PP mPrtPreview->mPrintObject->mSeqFrame is null
-  auto [seqFrame, pageCount] = mPrintJob->GetSeqFrameAndCountPages();
+  auto [seqFrame, sheetCount] = mPrintJob->GetSeqFrameAndCountSheets();
   if (!seqFrame) {
     return NS_ERROR_FAILURE;
   }
@@ -3228,7 +3225,7 @@ nsresult nsDocumentViewer::PrintPreviewScrollToPageForOldUI(int16_t aType,
   // If it is "End" then just do a "goto" to the last page
   if (aType == nsIWebBrowserPrint::PRINTPREVIEW_END) {
     aType = nsIWebBrowserPrint::PRINTPREVIEW_GOTO_PAGENUM;
-    aPageNum = pageCount;
+    aPageNum = sheetCount;
   }
 
   // Now, locate the current page we are on and
@@ -3264,7 +3261,7 @@ nsresult nsDocumentViewer::PrintPreviewScrollToPageForOldUI(int16_t aType,
       return NS_OK;
     }
   } else {  // If we get here we are doing "GoTo"
-    if (aPageNum < 0 || aPageNum > pageCount) {
+    if (aPageNum < 0 || aPageNum > sheetCount) {
       return NS_OK;
     }
   }
@@ -3325,8 +3322,8 @@ nsDocumentViewer::PrintPreviewScrollToPage(int16_t aType, int32_t aPageNum) {
       mPrintJob->GetPrintPreviewPresShell()->GetRootScrollFrameAsScrollable();
   if (!sf) return NS_OK;
 
-  auto [seqFrame, pageCount] = mPrintJob->GetSeqFrameAndCountPages();
-  Unused << pageCount;
+  auto [seqFrame, sheetCount] = mPrintJob->GetSeqFrameAndCountSheets();
+  Unused << sheetCount;
   if (!seqFrame) {
     return NS_ERROR_FAILURE;
   }
@@ -3344,9 +3341,8 @@ nsDocumentViewer::PrintPreviewScrollToPage(int16_t aType, int32_t aPageNum) {
       break;
     case nsIWebBrowserPrint::PRINTPREVIEW_PREV_PAGE:
     case nsIWebBrowserPrint::PRINTPREVIEW_NEXT_PAGE: {
-      auto [currentFrame, currentPageNumber] =
-          GetCurrentSheetFrameAndPageNumber();
-      Unused << currentPageNumber;
+      auto [currentFrame, currentSheetNumber] = GetCurrentSheetFrameAndNumber();
+      Unused << currentSheetNumber;
       if (!currentFrame) {
         return NS_OK;
       }
@@ -3365,7 +3361,7 @@ nsDocumentViewer::PrintPreviewScrollToPage(int16_t aType, int32_t aPageNum) {
       break;
     }
     case nsIWebBrowserPrint::PRINTPREVIEW_GOTO_PAGENUM: {
-      if (aPageNum < 0 || aPageNum > pageCount) {
+      if (aPageNum < 0 || aPageNum > sheetCount) {
         return NS_ERROR_INVALID_ARG;
       }
 
@@ -3386,13 +3382,13 @@ nsDocumentViewer::PrintPreviewScrollToPage(int16_t aType, int32_t aPageNum) {
 }
 
 std::tuple<const nsIFrame*, int32_t>
-nsDocumentViewer::GetCurrentSheetFrameAndPageNumber() const {
+nsDocumentViewer::GetCurrentSheetFrameAndNumber() const {
   MOZ_ASSERT(mPrintJob);
   MOZ_ASSERT(GetIsPrintPreview() && !mPrintJob->GetIsCreatingPrintPreview());
 
   // in PP mPrtPreview->mPrintObject->mSeqFrame is null
-  auto [seqFrame, pageCount] = mPrintJob->GetSeqFrameAndCountPages();
-  Unused << pageCount;
+  auto [seqFrame, sheetCount] = mPrintJob->GetSeqFrameAndCountSheets();
+  Unused << sheetCount;
   if (!seqFrame) {
     return {nullptr, 0};
   }
@@ -3400,7 +3396,7 @@ nsDocumentViewer::GetCurrentSheetFrameAndPageNumber() const {
   nsIScrollableFrame* sf =
       mPrintJob->GetPrintPreviewPresShell()->GetRootScrollFrameAsScrollable();
   if (!sf) {
-    // No scrollable contents, returns 1 even if there are multiple pages.
+    // No scrollable contents, returns 1 even if there are multiple sheets.
     return {seqFrame->PrincipalChildList().FirstChild(), 1};
   }
 
@@ -3408,17 +3404,17 @@ nsDocumentViewer::GetCurrentSheetFrameAndPageNumber() const {
   float halfwayPoint =
       currentScrollPosition.y + float(sf->GetScrollPortRect().height) / 2.0f;
   float lastDistanceFromHalfwayPoint = std::numeric_limits<float>::max();
-  int32_t pageNumber = 0;
+  int32_t sheetNumber = 0;
   const nsIFrame* currentSheet = nullptr;
   float previewScale = seqFrame->GetPrintPreviewScale();
   for (const nsIFrame* sheetFrame : seqFrame->PrincipalChildList()) {
     nsRect sheetRect = sheetFrame->GetRect();
-    pageNumber++;
+    sheetNumber++;
     currentSheet = sheetFrame;
 
     float bottomOfSheet = sheetRect.YMost() * previewScale;
     if (bottomOfSheet < halfwayPoint) {
-      // If the bottom of the page is not yet over the halfway point, iterate
+      // If the bottom of the sheet is not yet over the halfway point, iterate
       // the next frame to see if the next frame is over the halfway point and
       // compare the distance from the halfway point.
       lastDistanceFromHalfwayPoint = halfwayPoint - bottomOfSheet;
@@ -3427,28 +3423,31 @@ nsDocumentViewer::GetCurrentSheetFrameAndPageNumber() const {
 
     float topOfSheet = sheetRect.Y() * previewScale;
     if (topOfSheet <= halfwayPoint) {
-      // If the top of the page is not yet over the halfway point or on the
-      // point, it's the current page.
+      // If the top of the sheet is not yet over the halfway point or on the
+      // point, it's the current sheet.
       break;
     }
 
-    // Now the page rect is completely over the halfway point, compare the
+    // Now the sheet rect is completely over the halfway point, compare the
     // distances from the halfway point.
     if ((topOfSheet - halfwayPoint) >= lastDistanceFromHalfwayPoint) {
-      // If the previous page distance is less than or equal to the current page
-      // distance, choose the previous one as the current.
-      pageNumber--;
-      MOZ_ASSERT(pageNumber > 0);
+      // If the previous sheet distance is less than or equal to the current
+      // sheet distance, choose the previous one as the current.
+      sheetNumber--;
+      MOZ_ASSERT(sheetNumber > 0);
       currentSheet = currentSheet->GetPrevInFlow();
       MOZ_ASSERT(currentSheet);
     }
     break;
   }
 
-  MOZ_ASSERT(pageNumber <= pageCount);
-  return {currentSheet, pageNumber};
+  MOZ_ASSERT(sheetNumber <= sheetCount);
+  return {currentSheet, sheetNumber};
 }
 
+// XXXdholbert As noted in nsIWebBrowserPrint.idl, this API (the IDL attr
+// 'printPreviewCurrentPageNumber') is misnamed and needs s/Page/Sheet/.  See
+// bug 1669762.
 NS_IMETHODIMP
 nsDocumentViewer::GetPrintPreviewCurrentPageNumber(int32_t* aNumber) {
   NS_ENSURE_ARG_POINTER(aNumber);
@@ -3457,13 +3456,13 @@ nsDocumentViewer::GetPrintPreviewCurrentPageNumber(int32_t* aNumber) {
     return NS_ERROR_FAILURE;
   }
 
-  auto [currentFrame, currentPageNumber] = GetCurrentSheetFrameAndPageNumber();
+  auto [currentFrame, currentSheetNumber] = GetCurrentSheetFrameAndNumber();
   Unused << currentFrame;
-  if (!currentPageNumber) {
+  if (!currentSheetNumber) {
     return NS_ERROR_FAILURE;
   }
 
-  *aNumber = currentPageNumber;
+  *aNumber = currentSheetNumber;
 
   return NS_OK;
 }
@@ -3548,12 +3547,14 @@ nsDocumentViewer::GetRawNumPages(int32_t* aRawNumPages) {
   return *aRawNumPages > 0 ? NS_OK : NS_ERROR_FAILURE;
 }
 
+// XXXdholbert As noted in nsIWebBrowserPrint.idl, this API (the IDL attr
+// 'printPreviewNumPages') is misnamed and needs s/Page/Sheet/.
+// See bug 1669762.
 NS_IMETHODIMP
 nsDocumentViewer::GetPrintPreviewNumPages(int32_t* aPrintPreviewNumPages) {
   NS_ENSURE_ARG_POINTER(aPrintPreviewNumPages);
   NS_ENSURE_TRUE(mPrintJob, NS_ERROR_FAILURE);
-
-  *aPrintPreviewNumPages = mPrintJob->GetPrintPreviewNumPages();
+  *aPrintPreviewNumPages = mPrintJob->GetPrintPreviewNumSheets();
   return *aPrintPreviewNumPages > 0 ? NS_OK : NS_ERROR_FAILURE;
 }
 

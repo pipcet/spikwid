@@ -1490,8 +1490,19 @@ impl Device {
 
         info!("GL texture cache {:?}, bgra {:?} swizzle {:?}, texture storage {:?}, depth {:?}",
             color_formats, bgra_formats, bgra8_sampling_swizzle, texture_storage_usage, depth_format);
-        let supports_copy_image_sub_data = supports_extension(&extensions, "GL_EXT_copy_image") ||
-            supports_extension(&extensions, "GL_ARB_copy_image");
+
+        // On Mali-T devices glCopyImageSubData appears to stall the pipeline until any pending
+        // renders to the source texture have completed. Using an alternative such as
+        // glBlitFramebuffer is preferable on such devices, so pretend we don't support
+        // glCopyImageSubData. See bug 1669494.
+        // We cannot do the same on Mali-G devices, because glBlitFramebuffer can cause corruption.
+        // See bug 1669960.
+        let supports_copy_image_sub_data = if renderer_name.starts_with("Mali-T") {
+            false
+        } else {
+            supports_extension(&extensions, "GL_EXT_copy_image") ||
+            supports_extension(&extensions, "GL_ARB_copy_image")
+        };
 
         // Due to a bug on Adreno devices, blitting to an fbo bound to
         // a non-0th layer of a texture array is not supported.
@@ -3779,7 +3790,8 @@ impl Device {
         match format {
             ImageFormat::R8 => gl::R8,
             ImageFormat::R16 => gl::R16UI,
-            ImageFormat::BGRA8 => panic!("Unable to render to BGRA format!"),
+            // BGRA8 renderbuffers are not supported, so use RGBA8.
+            ImageFormat::BGRA8 => gl::RGBA8,
             ImageFormat::RGBAF32 => gl::RGBA32F,
             ImageFormat::RG8 => gl::RG8,
             ImageFormat::RG16 => gl::RG16,

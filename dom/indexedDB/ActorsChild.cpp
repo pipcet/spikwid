@@ -29,7 +29,6 @@
 #include "mozilla/CycleCollectedJSRuntime.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/ResultExtensions.h"
-#include "mozilla/SnappyUncompressInputStream.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/Event.h"
 #include "mozilla/dom/PermissionMessageUtils.h"
@@ -784,8 +783,9 @@ class WorkerPermissionChallenge final : public Runnable {
       return true;
     }
 
-    IDB_TRY_VAR(auto principal,
-                mozilla::ipc::PrincipalInfoToPrincipal(mPrincipalInfo), true);
+    IDB_TRY_UNWRAP(auto principal,
+                   mozilla::ipc::PrincipalInfoToPrincipal(mPrincipalInfo),
+                   true);
 
     if (XRE_IsParentProcess()) {
       const nsCOMPtr<Element> ownerElement =
@@ -797,10 +797,8 @@ class WorkerPermissionChallenge final : public Runnable {
       RefPtr<WorkerPermissionRequest> helper =
           new WorkerPermissionRequest(ownerElement, principal, this);
 
-      PermissionRequestBase::PermissionValue permission;
-      if (NS_WARN_IF(NS_FAILED(helper->PromptIfNeeded(&permission)))) {
-        return true;
-      }
+      IDB_TRY_INSPECT(const PermissionRequestBase::PermissionValue& permission,
+                      helper->PromptIfNeeded(), true);
 
       MOZ_ASSERT(permission == PermissionRequestBase::kPermissionAllowed ||
                  permission == PermissionRequestBase::kPermissionDenied ||
@@ -1350,12 +1348,14 @@ bool BackgroundFactoryRequestChild::HandleResponse(
       static_cast<BackgroundDatabaseChild*>(aResponse.databaseChild());
   MOZ_ASSERT(databaseActor);
 
-  NotNull<IDBDatabase*> database = [this, databaseActor] {
+  IDBDatabase* const database = [this, databaseActor]() -> IDBDatabase* {
     IDBDatabase* database = databaseActor->GetDOMObject();
     if (!database) {
       Unused << this;
 
-      databaseActor->EnsureDOMObject();
+      if (NS_WARN_IF(!databaseActor->EnsureDOMObject())) {
+        return nullptr;
+      }
       MOZ_ASSERT(mDatabaseActor);
 
       database = databaseActor->GetDOMObject();
@@ -1364,12 +1364,10 @@ bool BackgroundFactoryRequestChild::HandleResponse(
       MOZ_ASSERT(!database->IsClosed());
     }
 
-    return WrapNotNullUnchecked(database);
+    return database;
   }();
 
-  MOZ_ASSERT(mDatabaseActor == databaseActor);
-
-  if (database->IsClosed()) {
+  if (!database || database->IsClosed()) {
     // If the database was closed already, which is only possible if we fired an
     // "upgradeneeded" event, then we shouldn't fire a "success" event here.
     // Instead we fire an error event with AbortErr.
@@ -1378,7 +1376,13 @@ bool BackgroundFactoryRequestChild::HandleResponse(
     SetResultAndDispatchSuccessEvent(mRequest, nullptr, *database);
   }
 
-  databaseActor->ReleaseDOMObject();
+  if (database) {
+    MOZ_ASSERT(mDatabaseActor == databaseActor);
+
+    databaseActor->ReleaseDOMObject();
+  } else {
+    databaseActor->SendDeleteMeInternal();
+  }
   MOZ_ASSERT(!mDatabaseActor);
 
   return true;
@@ -1466,9 +1470,9 @@ mozilla::ipc::IPCResult BackgroundFactoryRequestChild::RecvPermissionChallenge(
     return IPC_OK();
   }
 
-  IDB_TRY_VAR(auto principal,
-              mozilla::ipc::PrincipalInfoToPrincipal(aPrincipalInfo),
-              IPC_FAIL_NO_REASON(this));
+  IDB_TRY_UNWRAP(auto principal,
+                 mozilla::ipc::PrincipalInfoToPrincipal(aPrincipalInfo),
+                 IPC_FAIL_NO_REASON(this));
 
   if (XRE_IsParentProcess()) {
     nsCOMPtr<nsIGlobalObject> global = mFactory->GetParentObject();
@@ -1490,10 +1494,8 @@ mozilla::ipc::IPCResult BackgroundFactoryRequestChild::RecvPermissionChallenge(
         new PermissionRequestMainProcessHelper(this, mFactory.clonePtr(),
                                                ownerElement, principal);
 
-    PermissionRequestBase::PermissionValue permission;
-    if (NS_WARN_IF(NS_FAILED(helper->PromptIfNeeded(&permission)))) {
-      return IPC_FAIL_NO_REASON(this);
-    }
+    IDB_TRY_INSPECT(const PermissionRequestBase::PermissionValue& permission,
+                    helper->PromptIfNeeded(), IPC_FAIL_NO_REASON(this));
 
     MOZ_ASSERT(permission == PermissionRequestBase::kPermissionAllowed ||
                permission == PermissionRequestBase::kPermissionDenied ||
@@ -1593,14 +1595,14 @@ void BackgroundDatabaseChild::SendDeleteMeInternal() {
   }
 }
 
-void BackgroundDatabaseChild::EnsureDOMObject() {
+bool BackgroundDatabaseChild::EnsureDOMObject() {
   AssertIsOnOwningThread();
   MOZ_ASSERT(mOpenRequestActor);
 
   if (mTemporaryStrongDatabase) {
     MOZ_ASSERT(!mSpec);
     MOZ_ASSERT(mDatabase == mTemporaryStrongDatabase);
-    return;
+    return true;
   }
 
   MOZ_ASSERT(mSpec);
@@ -1609,6 +1611,17 @@ void BackgroundDatabaseChild::EnsureDOMObject() {
 
   auto& factory =
       static_cast<BackgroundFactoryChild*>(Manager())->GetDOMObject();
+
+  if (!factory.GetParentObject()) {
+    // Already disconnected from global.
+
+    // We need to clear mOpenRequestActor here, since that would otherwise be
+    // done by ReleaseDOMObject, which cannot be called if EnsureDOMObject
+    // failed.
+    mOpenRequestActor = nullptr;
+
+    return false;
+  }
 
   // TODO: This AcquireStrongRefFromRawPtr looks suspicious. This should be
   // changed or at least well explained, see also comment on
@@ -1623,6 +1636,8 @@ void BackgroundDatabaseChild::EnsureDOMObject() {
   mDatabase = mTemporaryStrongDatabase;
 
   mOpenRequestActor->SetDatabaseActor(this);
+
+  return true;
 }
 
 void BackgroundDatabaseChild::ReleaseDOMObject() {
@@ -1712,9 +1727,28 @@ BackgroundDatabaseChild::RecvPBackgroundIDBVersionChangeTransactionConstructor(
 
   MaybeCollectGarbageOnIPCMessage();
 
-  EnsureDOMObject();
+  auto* const actor =
+      static_cast<BackgroundVersionChangeTransactionChild*>(aActor);
 
-  auto* actor = static_cast<BackgroundVersionChangeTransactionChild*>(aActor);
+  if (!EnsureDOMObject()) {
+    NS_WARNING("Factory is already disconnected from global");
+
+    actor->SendDeleteMeInternal(true);
+
+    // XXX This is a hack to ensure that transaction/request serial numbers stay
+    // in sync between parent and child. Actually, it might be better to create
+    // an IDBTransaction in the child and abort that.
+    Unused
+        << mozilla::ipc::BackgroundChildImpl::GetThreadLocalForCurrentThread()
+               ->mIndexedDBThreadLocal->NextTransactionSN(
+                   IDBTransaction::Mode::VersionChange);
+    Unused << IDBRequest::NextSerialNumber();
+
+    // If we return IPC_FAIL_NO_REASON(this) here, we crash...
+    return IPC_OK();
+  }
+
+  MOZ_ASSERT(!mDatabase->IsInvalidated());
 
   // XXX NotNull might encapsulate this
   const auto request =
@@ -2406,22 +2440,26 @@ void BackgroundRequestChild::HandleResponse(
 
   nsTArray<StructuredCloneReadInfoChild> cloneReadInfos;
 
-  if (!aResponse.IsEmpty()) {
-    const uint32_t count = aResponse.Length();
+  IDB_TRY(OkIf(cloneReadInfos.SetCapacity(aResponse.Length(), fallible)),
+          QM_VOID, ([&aResponse, this](const auto) {
+            // Since we are under memory pressure, release aResponse early.
+            aResponse.Clear();
 
-    cloneReadInfos.SetCapacity(count);
+            DispatchErrorEvent(mRequest, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR,
+                               AcquireTransaction());
 
-    std::transform(
-        std::make_move_iterator(aResponse.begin()),
-        std::make_move_iterator(aResponse.end()),
-        MakeBackInserter(cloneReadInfos),
-        [database = mTransaction->Database(),
-         this](SerializedStructuredCloneReadInfo&& serializedCloneInfo) {
-          return DeserializeStructuredCloneReadInfo(
-              std::move(serializedCloneInfo), database,
-              [this] { return std::move(*GetNextCloneData()); });
-        });
-  }
+            MOZ_ASSERT(mTransaction->IsAborted());
+          }));
+
+  std::transform(std::make_move_iterator(aResponse.begin()),
+                 std::make_move_iterator(aResponse.end()),
+                 MakeBackInserter(cloneReadInfos),
+                 [database = mTransaction->Database(), this](
+                     SerializedStructuredCloneReadInfo&& serializedCloneInfo) {
+                   return DeserializeStructuredCloneReadInfo(
+                       std::move(serializedCloneInfo), database,
+                       [this] { return std::move(*GetNextCloneData()); });
+                 });
 
   SetResultAndDispatchSuccessEvent(mRequest, AcquireTransaction(),
                                    cloneReadInfos);
@@ -2756,40 +2794,12 @@ nsresult BackgroundRequestChild::PreprocessHelper::ProcessStream() {
       blobInputStream->GetInternalStream();
   MOZ_ASSERT(internalInputStream);
 
-  RefPtr<SnappyUncompressInputStream> snappyInputStream =
-      new SnappyUncompressInputStream(internalInputStream);
-
-  nsresult rv;
-
-  do {
-    char buffer[kFileCopyBufferSize];
-
-    uint32_t numRead;
-    rv = snappyInputStream->Read(buffer, sizeof(buffer), &numRead);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      break;
-    }
-
-    if (!numRead) {
-      break;
-    }
-
-    if (NS_WARN_IF(!mCloneData->AppendBytes(buffer, numRead))) {
-      rv = NS_ERROR_OUT_OF_MEMORY;
-      break;
-    }
-  } while (true);
-
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
+  IDB_TRY(
+      SnappyUncompressStructuredCloneData(*internalInputStream, *mCloneData));
 
   mState = State::Finishing;
 
-  rv = mOwningEventTarget->Dispatch(this, NS_DISPATCH_NORMAL);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
+  IDB_TRY(mOwningEventTarget->Dispatch(this, NS_DISPATCH_NORMAL));
 
   return NS_OK;
 }

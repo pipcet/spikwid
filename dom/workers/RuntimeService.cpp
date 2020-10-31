@@ -22,6 +22,7 @@
 #include "mozilla/ipc/BackgroundChild.h"
 #include "GeckoProfiler.h"
 #include "jsfriendapi.h"
+#include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
 #include "js/ContextOptions.h"
 #include "js/LocaleSensitive.h"
 #include "mozilla/ArrayUtils.h"
@@ -915,7 +916,7 @@ class WorkerJSContext final : public mozilla::CycleCollectedJSContext {
 
     std::queue<RefPtr<MicroTaskRunnable>>* microTaskQueue = nullptr;
 
-    JSContext* cx = GetCurrentWorkerThreadJSContext();
+    JSContext* cx = Context();
     NS_ASSERTION(cx, "This should never be null!");
 
     JS::Rooted<JSObject*> global(cx, JS::CurrentGlobalOrNull(cx));
@@ -1582,17 +1583,21 @@ class CrashIfHangingRunnable : public WorkerControlRunnable {
         mMonitor("CrashIfHangingRunnable::mMonitor") {}
 
   bool WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate) override {
-    aWorkerPrivate->DumpCrashInformation(mMsg);
-
     MonitorAutoLock lock(mMonitor);
+    if (!mHasMsg) {
+      aWorkerPrivate->DumpCrashInformation(mMsg);
+      mHasMsg.Flip();
+    }
     lock.Notify();
     return true;
   }
 
   nsresult Cancel() override {
-    mMsg.Assign("Canceled");
-
     MonitorAutoLock lock(mMonitor);
+    if (!mHasMsg) {
+      mMsg.Assign("Canceled");
+      mHasMsg.Flip();
+    }
     lock.Notify();
 
     return NS_OK;
@@ -1607,7 +1612,13 @@ class CrashIfHangingRunnable : public WorkerControlRunnable {
       return false;
     }
 
-    lock.Wait();
+    // To avoid any possibility of process hangs we never receive reports on
+    // we give the worker 1sec to react.
+    lock.Wait(TimeDuration::FromMilliseconds(1000));
+    if (!mHasMsg) {
+      mMsg.Append("NoResponse");
+      mHasMsg.Flip();
+    }
     return true;
   }
 
@@ -1621,6 +1632,7 @@ class CrashIfHangingRunnable : public WorkerControlRunnable {
 
   Monitor mMonitor;
   nsCString mMsg;
+  FlippedOnce<false> mHasMsg;
 };
 
 struct ActiveWorkerStats {
@@ -1635,6 +1647,8 @@ struct ActiveWorkerStats {
         // BC: Busy Count
         mMessage.AppendPrintf("-BC:%d", worker->BusyCount());
         mMessage.Append(runnable->MsgData());
+      } else {
+        mMessage.AppendPrintf("-BC:%d DispatchFailed", worker->BusyCount());
       }
     }
   }

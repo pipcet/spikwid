@@ -22,12 +22,12 @@
 #include "mozilla/Unused.h"
 #include "mozilla/Utf8.h"
 
-#include "builtin/TypedObject.h"
 #include "jit/JitOptions.h"
 #include "js/Printf.h"
 #include "js/String.h"  // JS::MaxStringLength
 #include "vm/JSContext.h"
 #include "vm/Realm.h"
+#include "wasm/TypedObject.h"
 #include "wasm/WasmOpIter.h"
 
 using namespace js;
@@ -483,10 +483,11 @@ static bool DecodeFunctionBodyExprs(const ModuleEnvironment& env,
   if (!(c)) return false; \
   break
 
-#define CHECK_EXPERIMENTAL_SIMD()        \
-  if (!SimdExperimentalEnabled) {        \
-    return iter.unrecognizedOpcode(&op); \
-  }
+#ifdef ENABLE_WASM_SIMD_EXPERIMENTAL
+#  define CHECK_SIMD_EXPERIMENTAL() (void)(0)
+#else
+#  define CHECK_SIMD_EXPERIMENTAL() return iter.unrecognizedOpcode(&op)
+#endif
 
   while (true) {
     OpBytes op;
@@ -1051,14 +1052,11 @@ static bool DecodeFunctionBodyExprs(const ModuleEnvironment& env,
           case uint32_t(SimdOp::I16x8NarrowSI32x4):
           case uint32_t(SimdOp::I16x8NarrowUI32x4):
           case uint32_t(SimdOp::V8x16Swizzle):
-            CHECK(iter.readBinary(ValType::V128, &nothing, &nothing));
-
-          case uint32_t(SimdOp::F32x4PMaxExperimental):
-          case uint32_t(SimdOp::F32x4PMinExperimental):
-          case uint32_t(SimdOp::F64x2PMaxExperimental):
-          case uint32_t(SimdOp::F64x2PMinExperimental):
-          case uint32_t(SimdOp::I32x4DotSI16x8Experimental):
-            CHECK_EXPERIMENTAL_SIMD();
+          case uint32_t(SimdOp::F32x4PMax):
+          case uint32_t(SimdOp::F32x4PMin):
+          case uint32_t(SimdOp::F64x2PMax):
+          case uint32_t(SimdOp::F64x2PMin):
+          case uint32_t(SimdOp::I32x4DotSI16x8):
             CHECK(iter.readBinary(ValType::V128, &nothing, &nothing));
 
           case uint32_t(SimdOp::I8x16Neg):
@@ -1087,17 +1085,14 @@ static bool DecodeFunctionBodyExprs(const ModuleEnvironment& env,
           case uint32_t(SimdOp::I8x16Abs):
           case uint32_t(SimdOp::I16x8Abs):
           case uint32_t(SimdOp::I32x4Abs):
-            CHECK(iter.readUnary(ValType::V128, &nothing));
-
-          case uint32_t(SimdOp::F32x4CeilExperimental):
-          case uint32_t(SimdOp::F32x4FloorExperimental):
-          case uint32_t(SimdOp::F32x4TruncExperimental):
-          case uint32_t(SimdOp::F32x4NearestExperimental):
-          case uint32_t(SimdOp::F64x2CeilExperimental):
-          case uint32_t(SimdOp::F64x2FloorExperimental):
-          case uint32_t(SimdOp::F64x2TruncExperimental):
-          case uint32_t(SimdOp::F64x2NearestExperimental):
-            CHECK_EXPERIMENTAL_SIMD();
+          case uint32_t(SimdOp::F32x4Ceil):
+          case uint32_t(SimdOp::F32x4Floor):
+          case uint32_t(SimdOp::F32x4Trunc):
+          case uint32_t(SimdOp::F32x4Nearest):
+          case uint32_t(SimdOp::F64x2Ceil):
+          case uint32_t(SimdOp::F64x2Floor):
+          case uint32_t(SimdOp::F64x2Trunc):
+          case uint32_t(SimdOp::F64x2Nearest):
             CHECK(iter.readUnary(ValType::V128, &nothing));
 
           case uint32_t(SimdOp::I8x16Shl):
@@ -1175,15 +1170,13 @@ static bool DecodeFunctionBodyExprs(const ModuleEnvironment& env,
             CHECK(iter.readStore(ValType::V128, 16, &addr, &nothing));
           }
 
-          case uint32_t(SimdOp::V128Load32ZeroExperimental): {
+          case uint32_t(SimdOp::V128Load32Zero): {
             LinearMemoryAddress<Nothing> addr;
-            CHECK_EXPERIMENTAL_SIMD();
             CHECK(iter.readLoadSplat(4, &addr));
           }
 
-          case uint32_t(SimdOp::V128Load64ZeroExperimental): {
+          case uint32_t(SimdOp::V128Load64Zero): {
             LinearMemoryAddress<Nothing> addr;
-            CHECK_EXPERIMENTAL_SIMD();
             CHECK(iter.readLoadSplat(8, &addr));
           }
 
@@ -1296,7 +1289,7 @@ static bool DecodeFunctionBodyExprs(const ModuleEnvironment& env,
         if (!env.gcTypesEnabled()) {
           return iter.unrecognizedOpcode(&op);
         }
-        CHECK(iter.readComparison(RefType::extern_(), &nothing, &nothing));
+        CHECK(iter.readComparison(RefType::eq(), &nothing, &nothing));
       }
 #endif
 #ifdef ENABLE_WASM_REFTYPES
@@ -1507,7 +1500,7 @@ static bool DecodeFunctionBodyExprs(const ModuleEnvironment& env,
   MOZ_CRASH("unreachable");
 
 #undef CHECK
-#undef CHECK_EXPERIMENTAL_SIMD
+#undef CHECK_SIMD_EXPERIMENTAL
 }
 
 bool wasm::ValidateFunctionBody(const ModuleEnvironment& env,
@@ -1700,6 +1693,7 @@ static bool DecodeStructType(Decoder& d, ModuleEnvironment* env,
         break;
       case ValType::Ref:
         switch (fields[i].type.refTypeKind()) {
+          case RefType::Eq:
           case RefType::TypeIndex:
             offset = layout.addReference(ReferenceType::TYPE_OBJECT);
             break;
@@ -1953,6 +1947,7 @@ static bool GlobalIsJSCompatible(Decoder& d, ValType type) {
       switch (type.refTypeKind()) {
         case RefType::Func:
         case RefType::Extern:
+        case RefType::Eq:
           break;
         case RefType::TypeIndex:
 #ifdef WASM_PRIVATE_REFTYPES
@@ -2014,11 +2009,11 @@ static bool DecodeMemoryLimits(Decoder& d, ModuleEnvironment* env) {
     return false;
   }
 
-  if (memory.initial > MaxMemoryLimitField) {
+  if (memory.initial > MaxMemory32LimitField) {
     return d.fail("initial memory size too big");
   }
 
-  if (memory.maximum && *memory.maximum > MaxMemoryLimitField) {
+  if (memory.maximum && *memory.maximum > MaxMemory32LimitField) {
     return d.fail("maximum memory size too big");
   }
 
@@ -2066,6 +2061,9 @@ static bool DecodeImport(Decoder& d, ModuleEnvironment* env) {
       }
 #endif
       if (!env->funcTypes.append(&env->types[funcTypeIndex].funcType())) {
+        return false;
+      }
+      if (!env->funcTypeIndices.append(funcTypeIndex)) {
         return false;
       }
       if (env->funcTypes.length() > MaxFuncs) {
@@ -2172,6 +2170,9 @@ static bool DecodeFunctionSection(Decoder& d, ModuleEnvironment* env) {
   if (!env->funcTypes.reserve(numFuncs.value())) {
     return false;
   }
+  if (!env->funcTypeIndices.reserve(numFuncs.value())) {
+    return false;
+  }
 
   for (uint32_t i = 0; i < numDefs; i++) {
     uint32_t funcTypeIndex;
@@ -2179,6 +2180,7 @@ static bool DecodeFunctionSection(Decoder& d, ModuleEnvironment* env) {
       return false;
     }
     env->funcTypes.infallibleAppend(&env->types[funcTypeIndex].funcType());
+    env->funcTypeIndices.infallibleAppend(funcTypeIndex);
   }
 
   return d.finishSection(*range, "function");
@@ -2769,7 +2771,7 @@ static bool DecodeElemSection(Decoder& d, ModuleEnvironment* env) {
             initType = RefType::func();
             break;
           case uint16_t(Op::RefNull):
-            if (!d.readRefType(env->types, env->features, &initType)) {
+            if (!d.readHeapType(env->types, env->features, true, &initType)) {
               return false;
             }
             needIndex = false;
@@ -2869,8 +2871,6 @@ bool wasm::DecodeModuleEnvironment(Decoder& d, ModuleEnvironment* env) {
   if (!DecodePreamble(d)) {
     return false;
   }
-
-  env->compilerEnv->computeParameters(d);
 
   if (!DecodeTypeSection(d, env)) {
     return false;
@@ -3220,9 +3220,7 @@ bool wasm::Validate(JSContext* cx, const ShareableBytes& bytecode,
   Decoder d(bytecode.bytes, 0, error);
 
   FeatureArgs features = FeatureArgs::build(cx);
-  CompilerEnvironment compilerEnv(CompileMode::Once, Tier::Optimized,
-                                  OptimizedBackend::Ion, DebugEnabled::False);
-  ModuleEnvironment env(&compilerEnv, features);
+  ModuleEnvironment env(features);
   if (!DecodeModuleEnvironment(d, &env)) {
     return false;
   }

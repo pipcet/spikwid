@@ -4,6 +4,7 @@
 
 package org.mozilla.geckoview.test
 
+import android.util.Base64
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import androidx.test.filters.MediumTest
@@ -293,11 +294,11 @@ class ProgressDelegateTest : BaseSessionTest() {
         waitForScroll(offset, timeout, "pageTop")
     }
 
-    fun collectState(uri: String) : GeckoSession.SessionState {
-        sessionRule.setPrefsUntilTestEnd(mapOf("dom.visualviewport.enabled" to true))
-
-        mainSession.loadUri(uri)
-        sessionRule.waitForPageStop()
+    fun collectState(vararg uris: String) : GeckoSession.SessionState {
+        for (uri in uris) {
+            mainSession.loadUri(uri)
+            sessionRule.waitForPageStop()
+        }
 
         mainSession.evaluateJS("document.querySelector('#name').value = 'the name';")
         mainSession.evaluateJS("document.querySelector('#name').dispatchEvent(new Event('input'));")
@@ -323,8 +324,10 @@ class ProgressDelegateTest : BaseSessionTest() {
 
     @WithDisplay(width = 400, height = 400)
     @Test fun saveAndRestoreStateNewSession() {
+        val helloUri = createTestUrl(HELLO_HTML_PATH)
         val startUri = createTestUrl(SAVE_STATE_PATH)
-        val savedState = collectState(startUri);
+
+        val savedState = collectState(helloUri, startUri);
 
         val session = sessionRule.createOpenSession()
         session.addDisplay(400, 400)
@@ -348,6 +351,14 @@ class ProgressDelegateTest : BaseSessionTest() {
         assertThat("Scroll position should match",
                 session.evaluateJS("window.visualViewport.pageTop") as Double,
                 closeTo(100.0, .5))
+
+        session.goBack()
+
+        session.waitUntilCalled(object: Callbacks.NavigationDelegate {
+            override fun onLocationChange(session: GeckoSession, url: String?) {
+                assertThat("History should be preserved", url, equalTo(helloUri))
+            }
+        })
     }
 
     @WithDisplay(width = 400, height = 400)
@@ -381,8 +392,6 @@ class ProgressDelegateTest : BaseSessionTest() {
 
     @WithDisplay(width = 400, height = 400)
     @Test fun flushSessionState() {
-        sessionRule.setPrefsUntilTestEnd(mapOf("dom.visualviewport.enabled" to true))
-
         val startUri = createTestUrl(SAVE_STATE_PATH)
         mainSession.loadUri(startUri)
         sessionRule.waitForPageStop()
@@ -420,6 +429,12 @@ class ProgressDelegateTest : BaseSessionTest() {
         })
     }
 
+    private fun createDataUri(bytes: ByteArray,
+                              mimeType: String?): String {
+        return String.format("data:%s;base64,%s", mimeType ?: "",
+                Base64.encodeToString(bytes, Base64.NO_WRAP))
+    }
+
     @Test(expected = UiThreadUtils.TimeoutException::class)
     fun handlingLargeDataURIs() {
         sessionRule.delegateUntilTestEnd(object : Callbacks.ProgressDelegate {
@@ -429,7 +444,7 @@ class ProgressDelegateTest : BaseSessionTest() {
         });
 
         val dataBytes = ByteArray(3 * 1024 * 1024)
-        val uri = GeckoSession.createDataUri(dataBytes, "*/*")
+        val uri = createDataUri(dataBytes, "*/*")
 
         sessionRule.session.loadTestPath(DATA_URI_PATH)
         sessionRule.session.waitForPageStop()
@@ -447,7 +462,7 @@ class ProgressDelegateTest : BaseSessionTest() {
         });
 
         val dataBytes = this.getTestBytes("/assets/www/images/test.gif")
-        val uri = GeckoSession.createDataUri(dataBytes, "image/*")
+        val uri = createDataUri(dataBytes, "image/*")
 
         sessionRule.session.loadTestPath(DATA_URI_PATH)
         sessionRule.session.waitForPageStop()

@@ -27,7 +27,7 @@ class RotorRule : public PivotRule {
 /**
  * This rule matches all accessibles of a given role.
  */
-class RotorRoleRule final : public RotorRule {
+class RotorRoleRule : public RotorRule {
  public:
   explicit RotorRoleRule(role aRole, AccessibleOrProxy& aDirectDescendantsFrom);
   explicit RotorRoleRule(role aRole);
@@ -35,6 +35,18 @@ class RotorRoleRule final : public RotorRule {
 
  private:
   role mRole;
+};
+
+class RotorMacRoleRule : public RotorRule {
+ public:
+  explicit RotorMacRoleRule(NSString* aRole);
+  explicit RotorMacRoleRule(NSString* aRole,
+                            AccessibleOrProxy& aDirectDescendantsFrom);
+  ~RotorMacRoleRule();
+  virtual uint16_t Match(const AccessibleOrProxy& aAccOrProxy) override;
+
+ protected:
+  NSString* mMacRole;
 };
 
 class RotorControlRule final : public RotorRule {
@@ -69,10 +81,34 @@ class RotorUnvisitedLinkRule final : public RotorLinkRule {
   virtual uint16_t Match(const AccessibleOrProxy& aAccOrProxy) override;
 };
 
+/**
+ * This rule matches all accessibles that satisfy the "boilerplate"
+ * pivot conditions and have a corresponding native accessible.
+ */
+class RotorNotMacRoleRule : public RotorMacRoleRule {
+ public:
+  explicit RotorNotMacRoleRule(NSString* aMacRole,
+                               AccessibleOrProxy& aDirectDescendantsFrom);
+  explicit RotorNotMacRoleRule(NSString* aMacRole);
+  uint16_t Match(const AccessibleOrProxy& aAccOrProxy) override;
+};
+
 class RotorStaticTextRule : public RotorRule {
  public:
   explicit RotorStaticTextRule();
   explicit RotorStaticTextRule(AccessibleOrProxy& aDirectDescendantsFrom);
 
   virtual uint16_t Match(const AccessibleOrProxy& aAccOrProxy) override;
+};
+
+class RotorHeadingLevelRule : public RotorRoleRule {
+ public:
+  explicit RotorHeadingLevelRule(int32_t aLevel);
+  explicit RotorHeadingLevelRule(int32_t aLevel,
+                                 AccessibleOrProxy& aDirectDescendantsFrom);
+
+  virtual uint16_t Match(const AccessibleOrProxy& aAccOrProxy) override;
+
+ private:
+  int32_t mLevel;
 };

@@ -13,6 +13,12 @@ XPCOMUtils.defineLazyScriptGetter(
 XPCOMUtils.defineLazyModuleGetters(this, {
   BookmarkPanelHub: "resource://activity-stream/lib/BookmarkPanelHub.jsm",
 });
+XPCOMUtils.defineLazyPreferenceGetter(
+  this,
+  "NEWTAB_ENABLED",
+  "browser.newtabpage.enabled",
+  false
+);
 ChromeUtils.defineModuleGetter(
   this,
   "PanelMultiView",
@@ -1264,140 +1270,24 @@ var PlacesToolbarHelper = {
         this.addManagedBookmarks(submenupopup, entry.children);
       } else if (entry.name && entry.url) {
         // It's bookmark.
-        let uri = Services.uriFixup.createFixupURI(
-          entry.url,
-          Ci.nsIURIFixup.FIXUP_FLAG_NONE
-        );
+        let { preferredURI } = Services.uriFixup.getFixupURIInfo(entry.url);
         let menuitem = document.createXULElement("menuitem");
         menuitem.setAttribute("label", entry.name);
-        menuitem.setAttribute("image", "page-icon:" + uri.spec);
+        menuitem.setAttribute("image", "page-icon:" + preferredURI.spec);
         menuitem.setAttribute(
           "class",
           "menuitem-iconic bookmark-item menuitem-with-favicon"
         );
-        menuitem.link = uri.spec;
+        menuitem.link = preferredURI.spec;
         menu.appendChild(menuitem);
       }
     }
   },
 
-  updateManagedBookmarksContextMenu(popup) {
-    let hiddenContainerItems = [
-      "placesContextManaged_openSeparator",
-      "placesContextManaged_open:newtab",
-      "placesContextManaged_open:newwindow",
-      "placesContextManaged_copy",
-    ];
-
-    if (
-      popup.triggerNode.id == "managed-bookmarks" &&
-      !popup.triggerNode.menupopup.hasAttribute("hasbeenopened")
-    ) {
-      this.populateManagedBookmarks(popup.triggerNode.menupopup);
-    }
-    let isContainer = popup.triggerNode.getAttribute("container") == "true";
-    document.getElementById(
-      "placesContextManaged_openContainer:tabs"
-    ).hidden = !isContainer;
-    let openContainerInTabs = false;
-    if (isContainer) {
-      let menuitems = popup.triggerNode.menupopup.children;
-      openContainerInTabs = Array.from(menuitems).some(
-        menuitem => menuitem.link
-      );
-    }
-    document.getElementById(
-      "placesContextManaged_openContainer:tabs"
-    ).disabled = !openContainerInTabs;
-    document.getElementById(
-      "placesContextManaged_open:newprivatewindow"
-    ).hidden = isContainer || PrivateBrowsingUtils.isWindowPrivate(window);
-
-    hiddenContainerItems.forEach(
-      id => (document.getElementById(id).hidden = isContainer)
-    );
-  },
-
-  openManagedBookmark(event, where, private = false) {
-    event = getRootEvent(event);
-    if (where) {
-      openUILinkIn(event.target.parentNode.triggerNode.link, where, {
-        triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
-        private,
-      });
-    } else {
-      openUILink(event.target.link, event, {
-        triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
-      });
-    }
-  },
-
-  openManagedFolder(event) {
-    let menuitems = event.target.parentNode.triggerNode.menupopup.children;
-    let items = [];
-    for (let i = 0; i < menuitems.length; i++) {
-      if (menuitems[i].link) {
-        let item = {};
-        item.uri = menuitems[i].link;
-        item.isBookmark = true;
-        items.push(item);
-      }
-    }
-    PlacesUIUtils.openTabset(items, event, window);
-  },
-
-  copyManagedBookmark(event) {
-    // This is a little hacky, but there is a lot of code in Places that handles
-    // clipboard stuff, so it's easier to reuse.
-    let node = {};
-    node.type = 0;
-    node.title = event.target.parentNode.triggerNode.label;
-    node.uri = event.target.parentNode.triggerNode.link;
-    // Copied from _populateClipboard in controller.js
-
-    // This order is _important_! It controls how this and other applications
-    // select data to be inserted based on type.
-    let contents = [
-      { type: PlacesUtils.TYPE_X_MOZ_URL, entries: [] },
-      { type: PlacesUtils.TYPE_HTML, entries: [] },
-      { type: PlacesUtils.TYPE_UNICODE, entries: [] },
-    ];
-
-    contents.forEach(function(content) {
-      content.entries.push(PlacesUtils.wrapNode(node, content.type));
+  openManagedBookmark(event) {
+    openUILink(event.target.link, event, {
+      triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
     });
-
-    function addData(type, data) {
-      xferable.addDataFlavor(type);
-      xferable.setTransferData(
-        type,
-        PlacesUtils.toISupportsString(data),
-        data.length * 2
-      );
-    }
-
-    let xferable = Cc["@mozilla.org/widget/transferable;1"].createInstance(
-      Ci.nsITransferable
-    );
-    xferable.init(null);
-    let hasData = false;
-    // This order matters here!  It controls how this and other applications
-    // select data to be inserted based on type.
-    contents.forEach(function(content) {
-      if (content.entries.length) {
-        hasData = true;
-        let glue = PlacesUtils.endl;
-        addData(content.type, content.entries.join(glue));
-      }
-    });
-
-    if (hasData) {
-      Services.clipboard.setData(
-        xferable,
-        null,
-        Ci.nsIClipboard.kGlobalClipboard
-      );
-    }
   },
 
   onDragStartManaged(event) {
@@ -1635,14 +1525,108 @@ var BookmarkingUI = {
   },
 
   toggleBookmarksToolbar(reason) {
-    CustomizableUI.setToolbarVisibility(
-      "PersonalToolbar",
-      document.getElementById("PersonalToolbar").collapsed
+    let toolbar = document.getElementById("PersonalToolbar");
+    let newState = toolbar.collapsed ? "always" : "never";
+    Services.prefs.setCharPref(
+      "browser.toolbars.bookmarks.visibility",
+      // See firefox.js for possible values
+      newState
     );
+
+    CustomizableUI.setToolbarVisibility("PersonalToolbar", newState, false);
     BrowserUsageTelemetry.recordToolbarVisibility(
       "PersonalToolbar",
-      document.getElementById("PersonalToolbar").collapsed,
+      newState,
       reason
+    );
+  },
+
+  isOnNewTabPage({ currentURI, isNullPrincipal }) {
+    if (!NEWTAB_ENABLED && currentURI?.spec == "about:blank") {
+      return isNullPrincipal;
+    }
+    // Prevent loading AboutNewTab.jsm during startup path if it
+    // is only the newTabURL getter we are interested in.
+    let newTabURL = Cu.isModuleLoaded("resource:///modules/AboutNewTab.jsm")
+      ? AboutNewTab.newTabURL
+      : "about:newtab";
+    let newTabURLs = [newTabURL, "about:home"];
+    if (PrivateBrowsingUtils.isWindowPrivate(window)) {
+      newTabURLs.push("about:privatebrowsing");
+    }
+    return newTabURLs.some(uri => currentURI?.spec.startsWith(uri));
+  },
+
+  buildBookmarksToolbarSubmenu(toolbar) {
+    let alwaysShowMenuItem = document.createXULElement("menuitem");
+    let alwaysHideMenuItem = document.createXULElement("menuitem");
+    let showOnNewTabMenuItem = document.createXULElement("menuitem");
+    let menuPopup = document.createXULElement("menupopup");
+    menuPopup.append(
+      alwaysShowMenuItem,
+      alwaysHideMenuItem,
+      showOnNewTabMenuItem
+    );
+    let menu = document.createXULElement("menu");
+    menu.appendChild(menuPopup);
+
+    menu.setAttribute("label", toolbar.getAttribute("toolbarname"));
+    menu.setAttribute("id", "toggle_" + toolbar.id);
+    menu.setAttribute("accesskey", toolbar.getAttribute("accesskey"));
+    menu.setAttribute("toolbarId", toolbar.id);
+    let menuItems = [
+      [
+        showOnNewTabMenuItem,
+        "toolbar-context-menu-bookmarks-toolbar-on-new-tab",
+        "newtab",
+      ],
+      [
+        alwaysShowMenuItem,
+        "toolbar-context-menu-bookmarks-toolbar-always-show",
+        "always",
+      ],
+      [
+        alwaysHideMenuItem,
+        "toolbar-context-menu-bookmarks-toolbar-never-show",
+        "never",
+      ],
+    ];
+    menuItems.map(([menuItem, l10nId, visibilityEnum]) => {
+      document.l10n.setAttributes(menuItem, l10nId);
+      menuItem.setAttribute("type", "radio");
+      // The persisted state of the PersonalToolbar is stored in
+      // "browser.toolbars.bookmarks.visibility".
+      menuItem.setAttribute(
+        "checked",
+        gBookmarksToolbarVisibility == visibilityEnum
+      );
+      // Identify these items for "onViewToolbarCommand" so
+      // we know to check the visibilityEnum value.
+      menuItem.dataset.bookmarksToolbarVisibility = true;
+      menuItem.dataset.visibilityEnum = visibilityEnum;
+      menuItem.addEventListener("command", onViewToolbarCommand);
+    });
+
+    return menu;
+  },
+
+  bookmarksToolbarHasVisibleChildren() {
+    let bookmarksToolbarWidgets = CustomizableUI.getWidgetsInArea(
+      CustomizableUI.AREA_BOOKMARKS
+    );
+
+    const BOOKMARKS_TOOLBAR_ITEMS_ID = "personal-bookmarks";
+    if (
+      bookmarksToolbarWidgets.find(w => w.id == BOOKMARKS_TOOLBAR_ITEMS_ID) &&
+      PlacesUtils.getChildCountForFolder(PlacesUtils.bookmarks.toolbarGuid)
+    ) {
+      return true;
+    }
+
+    // The bookmarks items may not have any children, but if there are
+    // other widgets present then treat them as visible.
+    return bookmarksToolbarWidgets.some(
+      w => w.id != BOOKMARKS_TOOLBAR_ITEMS_ID
     );
   },
 
@@ -2186,6 +2170,10 @@ var BookmarkingUI = {
           }
           break;
       }
+
+      if (ev.parentGuid === PlacesUtils.bookmarks.unfiledGuid) {
+        this.maybeShowOtherBookmarksFolder();
+      }
     }
   },
 
@@ -2223,7 +2211,25 @@ var BookmarkingUI = {
   onEndUpdateBatch() {},
   onBeforeItemRemoved() {},
   onItemVisited() {},
-  onItemMoved() {},
+  onItemMoved(
+    aItemId,
+    aProperty,
+    aIsAnnotationProperty,
+    aNewValue,
+    aLastModified,
+    aItemType,
+    aGuid,
+    oldParentGuid,
+    newParentGuid
+  ) {
+    let hasMovedToOrOutOfOtherBookmarks =
+      newParentGuid === PlacesUtils.bookmarks.unfiledGuid ||
+      oldParentGuid === PlacesUtils.bookmarks.unfiledGuid;
+
+    if (hasMovedToOrOutOfOtherBookmarks) {
+      this.maybeShowOtherBookmarksFolder();
+    }
+  },
 
   onWidgetUnderflow(aNode, aContainer) {
     let win = aNode.ownerGlobal;
@@ -2236,30 +2242,32 @@ var BookmarkingUI = {
     this._uninitView();
   },
 
+  async maybeShowOtherBookmarksFolder() {
+    // Only show the "Other Bookmarks" folder in the toolbar if pref is enabled.
+    let featureEnabled = Services.prefs.getBoolPref(
+      "browser.toolbars.bookmarks.2h2020",
+      false
+    );
+
+    if (!featureEnabled) {
+      return;
+    }
+
+    let unfiledGuid = PlacesUtils.bookmarks.unfiledGuid;
+    let numberOfBookmarks = PlacesUtils.getChildCountForFolder(unfiledGuid);
+    let otherBookmarks = document.getElementById("OtherBookmarks");
+
+    if (numberOfBookmarks > 0) {
+      let otherBookmarksPopup = document.getElementById("OtherBookmarksPopup");
+      let result = PlacesUtils.getFolderContents(unfiledGuid);
+      let node = result.root;
+      otherBookmarksPopup._placesNode = PlacesUtils.asContainer(node);
+
+      otherBookmarks.hidden = false;
+    } else {
+      otherBookmarks.hidden = true;
+    }
+  },
+
   QueryInterface: ChromeUtils.generateQI(["nsINavBookmarkObserver"]),
-};
-
-var AutoShowBookmarksToolbar = {
-  init() {
-    Services.obs.addObserver(this, "autoshow-bookmarks-toolbar");
-  },
-
-  uninit() {
-    Services.obs.removeObserver(this, "autoshow-bookmarks-toolbar");
-  },
-
-  observe(subject, topic, data) {
-    let toolbar = document.getElementById("PersonalToolbar");
-    if (!toolbar.collapsed) {
-      return;
-    }
-
-    let placement = CustomizableUI.getPlacementOfWidget("personal-bookmarks");
-    let area = placement && placement.area;
-    if (area != CustomizableUI.AREA_BOOKMARKS) {
-      return;
-    }
-
-    setToolbarVisibility(toolbar, true);
-  },
 };

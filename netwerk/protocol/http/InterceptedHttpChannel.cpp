@@ -553,6 +553,11 @@ InterceptedHttpChannel::SetupFallbackChannel(const char* aFallbackKey) {
 }
 
 NS_IMETHODIMP
+InterceptedHttpChannel::GetIsAuthChannel(bool* aIsAuthChannel) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
 InterceptedHttpChannel::SetPriority(int32_t aPriority) {
   mPriority = clamped<int32_t>(aPriority, INT16_MIN, INT16_MAX);
   return NS_OK;
@@ -991,7 +996,12 @@ InterceptedHttpChannel::OnRedirectVerifyCallback(nsresult rv) {
   MaybeCallBodyCallback();
 
   mIsPending = false;
-  ReleaseListeners();
+  // We can only release listeners after the redirected channel really owns
+  // mListener. Otherwise, the OnStart/OnStopRequest functions of mListener will
+  // not be called.
+  if (NS_SUCCEEDED(rv)) {
+    ReleaseListeners();
+  }
 
   return NS_OK;
 }
@@ -1023,6 +1033,12 @@ InterceptedHttpChannel::OnStartRequest(nsIRequest* aRequest) {
   rv = ComputeCrossOriginOpenerPolicyMismatch();
   if (rv == NS_ERROR_BLOCKED_BY_POLICY) {
     mStatus = NS_ERROR_BLOCKED_BY_POLICY;
+    Cancel(mStatus);
+  }
+
+  rv = ValidateMIMEType();
+  if (NS_FAILED(rv)) {
+    mStatus = rv;
     Cancel(mStatus);
   }
 

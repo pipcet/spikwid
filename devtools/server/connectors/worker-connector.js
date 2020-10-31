@@ -14,13 +14,21 @@ loader.lazyRequireGetter(
 );
 
 /**
- * Start a DevTools server in a worker and add it as a child server for an active
- * connection.
+ * Start a DevTools server in a worker and add it as a child server for a given active connection.
+ *
+ * @params {DevToolsConnection} connection
+ * @params {WorkerDebugger} dbg: The WorkerDebugger we want to create a target actor for.
+ * @params {String} forwardingPrefix: The prefix that will be used to forward messages
+ *                  to the DevToolsServer on the worker thread.
+ * @params {Object} options: An option object that will be passed with the "connect" packet.
+ * @params {Object} options.watchedData: The watchedData object that will be passed to the
+ *                  worker target actor.
  */
-function connectToWorker(connection, dbg, id, options) {
+function connectToWorker(connection, dbg, forwardingPrefix, options) {
   return new Promise((resolve, reject) => {
-    if (dbg.isClosed) {
+    if (!DevToolsUtils.isWorkerDebuggerAlive(dbg)) {
       reject("closed");
+      return;
     }
 
     // Step 1: Ensure the worker debugger is initialized.
@@ -85,16 +93,22 @@ function connectToWorker(connection, dbg, id, options) {
       dbg.addListener(listener);
     }
 
-    if (dbg.isClosed) {
+    if (!DevToolsUtils.isWorkerDebuggerAlive(dbg)) {
       reject("closed");
+      return;
     }
 
     // Step 2: Send a connect request to the worker debugger.
     dbg.postMessage(
       JSON.stringify({
         type: "connect",
-        id,
+        forwardingPrefix,
         options,
+        workerDebuggerData: {
+          id: dbg.id,
+          type: dbg.type,
+          url: dbg.url,
+        },
       })
     );
 
@@ -110,7 +124,10 @@ function connectToWorker(connection, dbg, id, options) {
 
       onMessage: message => {
         message = JSON.parse(message);
-        if (message.type !== "connected" || message.id !== id) {
+        if (
+          message.type !== "connected" ||
+          message.forwardingPrefix !== forwardingPrefix
+        ) {
           return;
         }
 
@@ -119,11 +136,14 @@ function connectToWorker(connection, dbg, id, options) {
         dbg.removeListener(listener);
 
         // Step 7: Create a transport for the connection to the worker.
-        const transport = new MainThreadWorkerDebuggerTransport(dbg, id);
+        const transport = new MainThreadWorkerDebuggerTransport(
+          dbg,
+          forwardingPrefix
+        );
         transport.ready();
         transport.hooks = {
           onClosed: () => {
-            if (!dbg.isClosed) {
+            if (DevToolsUtils.isWorkerDebuggerAlive(dbg)) {
               // If the worker happens to be shutting down while we are trying
               // to close the connection, there is a small interval during
               // which no more runnables can be dispatched to the worker, but
@@ -135,7 +155,7 @@ function connectToWorker(connection, dbg, id, options) {
                 dbg.postMessage(
                   JSON.stringify({
                     type: "disconnect",
-                    id,
+                    forwardingPrefix,
                   })
                 );
               } catch (e) {
@@ -147,7 +167,7 @@ function connectToWorker(connection, dbg, id, options) {
               }
             }
 
-            connection.cancelForwarding(id);
+            connection.cancelForwarding(forwardingPrefix);
           },
 
           onPacket: packet => {
@@ -161,7 +181,7 @@ function connectToWorker(connection, dbg, id, options) {
         // Ensure that any packets received from the client on the main thread
         // to actors on the worker thread are forwarded to the server on the
         // worker thread.
-        connection.setForwarding(id, transport);
+        connection.setForwarding(forwardingPrefix, transport);
 
         resolve({
           workerTargetForm: message.workerTargetForm,

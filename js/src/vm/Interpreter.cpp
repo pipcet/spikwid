@@ -20,6 +20,7 @@
 #include <string.h>
 
 #include "jslibmath.h"
+#include "jsmath.h"
 #include "jsnum.h"
 
 #include "builtin/Array.h"
@@ -31,8 +32,10 @@
 #include "jit/Ion.h"
 #include "jit/IonAnalysis.h"
 #include "jit/Jit.h"
+#include "jit/JitRuntime.h"
 #include "js/CharacterEncoding.h"
 #include "js/experimental/JitInfo.h"  // JSJitInfo
+#include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
 #include "js/friend/StackLimits.h"    // js::CheckRecursionLimit
 #include "js/friend/WindowProxy.h"    // js::IsWindowProxy
 #include "util/CheckedArithmetic.h"
@@ -64,7 +67,6 @@
 
 #include "builtin/Boolean-inl.h"
 #include "debugger/DebugAPI-inl.h"
-#include "jit/JitFrames-inl.h"
 #include "vm/EnvironmentObject-inl.h"
 #include "vm/GeckoProfiler-inl.h"
 #include "vm/JSAtom-inl.h"
@@ -434,22 +436,28 @@ bool js::RunScript(JSContext* cx, RunState& state) {
   MOZ_DIAGNOSTIC_ASSERT(cx->realm()->isSystem() ||
                         cx->runtime()->allowContentJS());
 
-  MOZ_ASSERT(!cx->enableAccessValidation || cx->realm()->isAccessValid());
-
   if (!DebugAPI::checkNoExecute(cx, state.script())) {
     return false;
   }
 
   GeckoProfilerEntryMarker marker(cx, state.script());
 
-#ifdef ENABLE_SPIDERMONKEY_TELEMETRY
   bool measuringTime = !cx->isMeasuringExecutionTime();
-  int64_t startTime = 0;
+  mozilla::TimeStamp startTime;
   if (measuringTime) {
     cx->setIsMeasuringExecutionTime(true);
-    startTime = PRMJ_Now();
+    startTime = ReallyNow();
   }
-#endif
+  auto timerEnd = mozilla::MakeScopeExit([&]() {
+    if (measuringTime) {
+      mozilla::TimeDuration delta = ReallyNow() - startTime;
+      cx->realm()->timers.executionTime += delta;
+      cx->setIsMeasuringExecutionTime(false);
+
+      // JS_TELEMETRY_RUN_TIME_US reporting was done here, but is temporarily
+      // disabled due to the crash in 1670348.
+    }
+  });
 
   jit::EnterJitStatus status = jit::MaybeEnterJit(cx, state);
   switch (status) {
@@ -467,15 +475,6 @@ bool js::RunScript(JSContext* cx, RunState& state) {
   }
 
   bool ok = Interpret(cx, state);
-
-#ifdef ENABLE_SPIDERMONKEY_TELEMETRY
-  if (measuringTime) {
-    int64_t endTime = PRMJ_Now();
-    int64_t runtimeMicros = endTime - startTime;
-    cx->runtime()->addTelemetry(JS_TELEMETRY_RUN_TIME_US, runtimeMicros);
-    cx->setIsMeasuringExecutionTime(false);
-  }
-#endif
 
   return ok;
 }
@@ -1276,7 +1275,8 @@ bool js::HandleClosingGeneratorReturn(JSContext* cx, AbstractFramePtr frame,
   if (cx->isClosingGenerator()) {
     cx->clearPendingException();
     ok = true;
-    SetGeneratorClosed(cx, frame);
+    auto* genObj = GetGeneratorObjectForFrame(cx, frame);
+    genObj->setClosed();
   }
   return ok;
 }
@@ -4267,8 +4267,8 @@ static MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER bool Interpret(JSContext* cx,
       ReservedRooted<JSObject*> obj(&rootObject0, &REGS.sp[-1].toObject());
       POP_RETURN_VALUE();
       MOZ_ASSERT(REGS.stackDepth() == 0);
-      if (!AbstractGeneratorObject::initialSuspend(cx, obj, REGS.fp(),
-                                                   REGS.pc)) {
+      if (!AbstractGeneratorObject::suspend(cx, obj, REGS.fp(), REGS.pc,
+                                            script->nfixed())) {
         goto error;
       }
       goto successful_return_continuation;
@@ -4279,9 +4279,9 @@ static MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER bool Interpret(JSContext* cx,
       MOZ_ASSERT(!cx->isExceptionPending());
       MOZ_ASSERT(REGS.fp()->isFunctionFrame());
       ReservedRooted<JSObject*> obj(&rootObject0, &REGS.sp[-1].toObject());
-      if (!AbstractGeneratorObject::normalSuspend(cx, obj, REGS.fp(), REGS.pc,
-                                                  REGS.spForStackDepth(0),
-                                                  REGS.stackDepth() - 2)) {
+      if (!AbstractGeneratorObject::suspend(
+              cx, obj, REGS.fp(), REGS.pc,
+              script->nfixed() + REGS.stackDepth() - 2)) {
         goto error;
       }
 

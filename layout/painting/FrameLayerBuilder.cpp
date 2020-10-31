@@ -19,7 +19,6 @@
 #include "LayerTreeInvalidation.h"
 #include "LayerUserData.h"
 #include "Layers.h"
-#include "LayersLogging.h"
 #include "MaskLayerImageCache.h"
 #include "MatrixStack.h"
 #include "UnitTransforms.h"
@@ -29,6 +28,7 @@
 #include "gfxEnv.h"
 #include "gfxUtils.h"
 #include "mozilla/DebugOnly.h"
+#include "mozilla/DisplayPortUtils.h"
 #include "mozilla/EffectCompositor.h"
 #include "mozilla/LayerAnimationInfo.h"
 #include "mozilla/LayerTimelineMarker.h"
@@ -4253,9 +4253,9 @@ nsRect ContainerState::GetDisplayPortForAnimatedGeometryRoot(
     return mLastDisplayPortRect;
   }
 
-  bool usingDisplayport = nsLayoutUtils::GetDisplayPort(
+  bool usingDisplayport = DisplayPortUtils::GetDisplayPort(
       (*aAnimatedGeometryRoot)->GetContent(), &mLastDisplayPortRect,
-      DisplayportRelativeTo::ScrollFrame);
+      DisplayPortOptions().With(DisplayportRelativeTo::ScrollFrame));
   if (!usingDisplayport) {
     // No async scrolling, so all that matters is that the layer contents
     // cover the scrollport.
@@ -5445,9 +5445,8 @@ void FrameLayerBuilder::AddPaintedDisplayItem(PaintedLayerData* aLayerData,
           aItem.mItem->Name(), aItem.mItem->Frame());
       std::stringstream stream;
       tempManager->Dump(stream, "", gfxEnv::DumpPaintToFile());
-      fprint_stderr(
-          gfxUtils::sDumpPaintFile,
-          stream);  // not a typo, fprint_stderr declared in LayersLogging.h
+      fprint_stderr(gfxUtils::sDumpPaintFile,
+                    stream);  // not a typo, fprint_stderr declared in nsDebug.h
     }
 
     nsIntPoint offset =

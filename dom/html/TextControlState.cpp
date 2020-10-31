@@ -30,6 +30,7 @@
 #include "mozilla/Preferences.h"
 #include "nsTextNode.h"
 #include "nsIController.h"
+#include "nsIScrollableFrame.h"
 #include "mozilla/AutoRestore.h"
 #include "mozilla/InputEventOptions.h"
 #include "mozilla/PresShell.h"
@@ -39,6 +40,7 @@
 #include "mozilla/dom/HTMLInputElement.h"
 #include "mozilla/dom/HTMLTextAreaElement.h"
 #include "mozilla/dom/Text.h"
+#include "mozilla/layers/ScrollInputMethods.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "nsFrameSelection.h"
 #include "mozilla/ErrorResult.h"
@@ -51,6 +53,7 @@
 namespace mozilla {
 
 using namespace dom;
+using layers::ScrollInputMethod;
 
 /*****************************************************************************
  * TextControlElement
@@ -111,8 +114,8 @@ TextControlElement::GetTextControlElementFromEditingHost(nsIContent* aHost) {
 
 using ValueChangeKind = TextControlElement::ValueChangeKind;
 
-inline nsresult SetEditorFlagsIfNecessary(EditorBase& aEditorBase,
-                                          uint32_t aFlags) {
+MOZ_CAN_RUN_SCRIPT inline nsresult SetEditorFlagsIfNecessary(
+    EditorBase& aEditorBase, uint32_t aFlags) {
   if (aEditorBase.Flags() == aFlags) {
     return NS_OK;
   }
@@ -200,7 +203,7 @@ class RestoreSelectionState : public Runnable {
 
 class MOZ_RAII AutoRestoreEditorState final {
  public:
-  explicit AutoRestoreEditorState(TextEditor* aTextEditor)
+  MOZ_CAN_RUN_SCRIPT explicit AutoRestoreEditorState(TextEditor* aTextEditor)
       : mTextEditor(aTextEditor),
         mSavedFlags(mTextEditor->Flags()),
         mSavedMaxLength(mTextEditor->MaxTextLength()) {
@@ -214,14 +217,18 @@ class MOZ_RAII AutoRestoreEditorState final {
     flags &= ~(nsIEditor::eEditorReadonlyMask);
     flags |= nsIEditor::eEditorDontEchoPassword;
     if (mSavedFlags != flags) {
-      mTextEditor->SetFlags(flags);
+      // It's aTextEditor and whose lifetime must be guaranteed by the caller.
+      MOZ_KnownLive(mTextEditor)->SetFlags(flags);
     }
     mTextEditor->SetMaxTextLength(-1);
   }
 
-  ~AutoRestoreEditorState() {
+  MOZ_CAN_RUN_SCRIPT ~AutoRestoreEditorState() {
     mTextEditor->SetMaxTextLength(mSavedMaxLength);
-    SetEditorFlagsIfNecessary(*mTextEditor, mSavedFlags);
+    // mTextEditor's lifetime must be guaranteed by owner of the instance
+    // since the constructor is marked as `MOZ_CAN_RUN_SCRIPT` and this is
+    // a stack only class.
+    SetEditorFlagsIfNecessary(MOZ_KnownLive(*mTextEditor), mSavedFlags);
   }
 
  private:
@@ -649,6 +656,11 @@ TextInputSelectionController::CompleteScroll(bool aForward) {
   if (!mScrollFrame) {
     return NS_ERROR_NOT_INITIALIZED;
   }
+
+  mozilla::Telemetry::Accumulate(
+      mozilla::Telemetry::SCROLL_INPUT_METHODS,
+      (uint32_t)ScrollInputMethod::MainThreadCompleteScroll);
+
   mScrollFrame->ScrollBy(nsIntPoint(0, aForward ? 1 : -1), ScrollUnit::WHOLE,
                          ScrollMode::Instant);
   return NS_OK;
@@ -700,6 +712,11 @@ TextInputSelectionController::ScrollPage(bool aForward) {
   if (!mScrollFrame) {
     return NS_ERROR_NOT_INITIALIZED;
   }
+
+  mozilla::Telemetry::Accumulate(
+      mozilla::Telemetry::SCROLL_INPUT_METHODS,
+      (uint32_t)ScrollInputMethod::MainThreadScrollPage);
+
   mScrollFrame->ScrollBy(nsIntPoint(0, aForward ? 1 : -1), ScrollUnit::PAGES,
                          ScrollMode::Smooth);
   return NS_OK;
@@ -710,6 +727,11 @@ TextInputSelectionController::ScrollLine(bool aForward) {
   if (!mScrollFrame) {
     return NS_ERROR_NOT_INITIALIZED;
   }
+
+  mozilla::Telemetry::Accumulate(
+      mozilla::Telemetry::SCROLL_INPUT_METHODS,
+      (uint32_t)ScrollInputMethod::MainThreadScrollLine);
+
   mScrollFrame->ScrollBy(nsIntPoint(0, aForward ? 1 : -1), ScrollUnit::LINES,
                          ScrollMode::Smooth);
   return NS_OK;
@@ -720,6 +742,11 @@ TextInputSelectionController::ScrollCharacter(bool aRight) {
   if (!mScrollFrame) {
     return NS_ERROR_NOT_INITIALIZED;
   }
+
+  mozilla::Telemetry::Accumulate(
+      mozilla::Telemetry::SCROLL_INPUT_METHODS,
+      (uint32_t)ScrollInputMethod::MainThreadScrollCharacter);
+
   mScrollFrame->ScrollBy(nsIntPoint(aRight ? 1 : -1, 0), ScrollUnit::LINES,
                          ScrollMode::Smooth);
   return NS_OK;
@@ -2735,7 +2762,11 @@ bool TextControlState::SetValueWithTextEditor(
     // nsIPrincipal means that that may be user's input.  So, let's
     // do it.
     nsresult rv = textEditor->ReplaceTextAsAction(
-        aHandlingSetValue.GetSettingValue(), nullptr, nullptr);
+        aHandlingSetValue.GetSettingValue(), nullptr,
+        StaticPrefs::dom_input_event_allow_to_cancel_set_user_input()
+            ? TextEditor::AllowBeforeInputEventCancelable::Yes
+            : TextEditor::AllowBeforeInputEventCancelable::No,
+        nullptr);
     NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
                          "TextEditor::ReplaceTextAsAction() failed");
     return rv != NS_ERROR_OUT_OF_MEMORY;
@@ -2811,8 +2842,13 @@ bool TextControlState::SetValueWithTextEditor(
 
   // In this case, we makes the editor stop dispatching "input"
   // event so that passing nullptr as nsIPrincipal is safe for now.
-  nsresult rv =
-      textEditor->SetTextAsAction(aHandlingSetValue.GetSettingValue(), nullptr);
+  nsresult rv = textEditor->SetTextAsAction(
+      aHandlingSetValue.GetSettingValue(),
+      (aHandlingSetValue.GetSetValueFlags() & eSetValue_BySetUserInput) &&
+              !StaticPrefs::dom_input_event_allow_to_cancel_set_user_input()
+          ? TextEditor::AllowBeforeInputEventCancelable::No
+          : TextEditor::AllowBeforeInputEventCancelable::Yes,
+      nullptr);
   NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
                        "TextEditor::SetTextAsAction() failed");
 
@@ -2871,7 +2907,12 @@ bool TextControlState::SetValueWithoutTextEditor(
       DebugOnly<nsresult> rvIgnored = nsContentUtils::DispatchInputEvent(
           MOZ_KnownLive(aHandlingSetValue.GetTextControlElement()),
           eEditorBeforeInput, EditorInputType::eInsertReplacementText, nullptr,
-          InputEventOptions(inputEventData), &status);
+          InputEventOptions(
+              inputEventData,
+              StaticPrefs::dom_input_event_allow_to_cancel_set_user_input()
+                  ? InputEventOptions::NeverCancelable::No
+                  : InputEventOptions::NeverCancelable::Yes),
+          &status);
       NS_WARNING_ASSERTION(NS_SUCCEEDED(rvIgnored),
                            "Failed to dispatch beforeinput event");
       if (status == nsEventStatus_eConsumeNoDefault) {
@@ -2957,7 +2998,8 @@ bool TextControlState::SetValueWithoutTextEditor(
       DebugOnly<nsresult> rvIgnored = nsContentUtils::DispatchInputEvent(
           MOZ_KnownLive(aHandlingSetValue.GetTextControlElement()),
           eEditorInput, EditorInputType::eInsertReplacementText, nullptr,
-          InputEventOptions(inputEventData));
+          InputEventOptions(inputEventData,
+                            InputEventOptions::NeverCancelable::No));
       NS_WARNING_ASSERTION(NS_SUCCEEDED(rvIgnored),
                            "Failed to dispatch input event");
     }

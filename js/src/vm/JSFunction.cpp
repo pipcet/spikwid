@@ -36,6 +36,7 @@
 #include "jit/Ion.h"
 #include "js/CallNonGenericMethod.h"
 #include "js/CompileOptions.h"
+#include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
 #include "js/friend/StackLimits.h"  // js::CheckRecursionLimit
 #include "js/PropertySpec.h"
 #include "js/Proxy.h"
@@ -1564,6 +1565,8 @@ bool DelazifyCanonicalScriptedFunctionImpl(JSContext* cx, HandleFunction fun,
   MOZ_ASSERT(!lazy->hasBytecode(), "Script is already compiled!");
   MOZ_ASSERT(lazy->function() == fun);
 
+  AutoIncrementalTimer timer(cx->realm()->timers.delazificationTime);
+
   size_t sourceStart = lazy->sourceStart();
   size_t sourceLength = lazy->sourceEnd() - lazy->sourceStart();
 
@@ -1744,8 +1747,6 @@ void JSFunction::maybeRelazify(JSRuntime* rt) {
   } else {
     script->relazify(rt);
   }
-
-  realm->scheduleDelazificationForDebugger();
 }
 
 js::GeneratorKind JSFunction::clonedSelfHostedGeneratorKind() const {

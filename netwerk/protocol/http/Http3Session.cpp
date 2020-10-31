@@ -85,7 +85,6 @@ nsresult Http3Session::Init(const nsACString& aOrigin,
 
   mAlpnToken = aAlpnToken;
   mSocketTransport = aSocketTransport;
-  mSegmentReaderWriter = readerWriter;
 
   nsCOMPtr<nsISupports> info;
   Unused << mSocketTransport->GetSecurityInfo(getter_AddRefs(info));
@@ -176,6 +175,11 @@ nsresult Http3Session::Init(const nsACString& aOrigin,
                            "NS_DispatchToCurrentThread failed");
     }
   }
+
+  // After this line, Http3Session and HttpConnectionUDP become a cycle. We put
+  // this line in the end of Http3Session::Init to make sure Http3Session can be
+  // released when Http3Session::Init early returned.
+  mSegmentReaderWriter = readerWriter;
   return NS_OK;
 }
 
@@ -267,25 +271,6 @@ nsresult Http3Session::ProcessInput(uint32_t* aCountRead) {
   return rv;
 }
 
-nsresult Http3Session::ProcessSingleTransactionRead(Http3Stream* stream,
-                                                    uint32_t count,
-                                                    uint32_t* countWritten) {
-  uint32_t countWrittenSingle = 0;
-  nsresult rv = stream->WriteSegments(this, count, &countWrittenSingle);
-  *countWritten += countWrittenSingle;
-
-  if (ASpdySession::SoftStreamError(rv)) {
-    CloseStream(stream,
-                (rv == NS_BINDING_RETARGETED) ? NS_BINDING_RETARGETED : NS_OK);
-    return NS_OK;
-  }
-
-  if (NS_FAILED(rv) && rv != NS_BASE_STREAM_WOULD_BLOCK) {
-    return rv;
-  }
-  return NS_OK;
-}
-
 nsresult Http3Session::ProcessTransactionRead(uint64_t stream_id,
                                               uint32_t count,
                                               uint32_t* countWritten) {
@@ -304,29 +289,22 @@ nsresult Http3Session::ProcessTransactionRead(uint64_t stream_id,
 nsresult Http3Session::ProcessTransactionRead(Http3Stream* stream,
                                               uint32_t count,
                                               uint32_t* countWritten) {
-  nsresult rv = ProcessSingleTransactionRead(stream, count, countWritten);
+  nsresult rv = stream->WriteSegments(stream, count, countWritten);
 
-  if (NS_FAILED(rv)) {
+  if (ASpdySession::SoftStreamError(rv) || stream->Done()) {
+    LOG3(
+        ("Http3Session::ProcessSingleTransactionRead session=%p stream=%p "
+         "0x%" PRIx64 " cleanup stream rv=0x%" PRIx32 " done=%d.\n",
+         this, stream, stream->StreamId(), static_cast<uint32_t>(rv),
+         stream->Done()));
+    CloseStream(stream,
+                (rv == NS_BINDING_RETARGETED) ? NS_BINDING_RETARGETED : NS_OK);
+    return NS_OK;
+  }
+
+  if (NS_FAILED(rv) && rv != NS_BASE_STREAM_WOULD_BLOCK) {
     return rv;
   }
-
-  if (stream->RecvdFin() && !stream->Done() && NS_SUCCEEDED(rv)) {
-    // In RECEIVED_FIN state we need to give the httpTransaction the info
-    // that the transaction is closed.
-    rv = ProcessSingleTransactionRead(stream, count, countWritten);
-
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-  }
-
-  if (stream->Done()) {
-    LOG3(("Http3Session::ProcessTransactionRead session=%p stream=%p 0x%" PRIx64
-          " cleanup stream.\n",
-          this, stream, stream->StreamId()));
-    CloseStream(stream, NS_OK);
-  }
-
   return NS_OK;
 }
 
@@ -509,6 +487,8 @@ nsresult Http3Session::ProcessEvents(uint32_t count) {
       default:
         break;
     }
+    // Delete previous content of data
+    data.TruncateLength(0);
     rv = mHttp3Connection->GetEvent(&event, data);
     if (NS_FAILED(rv)) {
       LOG(("Http3Session::ProcessEvents [this=%p] rv=%" PRIx32, this,
@@ -609,7 +589,8 @@ void Http3Session::SetupTimer(uint64_t aTimeout) {
   LOG(("Http3Session::SetupTimer to %" PRIu64 "ms [this=%p].", aTimeout, this));
 
   // Remember the time when the timer should trigger.
-  mTimerShouldTrigger = TimeStamp::Now() + TimeDuration::FromMilliseconds(aTimeout);
+  mTimerShouldTrigger =
+      TimeStamp::Now() + TimeDuration::FromMilliseconds(aTimeout);
 
   if (mTimerActive && mTimer) {
     LOG(
@@ -687,7 +668,6 @@ bool Http3Session::AddStream(nsAHttpTransaction* aHttpTransaction,
     mFirstHttpTransaction = aHttpTransaction->QueryHttpTransaction();
     LOG3(("Http3Session::AddStream first session=%p trans=%p ", this,
           mFirstHttpTransaction.get()));
-
   }
 
   StreamReadyToWrite(stream);
@@ -787,7 +767,7 @@ nsresult Http3Session::TryActivating(
            this, aStream));
       mTransactionsBlockedByStreamLimitCount++;
       if (mQueuedStreams.GetSize() == 0) {
-          mBlockedByStreamLimitCount++;
+        mBlockedByStreamLimitCount++;
       }
       QueueStream(aStream);
     }
@@ -1078,13 +1058,6 @@ nsresult Http3Session::ProcessSlowConsumers() {
   uint32_t countRead = 0;
   nsresult rv = ProcessTransactionRead(
       slowConsumer, nsIOService::gDefaultSegmentSize, &countRead);
-
-  if (NS_SUCCEEDED(rv) && (countRead > 0) && !slowConsumer->Done()) {
-    // There have been buffered bytes successfully fed into the
-    // formerly blocked consumer. Repeat until buffer empty or
-    // consumer is blocked again.
-    ConnectSlowConsumer(slowConsumer);
-  }
 
   return rv;
 }
@@ -1576,10 +1549,13 @@ void Http3Session::Authenticated(int32_t aError) {
            static_cast<uint32_t>(mError), this));
     }
     mHttp3Connection->PeerAuthenticated(aError);
-  }
 
-  if (mConnection) {
-    Unused << mConnection->ResumeSend();
+    // Call OnQuicTimeoutExpired to properly process neqo events and outputs.
+    // We call OnQuicTimeoutExpired instead of ProcessOutputAndEvents, because
+    // HttpConnectionUDP must close this session in case of an error.
+    NS_DispatchToCurrentThread(NewRunnableMethod(
+        "net::HttpConnectionUDP::OnQuicTimeoutExpired", mSegmentReaderWriter,
+        &HttpConnectionUDP::OnQuicTimeoutExpired));
   }
 }
 
@@ -1592,6 +1568,11 @@ void Http3Session::SetSecInfo() {
 
     mSocketControl->SetInfo(secInfo.cipher, secInfo.version, secInfo.group,
                             secInfo.signature_scheme);
+  }
+
+  if (!mSocketControl->HasServerCert() &&
+      StaticPrefs::network_ssl_tokens_cache_enabled()) {
+    mSocketControl->RebuildCertificateInfoFromSSLTokenCache();
   }
 }
 

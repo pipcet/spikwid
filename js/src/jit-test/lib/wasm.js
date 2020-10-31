@@ -59,13 +59,27 @@ function wasmCompilationShouldFail(bin, compile_error_regex) {
     }
 }
 
+function typeToCraneliftName(ty) {
+    switch(ty) {
+        case 'externref':
+            return 'ExternRef';
+        case 'funcref':
+            return 'FuncRef';
+        default:
+            return ty.toUpperCase();
+    }
+}
+
 function mismatchError(actual, expect) {
-    var str = `type mismatch: expression has type ${actual} but expected ${expect}`;
+    let actualCL = typeToCraneliftName(actual);
+    let expectCL = typeToCraneliftName(expect);
+    var str = `(type mismatch: expression has type ${actual} but expected ${expect})|` +
+              `(type mismatch: expected Some\\(${expectCL}\\), found Some\\(${actualCL}\\))`;
     return RegExp(str);
 }
 
-const emptyStackError = /from empty stack/;
-const unusedValuesError = /unused values not explicitly dropped by end of block/;
+const emptyStackError = /(from empty stack)|(nothing on stack)/;
+const unusedValuesError = /(unused values not explicitly dropped by end of block)|(values remaining on stack at end of block)/;
 
 function jsify(wasmVal) {
     if (wasmVal === 'nan')
@@ -146,8 +160,10 @@ function _augmentSrc(src, assertions) {
     return newSrc;
 }
 
-function wasmAssert(src, assertions, maybeImports = {}) {
+function wasmAssert(src, assertions, maybeImports = {}, exportBox = null) {
     let { exports } = wasmEvalText(_augmentSrc(src, assertions), maybeImports);
+    if (exportBox !== null)
+        exportBox.exports = exports;
     for (let i = 0; i < assertions.length; i++) {
         let { func, expected, params } = assertions[i];
         let paramText = params ? params.join(', ') : '';
@@ -369,7 +385,20 @@ function fuzzingSafe() {
     return typeof getErrorNotes == 'undefined';
 }
 
-let WasmNonNullExternrefValues = [
+// Common instantiations of wasm values for dynamic type check testing
+
+let WasmNonNullEqrefValues = [];
+let WasmEqrefValues = [];
+if (wasmGcEnabled()) {
+    let { newStruct } = wasmEvalText(`
+      (module
+        (type $s (struct))
+        (func (export "newStruct") (result eqref) struct.new $s)
+      )`).exports;
+    WasmNonNullEqrefValues.push(newStruct());
+    WasmEqrefValues.push(null, ...WasmNonNullEqrefValues);
+}
+let WasmNonEqrefValues = [
     undefined,
     true,
     false,
@@ -383,5 +412,9 @@ let WasmNonNullExternrefValues = [
     new Boolean(true),
     Symbol("status"),
     () => 1337
+];
+let WasmNonNullExternrefValues = [
+    ...WasmNonEqrefValues,
+    ...WasmNonNullEqrefValues
 ];
 let WasmExternrefValues = [null, ...WasmNonNullExternrefValues];

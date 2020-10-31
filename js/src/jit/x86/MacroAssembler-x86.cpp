@@ -13,10 +13,12 @@
 #include "jit/Bailouts.h"
 #include "jit/BaselineFrame.h"
 #include "jit/JitFrames.h"
+#include "jit/JitRuntime.h"
 #include "jit/MacroAssembler.h"
 #include "jit/MoveEmitter.h"
 #include "util/Memory.h"
 #include "vm/JitActivation.h"  // js::jit::JitActivation
+#include "vm/JSContext.h"
 
 #include "jit/MacroAssembler-inl.h"
 #include "vm/JSScript-inl.h"
@@ -84,6 +86,26 @@ void MacroAssemblerX86::vpandSimd128(const SimdConstant& v,
   propagateOOM(val->uses.append(CodeOffset(masm.size())));
 }
 
+void MacroAssemblerX86::vpxorSimd128(const SimdConstant& v,
+                                     FloatRegister srcDest) {
+  SimdData* val = getSimdData(v);
+  if (!val) {
+    return;
+  }
+  masm.vpxor_mr(nullptr, srcDest.encoding(), srcDest.encoding());
+  propagateOOM(val->uses.append(CodeOffset(masm.size())));
+}
+
+void MacroAssemblerX86::vpshufbSimd128(const SimdConstant& v,
+                                       FloatRegister srcDest) {
+  SimdData* val = getSimdData(v);
+  if (!val) {
+    return;
+  }
+  masm.vpshufb_mr(nullptr, srcDest.encoding(), srcDest.encoding());
+  propagateOOM(val->uses.append(CodeOffset(masm.size())));
+}
+
 void MacroAssemblerX86::finish() {
   // Last instruction may be an indirect jump so eagerly insert an undefined
   // instruction byte to prevent processors from decoding data values into
@@ -134,17 +156,17 @@ void MacroAssemblerX86::finish() {
   }
 }
 
-void MacroAssemblerX86::handleFailureWithHandlerTail(void* handler,
-                                                     Label* profilerExitTail) {
+void MacroAssemblerX86::handleFailureWithHandlerTail(Label* profilerExitTail) {
   // Reserve space for exception information.
   subl(Imm32(sizeof(ResumeFromException)), esp);
   movl(esp, eax);
 
   // Call the handler.
+  using Fn = void (*)(ResumeFromException * rfe);
   asMasm().setupUnalignedABICall(ecx);
   asMasm().passABIArg(eax);
-  asMasm().callWithABI(handler, MoveOp::GENERAL,
-                       CheckUnsafeCallWithABI::DontCheckHasExitFrame);
+  asMasm().callWithABI<Fn, HandleException>(
+      MoveOp::GENERAL, CheckUnsafeCallWithABI::DontCheckHasExitFrame);
 
   Label entryFrame;
   Label catch_;
@@ -593,6 +615,12 @@ void MacroAssembler::wasmLoad(const wasm::MemoryAccessDesc& access,
   MOZ_ASSERT(srcAddr.kind() == Operand::MEM_REG_DISP ||
              srcAddr.kind() == Operand::MEM_SCALE);
 
+  MOZ_ASSERT_IF(
+      access.isZeroExtendSimd128Load(),
+      access.type() == Scalar::Float32 || access.type() == Scalar::Float64);
+  MOZ_ASSERT_IF(access.isSplatSimd128Load(), access.type() == Scalar::Float64);
+  MOZ_ASSERT_IF(access.isWidenSimd128Load(), access.type() == Scalar::Float64);
+
   memoryBarrierBefore(access.sync());
 
   append(access, size());
@@ -614,12 +642,39 @@ void MacroAssembler::wasmLoad(const wasm::MemoryAccessDesc& access,
       movl(srcAddr, out.gpr());
       break;
     case Scalar::Float32:
-      // vmovss does the right thing also for access.isZeroExtendSimdLoad()
+      // vmovss does the right thing also for access.isZeroExtendSimd128Load()
       vmovss(srcAddr, out.fpu());
       break;
     case Scalar::Float64:
-      // vmovsd does the right thing also for access.isZeroExtendSimdLoad()
-      vmovsd(srcAddr, out.fpu());
+      if (access.isSplatSimd128Load()) {
+        vmovddup(srcAddr, out.fpu());
+      } else if (access.isWidenSimd128Load()) {
+        switch (access.widenSimdOp()) {
+          case wasm::SimdOp::I16x8LoadS8x8:
+            vpmovsxbw(srcAddr, out.fpu());
+            break;
+          case wasm::SimdOp::I16x8LoadU8x8:
+            vpmovzxbw(srcAddr, out.fpu());
+            break;
+          case wasm::SimdOp::I32x4LoadS16x4:
+            vpmovsxwd(srcAddr, out.fpu());
+            break;
+          case wasm::SimdOp::I32x4LoadU16x4:
+            vpmovzxwd(srcAddr, out.fpu());
+            break;
+          case wasm::SimdOp::I64x2LoadS32x2:
+            vpmovsxdq(srcAddr, out.fpu());
+            break;
+          case wasm::SimdOp::I64x2LoadU32x2:
+            vpmovzxdq(srcAddr, out.fpu());
+            break;
+          default:
+            MOZ_CRASH("Unexpected widening op for wasmLoad");
+        }
+      } else {
+        // vmovsd does the right thing also for access.isZeroExtendSimd128Load()
+        vmovsd(srcAddr, out.fpu());
+      }
       break;
     case Scalar::Simd128:
       vmovups(srcAddr, out.fpu());
@@ -641,6 +696,9 @@ void MacroAssembler::wasmLoadI64(const wasm::MemoryAccessDesc& access,
   MOZ_ASSERT_IF(access.isAtomic(), access.byteSize() <= 4);
   MOZ_ASSERT(srcAddr.kind() == Operand::MEM_REG_DISP ||
              srcAddr.kind() == Operand::MEM_SCALE);
+  MOZ_ASSERT(!access.isZeroExtendSimd128Load());  // Use wasmLoad()
+  MOZ_ASSERT(!access.isSplatSimd128Load());       // Use wasmLoad()
+  MOZ_ASSERT(!access.isWidenSimd128Load());       // Use wasmLoad()
 
   memoryBarrierBefore(access.sync());
 
@@ -758,11 +816,13 @@ void MacroAssembler::wasmStoreI64(const wasm::MemoryAccessDesc& access,
   MOZ_ASSERT(dstAddr.kind() == Operand::MEM_REG_DISP ||
              dstAddr.kind() == Operand::MEM_SCALE);
 
-  append(access, size());
-  movl(value.low, LowWord(dstAddr));
-
+  // Store the high word first so as to hit guard-page-based OOB checks without
+  // writing partial data.
   append(access, size());
   movl(value.high, HighWord(dstAddr));
+
+  append(access, size());
+  movl(value.low, LowWord(dstAddr));
 }
 
 template <typename T>

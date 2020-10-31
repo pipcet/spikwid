@@ -58,6 +58,19 @@ class ResourceWatcher {
   }
 
   /**
+   * Return the specified resource cached in this watcher.
+   *
+   * @param {String} resourceType
+   * @param {String} resourceId
+   * @return {Object} resource cached in this watcher
+   */
+  getResourceById(resourceType, resourceId) {
+    return this._cache.find(
+      r => r.resourceType === resourceType && r.resourceId === resourceId
+    );
+  }
+
+  /**
    * Request to start retrieving all already existing instances of given
    * type of resources and also start watching for the one to be created after.
    *
@@ -254,7 +267,7 @@ class ResourceWatcher {
       // to a new process.
       // In order to keep working resources that are being watched via the
       // Watcher actor, we have to unregister and re-register the resource
-      // types. This will force calling `watchTargetResources` on the new top
+      // types. This will force calling `Resources.watchResources` on the new top
       // level target.
       for (const resourceType of this._listenerCount.keys()) {
         await this._stopListening(resourceType, { bypassListenerCount: true });
@@ -280,7 +293,7 @@ class ResourceWatcher {
         // ...request existing resource and new one to come from this one target
         // *but* only do that for backward compat, where we don't have the watcher API
         // (See bug 1626647)
-        if (this._hasWatcherSupport(resourceType)) {
+        if (this.hasWatcherSupport(resourceType)) {
           continue;
         }
         await this._watchResourcesForTarget(targetFront, resourceType);
@@ -360,6 +373,7 @@ class ResourceWatcher {
           targetList: this.targetList,
           targetFront,
           isFissionEnabledOnContentToolbox: gDevTools.isFissionContentToolboxEnabled(),
+          watcher: this.watcher,
         });
       }
 
@@ -416,6 +430,10 @@ class ResourceWatcher {
         resourceUpdates,
         nestedResourceUpdates,
       } = update;
+
+      if (!resourceId) {
+        console.warn(`Expected resource ${resourceType} to have a resourceId`);
+      }
 
       const existingResource = this._cache.find(
         cachedResource =>
@@ -597,7 +615,7 @@ class ResourceWatcher {
     );
   }
 
-  _hasWatcherSupport(resourceType) {
+  hasWatcherSupport(resourceType) {
     return this.watcher?.traits?.resources?.[resourceType];
   }
 
@@ -628,7 +646,7 @@ class ResourceWatcher {
 
     // If the server supports the Watcher API and the Watcher supports
     // this resource type, use this API
-    if (this._hasWatcherSupport(resourceType)) {
+    if (this.hasWatcherSupport(resourceType)) {
       await this.watcher.watchResources([resourceType]);
       return;
     }
@@ -664,8 +682,12 @@ class ResourceWatcher {
     }
 
     const onAvailable = this._onResourceAvailable.bind(this, { targetFront });
-    const onDestroyed = this._onResourceDestroyed.bind(this, { targetFront });
     const onUpdated = this._onResourceUpdated.bind(this, { targetFront });
+    const onDestroyed = this._onResourceDestroyed.bind(this, { targetFront });
+
+    if (!(resourceType in LegacyListeners)) {
+      throw new Error(`Missing legacy listener for ${resourceType}`);
+    }
     return LegacyListeners[resourceType]({
       targetList: this.targetList,
       targetFront,
@@ -704,7 +726,7 @@ class ResourceWatcher {
 
     // If the server supports the Watcher API and the Watcher supports
     // this resource type, use this API
-    if (this._hasWatcherSupport(resourceType)) {
+    if (this.hasWatcherSupport(resourceType)) {
       this.watcher.unwatchResources([resourceType]);
       return;
     }
@@ -746,9 +768,16 @@ ResourceWatcher.TYPES = ResourceWatcher.prototype.TYPES = {
   STYLESHEET: "stylesheet",
   NETWORK_EVENT: "network-event",
   WEBSOCKET: "websocket",
+  COOKIE: "cookie",
+  LOCAL_STORAGE: "local-storage",
+  SESSION_STORAGE: "session-storage",
+  CACHE_STORAGE: "Cache",
+  EXTENSION_STORAGE: "extension-storage",
+  INDEXED_DB: "indexed-db",
   NETWORK_EVENT_STACKTRACE: "network-event-stacktrace",
+  SOURCE: "source",
 };
-module.exports = { ResourceWatcher };
+module.exports = { ResourceWatcher, TYPES: ResourceWatcher.TYPES };
 
 // Backward compat code for each type of resource.
 // Each section added here should eventually be removed once the equivalent server
@@ -790,7 +819,21 @@ const LegacyListeners = {
   [ResourceWatcher.TYPES
     .WEBSOCKET]: require("devtools/shared/resources/legacy-listeners/websocket"),
   [ResourceWatcher.TYPES
+    .COOKIE]: require("devtools/shared/resources/legacy-listeners/cookie"),
+  [ResourceWatcher.TYPES
+    .LOCAL_STORAGE]: require("devtools/shared/resources/legacy-listeners/local-storage"),
+  [ResourceWatcher.TYPES
+    .SESSION_STORAGE]: require("devtools/shared/resources/legacy-listeners/session-storage"),
+  [ResourceWatcher.TYPES
+    .CACHE_STORAGE]: require("devtools/shared/resources/legacy-listeners/cache-storage"),
+  [ResourceWatcher.TYPES
+    .EXTENSION_STORAGE]: require("devtools/shared/resources/legacy-listeners/extension-storage"),
+  [ResourceWatcher.TYPES
+    .INDEXED_DB]: require("devtools/shared/resources/legacy-listeners/indexed-db"),
+  [ResourceWatcher.TYPES
     .NETWORK_EVENT_STACKTRACE]: require("devtools/shared/resources/legacy-listeners/network-event-stacktraces"),
+  [ResourceWatcher.TYPES
+    .SOURCE]: require("devtools/shared/resources/legacy-listeners/source"),
 };
 
 // Optional transformers for each type of resource.
@@ -803,5 +846,11 @@ const ResourceTransformers = {
   [ResourceWatcher.TYPES
     .ERROR_MESSAGE]: require("devtools/shared/resources/transformers/error-messages"),
   [ResourceWatcher.TYPES
+    .INDEXED_DB]: require("devtools/shared/resources/transformers/storage-indexed-db.js"),
+  [ResourceWatcher.TYPES
+    .LOCAL_STORAGE]: require("devtools/shared/resources/transformers/storage-local-storage.js"),
+  [ResourceWatcher.TYPES
     .ROOT_NODE]: require("devtools/shared/resources/transformers/root-node"),
+  [ResourceWatcher.TYPES
+    .SESSION_STORAGE]: require("devtools/shared/resources/transformers/storage-session-storage.js"),
 };

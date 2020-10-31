@@ -2,6 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+/* eslint-disable no-restricted-globals */
+
 "use strict";
 
 const EXPORTED_SYMBOLS = ["MarionetteFrameChild"];
@@ -11,15 +13,17 @@ const { XPCOMUtils } = ChromeUtils.import(
 );
 
 XPCOMUtils.defineLazyModuleGetters(this, {
+  action: "chrome://marionette/content/action.js",
   atom: "chrome://marionette/content/atom.js",
-  ContentDOMReference: "resource://gre/modules/ContentDOMReference.jsm",
   element: "chrome://marionette/content/element.js",
   error: "chrome://marionette/content/error.js",
   evaluate: "chrome://marionette/content/evaluate.js",
+  event: "chrome://marionette/content/event.js",
   interaction: "chrome://marionette/content/interaction.js",
+  legacyaction: "chrome://marionette/content/legacyaction.js",
   Log: "chrome://marionette/content/log.js",
-  pprint: "chrome://marionette/content/format.js",
-  WebElement: "chrome://marionette/content/element.js",
+  sandbox: "chrome://marionette/content/evaluate.js",
+  Sandboxes: "chrome://marionette/content/evaluate.js",
 });
 
 XPCOMUtils.defineLazyGetter(this, "logger", () => Log.get());
@@ -27,15 +31,45 @@ XPCOMUtils.defineLazyGetter(this, "logger", () => Log.get());
 class MarionetteFrameChild extends JSWindowActorChild {
   constructor() {
     super();
+
+    // sandbox storage and name of the current sandbox
+    this.sandboxes = new Sandboxes(() => this.contentWindow);
   }
 
   get innerWindowId() {
     return this.manager.innerWindowId;
   }
 
+  /**
+   * Lazy getter to create a legacyaction Chain instance for touch events.
+   */
+  get legacyactions() {
+    if (!this._legacyactions) {
+      this._legacyactions = new legacyaction.Chain();
+    }
+
+    return this._legacyactions;
+  }
+
   actorCreated() {
     logger.trace(
       `[${this.browsingContext.id}] Child actor created for window id ${this.innerWindowId}`
+    );
+
+    // Listen for click event to indicate one click has happened, so actions
+    // code can send dblclick event
+    this.contentWindow.addEventListener(
+      "click",
+      event.DoubleClickTracker.setClick
+    );
+    this.contentWindow.addEventListener(
+      "dblclick",
+      event.DoubleClickTracker.resetClick
+    );
+    this.contentWindow.addEventListener(
+      "unload",
+      event.DoubleClickTracker.resetClick,
+      true
     );
   }
 
@@ -55,11 +89,11 @@ class MarionetteFrameChild extends JSWindowActorChild {
   }
 
   async receiveMessage(msg) {
-    const { name, data: serializedData } = msg;
-    const data = evaluate.fromJSON(serializedData);
-
     try {
       let result;
+
+      const { name, data: serializedData } = msg;
+      const data = evaluate.fromJSON(serializedData, null, this.contentWindow);
 
       switch (name) {
         case "MarionetteFrameParent:clearElement":
@@ -67,6 +101,9 @@ class MarionetteFrameChild extends JSWindowActorChild {
           break;
         case "MarionetteFrameParent:clickElement":
           result = await this.clickElement(data);
+          break;
+        case "MarionetteFrameParent:executeScript":
+          result = await this.executeScript(data);
           break;
         case "MarionetteFrameParent:findElement":
           result = await this.findElement(data);
@@ -101,6 +138,9 @@ class MarionetteFrameChild extends JSWindowActorChild {
         case "MarionetteFrameParent:getPageSource":
           result = await this.getPageSource();
           break;
+        case "MarionetteFrameParent:getScreenshotRect":
+          result = await this.getScreenshotRect(data);
+          break;
         case "MarionetteFrameParent:isElementDisplayed":
           result = await this.isElementDisplayed(data);
           break;
@@ -110,8 +150,17 @@ class MarionetteFrameChild extends JSWindowActorChild {
         case "MarionetteFrameParent:isElementSelected":
           result = await this.isElementSelected(data);
           break;
+        case "MarionetteFrameParent:performActions":
+          result = await this.performActions(data);
+          break;
+        case "MarionetteFrameParent:releaseActions":
+          result = await this.releaseActions();
+          break;
         case "MarionetteFrameParent:sendKeysToElement":
           result = await this.sendKeysToElement(data);
+          break;
+        case "MarionetteFrameParent:singleTap":
+          result = await this.singleTap(data);
           break;
         case "MarionetteFrameParent:switchToFrame":
           result = await this.switchToFrame(data);
@@ -121,6 +170,9 @@ class MarionetteFrameChild extends JSWindowActorChild {
           break;
       }
 
+      // The element reference store lives in the parent process. Calling
+      // toJSON() without a second argument here passes element reference ids
+      // of DOM nodes to the parent frame.
       return { data: evaluate.toJSON(result) };
     } catch (e) {
       // Always wrap errors as WebDriverError
@@ -128,86 +180,46 @@ class MarionetteFrameChild extends JSWindowActorChild {
     }
   }
 
-  /**
-   * Wrapper around ContentDOMReference.get with additional steps specific to
-   * Marionette.
-   *
-   * @param {Element} el
-   *     The DOM element to generate the identifier for.
-   *
-   * @return {object} The ContentDOMReference ElementIdentifier for the DOM
-   *     element augmented with a Marionette WebElement reference.
-   */
-  async getElementId(el) {
-    const id = ContentDOMReference.get(el);
-    const webEl = WebElement.from(el);
-    id.webElRef = webEl.toJSON();
-    // Use known WebElement reference if parent process has seen `id` before
-    // TODO - Bug 1666837 - Avoid interprocess element lookup when possible
-    id.webElRef = await this.sendQuery(
-      "MarionetteFrameChild:ElementIdCacheAdd",
-      id
-    );
-    return id;
-  }
-
-  /**
-   * Wrapper around ContentDOMReference.resolve with additional error handling
-   * specific to Marionette.
-   *
-   * @param {ElementIdentifier} id
-   *     The identifier generated via ContentDOMReference.get for a DOM element.
-   *
-   * @return {Element} The DOM element that the identifier was generated for, or
-   *     null if the element does not still exist.
-   *
-   * @throws {StaleElementReferenceError}
-   *     If the element has gone stale, indicating it is no longer
-   *     attached to the DOM, or its node document is no longer the
-   *     active document.
-   */
-  resolveElement(id) {
-    let webEl;
-    if (id.webElRef) {
-      webEl = WebElement.fromJSON(id.webElRef);
-    }
-    const el = ContentDOMReference.resolve(id);
-    if (element.isStale(el, this.contentWindow)) {
-      throw new error.StaleElementReferenceError(
-        pprint`The element reference of ${el || webEl?.uuid} is stale; ` +
-          "either the element is no longer attached to the DOM, " +
-          "it is not in the current frame context, " +
-          "or the document has been refreshed"
-      );
-    }
-    return el;
-  }
-
   // Implementation of WebDriver commands
 
   /** Clear the text of an element.
    *
    * @param {Object} options
-   * @param {ElementIdentifier} options.webEl
+   * @param {Element} options.elem
    */
   clearElement(options = {}) {
-    const { webEl } = options;
-    const el = this.resolveElement(webEl);
-    interaction.clearElement(el);
+    const { elem } = options;
+
+    interaction.clearElement(elem);
   }
 
   /**
    * Click an element.
    */
   async clickElement(options = {}) {
-    const { capabilities, webEl } = options;
-    const el = this.resolveElement(webEl);
+    const { capabilities, elem } = options;
 
     return interaction.clickElement(
-      el,
+      elem,
       capabilities["moz:accessibilityChecks"],
       capabilities["moz:webdriverClick"]
     );
+  }
+
+  /**
+   * Executes a JavaScript function.
+   */
+  async executeScript(options = {}) {
+    const { args, opts = {}, script } = options;
+
+    let sb;
+    if (opts.sandboxName) {
+      sb = this.sandboxes.get(opts.sandboxName, opts.newSandbox);
+    } else {
+      sb = sandbox.createMutable(this.contentWindow);
+    }
+
+    return evaluate.sandbox(sb, script, args, opts);
   }
 
   /**
@@ -216,7 +228,7 @@ class MarionetteFrameChild extends JSWindowActorChild {
    *
    * @param {Object} options
    * @param {Object} options.opts
-   * @param {ElementIdentifier} opts.startNode
+   * @param {Element} opts.startNode
    * @param {string} opts.strategy
    * @param {string} opts.selector
    *
@@ -226,13 +238,8 @@ class MarionetteFrameChild extends JSWindowActorChild {
 
     opts.all = false;
 
-    if (opts.startNode) {
-      opts.startNode = this.resolveElement(opts.startNode);
-    }
-
     const container = { frame: this.contentWindow };
-    const el = await element.find(container, strategy, selector, opts);
-    return this.getElementId(el);
+    return element.find(container, strategy, selector, opts);
   }
 
   /**
@@ -241,7 +248,7 @@ class MarionetteFrameChild extends JSWindowActorChild {
    *
    * @param {Object} options
    * @param {Object} options.opts
-   * @param {ElementIdentifier} opts.startNode
+   * @param {Element} opts.startNode
    * @param {string} opts.strategy
    * @param {string} opts.selector
    *
@@ -251,25 +258,20 @@ class MarionetteFrameChild extends JSWindowActorChild {
 
     opts.all = true;
 
-    if (opts.startNode) {
-      opts.startNode = this.resolveElement(opts.startNode);
-    }
-
     const container = { frame: this.contentWindow };
-    const els = await element.find(container, strategy, selector, opts);
-    return Promise.all(els.map(el => this.getElementId(el)));
+    return element.find(container, strategy, selector, opts);
   }
 
   /**
    * Return the active element in the document.
    */
   async getActiveElement() {
-    let el = this.document.activeElement;
-    if (!el) {
+    let elem = this.document.activeElement;
+    if (!elem) {
       throw new error.NoSuchElementError();
     }
 
-    return this.getElementId(el);
+    return elem;
   }
 
   /**
@@ -283,39 +285,36 @@ class MarionetteFrameChild extends JSWindowActorChild {
    * Get the value of an attribute for the given element.
    */
   async getElementAttribute(options = {}) {
-    const { name, webEl } = options;
-    const el = this.resolveElement(webEl);
+    const { name, elem } = options;
 
-    if (element.isBooleanAttribute(el, name)) {
-      if (el.hasAttribute(name)) {
+    if (element.isBooleanAttribute(elem, name)) {
+      if (elem.hasAttribute(name)) {
         return "true";
       }
       return null;
     }
-    return el.getAttribute(name);
+    return elem.getAttribute(name);
   }
 
   /**
    * Get the value of a property for the given element.
    */
   async getElementProperty(options = {}) {
-    const { name, webEl } = options;
-    const el = this.resolveElement(webEl);
+    const { name, elem } = options;
 
-    return typeof el[name] != "undefined" ? el[name] : null;
+    return typeof elem[name] != "undefined" ? elem[name] : null;
   }
 
   /**
    * Get the position and dimensions of the element.
    */
   async getElementRect(options = {}) {
-    const { webEl } = options;
-    const el = this.resolveElement(webEl);
+    const { elem } = options;
 
-    const rect = el.getBoundingClientRect();
+    const rect = elem.getBoundingClientRect();
     return {
-      x: rect.x + this.content.pageXOffset,
-      y: rect.y + this.content.pageYOffset,
+      x: rect.x + this.contentWindow.pageXOffset,
+      y: rect.y + this.contentWindow.pageYOffset,
       width: rect.width,
       height: rect.height,
     };
@@ -325,28 +324,27 @@ class MarionetteFrameChild extends JSWindowActorChild {
    * Get the tagName for the given element.
    */
   async getElementTagName(options = {}) {
-    const { webEl } = options;
-    const el = this.resolveElement(webEl);
-    return el.tagName.toLowerCase();
+    const { elem } = options;
+
+    return elem.tagName.toLowerCase();
   }
 
   /**
    * Get the text content for the given element.
    */
   async getElementText(options = {}) {
-    const { webEl } = options;
-    const el = this.resolveElement(webEl);
-    return atom.getElementText(el, this.contentWindow);
+    const { elem } = options;
+
+    return atom.getElementText(elem, this.contentWindow);
   }
 
   /**
    * Get the value of a css property for the given element.
    */
   async getElementValueOfCssProperty(options = {}) {
-    const { name, webEl } = options;
-    const el = this.resolveElement(webEl);
+    const { name, elem } = options;
 
-    const style = this.contentWindow.getComputedStyle(el);
+    const style = this.contentWindow.getComputedStyle(elem);
     return style.getPropertyValue(name);
   }
 
@@ -358,14 +356,61 @@ class MarionetteFrameChild extends JSWindowActorChild {
   }
 
   /**
+   * Returns the rect of the element to screenshot.
+   *
+   * Because the screen capture takes place in the parent process the dimensions
+   * for the screenshot have to be determined in the appropriate child process.
+   *
+   * Also it takes care of scrolling an element into view if requested.
+   *
+   * @param {Object} options
+   * @param {Element} options.elem
+   *     Optional element to take a screenshot of.
+   * @param {boolean=} options.full
+   *     True to take a screenshot of the entire document element.
+   *     Defaults to true.
+   * @param {boolean=} options.scroll
+   *     When <var>elem</var> is given, scroll it into view.
+   *     Defaults to true.
+   *
+   * @return {DOMRect}
+   *     The area to take a snapshot from.
+   */
+  async getScreenshotRect(options = {}) {
+    const { elem, full = true, scroll = true } = options;
+    const win = elem ? this.contentWindow : this.browsingContext.top.window;
+
+    let rect;
+
+    if (elem) {
+      if (scroll) {
+        element.scrollIntoView(elem);
+      }
+      rect = this.getElementRect({ elem });
+    } else if (full) {
+      const docEl = win.document.documentElement;
+      rect = new DOMRect(0, 0, docEl.scrollWidth, docEl.scrollHeight);
+    } else {
+      // viewport
+      rect = new DOMRect(
+        win.pageXOffset,
+        win.pageYOffset,
+        win.innerWidth,
+        win.innerHeight
+      );
+    }
+
+    return rect;
+  }
+
+  /**
    * Determine the element displayedness of the given web element.
    */
   async isElementDisplayed(options = {}) {
-    const { capabilities, webEl } = options;
-    const el = this.resolveElement(webEl);
+    const { capabilities, elem } = options;
 
     return interaction.isElementDisplayed(
-      el,
+      elem,
       capabilities["moz:accessibilityChecks"]
     );
   }
@@ -374,11 +419,10 @@ class MarionetteFrameChild extends JSWindowActorChild {
    * Check if element is enabled.
    */
   async isElementEnabled(options = {}) {
-    const { capabilities, webEl } = options;
-    const el = this.resolveElement(webEl);
+    const { capabilities, elem } = options;
 
     return interaction.isElementEnabled(
-      el,
+      elem,
       capabilities["moz:accessibilityChecks"]
     );
   }
@@ -387,21 +431,56 @@ class MarionetteFrameChild extends JSWindowActorChild {
    * Determine whether the referenced element is selected or not.
    */
   async isElementSelected(options = {}) {
-    const { capabilities, webEl } = options;
-    const el = this.resolveElement(webEl);
+    const { capabilities, elem } = options;
 
     return interaction.isElementSelected(
-      el,
+      elem,
       capabilities["moz:accessibilityChecks"]
     );
+  }
+
+  /**
+   * Perform a series of grouped actions at the specified points in time.
+   *
+   * @param {Object} options
+   * @param {Object} options.actions
+   *     Array of objects with each representing an action sequence.
+   * @param {Object} options.capabilities
+   *     Object with a list of WebDriver session capabilities.
+   */
+  async performActions(options = {}) {
+    const { actions, capabilities } = options;
+
+    await action.dispatch(
+      action.Chain.fromJSON(actions),
+      this.contentWindow,
+      !capabilities["moz:useNonSpecCompliantPointerOrigin"]
+    );
+  }
+
+  /**
+   * The release actions command is used to release all the keys and pointer
+   * buttons that are currently depressed. This causes events to be fired
+   * as if the state was released by an explicit series of actions. It also
+   * clears all the internal state of the virtual devices.
+   */
+  async releaseActions() {
+    await action.dispatchTickActions(
+      action.inputsToCancel.reverse(),
+      0,
+      this.contentWindow
+    );
+    action.inputsToCancel.length = 0;
+    action.inputStateMap.clear();
+
+    event.DoubleClickTracker.resetClick();
   }
 
   /*
    * Send key presses to element after focusing on it.
    */
   async sendKeysToElement(options = {}) {
-    const { capabilities, text, webEl } = options;
-    const el = this.resolveElement(webEl);
+    const { capabilities, elem, text } = options;
 
     const opts = {
       strictFileInteractability: capabilities.strictFileInteractability,
@@ -409,18 +488,25 @@ class MarionetteFrameChild extends JSWindowActorChild {
       webdriverClick: capabilities["moz:webdriverClick"],
     };
 
-    return interaction.sendKeysToElement(el, text, opts);
+    return interaction.sendKeysToElement(elem, text, opts);
+  }
+
+  /**
+   * Perform a single tap.
+   */
+  async singleTap(options = {}) {
+    const { capabilities, elem, x, y } = options;
+    return this.legacyactions.singleTap(elem, x, y, capabilities);
   }
 
   /**
    * Switch to the specified frame.
    *
    * @param {Object=} options
-   * @param {(number|ElementIdentifier)=} options.id
-   *     Identifier of the frame to switch to. If it's a number treat it as
-   *     the index for all the existing frames. If it's an ElementIdentifier switch
-   *     to this specific frame. If not specified or `null` switch to the
-   *     top-level browsing context.
+   * @param {(number|Element)=} options.id
+   *     If it's a number treat it as the index for all the existing frames.
+   *     If it's an Element switch to this specific frame.
+   *     If not specified or `null` switch to the top-level browsing context.
    */
   async switchToFrame(options = {}) {
     const { id } = options;
@@ -437,11 +523,9 @@ class MarionetteFrameChild extends JSWindowActorChild {
         );
       }
       browsingContext = childContexts[id];
-      await this.getElementId(browsingContext.embedderElement);
     } else {
-      const frameElement = this.resolveElement(id);
       const context = childContexts.find(context => {
-        return context.embedderElement === frameElement;
+        return context.embedderElement === id;
       });
       if (!context) {
         throw new error.NoSuchFrameError(

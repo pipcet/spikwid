@@ -35,6 +35,7 @@
 #include "js/CharacterEncoding.h"
 #include "js/experimental/CodeCoverage.h"
 #include "js/friend/DumpFunctions.h"  // js::DumpPC, js::DumpScript
+#include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
 #include "js/Printf.h"
 #include "js/Symbol.h"
 #include "util/Memory.h"
@@ -52,6 +53,7 @@
 #include "vm/JSObject.h"
 #include "vm/JSScript.h"
 #include "vm/Opcodes.h"
+#include "vm/Printer.h"
 #include "vm/Realm.h"
 #include "vm/Shape.h"
 #include "vm/ToSource.h"  // js::ValueToSource
@@ -1799,6 +1801,10 @@ bool ExpressionDecompiler::decompilePC(jsbytecode* pc, uint8_t defIndex) {
         if (result) {
           return write(result.get());
         }
+
+        // If it fails, do not return parameter name and let the caller
+        // fallback.
+        return write("(intermediate value)");
       }
 
       JSAtom* atom = getArg(slot);

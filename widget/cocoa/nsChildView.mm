@@ -486,28 +486,6 @@ void* nsChildView::GetNativeData(uint32_t aDataType) {
 
 #pragma mark -
 
-nsTransparencyMode nsChildView::GetTransparencyMode() {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK_RETURN;
-
-  nsCocoaWindow* windowWidget = GetAppWindowWidget();
-  return windowWidget ? windowWidget->GetTransparencyMode() : eTransparencyOpaque;
-
-  NS_OBJC_END_TRY_ABORT_BLOCK_RETURN(eTransparencyOpaque);
-}
-
-// This is called by nsContainerFrame on the root widget for all window types
-// except popup windows (when nsCocoaWindow::SetTransparencyMode is used instead).
-void nsChildView::SetTransparencyMode(nsTransparencyMode aMode) {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
-
-  nsCocoaWindow* windowWidget = GetAppWindowWidget();
-  if (windowWidget) {
-    windowWidget->SetTransparencyMode(aMode);
-  }
-
-  NS_OBJC_END_TRY_ABORT_BLOCK;
-}
-
 void nsChildView::SuppressAnimation(bool aSuppress) {
   GetAppWindowWidget()->SuppressAnimation(aSuppress);
 }
@@ -963,9 +941,14 @@ nsresult nsChildView::SynthesizeNativeMouseScrollEvent(
   CGScrollEventUnit units = (aAdditionalFlags & nsIDOMWindowUtils::MOUSESCROLL_SCROLL_LINES)
                                 ? kCGScrollEventUnitLine
                                 : kCGScrollEventUnitPixel;
-  CGEventRef cgEvent = CGEventCreateScrollWheelEvent(NULL, units, 3, aDeltaY, aDeltaX, aDeltaZ);
+  CGEventRef cgEvent = CGEventCreateScrollWheelEvent(NULL, units, 3, (int32_t)aDeltaY,
+                                                     (int32_t)aDeltaX, (int32_t)aDeltaZ);
   if (!cgEvent) {
     return NS_ERROR_FAILURE;
+  }
+
+  if (aNativeMessage) {
+    CGEventSetIntegerValueField(cgEvent, kCGScrollWheelEventScrollPhase, aNativeMessage);
   }
 
   // On macOS 10.14 and up CGEventPost won't work because of changes in macOS
@@ -1190,21 +1173,28 @@ void nsChildView::Invalidate(const LayoutDeviceIntRect& aRect) {
 }
 
 bool nsChildView::WidgetTypeSupportsAcceleration() {
-  // We need to enable acceleration in popups which contain remote layer
-  // trees, since the remote content won't be rendered at all otherwise. This
-  // causes issues with transparency and drop shadows, so it should not be
-  // used by default in release builds.
+  // All widget types support acceleration.
+  return true;
+}
+
+bool nsChildView::ShouldUseOffMainThreadCompositing() {
+  // We need to enable OMTC in popups which contain remote layer
+  // trees, since the remote content won't be rendered at all otherwise.
   if (HasRemoteContent()) {
     return true;
   }
 
-  // Don't use OpenGL for transparent windows or for popup windows.
-  return mView && [[mView window] isOpaque] && ![[mView window] isKindOfClass:[PopupWindow class]];
-}
-
-bool nsChildView::ShouldUseOffMainThreadCompositing() {
-  // Don't use OMTC for transparent windows or for popup windows.
-  if (!WidgetTypeSupportsAcceleration()) return false;
+  // Don't use OMTC for popup windows, because we do not want context menus to
+  // pay the overhead of starting up a compositor. With the OpenGL compositor,
+  // new windows are expensive because of shader re-compilation, and with
+  // WebRender, new windows are expensive because they create their own threads
+  // and texture caches.
+  // Using OMTC with BasicCompositor for context menus would probably be fine
+  // but isn't a well-tested configuration.
+  if ([mView window] && [[mView window] isKindOfClass:[PopupWindow class]]) {
+    // Use main-thread BasicLayerManager for drawing menus.
+    return false;
+  }
 
   return nsBaseWidget::ShouldUseOffMainThreadCompositing();
 }
@@ -1859,10 +1849,6 @@ static void MakeRegionsNonOverlapping(Region& aFirst, Regions&... aRest) {
 }
 
 void nsChildView::UpdateVibrancy(const nsTArray<ThemeGeometry>& aThemeGeometries) {
-  if (!VibrancyManager::SystemSupportsVibrancy()) {
-    return;
-  }
-
   LayoutDeviceIntRegion sheetRegion = GatherVibrantRegion(aThemeGeometries, VibrancyType::SHEET);
   LayoutDeviceIntRegion vibrantLightRegion =
       GatherVibrantRegion(aThemeGeometries, VibrancyType::LIGHT);
@@ -2051,7 +2037,7 @@ nsEventStatus nsChildView::DispatchAPZInputEvent(InputData& aEvent) {
 
   if (aEvent.mInputType == PINCHGESTURE_INPUT) {
     PinchGestureInput& pinchEvent = aEvent.AsPinchGestureInput();
-    WidgetWheelEvent wheelEvent = pinchEvent.ToWidgetWheelEvent(this);
+    WidgetWheelEvent wheelEvent = pinchEvent.ToWidgetEvent(this);
     ProcessUntransformedAPZEvent(&wheelEvent, result);
   }
 
@@ -2083,7 +2069,7 @@ void nsChildView::DispatchAPZWheelInputEvent(InputData& aEvent, bool aCanTrigger
 
         PanGestureInput& panInput = aEvent.AsPanGestureInput();
 
-        event = panInput.ToWidgetWheelEvent(this);
+        event = panInput.ToWidgetEvent(this);
         if (aCanTriggerSwipe && panInput.mOverscrollBehaviorAllowsSwipe) {
           SwipeInfo swipeInfo = SendMayStartSwipe(panInput);
           event.mCanTriggerSwipe = swipeInfo.wantsSwipe;
@@ -2119,7 +2105,7 @@ void nsChildView::DispatchAPZWheelInputEvent(InputData& aEvent, bool aCanTrigger
         // that function has special handling (for delta multipliers etc.) that
         // we need to run. Using the InputData variant would bypass that and
         // go straight to the APZCTreeManager subclass.
-        event = aEvent.AsScrollWheelInput().ToWidgetWheelEvent(this);
+        event = aEvent.AsScrollWheelInput().ToWidgetEvent(this);
         result = mAPZC->InputBridge()->ReceiveInputEvent(event);
         if (result.mStatus == nsEventStatus_eConsumeNoDefault) {
           return;
@@ -2154,7 +2140,7 @@ void nsChildView::DispatchAPZWheelInputEvent(InputData& aEvent, bool aCanTrigger
         return;
       }
 
-      event = panInput.ToWidgetWheelEvent(this);
+      event = panInput.ToWidgetEvent(this);
       if (aCanTriggerSwipe) {
         SwipeInfo swipeInfo = SendMayStartSwipe(panInput);
 
@@ -2184,7 +2170,7 @@ void nsChildView::DispatchAPZWheelInputEvent(InputData& aEvent, bool aCanTrigger
       break;
     }
     case SCROLLWHEEL_INPUT: {
-      event = aEvent.AsScrollWheelInput().ToWidgetWheelEvent(this);
+      event = aEvent.AsScrollWheelInput().ToWidgetEvent(this);
       break;
     }
     default:
@@ -2517,7 +2503,10 @@ NSEvent* gLastDragMouseDownEvent = nil;  // [strong]
 }
 
 - (void)systemMetricsChanged {
-  if (mGeckoChild) mGeckoChild->NotifyThemeChanged();
+  // TODO(emilio): We could make this more fine-grained by only passing true
+  // here when system colors / fonts change, but right now we tunnel all the
+  // relevant notifications through here.
+  if (mGeckoChild) mGeckoChild->NotifyThemeChanged(widget::ThemeChangeKind::StyleAndLayout);
 }
 
 - (void)scrollbarSystemMetricChanged {

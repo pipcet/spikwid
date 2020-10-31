@@ -538,12 +538,8 @@ nsresult HTMLEditor::HTMLWithContextInserter::Run(
 
   // Are there any table elements in the list?
   // check for table cell selection mode
-  bool cellSelectionMode = false;
-  RefPtr<Element> cellElement =
-      mHTMLEditor.GetFirstSelectedTableCellElement(ignoredError);
-  if (cellElement) {
-    cellSelectionMode = true;
-  }
+  bool cellSelectionMode =
+      HTMLEditUtils::IsInTableCellSelectionMode(*mHTMLEditor.SelectionRefPtr());
 
   if (cellSelectionMode) {
     // do we have table content to paste?  If so, we want to delete
@@ -591,7 +587,7 @@ nsresult HTMLEditor::HTMLWithContextInserter::Run(
     }
     // collapse selection to beginning of deleted table content
     IgnoredErrorResult ignoredError;
-    mHTMLEditor.SelectionRefPtr()->CollapseToStart(ignoredError);
+    MOZ_KnownLive(mHTMLEditor.SelectionRefPtr())->CollapseToStart(ignoredError);
     NS_WARNING_ASSERTION(!ignoredError.Failed(),
                          "Selection::Collapse() failed, but ignored");
   }
@@ -2180,8 +2176,8 @@ nsresult HTMLEditor::PasteNoFormattingAsAction(int32_t aSelectionType,
     return rv;
   }
 
-  const nsString& empty = u""_ns;
-  rv = InsertFromTransferable(transferable, nullptr, empty, empty, false, true);
+  rv = InsertFromTransferable(transferable, nullptr, u""_ns, u""_ns, false,
+                              true);
   NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
                        "HTMLEditor::InsertFromTransferable() failed");
   return EditorBase::ToGenericNSResult(rv);
@@ -2288,8 +2284,13 @@ nsresult HTMLEditor::PasteAsQuotationAsAction(int32_t aClipboardType,
     return NS_ERROR_NOT_INITIALIZED;
   }
 
-  if (aDispatchPasteEvent && !FireClipboardEvent(ePaste, aClipboardType)) {
-    return EditorBase::ToGenericNSResult(NS_ERROR_EDITOR_ACTION_CANCELED);
+  if (aDispatchPasteEvent) {
+    if (!FireClipboardEvent(ePaste, aClipboardType)) {
+      return EditorBase::ToGenericNSResult(NS_ERROR_EDITOR_ACTION_CANCELED);
+    }
+  } else {
+    // The caller must already have dispatched a "paste" event.
+    editActionData.NotifyOfDispatchingClipboardEvent();
   }
 
   nsresult rv = editActionData.MaybeDispatchBeforeInputEvent();
@@ -2542,6 +2543,9 @@ nsresult HTMLEditor::InsertTextWithQuotations(
                          "CanHandleAndMaybeDispatchBeforeInputEvent(), failed");
     return EditorBase::ToGenericNSResult(rv);
   }
+  if (aStringToInsert.IsEmpty()) {
+    return NS_OK;
+  }
 
   // The whole operation should be undoable in one transaction:
   // XXX Why isn't enough to use only AutoPlaceholderBatch here?
@@ -2557,11 +2561,11 @@ nsresult HTMLEditor::InsertTextWithQuotations(
 
 nsresult HTMLEditor::InsertTextWithQuotationsInternal(
     const nsAString& aStringToInsert) {
+  MOZ_ASSERT(!aStringToInsert.IsEmpty());
   // We're going to loop over the string, collecting up a "hunk"
   // that's all the same type (quoted or not),
   // Whenever the quotedness changes (or we reach the string's end)
   // we will insert the hunk all at once, quoted or non.
-
   static const char16_t cite('>');
   bool curHunkIsQuoted = (aStringToInsert.First() == cite);
 
@@ -2877,6 +2881,10 @@ NS_IMETHODIMP HTMLEditor::Rewrap(bool aRespectNewlines) {
   if (NS_FAILED(rv)) {
     NS_WARNING("TextEditor::SharedOutputString() failed");
     return EditorBase::ToGenericNSResult(rv);
+  }
+
+  if (current.IsEmpty()) {
+    return NS_OK;
   }
 
   nsString wrapped;
@@ -3531,8 +3539,13 @@ nsresult HTMLEditor::HTMLWithContextInserter::FragmentParser::ParseFragment(
     bool aTrustedInput) {
   nsAutoScriptBlockerSuppressNodeRemoved autoBlocker;
 
-  RefPtr<DocumentFragment> fragment = new (aTargetDocument->NodeInfoManager())
-      DocumentFragment(aTargetDocument->NodeInfoManager());
+  nsCOMPtr<Document> doc =
+      nsContentUtils::CreateInertHTMLDocument(aTargetDocument);
+  if (!doc) {
+    return NS_ERROR_FAILURE;
+  }
+  RefPtr<DocumentFragment> fragment =
+      new (doc->NodeInfoManager()) DocumentFragment(doc->NodeInfoManager());
   nsresult rv = nsContentUtils::ParseFragmentHTML(
       aFragStr, fragment,
       aContextLocalName ? aContextLocalName : nsGkAtoms::body,

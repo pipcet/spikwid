@@ -11,7 +11,6 @@
 #include "Units.h"
 #include "mozilla/EventForwards.h"
 #include "mozilla/layers/MatrixMessage.h"
-#include "mozilla/layers/RepaintRequest.h"
 #include "nsRefreshObservers.h"
 
 #include <functional>
@@ -30,24 +29,27 @@ class PresShell;
 
 namespace layers {
 
+struct RepaintRequest;
+
 typedef std::function<void(uint64_t, const nsTArray<TouchBehaviorFlags>&)>
     SetAllowedTouchBehaviorCallback;
 
 /* Refer to documentation on SendSetTargetAPZCNotification for this class */
-class DisplayportSetListener : public nsAPostRefreshObserver {
+class DisplayportSetListener : public OneShotPostRefreshObserver {
  public:
   DisplayportSetListener(nsIWidget* aWidget, PresShell* aPresShell,
                          const uint64_t& aInputBlockId,
-                         const nsTArray<ScrollableLayerGuid>& aTargets);
+                         nsTArray<ScrollableLayerGuid>&& aTargets);
   virtual ~DisplayportSetListener();
   bool Register();
-  void DidRefresh() override;
 
  private:
   RefPtr<nsIWidget> mWidget;
-  RefPtr<PresShell> mPresShell;
   uint64_t mInputBlockId;
   nsTArray<ScrollableLayerGuid> mTargets;
+
+  static void OnPostRefresh(DisplayportSetListener* aListener,
+                            PresShell* aPresShell);
 };
 
 /* This class contains some helper methods that facilitate implementing the
@@ -171,12 +173,6 @@ class APZCCallbackHelper {
       const ScrollableLayerGuid::ViewID& aScrollId);
 
   static void CancelAutoscroll(const ScrollableLayerGuid::ViewID& aScrollId);
-
-  /* Adjust the display-port margins by the difference between the requested
-   * scroll offset and the resulting scroll offset after setting the requested
-   * value. */
-  static ScreenMargin AdjustDisplayPortForScrollDelta(ScreenMargin aMargins,
-                                                      ScreenPoint aScrollDelta);
 
   /*
    * Check if the scrollable frame is currently in the middle of a main thread

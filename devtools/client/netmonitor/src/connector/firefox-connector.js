@@ -52,6 +52,16 @@ class FirefoxConnector {
     return this.toolbox.targetList.targetFront;
   }
 
+  get hasWatcherSupport() {
+    return this.toolbox.resourceWatcher.hasWatcherSupport(
+      this.toolbox.resourceWatcher.TYPES.NETWORK_EVENT
+    );
+  }
+
+  get currentWatcher() {
+    return this.toolbox.resourceWatcher.watcher;
+  }
+
   /**
    * Connect to the backend.
    *
@@ -140,10 +150,16 @@ class FirefoxConnector {
       webConsoleFront: this.webConsoleFront,
       actions: this.actions,
       owner: this.owner,
+      resourceWatcher: this.toolbox.resourceWatcher,
     });
 
-    // Register all listeners
-    await this.addListeners();
+    // Register target listeners if we switched to a new top level one
+    if (isTargetSwitching) {
+      await this.addTargetListeners();
+    } else {
+      // Otherwise, this is the first top level target, so register all the listeners
+      await this.addListeners();
+    }
 
     // Initialize Responsive Emulation front for network throttling.
     this.responsiveFront = await this.currentTarget.getFront("responsive");
@@ -235,6 +251,10 @@ class FirefoxConnector {
       ignoreExistingResources,
     });
 
+    await this.addTargetListeners();
+  }
+
+  async addTargetListeners() {
     // Support for EventSource monitoring is currently hidden behind this pref.
     if (
       Services.prefs.getBoolPref(
@@ -392,7 +412,11 @@ class FirefoxConnector {
   /*
    * Get the list of blocked URLs
    */
-  getBlockedUrls() {
+  async getBlockedUrls() {
+    if (this.hasWatcherSupport && this.currentWatcher) {
+      const network = await this.currentWatcher.getNetworkActor();
+      return network.getBlockedUrls();
+    }
     if (!this.webConsoleFront.traits.blockedUrls) {
       return [];
     }
@@ -404,7 +428,11 @@ class FirefoxConnector {
    *
    * @param {object} urls An array of URL strings
    */
-  setBlockedUrls(urls) {
+  async setBlockedUrls(urls) {
+    if (this.hasWatcherSupport && this.currentWatcher) {
+      const network = await this.currentWatcher.getNetworkActor();
+      return network.setBlockedUrls(urls);
+    }
     return this.webConsoleFront.setBlockedUrls(urls);
   }
 

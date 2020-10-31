@@ -429,13 +429,18 @@ nsresult TextEditor::InsertLineBreakAsAction(nsIPrincipal* aPrincipal) {
   return EditorBase::ToGenericNSResult(rv);
 }
 
-nsresult TextEditor::SetTextAsAction(const nsAString& aString,
-                                     nsIPrincipal* aPrincipal) {
+nsresult TextEditor::SetTextAsAction(
+    const nsAString& aString,
+    AllowBeforeInputEventCancelable aAllowBeforeInputEventCancelable,
+    nsIPrincipal* aPrincipal) {
   MOZ_ASSERT(aString.FindChar(nsCRT::CR) == kNotFound);
   MOZ_ASSERT(!AsHTMLEditor());
 
   AutoEditActionDataSetter editActionData(*this, EditAction::eSetText,
                                           aPrincipal);
+  if (aAllowBeforeInputEventCancelable == AllowBeforeInputEventCancelable::No) {
+    editActionData.MakeBeforeInputEventNonCancelable();
+  }
   nsresult rv = editActionData.CanHandleAndMaybeDispatchBeforeInputEvent();
   if (NS_FAILED(rv)) {
     NS_WARNING_ASSERTION(rv == NS_ERROR_EDITOR_ACTION_CANCELED,
@@ -451,15 +456,19 @@ nsresult TextEditor::SetTextAsAction(const nsAString& aString,
   return EditorBase::ToGenericNSResult(rv);
 }
 
-nsresult TextEditor::ReplaceTextAsAction(const nsAString& aString,
-                                         nsRange* aReplaceRange,
-                                         nsIPrincipal* aPrincipal) {
+nsresult TextEditor::ReplaceTextAsAction(
+    const nsAString& aString, nsRange* aReplaceRange,
+    AllowBeforeInputEventCancelable aAllowBeforeInputEventCancelable,
+    nsIPrincipal* aPrincipal) {
   MOZ_ASSERT(aString.FindChar(nsCRT::CR) == kNotFound);
 
   AutoEditActionDataSetter editActionData(*this, EditAction::eReplaceText,
                                           aPrincipal);
   if (NS_WARN_IF(!editActionData.CanHandle())) {
     return NS_ERROR_NOT_INITIALIZED;
+  }
+  if (aAllowBeforeInputEventCancelable == AllowBeforeInputEventCancelable::No) {
+    editActionData.MakeBeforeInputEventNonCancelable();
   }
 
   if (!AsHTMLEditor()) {
@@ -586,7 +595,7 @@ nsresult TextEditor::SetTextAsSubAction(const nsAString& aString) {
     // shouldn't receive such selectionchange before the first mutation.
     AutoUpdateViewBatch preventSelectionChangeEvent(*this);
 
-    Element* rootElement = GetRoot();
+    RefPtr<Element> rootElement = GetRoot();
     if (NS_WARN_IF(!rootElement)) {
       return NS_ERROR_FAILURE;
     }
@@ -598,7 +607,7 @@ nsresult TextEditor::SetTextAsSubAction(const nsAString& aString) {
     //     we can saving the expensive cost of modifying `Selection` here.
     nsresult rv;
     if (IsEmpty()) {
-      rv = SelectionRefPtr()->CollapseInLimiter(rootElement, 0);
+      rv = MOZ_KnownLive(SelectionRefPtr())->CollapseInLimiter(rootElement, 0);
       NS_WARNING_ASSERTION(
           NS_SUCCEEDED(rv),
           "Selection::CollapseInLimiter() failed, but ignored");
@@ -1158,14 +1167,13 @@ bool TextEditor::FireClipboardEvent(EventMessage aEventMessage,
     sel = nsCopySupport::GetSelectionForCopy(GetDocument());
   }
 
-  if (!nsCopySupport::FireClipboardEvent(aEventMessage, aSelectionType,
-                                         presShell, sel, aActionTaken)) {
-    return false;
-  }
+  const bool clipboardEventCanceled = !nsCopySupport::FireClipboardEvent(
+      aEventMessage, aSelectionType, presShell, sel, aActionTaken);
+  NotifyOfDispatchingClipboardEvent();
 
   // If the event handler caused the editor to be destroyed, return false.
-  // Otherwise return true to indicate that the event was not cancelled.
-  return !mDidPreDestroy;
+  // Otherwise return true if the event was not cancelled.
+  return !clipboardEventCanceled && !mDidPreDestroy;
 }
 
 nsresult TextEditor::CutAsAction(nsIPrincipal* aPrincipal) {
@@ -1455,6 +1463,8 @@ nsresult TextEditor::PasteAsQuotationAsAction(int32_t aClipboardType,
   if (!stuffToPaste.IsEmpty()) {
     nsContentUtils::PlatformToDOMLineBreaks(stuffToPaste);
   }
+  // XXX Perhaps, we should dispatch "paste" event with the pasting text data.
+  editActionData.NotifyOfDispatchingClipboardEvent();
   rv = editActionData.MaybeDispatchBeforeInputEvent();
   if (NS_FAILED(rv)) {
     NS_WARNING_ASSERTION(rv == NS_ERROR_EDITOR_ACTION_CANCELED,
@@ -1542,7 +1552,7 @@ nsresult TextEditor::SelectEntireDocument() {
     return NS_ERROR_NOT_INITIALIZED;
   }
 
-  Element* anonymousDivElement = GetRoot();
+  RefPtr<Element> anonymousDivElement = GetRoot();
   if (NS_WARN_IF(!anonymousDivElement)) {
     return NS_ERROR_NOT_INITIALIZED;
   }
@@ -1550,7 +1560,8 @@ nsresult TextEditor::SelectEntireDocument() {
   // If we're empty, don't select all children because that would select the
   // padding <br> element for empty editor.
   if (IsEmpty()) {
-    nsresult rv = SelectionRefPtr()->CollapseInLimiter(anonymousDivElement, 0);
+    nsresult rv = MOZ_KnownLive(SelectionRefPtr())
+                      ->CollapseInLimiter(anonymousDivElement, 0);
     NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
                          "Selection::CollapseInLimiter() failed");
     return rv;

@@ -20,6 +20,7 @@
 // FIXME: Remove when code gets actually used eventually (by initializing Glean).
 #![allow(dead_code)]
 
+use fog::dispatcher;
 use fog::ping_upload::{self, UploadResult};
 use glean_core::{global_glean, setup_glean, Configuration, Glean, Result};
 use once_cell::sync::OnceCell;
@@ -71,10 +72,30 @@ where
 pub fn initialize(cfg: Configuration, client_info: ClientInfo) -> Result<()> {
     STATE
         .get_or_try_init(|| {
-            let glean = Glean::new(cfg)?;
+            let mut glean = Glean::new(cfg)?;
 
             // First initialize core metrics
             initialize_core_metrics(&glean, &client_info);
+
+            // Then register builtin pings.
+            // Borrowed from glean-core's internal_pings.rs.
+            let mping = glean_core::metrics::PingType::new(
+                "metrics",
+                true,
+                false,
+                vec![
+                    "overdue".to_string(),
+                    "reschedule".to_string(),
+                    "today".to_string(),
+                    "tomorrow".to_string(),
+                    "upgrade".to_string(),
+                ],
+            );
+            glean.register_ping_type(&mping);
+            let bping = glean_core::metrics::PingType::new("baseline", true, false, vec![]);
+            glean.register_ping_type(&bping);
+            let eping = glean_core::metrics::PingType::new("events", true, false, vec![]);
+            glean.register_ping_type(&eping);
 
             // Now make this the global object available to others.
             setup_glean(glean)?;
@@ -100,43 +121,37 @@ fn initialize_core_metrics(glean: &Glean, client_info: &ClientInfo) {
     if let Some(app_channel) = &client_info.channel {
         core_metrics.app_channel.set(glean, app_channel);
     }
-    // FIXME(bug 1625916): OS should be handled inside glean-core.
-    core_metrics.os.set(glean, "unknown".to_string());
     core_metrics
         .os_version
         .set(glean, &client_info.os_version[..]);
     core_metrics
         .architecture
         .set(glean, &client_info.architecture);
-    // FIXME(bug 1625207): Device manufacturer should be made optional.
-    core_metrics
-        .device_manufacturer
-        .set(glean, "unknown".to_string());
-    // FIXME(bug 1624823): Device model should be made optional.
-    core_metrics.device_model.set(glean, "unknown".to_string());
 }
 
 /// Set whether upload is enabled or not.
 ///
 /// See `glean_core::Glean.set_upload_enabled`.
-pub fn set_upload_enabled(enabled: bool) -> bool {
-    with_glean_mut(|glean| {
-        let state = global_state();
-        let old_enabled = glean.is_upload_enabled();
-        glean.set_upload_enabled(enabled);
+pub fn set_upload_enabled(enabled: bool) {
+    dispatcher::launch(move || {
+        with_glean_mut(|glean| {
+            let state = global_state();
+            let old_enabled = glean.is_upload_enabled();
+            glean.set_upload_enabled(enabled);
 
-        if !old_enabled && enabled {
-            // If uploading is being re-enabled, we have to restore the
-            // application-lifetime metrics.
-            initialize_core_metrics(&glean, &state.client_info);
-        } else if old_enabled && !enabled {
-            // If upload is being disabled, check for pings to send.
-            ping_upload::check_for_uploads();
-        }
+            if !old_enabled && enabled {
+                // If uploading is being re-enabled, we have to restore the
+                // application-lifetime metrics.
+                initialize_core_metrics(&glean, &state.client_info);
+            } else if old_enabled && !enabled {
+                // If upload is being disabled, check for pings to send.
+                ping_upload::check_for_uploads();
+            }
 
-        enabled
-    })
-    .expect("Setting upload enabled failed!")
+            enabled
+        })
+        .expect("Setting upload enabled failed!");
+    });
 }
 
 fn register_uploader() {

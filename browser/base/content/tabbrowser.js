@@ -1981,6 +1981,11 @@
       if (!Services.appinfo.sessionHistoryInParent) {
         b.prepareToChangeRemoteness = () =>
           SessionStore.prepareToChangeRemoteness(b);
+        b.afterChangeRemoteness = switchId => {
+          let tab = this.getTabForBrowser(b);
+          SessionStore.finishTabRemotenessChange(tab, switchId);
+          return true;
+        };
       }
 
       const defaultBrowserAttributes = {
@@ -2129,7 +2134,7 @@
             getter = () => browser.getAttribute("remote") == "true";
             break;
           case "permitUnload":
-            getter = () => () => ({ permitUnload: true, timedOut: false });
+            getter = () => () => ({ permitUnload: true });
             break;
           case "reload":
           case "reloadWithFlags":
@@ -2465,6 +2470,10 @@
         );
       }
 
+      if (!UserInteraction.running("browser.tabs.opening", window)) {
+        UserInteraction.start("browser.tabs.opening", "initting", window);
+      }
+
       // Don't use document.l10n.setAttributes because the FTL file is loaded
       // lazily and we won't be able to resolve the string.
       document
@@ -2562,6 +2571,7 @@
       this.tabContainer._unlockTabSizing();
 
       if (!animate) {
+        UserInteraction.update("browser.tabs.opening", "not-animated", window);
         t.setAttribute("fadein", "true");
 
         // Call _handleNewTab asynchronously as it needs to know if the
@@ -2573,6 +2583,8 @@
           0,
           this.tabContainer
         );
+      } else {
+        UserInteraction.update("browser.tabs.opening", "animated", window);
       }
 
       let usingPreloadedContent = false;
@@ -3284,6 +3296,10 @@
         prewarmed,
       } = {}
     ) {
+      if (UserInteraction.running("browser.tabs.opening", window)) {
+        UserInteraction.finish("browser.tabs.opening", window);
+      }
+
       // Telemetry stopwatches may already be running if removeTab gets
       // called again for an already closing tab.
       if (
@@ -3418,15 +3434,15 @@
         // processes the event queue and may lead to another removeTab()
         // call before permitUnload() returns.
         aTab._pendingPermitUnload = true;
-        let { permitUnload, timedOut } = browser.permitUnload();
-        delete aTab._pendingPermitUnload;
+        let { permitUnload } = browser.permitUnload();
+        aTab._pendingPermitUnload = false;
 
         TelemetryStopwatch.finish("FX_TAB_CLOSE_PERMIT_UNLOAD_TIME_MS", aTab);
 
         // If we were closed during onbeforeunload, we return false now
         // so we don't (try to) close the same tab again. Of course, we
         // also stop if the unload was cancelled by the user:
-        if (aTab.closing || (!timedOut && !permitUnload)) {
+        if (aTab.closing || !permitUnload) {
           return false;
         }
       }
@@ -5766,11 +5782,6 @@
           this.setSuccessor(predecessor, aOtherTab);
         }
       }
-    },
-
-    finishBrowserRemotenessChange(aBrowser, aSwitchId) {
-      let tab = this.getTabForBrowser(aBrowser);
-      SessionStore.finishTabRemotenessChange(tab, aSwitchId);
     },
   };
 

@@ -110,6 +110,7 @@ struct CompilerEnvironment {
     MOZ_ASSERT(isComputed());
     return debug_;
   }
+  bool debugEnabled() const { return debug() == DebugEnabled::True; }
 };
 
 // ModuleEnvironment contains all the state necessary to process or render
@@ -126,7 +127,6 @@ struct CompilerEnvironment {
 struct ModuleEnvironment {
   // Constant parameters for the entire compilation:
   const ModuleKind kind;
-  CompilerEnvironment* const compilerEnv;
   const FeatureArgs features;
 
   // Module fields decoded from the module environment (or initialized while
@@ -138,6 +138,7 @@ struct ModuleEnvironment {
   uint32_t numStructTypes;
   TypeDefVector types;
   FuncTypeWithIdPtrVector funcTypes;
+  Uint32Vector funcTypeIndices;
   Uint32Vector funcImportGlobalDataOffsets;
   GlobalDescVector globals;
   TableDescVector tables;
@@ -156,22 +157,14 @@ struct ModuleEnvironment {
   Maybe<Name> moduleName;
   NameVector funcNames;
 
-  explicit ModuleEnvironment(CompilerEnvironment* compilerEnv,
-                             FeatureArgs features,
+  explicit ModuleEnvironment(FeatureArgs features,
                              ModuleKind kind = ModuleKind::Wasm)
       : kind(kind),
-        compilerEnv(compilerEnv),
         features(features),
         memoryUsage(MemoryUsage::None),
         minMemoryLength(0),
         numStructTypes(0) {}
 
-  Tier tier() const { return compilerEnv->tier(); }
-  OptimizedBackend optimizedBackend() const {
-    return compilerEnv->optimizedBackend();
-  }
-  CompileMode mode() const { return compilerEnv->mode(); }
-  DebugEnabled debug() const { return compilerEnv->debug(); }
   size_t numTables() const { return tables.length(); }
   size_t numTypes() const { return types.length(); }
   size_t numFuncs() const { return funcTypes.length(); }
@@ -189,9 +182,7 @@ struct ModuleEnvironment {
   bool usesMemory() const { return memoryUsage != MemoryUsage::None; }
   bool usesSharedMemory() const { return memoryUsage == MemoryUsage::Shared; }
   bool isAsmJS() const { return kind == ModuleKind::AsmJS; }
-  bool debugEnabled() const {
-    return compilerEnv->debug() == DebugEnabled::True;
-  }
+
   uint32_t funcMaxResults() const {
     return multiValueEnabled() ? MaxResults : 1;
   }
@@ -220,8 +211,8 @@ struct ModuleEnvironment {
 #  ifdef ENABLE_WASM_GC
       // gc can only be enabled if function-references is enabled
       if (gcTypesEnabled()) {
-        // Structs are subtypes of ExternRef.
-        if (isStructType(one) && two.isExtern()) {
+        // Structs are subtypes of EqRef.
+        if (isStructType(one) && two.isEq()) {
           return true;
         }
         // Struct One is a subtype of struct Two if Two is a prefix of One.
@@ -725,6 +716,14 @@ class Decoder {
         return true;
       }
 #endif
+#ifdef ENABLE_WASM_GC
+      case uint8_t(TypeCode::EqRef):
+        if (!features.gcTypes) {
+          return fail("gc types not enabled");
+        }
+        *type = RefType::fromTypeCode(TypeCode(code), true);
+        return true;
+#endif
       default:
         return fail("bad type");
     }
@@ -758,6 +757,14 @@ class Decoder {
         case uint8_t(TypeCode::ExternRef):
           *type = RefType::fromTypeCode(TypeCode(code), nullable);
           return true;
+#ifdef ENABLE_WASM_GC
+        case uint8_t(TypeCode::EqRef):
+          if (!features.gcTypes) {
+            return fail("gc types not enabled");
+          }
+          *type = RefType::fromTypeCode(TypeCode(code), nullable);
+          return true;
+#endif
         default:
           return fail("invalid heap type");
       }

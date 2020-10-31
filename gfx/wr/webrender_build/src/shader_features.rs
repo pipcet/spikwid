@@ -15,6 +15,7 @@ bitflags! {
         const PIXEL_LOCAL_STORAGE = 1 << 10;
         const DITHERING = 1 << 11;
         const TEXTURE_EXTERNAL = 1 << 12;
+        const DEBUG = 1 << 13;
     }
 }
 
@@ -89,7 +90,7 @@ pub fn get_shader_features(flags: ShaderFeatureFlags) -> ShaderFeatures {
 
     // Brush shaders
     let mut brush_alpha_features = base_prim_features.with("ALPHA_PASS");
-    for name in &["brush_solid", "brush_blend", "brush_mix_blend", "brush_opacity"] {
+    for name in &["brush_solid", "brush_blend", "brush_mix_blend"] {
         let mut features: Vec<String> = Vec::new();
         features.push(base_prim_features.finish());
         features.push(brush_alpha_features.finish());
@@ -106,6 +107,17 @@ pub fn get_shader_features(flags: ShaderFeatureFlags) -> ShaderFeatures {
         features.push(list.concat(&brush_alpha_features).finish());
         features.push(list.with("DEBUG_OVERDRAW").finish());
         shaders.insert(name, features);
+    }
+
+    {
+        let mut features: Vec<String> = Vec::new();
+        features.push(base_prim_features.finish());
+        features.push(brush_alpha_features.finish());
+        features.push(base_prim_features.with("ANTIALIASING").finish());
+        features.push(brush_alpha_features.with("ANTIALIASING").finish());
+        features.push("ANTIALIASING,DEBUG_OVERDRAW".to_string());
+        features.push("DEBUG_OVERDRAW".to_string());
+        shaders.insert("brush_opacity", features);
     }
 
     // Image brush shaders
@@ -188,6 +200,12 @@ pub fn get_shader_features(flags: ShaderFeatureFlags) -> ShaderFeatures {
     shaders.insert("ps_split_composite", vec![base_prim_features.finish()]);
 
     shaders.insert("ps_clear", vec![base_prim_features.finish()]);
+
+    if flags.contains(ShaderFeatureFlags::DEBUG) {
+        for name in &["debug_color", "debug_font"] {
+            shaders.insert(name, vec![String::new()]);
+        }
+    }
 
     shaders
 }

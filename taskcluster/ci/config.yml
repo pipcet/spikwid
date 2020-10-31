@@ -318,7 +318,10 @@ merge-automation:
             version-files:
                 - filename: "browser/config/version_display.txt"
                   new-suffix: ''
-            replacements: []
+            replacements:
+                - - build/defines.sh
+                  - EARLY_BETA_OR_EARLIER=1
+                  - EARLY_BETA_OR_EARLIER=
             merge-old-head: true
             base-tag: 'FIREFOX_RELEASE_{major_version}_BASE'
             end-tag: 'FIREFOX_RELEASE_{major_version}_END'
@@ -536,11 +539,6 @@ workers:
             implementation: generic-worker
             os: linux
             worker-type: 'gecko-{alias}'
-        t-osx-1010:
-            provisioner: releng-hardware
-            implementation: generic-worker
-            os: macosx
-            worker-type: 'gecko-{alias}'
         t-osx-1014:
             provisioner: releng-hardware
             implementation: generic-worker
@@ -559,14 +557,6 @@ workers:
             implementation: docker-worker
             os: linux
             worker-type: 't-linux-xlarge'
-        t-osx-1010-pgo:
-            provisioner: releng-hardware
-            implementation: generic-worker
-            os: macosx
-            worker-type:
-                by-level:
-                    '3': 'gecko-{level}-t-osx-1010'
-                    default: 'gecko-t-osx-1010'
         t-osx-1014-pgo:
             provisioner: releng-hardware
             implementation: generic-worker

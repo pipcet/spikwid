@@ -111,7 +111,7 @@ macosx64-asan-fuzzing/opt:
             - linux64-sccache
             - wasi-sysroot
     optimization:
-        build-fuzzing: null
+        skip-unless-expanded: null
 
 macosx64-fuzzing/debug:
     description: "MacOS X x64 Cross-compile Fuzzing Debug"
@@ -140,7 +140,7 @@ macosx64-fuzzing/debug:
             - linux64-sccache
             - wasi-sysroot
     optimization:
-        build-fuzzing: null
+        skip-unless-expanded: null
 
 macosx64-devedition/opt:
     description: "MacOS X Dev Edition x64 (shippable)"
@@ -282,10 +282,10 @@ macosx64-ccov/opt:
     use-sccache: true
     fetches:
         toolchain:
-            - linux64-cctools-port-clang-9
-            - linux64-clang-9-macosx-cross
+            - linux64-cctools-port
+            - linux64-clang-macosx-cross
             - linux64-sccache
-            - wasi-sysroot-9
+            - wasi-sysroot
 
 macosx64-gcp/debug:
     description: "MacOS X x64 Cross-compile - built on GCP"

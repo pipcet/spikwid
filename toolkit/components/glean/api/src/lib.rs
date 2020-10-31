@@ -20,8 +20,10 @@ pub mod ping_upload;
 pub mod pings;
 pub mod private;
 
-pub(crate) mod dispatcher;
+pub mod dispatcher;
 pub mod ipc;
+
+mod ffi;
 
 /// Run a closure with a mutable reference to the locked global Glean object.
 fn with_glean<F, R>(f: F) -> R

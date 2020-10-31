@@ -863,6 +863,8 @@ function PlacesToolbar(aPlace) {
     ["_dropIndicator", "PlacesToolbarDropIndicator"],
     ["_chevron", "PlacesChevron"],
     ["_chevronPopup", "PlacesChevronPopup"],
+    ["_otherBookmarks", "OtherBookmarks"],
+    ["_otherBookmarksPopup", "OtherBookmarksPopup"],
   ].forEach(function(elementGlobal) {
     let [name, id] = elementGlobal;
     thisView.__defineGetter__(name, function() {
@@ -1030,6 +1032,8 @@ PlacesToolbar.prototype = {
       // Otherwise, it will be initialized when the toolbar overflows.
       this._chevronPopup.place = this.place;
     }
+
+    BookmarkingUI.maybeShowOtherBookmarksFolder();
   },
 
   _insertNewItem: function PT__insertNewItem(
@@ -1077,6 +1081,10 @@ PlacesToolbar.prototype = {
     }
 
     button._placesNode = aChild;
+    let { icon } = button._placesNode;
+    if (icon) {
+      button.setAttribute("image", icon);
+    }
     if (!this._domNodes.has(aChild)) {
       this._domNodes.set(aChild, button);
     }
@@ -1113,6 +1121,15 @@ PlacesToolbar.prototype = {
     }
 
     this._updateChevronPopupNodesVisibility();
+  },
+
+  _onOtherBookmarksPopupShowing: function PT__onOtherBookmarksPopupShowing(
+    aEvent
+  ) {
+    if (aEvent.target != this._otherBookmarksPopup) {
+      return;
+    }
+    this._rebuildPopup(this._otherBookmarksPopup);
   },
 
   handleEvent: function PT_handleEvent(aEvent) {

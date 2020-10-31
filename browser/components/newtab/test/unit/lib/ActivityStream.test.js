@@ -146,10 +146,6 @@ describe("ActivityStream", () => {
       const feed = as.feeds.get("feeds.favicon")();
       assert.ok(feed, "feed should exist");
     });
-    it("should create a ASRouter feed", () => {
-      const feed = as.feeds.get("feeds.asrouterfeed")();
-      assert.ok(feed, "feed should exist");
-    });
     it("should create a RecommendationProviderSwitcher feed", () => {
       const feed = as.feeds.get("feeds.recommendationproviderswitcher")();
       assert.ok(feed, "feed should exist");
@@ -214,9 +210,9 @@ describe("ActivityStream", () => {
     it("should enable 1 row layout pref based on region layout pref", () => {
       getStringPrefStub
         .withArgs(
-          "browser.newtabpage.activity-stream.discoverystream.region-layout-config"
+          "browser.newtabpage.activity-stream.discoverystream.region-basic-config"
         )
-        .returns("US");
+        .returns("CA");
 
       as._updateDynamicPrefs();
 
@@ -227,9 +223,9 @@ describe("ActivityStream", () => {
     it("should enable 7 row layout pref based on region layout pref", () => {
       getStringPrefStub
         .withArgs(
-          "browser.newtabpage.activity-stream.discoverystream.region-layout-config"
+          "browser.newtabpage.activity-stream.discoverystream.region-basic-config"
         )
-        .returns("US,CA");
+        .returns("");
 
       as._updateDynamicPrefs();
 

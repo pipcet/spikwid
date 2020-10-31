@@ -10,7 +10,6 @@
 
 #include "APZCCallbackHelper.h"
 #include "ActiveElementManager.h"
-#include "LayersLogging.h"
 #include "TouchManager.h"
 #include "mozilla/BasicEvents.h"
 #include "mozilla/IntegerPrintfMacros.h"
@@ -321,15 +320,16 @@ void APZEventState::ProcessTouchEvent(
 
   bool isTouchPrevented = aContentResponse == nsEventStatus_eConsumeNoDefault;
   bool sentContentResponse = false;
-  APZES_LOG("Handling event type %d\n", aEvent.mMessage);
+  APZES_LOG("Handling event type %d isPrevented=%d\n", aEvent.mMessage,
+            isTouchPrevented);
   switch (aEvent.mMessage) {
     case eTouchStart: {
       mTouchEndCancelled = false;
       mTouchRollup = do_GetWeakReference(widget::nsAutoRollup::GetLastRollup());
 
-      sentContentResponse = SendPendingTouchPreventedResponse(false);
-      // sentContentResponse can be true here if we get two TOUCH_STARTs in a
-      // row and just responded to the first one.
+      SendPendingTouchPreventedResponse(false);
+      // The above call may have sent a message to APZ if we get two
+      // TOUCH_STARTs in a row and just responded to the first one.
 
       // We're about to send a response back to APZ, but we should only do it
       // for events that went through APZ (which should be all of them).

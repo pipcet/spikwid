@@ -22,10 +22,8 @@
 #include "gc/HashUtil.h"
 #include "jit/BaselineIC.h"
 #include "jit/BaselineJIT.h"
-#include "jit/CompileInfo.h"
 #include "jit/Ion.h"
 #include "jit/IonAnalysis.h"
-#include "jit/JitRealm.h"
 #include "js/MemoryMetrics.h"
 #include "js/ScalarType.h"  // js::Scalar::Type
 #include "js/UniquePtr.h"
@@ -1489,15 +1487,8 @@ class TypeConstraintFreezeStack : public TypeConstraint {
 bool js::FinishCompilation(JSContext* cx, HandleScript script,
                            CompilerConstraintList* constraints,
                            IonCompilationId compilationId, bool* isValidOut) {
+  MOZ_ASSERT(IsTypeInferenceEnabled());
   MOZ_ASSERT(*cx->zone()->types.currentCompilationId() == compilationId);
-
-  if (!IsTypeInferenceEnabled()) {
-    MOZ_ASSERT(!constraints->failed());
-    MOZ_ASSERT(constraints->length() == 0);
-    MOZ_ASSERT(constraints->numFrozenScripts() == 0);
-    *isValidOut = true;
-    return true;
-  }
 
   if (constraints->failed()) {
     return false;

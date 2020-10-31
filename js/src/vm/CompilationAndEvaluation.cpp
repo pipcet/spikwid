@@ -14,7 +14,6 @@
 
 #include <utility>  // std::move
 
-#include "jsfriendapi.h"  // js::GetErrorMessage
 #include "jstypes.h"      // JS_PUBLIC_API
 
 #include "frontend/BytecodeCompilation.h"  // frontend::CompileGlobalScript
@@ -23,6 +22,7 @@
 #include "frontend/ParseContext.h"      // frontend::UsedNameTracker
 #include "frontend/Parser.h"            // frontend::Parser, frontend::ParseGoal
 #include "js/CharacterEncoding.h"  // JS::UTF8Chars, JS::UTF8CharsToNewTwoByteCharsZ
+#include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
 #include "js/RootingAPI.h"         // JS::Rooted
 #include "js/SourceText.h"         // JS::SourceText
 #include "js/TypeDecls.h"          // JS::HandleObject, JS::MutableHandleScript
@@ -110,18 +110,19 @@ static JSScript* CompileSourceBufferAndStartIncrementalEncoding(
     }
   }
 
-  frontend::CompilationGCOutput gcOutput(cx);
-  if (!frontend::InstantiateStencils(cx, compilationInfo.get(), gcOutput)) {
+  Rooted<frontend::CompilationGCOutput> gcOutput(cx);
+  if (!frontend::InstantiateStencils(cx, compilationInfo.get(),
+                                     gcOutput.get())) {
     return nullptr;
   }
 
-  MOZ_ASSERT(gcOutput.script);
+  MOZ_ASSERT(gcOutput.get().script);
   if (!js::UseOffThreadParseGlobal()) {
-    gcOutput.script->scriptSource()->setIncrementalEncoder(
+    gcOutput.get().script->scriptSource()->setIncrementalEncoder(
         xdrEncoder.release());
   }
 
-  Rooted<JSScript*> script(cx, gcOutput.script);
+  Rooted<JSScript*> script(cx, gcOutput.get().script);
   if (!script) {
     return nullptr;
   }

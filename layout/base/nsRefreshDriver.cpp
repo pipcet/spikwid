@@ -33,6 +33,7 @@
 #include "mozilla/AutoRestore.h"
 #include "mozilla/BasePrincipal.h"
 #include "mozilla/DebugOnly.h"
+#include "mozilla/DisplayPortUtils.h"
 #include "mozilla/InputTaskManager.h"
 #include "mozilla/IntegerRange.h"
 #include "mozilla/PresShell.h"
@@ -1243,10 +1244,10 @@ void nsRefreshDriver::RestoreNormalRefresh() {
   mCompletedTransaction = mOutstandingTransactionId = mNextTransactionId;
 }
 
-TimeStamp nsRefreshDriver::MostRecentRefresh() const {
+TimeStamp nsRefreshDriver::MostRecentRefresh(bool aEnsureTimerStarted) const {
   // In case of stylo traversal, we have already activated the refresh driver in
   // RestyleManager::ProcessPendingRestyles().
-  if (!ServoStyleSet::IsInServoTraversal()) {
+  if (aEnsureTimerStarted && !ServoStyleSet::IsInServoTraversal()) {
     const_cast<nsRefreshDriver*>(this)->EnsureTimerStarted();
   }
 
@@ -1283,11 +1284,10 @@ bool nsRefreshDriver::RemoveRefreshObserver(nsARefreshObserver* aObserver,
     nsPrintfCString str("%s [%s]", data.mDescription,
                         kFlushTypeNames[aFlushType]);
     PROFILER_MARKER_TEXT(
-        "RefreshObserver",
-        GRAPHICS.WithOptions(
-            MarkerStack::TakeBacktrace(std::move(data.mCause)),
-            MarkerTiming::IntervalUntilNowFrom(data.mRegisterTime),
-            MarkerInnerWindowId(data.mInnerWindowId)),
+        "RefreshObserver", GRAPHICS,
+        MarkerOptions(MarkerStack::TakeBacktrace(std::move(data.mCause)),
+                      MarkerTiming::IntervalUntilNowFrom(data.mRegisterTime),
+                      MarkerInnerWindowId(data.mInnerWindowId)),
         str);
   }
 #endif
@@ -1897,6 +1897,8 @@ void nsRefreshDriver::RunFrameRequestCallbacks(TimeStamp aNowTime) {
                                           "requestAnimationFrame callbacks",
                                           GRAPHICS, GetDocShell(mPresContext));
     for (const DocumentFrameCallbacks& docCallbacks : frameRequestCallbacks) {
+      TimeStamp startTime = TimeStamp::Now();
+
       // XXXbz Bug 863140: GetInnerWindow can return the outer
       // window in some cases.
       nsPIDOMWindowInner* innerWindow =
@@ -1924,6 +1926,17 @@ void nsRefreshDriver::RunFrameRequestCallbacks(TimeStamp aNowTime) {
         // mutated by the call.
         LogFrameRequestCallback::Run run(callback.mCallback);
         MOZ_KnownLive(callback.mCallback)->Call(timeStamp);
+      }
+
+      if (docCallbacks.mDocument->GetReadyStateEnum() ==
+          Document::READYSTATE_COMPLETE) {
+        Telemetry::AccumulateTimeDelta(
+            Telemetry::PERF_REQUEST_ANIMATION_CALLBACK_NON_PAGELOAD_MS,
+            startTime, TimeStamp::Now());
+      } else {
+        Telemetry::AccumulateTimeDelta(
+            Telemetry::PERF_REQUEST_ANIMATION_CALLBACK_PAGELOAD_MS, startTime,
+            TimeStamp::Now());
       }
     }
   }
@@ -2070,8 +2083,8 @@ void nsRefreshDriver::Tick(VsyncId aId, TimeStamp aNowTime) {
   }
 #endif
   AUTO_PROFILER_MARKER_TEXT(
-      "RefreshDriverTick",
-      GRAPHICS.WithOptions(
+      "RefreshDriverTick", GRAPHICS,
+      MarkerOptions(
           MarkerStack::TakeBacktrace(std::move(mRefreshTimerStartedCause)),
           MarkerInnerWindowIdFromDocShell(GetDocShell(mPresContext))),
       profilerStr);
@@ -2093,7 +2106,7 @@ void nsRefreshDriver::Tick(VsyncId aId, TimeStamp aNowTime) {
   // in the queue. This will prevent us from spending precious time
   // painting a stale displayport.
   if (StaticPrefs::apz_peek_messages_enabled()) {
-    nsLayoutUtils::UpdateDisplayPortMarginsFromPendingMessages();
+    DisplayPortUtils::UpdateDisplayPortMarginsFromPendingMessages();
   }
 
   AutoTArray<nsCOMPtr<nsIRunnable>, 16> earlyRunners = std::move(mEarlyRunners);
@@ -2333,10 +2346,10 @@ void nsRefreshDriver::Tick(VsyncId aId, TimeStamp aNowTime) {
       transactionId.AppendInt((uint64_t)mNextTransactionId);
     }
 #endif
-    AUTO_PROFILER_MARKER_TEXT("ViewManagerFlush",
-                              GRAPHICS.WithOptions(MarkerStack::TakeBacktrace(
-                                  std::move(mViewManagerFlushCause))),
-                              transactionId);
+    AUTO_PROFILER_MARKER_TEXT(
+        "ViewManagerFlush", GRAPHICS,
+        MarkerStack::TakeBacktrace(std::move(mViewManagerFlushCause)),
+        transactionId);
 
     RefPtr<TimelineConsumers> timelines = TimelineConsumers::Get();
 

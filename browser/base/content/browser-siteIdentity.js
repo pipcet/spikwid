@@ -115,6 +115,19 @@ var gIdentityHandler = {
     );
   },
 
+  get _isContentHttpsOnlyModeUpgraded() {
+    return (
+      this._state & Ci.nsIWebProgressListener.STATE_HTTPS_ONLY_MODE_UPGRADED
+    );
+  },
+
+  get _isContentHttpsOnlyModeUpgradeFailed() {
+    return (
+      this._state &
+      Ci.nsIWebProgressListener.STATE_HTTPS_ONLY_MODE_UPGRADE_FAILED
+    );
+  },
+
   get _isCertUserOverridden() {
     return this._state & Ci.nsIWebProgressListener.STATE_CERT_USER_OVERRIDDEN;
   },
@@ -215,6 +228,18 @@ var gIdentityHandler = {
     delete this._identityPopupSecurityView;
     return (this._identityPopupSecurityView = document.getElementById(
       "identity-popup-securityView"
+    ));
+  },
+  get _identityPopupHttpsOnlyModeMenuList() {
+    delete this._identityPopupHttpsOnlyModeMenuList;
+    return (this._identityPopupHttpsOnlyModeMenuList = document.getElementById(
+      "identity-popup-security-httpsonlymode-menulist"
+    ));
+  },
+  get _identityPopupHttpsOnlyModeMenuListTempItem() {
+    delete this._identityPopupHttpsOnlyModeMenuListTempItem;
+    return (this._identityPopupHttpsOnlyModeMenuListTempItem = document.getElementById(
+      "identity-popup-security-menulist-tempitem"
     ));
   },
   get _identityPopupSecurityEVContentOwner() {
@@ -373,7 +398,24 @@ var gIdentityHandler = {
     );
     return this._protectionsPanelEnabled;
   },
-
+  get _httpsOnlyModeEnabled() {
+    delete this._httpsOnlyModeEnabled;
+    XPCOMUtils.defineLazyPreferenceGetter(
+      this,
+      "_httpsOnlyModeEnabled",
+      "dom.security.https_only_mode"
+    );
+    return this._httpsOnlyModeEnabled;
+  },
+  get _httpsOnlyModeEnabledPBM() {
+    delete this._httpsOnlyModeEnabledPBM;
+    XPCOMUtils.defineLazyPreferenceGetter(
+      this,
+      "_httpsOnlyModeEnabledPBM",
+      "dom.security.https_only_mode_pbm"
+    );
+    return this._httpsOnlyModeEnabledPBM;
+  },
   get _useGrayLockIcon() {
     delete this._useGrayLockIcon;
     XPCOMUtils.defineLazyPreferenceGetter(
@@ -395,22 +437,21 @@ var gIdentityHandler = {
 
     let host = this._uri.host;
 
-    // Site data could have changed while the identity popup was open,
-    // reload again to be sure.
-    await SiteDataManager.updateSites();
-
-    let baseDomain = SiteDataManager.getBaseDomainFromHost(host);
-    let siteData = await SiteDataManager.getSites(baseDomain);
-
     // Hide the popup before showing the removal prompt, to
     // avoid a pretty ugly transition. Also hide it even
     // if the update resulted in no site data, to keep the
     // illusion that clicking the button had an effect.
+    let hidden = new Promise(c => {
+      this._identityPopup.addEventListener("popuphidden", c, { once: true });
+    });
     PanelMultiView.hidePopup(this._identityPopup);
+    await hidden;
 
-    if (siteData && siteData.length) {
-      let hosts = siteData.map(site => site.host);
-      if (SiteDataManager.promptSiteDataRemoval(window, hosts)) {
+    let baseDomain = SiteDataManager.getBaseDomainFromHost(host);
+    if (SiteDataManager.promptSiteDataRemoval(window, null, baseDomain)) {
+      let siteData = await SiteDataManager.getSites(baseDomain);
+      if (siteData && siteData.length) {
+        let hosts = siteData.map(site => site.host);
         SiteDataManager.remove(hosts);
       }
     }
@@ -483,6 +524,115 @@ var gIdentityHandler = {
     if (this._popupInitialized) {
       PanelMultiView.hidePopup(this._identityPopup);
     }
+  },
+
+  /**
+   * Gets the current HTTPS-Only mode permission for the current page.
+   * Values are the same as in #identity-popup-security-httpsonlymode-menulist
+   */
+  _getHttpsOnlyPermission() {
+    const { state } = SitePermissions.getForPrincipal(
+      gBrowser.contentPrincipal,
+      "https-only-load-insecure"
+    );
+    switch (state) {
+      case Ci.nsIHttpsOnlyModePermission.LOAD_INSECURE_ALLOW_SESSION:
+        return 2; // Off temporarily
+      case Ci.nsIHttpsOnlyModePermission.LOAD_INSECURE_ALLOW:
+        return 1; // Off
+      default:
+        return 0; // On
+    }
+  },
+
+  /**
+   * Sets/removes HTTPS-Only Mode exception and possibly reloads the page.
+   */
+  changeHttpsOnlyPermission() {
+    // Get the new value from the menulist and the current value
+    // Note: value and permission association is laid out
+    //       in _getHttpsOnlyPermission
+    const oldValue = this._getHttpsOnlyPermission();
+    let newValue = parseInt(
+      this._identityPopupHttpsOnlyModeMenuList.selectedItem.value,
+      10
+    );
+
+    // If nothing changed, just return here
+    if (newValue === oldValue) {
+      return;
+    }
+
+    // Permissions set in PMB get deleted anyway, but to make sure, let's make
+    // the permission session-only.
+    if (newValue === 1 && PrivateBrowsingUtils.isWindowPrivate(window)) {
+      newValue = 2;
+    }
+
+    // Usually we want to set the permission for the current site and therefore
+    // the current principal...
+    let principal = gBrowser.contentPrincipal;
+    // ...but if we're on the HTTPS-Only error page, the content-principal is
+    // for HTTPS but. We always want to set the exception for HTTP. (Code should
+    // be almost identical to the one in AboutHttpsOnlyErrorParent.jsm)
+    let newURI;
+    if (this._isAboutHttpsOnlyErrorPage) {
+      newURI = gBrowser.currentURI
+        .mutate()
+        .setScheme("http")
+        .finalize();
+      principal = Services.scriptSecurityManager.createContentPrincipal(
+        newURI,
+        gBrowser.contentPrincipal.originAttributes
+      );
+    }
+
+    // Set or remove the permission
+    if (newValue === 0) {
+      SitePermissions.removeFromPrincipal(
+        principal,
+        "https-only-load-insecure"
+      );
+    } else if (newValue === 1) {
+      SitePermissions.setForPrincipal(
+        principal,
+        "https-only-load-insecure",
+        Ci.nsIHttpsOnlyModePermission.LOAD_INSECURE_ALLOW,
+        SitePermissions.SCOPE_PERSISTENT
+      );
+    } else {
+      SitePermissions.setForPrincipal(
+        principal,
+        "https-only-load-insecure",
+        Ci.nsIHttpsOnlyModePermission.LOAD_INSECURE_ALLOW_SESSION,
+        SitePermissions.SCOPE_SESSION
+      );
+    }
+
+    // If we're on the error-page, we have to redirect the user
+    // from HTTPS to HTTP. Otherwise we can just reload the page.
+    if (this._isAboutHttpsOnlyErrorPage) {
+      gBrowser.loadURI(newURI.spec, {
+        triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+        loadFlags: Ci.nsIWebNavigation.LOAD_FLAGS_REPLACE_HISTORY,
+      });
+      if (this._popupInitialized) {
+        PanelMultiView.hidePopup(this._identityPopup);
+      }
+      return;
+    }
+    // The page only needs to reload if we switch between allow and block
+    // Because "off" is 1 and "off temporarily" is 2, we can just check if the
+    // sum of newValue and oldValue is 3.
+    if (newValue + oldValue !== 3) {
+      BrowserReloadSkipCache();
+      if (this._popupInitialized) {
+        PanelMultiView.hidePopup(this._identityPopup);
+      }
+      return;
+    }
+    // Otherwise we just refresh the interface
+    this.refreshIdentityPopup();
   },
 
   /**
@@ -992,6 +1142,41 @@ var gIdentityHandler = {
       this._useGrayLockIcon
     );
 
+    // If HTTPS-Only Mode is enabled, check the permission status
+    const privateBrowsingWindow = PrivateBrowsingUtils.isWindowPrivate(window);
+    let httpsOnlyStatus = "";
+    if (
+      this._httpsOnlyModeEnabled ||
+      (privateBrowsingWindow && this._httpsOnlyModeEnabledPBM)
+    ) {
+      // Note: value and permission association is laid out
+      //       in _getHttpsOnlyPermission
+      let value = this._getHttpsOnlyPermission();
+
+      // Because everything in PBM is temporary anyway, we don't need to make the distinction
+      if (privateBrowsingWindow) {
+        if (value === 2) {
+          value = 1;
+        }
+        // Hide "off temporarily" option
+        this._identityPopupHttpsOnlyModeMenuListTempItem.style.display = "none";
+      } else {
+        this._identityPopupHttpsOnlyModeMenuListTempItem.style.display = "";
+      }
+
+      this._identityPopupHttpsOnlyModeMenuList.value = value;
+
+      if (value > 0) {
+        httpsOnlyStatus = "exception";
+      } else if (this._isAboutHttpsOnlyErrorPage) {
+        httpsOnlyStatus = "failed-top";
+      } else if (this._isContentHttpsOnlyModeUpgradeFailed) {
+        httpsOnlyStatus = "failed-sub";
+      } else if (this._isContentHttpsOnlyModeUpgraded) {
+        httpsOnlyStatus = "upgraded";
+      }
+    }
+
     // Update all elements.
     let elementIDs = ["identity-popup", "identity-popup-securityView-body"];
 
@@ -1002,6 +1187,7 @@ var gIdentityHandler = {
       this._updateAttribute(element, "mixedcontent", mixedcontent);
       this._updateAttribute(element, "isbroken", this._isBrokenConnection);
       this._updateAttribute(element, "customroot", customRoot);
+      this._updateAttribute(element, "httpsonlystatus", httpsOnlyStatus);
     }
 
     // Initialize the optional strings to empty values
@@ -1215,12 +1401,11 @@ var gIdentityHandler = {
       case "perm-changed": {
         // Exclude permissions which do not appear in the UI in order to avoid
         // doing extra work here.
-        if (
-          subject &&
-          SitePermissions.listPermissions().includes(
-            subject.QueryInterface(Ci.nsIPermission).type
-          )
-        ) {
+        if (!subject) {
+          return;
+        }
+        let { type } = subject.QueryInterface(Ci.nsIPermission);
+        if (SitePermissions.isSitePermission(type)) {
           this.refreshIdentityBlock();
         }
         break;
@@ -1397,24 +1582,40 @@ var gIdentityHandler = {
     let totalBlockedPopups = gBrowser.selectedBrowser.popupBlocker.getBlockedPopupCount();
     let hasBlockedPopupIndicator = false;
     for (let permission of permissions) {
-      if (permission.id == "storage-access") {
+      let [id, key] = permission.id.split(SitePermissions.PERM_KEY_DELIMITER);
+
+      if (id == "storage-access") {
         // Ignore storage access permissions here, they are made visible inside
         // the Content Blocking UI.
         continue;
       }
-      let item = this._createPermissionItem(permission);
-      if (!item) {
-        continue;
-      }
-      this._permissionList.appendChild(item);
 
-      if (permission.id == "popup" && totalBlockedPopups) {
+      let item;
+
+      if (id == "open-protocol-handler") {
+        let permContainer = this._createProtocolHandlerPermissionItem(
+          permission,
+          key
+        );
+        if (permContainer) {
+          this._permissionList.appendChild(permContainer);
+        }
+      } else {
+        item = this._createPermissionItem(
+          permission,
+          id == "geo" || id == "xr"
+        );
+
+        if (!item) {
+          continue;
+        }
+        this._permissionList.appendChild(item);
+      }
+
+      if (id == "popup" && totalBlockedPopups) {
         this._createBlockedPopupIndicator(totalBlockedPopups);
         hasBlockedPopupIndicator = true;
-      } else if (
-        permission.id == "geo" &&
-        permission.state === SitePermissions.ALLOW
-      ) {
+      } else if (id == "geo" && permission.state === SitePermissions.ALLOW) {
         this._createGeoLocationLastAccessIndicator();
       }
     }
@@ -1441,17 +1642,20 @@ var gIdentityHandler = {
     }
   },
 
-  _createPermissionItem(aPermission) {
+  _createPermissionItem(
+    aPermission,
+    isContainer = false,
+    permClearButton = true,
+    showStateLabel = true,
+    idNoSuffix = aPermission.id
+  ) {
     let container = document.createXULElement("hbox");
     container.setAttribute("class", "identity-popup-permission-item");
     container.setAttribute("align", "center");
     container.setAttribute("role", "group");
 
     let img = document.createXULElement("image");
-    img.classList.add(
-      "identity-popup-permission-icon",
-      aPermission.id + "-icon"
-    );
+    img.classList.add("identity-popup-permission-icon", idNoSuffix + "-icon");
     if (
       aPermission.state == SitePermissions.BLOCK ||
       aPermission.state == SitePermissions.AUTOPLAY_BLOCKED_ALL
@@ -1462,7 +1666,7 @@ var gIdentityHandler = {
     if (
       aPermission.sharingState ==
         Ci.nsIMediaManagerService.STATE_CAPTURE_ENABLED ||
-      (aPermission.id == "screen" &&
+      (idNoSuffix == "screen" &&
         aPermission.sharingState &&
         !aPermission.sharingState.includes("Paused"))
     ) {
@@ -1485,12 +1689,12 @@ var gIdentityHandler = {
     let nameLabel = document.createXULElement("label");
     nameLabel.setAttribute("flex", "1");
     nameLabel.setAttribute("class", "identity-popup-permission-label");
-    let label = SitePermissions.getPermissionLabel(aPermission.id);
+    let label = SitePermissions.getPermissionLabel(idNoSuffix);
     if (label === null) {
       return null;
     }
     nameLabel.textContent = label;
-    let nameLabelId = "identity-popup-permission-label-" + aPermission.id;
+    let nameLabelId = "identity-popup-permission-label-" + idNoSuffix;
     nameLabel.setAttribute("id", nameLabelId);
 
     let isPolicyPermission = [
@@ -1499,9 +1703,8 @@ var gIdentityHandler = {
     ].includes(aPermission.scope);
 
     if (
-      (aPermission.id == "popup" && !isPolicyPermission) ||
-      aPermission.id == "autoplay-media" ||
-      aPermission.id == "https-only-load-insecure"
+      (idNoSuffix == "popup" && !isPolicyPermission) ||
+      idNoSuffix == "autoplay-media"
     ) {
       let menulist = document.createXULElement("menulist");
       let menupopup = document.createXULElement("menupopup");
@@ -1510,11 +1713,11 @@ var gIdentityHandler = {
       menulist.setAttribute("sizetopopup", "none");
       menulist.setAttribute("id", "identity-popup-popup-menulist");
 
-      for (let state of SitePermissions.getAvailableStates(aPermission.id)) {
+      for (let state of SitePermissions.getAvailableStates(idNoSuffix)) {
         let menuitem = document.createXULElement("menuitem");
         // We need to correctly display the default/unknown state, which has its
         // own integer value (0) but represents one of the other states.
-        if (state == SitePermissions.getDefault(aPermission.id)) {
+        if (state == SitePermissions.getDefault(idNoSuffix)) {
           menuitem.setAttribute("value", "0");
         } else {
           menuitem.setAttribute("value", state);
@@ -1522,14 +1725,14 @@ var gIdentityHandler = {
 
         menuitem.setAttribute(
           "label",
-          SitePermissions.getMultichoiceStateLabel(aPermission.id, state)
+          SitePermissions.getMultichoiceStateLabel(idNoSuffix, state)
         );
         menupopup.appendChild(menuitem);
       }
 
       menulist.appendChild(menupopup);
 
-      if (aPermission.state == SitePermissions.getDefault(aPermission.id)) {
+      if (aPermission.state == SitePermissions.getDefault(idNoSuffix)) {
         menulist.value = "0";
       } else {
         menulist.value = aPermission.state;
@@ -1539,7 +1742,7 @@ var gIdentityHandler = {
       menulist.addEventListener("command", () => {
         SitePermissions.setForPrincipal(
           gBrowser.contentPrincipal,
-          aPermission.id,
+          idNoSuffix,
           menulist.selectedItem.value
         );
       });
@@ -1553,29 +1756,17 @@ var gIdentityHandler = {
       return block;
     }
 
-    let stateLabel = document.createXULElement("label");
-    stateLabel.setAttribute("flex", "1");
-    stateLabel.setAttribute("class", "identity-popup-permission-state-label");
-    let stateLabelId =
-      "identity-popup-permission-state-label-" + aPermission.id;
-    stateLabel.setAttribute("id", stateLabelId);
-    let { state, scope } = aPermission;
-    // If the user did not permanently allow this device but it is currently
-    // used, set the variables to display a "temporarily allowed" info.
-    if (state != SitePermissions.ALLOW && aPermission.sharingState) {
-      state = SitePermissions.ALLOW;
-      scope = SitePermissions.SCOPE_REQUEST;
-    }
-    stateLabel.textContent = SitePermissions.getCurrentStateLabel(
-      state,
-      aPermission.id,
-      scope
-    );
-
     container.appendChild(img);
     container.appendChild(nameLabel);
-    container.appendChild(stateLabel);
-    container.setAttribute("aria-labelledby", nameLabelId + " " + stateLabelId);
+    let labelledBy = nameLabelId;
+
+    if (showStateLabel) {
+      let stateLabel = this._createStateLabel(aPermission, idNoSuffix);
+      container.appendChild(stateLabel);
+      labelledBy += " " + stateLabel.id;
+    }
+
+    container.setAttribute("aria-labelledby", labelledBy);
 
     /* We return the permission item here without a remove button if the permission is a
        SCOPE_POLICY or SCOPE_GLOBAL permission. Policy permissions cannot be
@@ -1584,24 +1775,46 @@ var gIdentityHandler = {
       return container;
     }
 
-    if (aPermission.id == "geo" || aPermission.id == "xr") {
+    if (isContainer) {
       let block = document.createXULElement("vbox");
-      block.setAttribute(
-        "id",
-        "identity-popup-" + aPermission.id + "-container"
-      );
+      block.setAttribute("id", "identity-popup-" + idNoSuffix + "-container");
 
-      let button = this._createPermissionClearButton(aPermission, block);
-      container.appendChild(button);
+      if (permClearButton) {
+        let button = this._createPermissionClearButton(aPermission, block);
+        container.appendChild(button);
+      }
 
       block.appendChild(container);
       return block;
     }
 
-    let button = this._createPermissionClearButton(aPermission, container);
-    container.appendChild(button);
+    if (permClearButton) {
+      let button = this._createPermissionClearButton(aPermission, container);
+      container.appendChild(button);
+    }
 
     return container;
+  },
+
+  _createStateLabel(aPermission, idNoSuffix) {
+    let label = document.createXULElement("label");
+    label.setAttribute("flex", "1");
+    label.setAttribute("class", "identity-popup-permission-state-label");
+    let labelId = "identity-popup-permission-state-label-" + idNoSuffix;
+    label.setAttribute("id", labelId);
+    let { state, scope } = aPermission;
+    // If the user did not permanently allow this device but it is currently
+    // used, set the variables to display a "temporarily allowed" info.
+    if (state != SitePermissions.ALLOW && aPermission.sharingState) {
+      state = SitePermissions.ALLOW;
+      scope = SitePermissions.SCOPE_REQUEST;
+    }
+    label.textContent = SitePermissions.getCurrentStateLabel(
+      state,
+      idNoSuffix,
+      scope
+    );
+    return label;
   },
 
   _removePermPersistentAllow(principal, id) {
@@ -1614,14 +1827,18 @@ var gIdentityHandler = {
     }
   },
 
-  _createPermissionClearButton(aPermission, container) {
+  _createPermissionClearButton(
+    aPermission,
+    container,
+    clearCallback = () => {}
+  ) {
     let button = document.createXULElement("button");
     button.setAttribute("class", "identity-popup-permission-remove-button");
     let tooltiptext = gNavigatorBundle.getString("permissions.remove.tooltip");
     button.setAttribute("tooltiptext", tooltiptext);
     button.addEventListener("command", () => {
       let browser = gBrowser.selectedBrowser;
-      this._permissionList.removeChild(container);
+      container.remove();
       if (aPermission.sharingState) {
         if (aPermission.id === "geo" || aPermission.id === "xr") {
           let origins = browser.getDevicePermissionOrigins(aPermission.id);
@@ -1683,6 +1900,8 @@ var gIdentityHandler = {
       } else if (aPermission.id === "xr") {
         gBrowser.updateBrowserSharing(browser, { xr: false });
       }
+
+      clearCallback();
     });
 
     return button;
@@ -1748,6 +1967,64 @@ var gIdentityHandler = {
     if (geoContainer) {
       geoContainer.appendChild(indicator);
     }
+  },
+
+  _createProtocolHandlerPermissionItem(permission, key) {
+    let container = document.getElementById(
+      "identity-popup-open-protocol-handler-container"
+    );
+    let initialCall;
+
+    if (!container) {
+      // First open-protocol-handler permission, create container.
+      container = this._createPermissionItem(
+        permission,
+        true,
+        false,
+        false,
+        "open-protocol-handler"
+      );
+      initialCall = true;
+    }
+
+    let icon = document.createXULElement("image");
+    icon.setAttribute("class", "popup-subitem-no-arrow");
+
+    let item = document.createXULElement("hbox");
+    item.setAttribute("class", "identity-popup-permission-item");
+    item.setAttribute("align", "center");
+
+    let text = document.createXULElement("label");
+    text.setAttribute("flex", "1");
+    text.setAttribute("class", "identity-popup-permission-label-subitem");
+
+    text.textContent = gNavigatorBundle.getFormattedString(
+      "openProtocolHandlerPermissionEntryLabel",
+      [key]
+    );
+
+    let stateLabel = this._createStateLabel(
+      permission,
+      "open-protocol-handler"
+    );
+
+    item.appendChild(text);
+    item.appendChild(stateLabel);
+
+    let button = this._createPermissionClearButton(permission, item, () => {
+      // When we're clearing the last open-protocol-handler permission, clean up
+      // the empty container.
+      // (<= 1 because the heading item is also a child of the container)
+      if (container.childElementCount <= 1) {
+        container.remove();
+      }
+    });
+    item.appendChild(button);
+
+    container.appendChild(item);
+
+    // If container already exists in permission list, don't return it again.
+    return initialCall && container;
   },
 
   _createBlockedPopupIndicator(aTotalBlockedPopups) {

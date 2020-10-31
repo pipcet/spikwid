@@ -1046,6 +1046,31 @@ addAccessibleTask(
       "AXWebArea",
       "Got web area accessible"
     );
+
+    const rootGroup = webArea.getAttributeValue("AXChildren")[0];
+    is(
+      rootGroup.getAttributeValue("AXIdentifier"),
+      "root-group",
+      "Is generated root group"
+    );
+
+    searchPred = {
+      AXSearchKey: "AXAnyTypeSearchKey",
+      AXImmediateDescendantsOnly: 1,
+      AXResultsLimit: 1,
+      AXDirection: "AXDirectionNext",
+    };
+
+    results = rootGroup.getParameterizedAttributeValue(
+      "AXUIElementsForSearchPredicate",
+      NSDictionary(searchPred)
+    );
+
+    is(
+      results[0].getAttributeValue("AXRole"),
+      "AXHeading",
+      "Is first heading child"
+    );
   }
 );
 
@@ -1164,6 +1189,82 @@ addAccessibleTask(
       controls[0].getAttributeValue("AXDescription"),
       "Found correct group of radios"
     );
+  }
+);
+
+/*
+ * Test rotor with inputs
+ */
+addAccessibleTask(
+  `
+  <input type="text" value="I'm a text field." id="text"><br>
+  <input type="text" value="me too" id="implText"><br>
+  <textarea id="textarea">this is some text in a text area</textarea><br>
+  <input type="tel" value="0000000000" id="tel"><br>
+  <input type="url" value="https://example.com" id="url"><br>
+  <input type="email" value="hi@example.com" id="email"><br>
+  <input type="password" value="blah" id="password"><br>
+  <input type="month" value="2020-01" id="month"><br>
+  <input type="week" value="2020-W01" id="week"><br>
+  `,
+  async (browser, accDoc) => {
+    const searchPred = {
+      AXSearchKey: "AXTextFieldSearchKey",
+      AXImmediateDescendants: 1,
+      AXResultsLimit: -1,
+      AXDirection: "AXDirectionNext",
+    };
+
+    const webArea = accDoc.nativeInterface.QueryInterface(
+      Ci.nsIAccessibleMacInterface
+    );
+    is(
+      webArea.getAttributeValue("AXRole"),
+      "AXWebArea",
+      "Got web area accessible"
+    );
+
+    const textfieldCount = webArea.getParameterizedAttributeValue(
+      "AXUIElementCountForSearchPredicate",
+      NSDictionary(searchPred)
+    );
+
+    is(9, textfieldCount, "Found 9 fields");
+
+    const fields = webArea.getParameterizedAttributeValue(
+      "AXUIElementsForSearchPredicate",
+      NSDictionary(searchPred)
+    );
+
+    const text = getNativeInterface(accDoc, "text");
+    const implText = getNativeInterface(accDoc, "implText");
+    const textarea = getNativeInterface(accDoc, "textarea");
+    const tel = getNativeInterface(accDoc, "tel");
+    const url = getNativeInterface(accDoc, "url");
+    const email = getNativeInterface(accDoc, "email");
+    const password = getNativeInterface(accDoc, "password");
+    const month = getNativeInterface(accDoc, "month");
+    const week = getNativeInterface(accDoc, "week");
+
+    const toCheck = [
+      text,
+      implText,
+      textarea,
+      tel,
+      url,
+      email,
+      password,
+      month,
+      week,
+    ];
+
+    for (let i = 0; i < toCheck.length; i++) {
+      is(
+        toCheck[i].getAttributeValue("AXValue"),
+        fields[i].getAttributeValue("AXValue"),
+        "Found correct input control"
+      );
+    }
   }
 );
 
@@ -1483,7 +1584,10 @@ addAccessibleTask(
  * Test search with non-webarea root
  */
 addAccessibleTask(
-  `<div id="searchroot"><p>hello</p><p>world</p></div><div><p>goodybe</p></div>`,
+  `
+  <div id="searchroot"><p id="p1">hello</p><p id="p2">world</p></div>
+  <div><p>goodybe</p></div>
+  `,
   async (browser, accDoc) => {
     let searchPred = {
       AXSearchKey: "AXAnyTypeSearchKey",
@@ -1498,5 +1602,43 @@ addAccessibleTask(
       NSDictionary(searchPred)
     );
     is(resultCount, 2, "Found 2 items");
+
+    const p1 = getNativeInterface(accDoc, "p1");
+    searchPred = {
+      AXSearchKey: "AXAnyTypeSearchKey",
+      AXImmediateDescendantsOnly: 1,
+      AXResultsLimit: -1,
+      AXDirection: "AXDirectionNext",
+      AXStartElement: p1,
+    };
+
+    let results = searchRoot.getParameterizedAttributeValue(
+      "AXUIElementsForSearchPredicate",
+      NSDictionary(searchPred)
+    );
+
+    Assert.deepEqual(
+      results.map(r => r.getAttributeValue("AXDOMIdentifier")),
+      ["p2"],
+      "Result is next group sibling"
+    );
+
+    searchPred = {
+      AXSearchKey: "AXAnyTypeSearchKey",
+      AXImmediateDescendantsOnly: 1,
+      AXResultsLimit: -1,
+      AXDirection: "AXDirectionPrevious",
+    };
+
+    results = searchRoot.getParameterizedAttributeValue(
+      "AXUIElementsForSearchPredicate",
+      NSDictionary(searchPred)
+    );
+
+    Assert.deepEqual(
+      results.map(r => r.getAttributeValue("AXDOMIdentifier")),
+      ["p2", "p1"],
+      "A reverse search should return groups in reverse"
+    );
   }
 );

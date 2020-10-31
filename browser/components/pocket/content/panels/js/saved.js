@@ -21,7 +21,7 @@ var PKT_SAVED_OVERLAY = function(options) {
   this.autocloseTimer = null;
   this.inoverflowmenu = false;
   this.dictJSON = {};
-  this.autocloseTiming = 3500;
+  this.autocloseTiming = 4500;
   this.autocloseTimingFinalState = 2000;
   this.mouseInside = false;
   this.userTags = [];
@@ -105,6 +105,13 @@ var PKT_SAVED_OVERLAY = function(options) {
     });
     this.wrapper.on("click", function(e) {
       myself.closeValid = false;
+    });
+    $("body").on("keydown", function(e) {
+      var key = e.keyCode || e.which;
+      if (key === 9) {
+        myself.mouseInside = true;
+        myself.stopCloseTimer();
+      }
     });
   };
   this.startCloseTimer = function(manualtime) {
@@ -263,6 +270,9 @@ var PKT_SAVED_OVERLAY = function(options) {
             if (e.which == 37) {
               myself.updateSlidingTagList();
             }
+            if (e.which === 9) {
+              $("a.pkt_ext_learn_more").focus();
+            }
           })
           .on("keypress", "input", function(e) {
             if (e.which == 13) {
@@ -294,14 +304,8 @@ var PKT_SAVED_OVERLAY = function(options) {
       },
       onShowDropdown() {
         if (myself.ho2 !== "show_prompt_preview") {
+          $(".pkt_ext_item_recs").hide(); // hide recs when tag input begins
           thePKT_SAVED.sendMessage("expandSavePanel");
-        }
-      },
-      onHideDropdown() {
-        if (!myself.ho2) {
-          thePKT_SAVED.sendMessage("collapseSavePanel");
-        } else if (myself.ho2 !== "show_prompt_preview") {
-          thePKT_SAVED.sendMessage("resizePanel", { width: 350, height: 200 });
         }
       },
     });
@@ -321,7 +325,6 @@ var PKT_SAVED_OVERLAY = function(options) {
           .parent()
           .hasClass("token-input-input-token")
       ) {
-        $(".pkt_ext_subshell").hide(); // hide recs when tag input begins
         e.stopImmediatePropagation();
       }
     });
@@ -526,6 +529,11 @@ var PKT_SAVED_OVERLAY = function(options) {
       data.recommendations = data.recommendations.map(rec => {
         // Using array notation because there is a key titled `1` (`images` is an object)
         let rawSource = rec?.item?.top_image_url || rec?.item?.images["1"]?.src;
+
+        // Append UTM to rec URLs (leave existing query strings intact)
+        if (rec?.item?.resolved_url && !rec.item.resolved_url.match(/\?/)) {
+          rec.item.resolved_url = `${rec.item.resolved_url}?utm_source=pocket-ff-recs`;
+        }
 
         rec.item.encodedThumbURL = rawSource
           ? encodeURIComponent(rawSource)

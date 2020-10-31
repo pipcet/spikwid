@@ -46,6 +46,9 @@
 #include "mozilla/dom/TimeoutManager.h"
 #include "mozilla/dom/VisualViewport.h"
 #include "mozilla/dom/WindowProxyHolder.h"
+#ifdef MOZ_GLEAN
+#  include "mozilla/glean/Glean.h"
+#endif
 #include "mozilla/IntegerPrintfMacros.h"
 #include "mozilla/Result.h"
 #if defined(MOZ_WIDGET_ANDROID)
@@ -1018,8 +1021,6 @@ nsGlobalWindowInner::~nsGlobalWindowInner() {
 
   Telemetry::Accumulate(Telemetry::INNERWINDOWS_WITH_MUTATION_LISTENERS,
                         mMutationBits ? 1 : 0);
-  Telemetry::Accumulate(Telemetry::INNERWINDOWS_WITH_TEXT_EVENT_LISTENERS,
-                        mMayHaveTextEventListenerInDefaultGroup ? 1 : 0);
 
   // An inner window is destroyed, pull it out of the outer window's
   // list if inner windows.
@@ -1059,6 +1060,15 @@ void nsGlobalWindowInner::FreeInnerObjects() {
     return;
   }
   StartDying();
+
+  if (mDoc && mDoc->GetWindowContext()) {
+    // The document is about to lose its window, so this is a good time to send
+    // our page use counters.
+    //
+    // (We also do this in Document::SetScriptGlobalObject(nullptr), which
+    // catches most cases of documents losing their window, but not all.)
+    mDoc->SendPageUseCounters();
+  }
 
   // Make sure that this is called before we null out the document and
   // other members that the window destroyed observers could
@@ -1226,6 +1236,10 @@ void nsGlobalWindowInner::FreeInnerObjects() {
   mSpeechSynthesis = nullptr;
 #endif
 
+#ifdef MOZ_GLEAN
+  mGlean = nullptr;
+#endif
+
   mParentTarget = nullptr;
 
   if (mCleanMessageManager) {
@@ -1314,6 +1328,10 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(nsGlobalWindowInner)
 
 #ifdef MOZ_WEBSPEECH
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mSpeechSynthesis)
+#endif
+
+#ifdef MOZ_GLEAN
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mGlean)
 #endif
 
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mOuterWindow)
@@ -1407,6 +1425,10 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsGlobalWindowInner)
 
 #ifdef MOZ_WEBSPEECH
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mSpeechSynthesis)
+#endif
+
+#ifdef MOZ_GLEAN
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mGlean)
 #endif
 
   if (tmp->mOuterWindow) {
@@ -1683,13 +1705,9 @@ void nsGlobalWindowInner::InitDocumentDependentState(JSContext* aCx) {
 
   Telemetry::Accumulate(Telemetry::INNERWINDOWS_WITH_MUTATION_LISTENERS,
                         mMutationBits ? 1 : 0);
-  Telemetry::Accumulate(Telemetry::INNERWINDOWS_WITH_TEXT_EVENT_LISTENERS,
-                        mMayHaveTextEventListenerInDefaultGroup ? 1 : 0);
 
   // Clear our mutation bitfield.
   mMutationBits = 0;
-
-  mMayHaveTextEventListenerInDefaultGroup = false;
 }
 
 nsresult nsGlobalWindowInner::EnsureClientSource() {
@@ -2711,6 +2729,16 @@ bool nsGlobalWindowInner::HasActiveSpeechSynthesis() {
 
 #endif
 
+#ifdef MOZ_GLEAN
+mozilla::glean::Glean* nsGlobalWindowInner::Glean() {
+  if (!mGlean) {
+    mGlean = new mozilla::glean::Glean();
+  }
+
+  return mGlean;
+}
+#endif
+
 Nullable<WindowProxyHolder> nsGlobalWindowInner::GetParent(
     ErrorResult& aError) {
   FORWARD_TO_OUTER_OR_THROW(GetParentOuter, (), aError, nullptr);
@@ -3619,7 +3647,7 @@ Nullable<WindowProxyHolder> nsGlobalWindowInner::PrintPreview(
   FORWARD_TO_OUTER_OR_THROW(Print,
                             (aSettings, aListener, aDocShellToCloneInto,
                              nsGlobalWindowOuter::IsPreview::Yes,
-                             nsGlobalWindowOuter::BlockUntilDone::No,
+                             nsGlobalWindowOuter::IsForWindowDotPrint::No,
                              /* aPrintPreviewCallback = */ nullptr, aError),
                             aError, nullptr);
 }
@@ -6072,12 +6100,11 @@ bool nsGlobalWindowInner::RunTimeoutHandler(Timeout* aTimeout,
     timeout->mScriptHandler->GetDescription(handlerDescription);
     str.Append(handlerDescription);
   }
-  AUTO_PROFILER_MARKER_TEXT(
-      "setTimeout callback",
-      JS.WithOptions(
-          MarkerStack::TakeBacktrace(timeout->TakeProfilerBacktrace()),
-          MarkerInnerWindowId(mWindowID)),
-      str);
+  AUTO_PROFILER_MARKER_TEXT("setTimeout callback", JS,
+                            MarkerOptions(MarkerStack::TakeBacktrace(
+                                              timeout->TakeProfilerBacktrace()),
+                                          MarkerInnerWindowId(mWindowID)),
+                            str);
 #endif
 
   bool abortIntervalHandler;
@@ -7486,7 +7513,8 @@ nsPIDOMWindowInner::nsPIDOMWindowInner(nsPIDOMWindowOuter* aOuterWindow,
       mMayHaveSelectionChangeEventListener(false),
       mMayHaveMouseEnterLeaveEventListener(false),
       mMayHavePointerEnterLeaveEventListener(false),
-      mMayHaveTextEventListenerInDefaultGroup(false),
+      mMayHaveBeforeInputEventListenerForTelemetry(false),
+      mMutationObserverHasObservedNodeForTelemetry(false),
       mOuterWindow(aOuterWindow),
       mWindowID(0),
       mHasNotifiedGlobalCreated(false),

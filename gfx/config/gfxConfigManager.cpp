@@ -38,7 +38,6 @@ void gfxConfigManager::Init() {
       StaticPrefs::gfx_webrender_compositor_force_enabled_AtStartup();
   mGPUProcessAllowSoftware =
       StaticPrefs::layers_gpu_process_allow_software_AtStartup();
-  mWrPictureCaching = StaticPrefs::gfx_webrender_picture_caching();
   mWrPartialPresent =
       StaticPrefs::gfx_webrender_max_partial_present_rects_AtStartup() > 0;
 #ifdef XP_WIN
@@ -55,13 +54,12 @@ void gfxConfigManager::Init() {
   mWrEnvForceDisabled = gfxPlatform::WebRenderEnvvarDisabled();
 
 #ifdef XP_WIN
-  mHwStretchingSupport =
-      DeviceManagerDx::Get()->CheckHardwareStretchingSupport();
+  DeviceManagerDx::Get()->CheckHardwareStretchingSupport(mHwStretchingSupport);
   mScaledResolution = HasScaledResolution();
   mIsWin10OrLater = IsWin10OrLater();
   mWrCompositorDCompRequired = true;
 #else
-  mHwStretchingSupport = true;
+  ++mHwStretchingSupport.mBoth;
 #endif
 
 #ifdef MOZ_WIDGET_GTK
@@ -170,20 +168,21 @@ bool gfxConfigManager::ConfigureWebRenderQualified() {
     nsAutoString adapterVendorID;
     mGfxInfo->GetAdapterVendorID(adapterVendorID);
     if (adapterVendorID == u"0x8086") {
-      bool hasBattery = false;
-      mGfxInfo->GetHasBattery(&hasBattery);
-      if (hasBattery && !mFeatureWrCompositor->IsEnabled()) {
+      bool mixed;
+      int32_t maxRefreshRate = mGfxInfo->GetMaxRefreshRate(&mixed);
+      if (maxRefreshRate > 60) {
         mFeatureWrQualified->Disable(FeatureStatus::Blocked,
-                                     "Battery Intel requires os compositor",
-                                     "INTEL_BATTERY_REQUIRES_DCOMP"_ns);
+                                     "Monitor refresh rate too high",
+                                     "REFRESH_RATE_TOO_HIGH"_ns);
       }
-    }
-
-    int32_t maxRefreshRate = mGfxInfo->GetMaxRefreshRate();
-    if (maxRefreshRate > 60) {
-      mFeatureWrQualified->Disable(FeatureStatus::Blocked,
-                                   "Monitor refresh rate too high",
-                                   "REFRESH_RATE_TOO_HIGH"_ns);
+    } else if (adapterVendorID == u"0x10de") {
+      bool mixed = false;
+      int32_t maxRefreshRate = mGfxInfo->GetMaxRefreshRate(&mixed);
+      if (maxRefreshRate > 60 && mixed) {
+        mFeatureWrQualified->Disable(FeatureStatus::Blocked,
+                                     "Monitor refresh rate too high/mixed",
+                                     "NVIDIA_REFRESH_RATE_MIXED"_ns);
+      }
     }
   }
 
@@ -215,49 +214,52 @@ void gfxConfigManager::ConfigureWebRender() {
   // Disable native compositor when hardware stretching is not supported. It is
   // for avoiding a problem like Bug 1618370.
   // XXX Is there a better check for Bug 1618370?
-  if (!mHwStretchingSupport && mScaledResolution) {
+  if (!mHwStretchingSupport.IsFullySupported() && mScaledResolution) {
+    nsPrintfCString failureId(
+        "FEATURE_FAILURE_NO_HARDWARE_STRETCHING_B%uW%uF%uN%uE%u",
+        mHwStretchingSupport.mBoth, mHwStretchingSupport.mWindowOnly,
+        mHwStretchingSupport.mFullScreenOnly, mHwStretchingSupport.mNone,
+        mHwStretchingSupport.mError);
     mFeatureWrCompositor->Disable(FeatureStatus::Unavailable,
-                                  "No hardware stretching support",
-                                  "FEATURE_FAILURE_NO_HARDWARE_STRETCHING"_ns);
+                                  "No hardware stretching support", failureId);
   }
 
   bool guardedByQualifiedPref = ConfigureWebRenderQualified();
 
-  mFeatureWr->DisableByDefault(FeatureStatus::OptIn,
-                               "WebRender is an opt-in feature",
-                               "FEATURE_FAILURE_DEFAULT_OFF"_ns);
+  mFeatureWr->EnableByDefault();
 
   // envvar works everywhere; note that we need this for testing in CI.
   // Prior to bug 1523788, the `prefEnabled` check was only done on Nightly,
   // so as to prevent random users from easily enabling WebRender on
   // unqualified hardware in beta/release.
   if (mWrEnvForceEnabled) {
-    mFeatureWr->UserEnable("Force enabled by envvar");
+    mFeatureWr->UserForceEnable("Force enabled by envvar");
   } else if (mWrForceEnabled) {
-    mFeatureWr->UserEnable("Force enabled by pref");
-  } else if (mFeatureWrQualified->IsEnabled()) {
-    // If the HW is qualified, we enable if either the HW has been qualified
-    // on the release channel (i.e. it's no longer guarded by the qualified
-    // pref), or if the qualified pref is enabled.
-    if (!guardedByQualifiedPref) {
-      mFeatureWr->UserEnable("Qualified in release");
-    } else if (mWrQualified) {
-      mFeatureWr->UserEnable("Qualified enabled by pref");
-    }
-  }
-
-  // If the user set the pref to force-disable, let's do that. This will
-  // override all the other enabling prefs (gfx.webrender.enabled,
-  // gfx.webrender.all, and gfx.webrender.all.qualified).
-  if (mWrForceDisabled ||
-      (mWrEnvForceDisabled && mWrQualifiedOverride.isNothing())) {
+    mFeatureWr->UserForceEnable("Force enabled by pref");
+  } else if (mWrForceDisabled ||
+             (mWrEnvForceDisabled && mWrQualifiedOverride.isNothing())) {
+    // If the user set the pref to force-disable, let's do that. This
+    // will override all the other enabling prefs
+    // (gfx.webrender.enabled, gfx.webrender.all, and
+    // gfx.webrender.all.qualified).
     mFeatureWr->UserDisable("User force-disabled WR",
                             "FEATURE_FAILURE_USER_FORCE_DISABLED"_ns);
   }
 
+  if (!mFeatureWrQualified->IsEnabled()) {
+    mFeatureWr->Disable(FeatureStatus::Disabled, "Not qualified",
+                        "FEATURE_FAILURE_NOT_QUALIFIED"_ns);
+  } else if (guardedByQualifiedPref && !mWrQualified) {
+    // If the HW is qualified, we enable if either the HW has been qualified
+    // on the release channel (i.e. it's no longer guarded by the qualified
+    // pref), or if the qualified pref is enabled.
+    mFeatureWr->Disable(FeatureStatus::Disabled, "Control group for experiment",
+                        "FEATURE_FAILURE_IN_EXPERIMENT"_ns);
+  }
+
   // HW_COMPOSITING being disabled implies interfacing with the GPU might break
   if (!mFeatureHwCompositing->IsEnabled() &&
-      !Preferences::GetBool("gfx.webrender.software", false)) {
+      !StaticPrefs::gfx_webrender_software_AtStartup()) {
     mFeatureWr->ForceDisable(FeatureStatus::UnavailableNoHwCompositing,
                              "Hardware compositing is disabled",
                              "FEATURE_FAILURE_WEBRENDER_NEED_HWCOMP"_ns);
@@ -276,24 +278,39 @@ void gfxConfigManager::ConfigureWebRender() {
                              "FEATURE_FAILURE_XRENDER"_ns);
   }
 
-  mFeatureWrAngle->DisableByDefault(FeatureStatus::OptIn,
-                                    "WebRender ANGLE is an opt-in feature",
-                                    "FEATURE_FAILURE_DEFAULT_OFF"_ns);
-
-  if (mFeatureD3D11HwAngle && mWrForceAngle) {
-    if (!mFeatureD3D11HwAngle->IsEnabled()) {
-      mFeatureWr->ForceDisable(FeatureStatus::UnavailableNoAngle,
-                               "ANGLE is disabled",
-                               mFeatureD3D11HwAngle->GetFailureId());
-    } else if (!mFeatureGPUProcess->IsEnabled() &&
-               (!mIsNightly || !mWrForceAngleNoGPUProcess)) {
-      // WebRender with ANGLE relies on the GPU process when on Windows
-      mFeatureWr->ForceDisable(FeatureStatus::UnavailableNoGpuProcess,
-                               "GPU Process is disabled",
-                               "FEATURE_FAILURE_GPU_PROCESS_DISABLED"_ns);
-    } else if (mFeatureWr->IsEnabled()) {
-      mFeatureWrAngle->UserEnable("Enabled");
+  mFeatureWrAngle->EnableByDefault();
+  if (mFeatureD3D11HwAngle) {
+    if (mWrForceAngle) {
+      if (!mFeatureD3D11HwAngle->IsEnabled()) {
+        mFeatureWrAngle->ForceDisable(FeatureStatus::UnavailableNoAngle,
+                                      "ANGLE is disabled",
+                                      mFeatureD3D11HwAngle->GetFailureId());
+      } else if (!mFeatureGPUProcess->IsEnabled() &&
+                 (!mIsNightly || !mWrForceAngleNoGPUProcess)) {
+        // WebRender with ANGLE relies on the GPU process when on Windows
+        mFeatureWrAngle->ForceDisable(
+            FeatureStatus::UnavailableNoGpuProcess, "GPU Process is disabled",
+            "FEATURE_FAILURE_GPU_PROCESS_DISABLED"_ns);
+      } else if (!mFeatureWr->IsEnabled()) {
+        mFeatureWrAngle->ForceDisable(FeatureStatus::Unavailable,
+                                      "WebRender disabled",
+                                      "FEATURE_FAILURE_WR_DISABLED"_ns);
+      }
+    } else {
+      mFeatureWrAngle->Disable(FeatureStatus::Disabled, "ANGLE is not forced",
+                               "FEATURE_FAILURE_ANGLE_NOT_FORCED"_ns);
     }
+  } else {
+    mFeatureWrAngle->Disable(FeatureStatus::Unavailable, "OS not supported",
+                             "FEATURE_FAILURE_OS_NOT_SUPPORTED"_ns);
+  }
+
+  if (mWrForceAngle && mFeatureWr->IsEnabled() &&
+      !mFeatureWrAngle->IsEnabled()) {
+    // Ensure we disable WebRender if ANGLE is unavailable and it is required.
+    mFeatureWr->ForceDisable(FeatureStatus::UnavailableNoAngle,
+                             "ANGLE is disabled",
+                             mFeatureWrAngle->GetFailureId());
   }
 
   if (!mFeatureWr->IsEnabled() && mDisableHwCompositingNoWr) {
@@ -336,12 +353,6 @@ void gfxConfigManager::ConfigureWebRender() {
                                   FeatureStatus::Unavailable, "Requires ANGLE",
                                   "FEATURE_FAILURE_DCOMP_NOT_ANGLE"_ns);
 
-  if (!mWrPictureCaching) {
-    mFeatureWrCompositor->ForceDisable(
-        FeatureStatus::Unavailable, "Picture caching is disabled",
-        "FEATURE_FAILURE_PICTURE_CACHING_DISABLED"_ns);
-  }
-
   if (!mFeatureWrDComp->IsEnabled() && mWrCompositorDCompRequired) {
     mFeatureWrCompositor->ForceDisable(FeatureStatus::Unavailable,
                                        "No DirectComposition usage",
@@ -353,11 +364,6 @@ void gfxConfigManager::ConfigureWebRender() {
   if (mWrPartialPresent) {
     if (mFeatureWr->IsEnabled()) {
       mFeatureWrPartial->EnableByDefault();
-      if (!mWrPictureCaching) {
-        mFeatureWrPartial->ForceDisable(
-            FeatureStatus::Unavailable, "Picture caching is disabled",
-            "FEATURE_FAILURE_PICTURE_CACHING_DISABLED"_ns);
-      }
     }
   }
 }

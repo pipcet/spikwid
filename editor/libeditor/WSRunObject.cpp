@@ -1157,6 +1157,10 @@ nsresult WhiteSpaceVisibilityKeeper::DeleteContentNodeAndJoinTextNodesAroundIt(
     NS_WARNING("Deleting content node was an orphan node");
     return NS_ERROR_FAILURE;
   }
+  if (!HTMLEditUtils::IsRemovableNode(aContentToDelete)) {
+    NS_WARNING("Deleting content node wasn't removable");
+    return NS_ERROR_FAILURE;
+  }
   nsresult rv = WhiteSpaceVisibilityKeeper::
       MakeSureToKeepVisibleStateOfWhiteSpacesAroundDeletingRange(
           aHTMLEditor, EditorDOMRange(atContent, atContent.NextPoint()));
@@ -1218,6 +1222,10 @@ WSScanResult WSRunScanner::ScanPreviousVisibleNodeOrBlockBoundaryFrom(
     const EditorDOMPointBase<PT, CT>& aPoint) const {
   MOZ_ASSERT(aPoint.IsSet());
 
+  if (!TextFragmentDataAtStartRef().IsInitialized()) {
+    return WSScanResult(nullptr, WSType::UnexpectedError);
+  }
+
   // If the range has visible text and start of the visible text is before
   // aPoint, return previous character in the text.
   const VisibleWhiteSpacesData& visibleWhiteSpaces =
@@ -1251,6 +1259,10 @@ template <typename PT, typename CT>
 WSScanResult WSRunScanner::ScanNextVisibleNodeOrBlockBoundaryFrom(
     const EditorDOMPointBase<PT, CT>& aPoint) const {
   MOZ_ASSERT(aPoint.IsSet());
+
+  if (!TextFragmentDataAtStartRef().IsInitialized()) {
+    return WSScanResult(nullptr, WSType::UnexpectedError);
+  }
 
   // If the range has visible text and aPoint equals or is before the end of the
   // visible text, return inclusive next character in the text.
@@ -1681,10 +1693,11 @@ WSRunScanner::TextFragmentData::GetNonCollapsedRangeInTexts(
   if (!aRange.IsPositioned()) {
     return EditorDOMRangeInTexts();
   }
+  if (aRange.Collapsed()) {
+    // If collapsed, we can do nothing.
+    return EditorDOMRangeInTexts();
+  }
   if (aRange.IsInTextNodes()) {
-    if (aRange.Collapsed()) {
-      return EditorDOMRangeInTexts();
-    }
     // Note that this may return a range which don't include any invisible
     // white-spaces due to empty text nodes.
     return aRange.GetAsInTexts();
@@ -1826,7 +1839,7 @@ nsresult WhiteSpaceVisibilityKeeper::
   }
 
   EditorDOMRange rangeToDelete(aRangeToDelete);
-  bool mayBecomeUnexpectedDOMTree = aHTMLEditor.MaybeHasMutationEventListeners(
+  bool mayBecomeUnexpectedDOMTree = aHTMLEditor.MayHaveMutationEventListeners(
       NS_EVENT_BITS_MUTATION_SUBTREEMODIFIED |
       NS_EVENT_BITS_MUTATION_NODEREMOVED |
       NS_EVENT_BITS_MUTATION_NODEREMOVEDFROMDOCUMENT |

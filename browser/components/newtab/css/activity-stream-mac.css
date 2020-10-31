@@ -473,9 +473,6 @@ main {
     color: var(--newtab-text-conditional-color);
     text-decoration: underline; }
 
-.top-sites {
-  margin-bottom: 2px; }
-
 .top-sites-list {
   list-style: none;
   margin: 0 -16px;
@@ -663,8 +660,7 @@ main {
   .top-site-outer .title {
     color: var(--newtab-topsites-label-color);
     font: message-box;
-    height: 30px;
-    line-height: 30px;
+    padding-top: 4px;
     text-align: center;
     width: 96px;
     position: relative; }
@@ -672,15 +668,17 @@ main {
       fill: var(--newtab-icon-tertiary-color);
       inset-inline-start: 0;
       position: absolute;
-      top: 10px; }
+      top: 0.5em; }
     .top-site-outer .title span {
-      height: 30px;
       display: block;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap; }
-    .top-site-outer .title.pinned span {
+    .top-site-outer .title.has-icon span {
       padding: 0 13px; }
+    .top-site-outer .title .sponsored-label {
+      color: #737373;
+      font-size: 0.9em; }
   .top-site-outer .edit-button {
     background-image: url("chrome://activity-stream/content/data/content/assets/glyph-edit-16.svg"); }
   .top-site-outer.placeholder .tile {
@@ -1679,7 +1677,7 @@ main {
 .asrouter-toggle {
   position: fixed;
   top: 15px;
-  right: 48px;
+  inset-inline-end: 48px;
   border: 0;
   background: none;
   z-index: 1;
@@ -1687,6 +1685,8 @@ main {
   .asrouter-toggle .icon-devtools {
     background-image: url("chrome://browser/skin/developer.svg");
     padding: 15px; }
+  .asrouter-toggle:dir(rtl) {
+    transform: scaleX(-1); }
   .asrouter-toggle:hover {
     background: var(--newtab-element-hover-color); }
   .asrouter-toggle.expanded {
@@ -1695,14 +1695,14 @@ main {
 .asrouter-admin {
   position: fixed;
   top: 0;
-  left: 0;
+  inset-inline-start: 0;
   width: 100%;
   background: var(--newtab-background-color);
   height: 100%;
   overflow-y: scroll;
   margin: 0 auto;
   font-size: 14px;
-  padding-left: 240px;
+  padding-inline-start: 240px;
   color: var(--newtab-text-primary-color); }
   .asrouter-admin.collapsed {
     display: none; }
@@ -1731,6 +1731,7 @@ main {
     margin-inline-start: 5px;
     margin-bottom: 0; }
   .asrouter-admin .general-textarea {
+    direction: ltr;
     width: 740px;
     height: 500px;
     overflow: auto;
@@ -1738,6 +1739,7 @@ main {
     border-radius: 4px;
     display: flex; }
   .asrouter-admin .wnp-textarea {
+    direction: ltr;
     width: 740px;
     height: 500px;
     overflow: auto;
@@ -1793,9 +1795,9 @@ main {
     .asrouter-admin .message-item td.button-column {
       width: 15%; }
     .asrouter-admin .message-item td:first-child {
-      border-left: 1px solid var(--newtab-border-secondary-color); }
+      border-inline-start: 1px solid var(--newtab-border-secondary-color); }
     .asrouter-admin .message-item td:last-child {
-      border-right: 1px solid var(--newtab-border-secondary-color); }
+      border-inline-end: 1px solid var(--newtab-border-secondary-color); }
   .asrouter-admin .message-item.blocked .message-id,
   .asrouter-admin .message-item.blocked .message-summary {
     opacity: 0.5; }
@@ -2710,22 +2712,6 @@ main {
   .ds-column-4 .ds-top-sites .top-site-inner .title {
     width: var(--rightPanelIconWidth); }
 
-.top-sites-spoc .top-sites-list {
-  display: flex;
-  flex-wrap: wrap; }
-  .top-sites-spoc .top-sites-list .top-site-outer {
-    margin: 0 0 20px; }
-    .top-sites-spoc .top-sites-list .top-site-outer .top-site-spoc-label {
-      color: #737373;
-      font-size: 11px;
-      display: flex;
-      justify-content: center;
-      margin-top: -4px; }
-      [lwt-newtab-brighttext] .top-sites-spoc .top-sites-list .top-site-outer .top-site-spoc-label {
-        color: #B1B1B3; }
-    .top-sites-spoc .top-sites-list .top-site-outer.dragged .top-site-spoc-label {
-      visibility: hidden; }
-
 .ds-hero-item .context-menu-button,
 .ds-list-item .context-menu-button,
 .ds-card .context-menu-button,
@@ -3400,6 +3386,12 @@ main {
   cursor: pointer; }
   .tall .ASRouterButton {
     margin-inline-start: 20px; }
+  .ASRouterButton.test-only {
+    width: 0;
+    height: 0;
+    overflow: hidden;
+    display: block;
+    visibility: hidden; }
   .ASRouterButton.primary {
     border: 1px solid var(--newtab-button-primary-color);
     background-color: var(--newtab-button-primary-color);

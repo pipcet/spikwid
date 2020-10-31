@@ -325,16 +325,18 @@ class nsHttpHandler final : public nsIHttpProtocolHandler,
 
   [[nodiscard]] nsresult SpeculativeConnect(nsHttpConnectionInfo* ci,
                                             nsIInterfaceRequestor* callbacks,
-                                            uint32_t caps = 0) {
+                                            uint32_t caps = 0,
+                                            bool aFetchHTTPSRR = false) {
     TickleWifi(callbacks);
     RefPtr<nsHttpConnectionInfo> clone = ci->Clone();
-    return mConnMgr->SpeculativeConnect(clone, callbacks, caps);
+    return mConnMgr->SpeculativeConnect(clone, callbacks, caps, nullptr,
+                                        aFetchHTTPSRR);
   }
 
   [[nodiscard]] nsresult SpeculativeConnect(nsHttpConnectionInfo* ci,
                                             nsIInterfaceRequestor* callbacks,
                                             uint32_t caps,
-                                            NullHttpTransaction* aTrans) {
+                                            SpeculativeTransaction* aTrans) {
     RefPtr<nsHttpConnectionInfo> clone = ci->Clone();
     return mConnMgr->SpeculativeConnect(clone, callbacks, caps, aTrans);
   }
@@ -505,6 +507,15 @@ class nsHttpHandler final : public nsIHttpProtocolHandler,
                                 const OriginAttributes& aOriginAttributes);
 
   bool UseHTTPSRRAsAltSvcEnabled() const;
+
+  bool EchConfigEnabled() const;
+  // When EchConfig is enabled and all records with echConfig are failed, this
+  // functon indicate whether we can fallback to the origin server.
+  // In the case an HTTPS RRSet contains some RRs with echConfig and some
+  // without, we always fallback to the origin one.
+  bool FallbackToOriginIfConfigsAreECHAndAllFailed() const;
+
+  bool UseHTTPSRRForSpeculativeConnection() const;
 
  private:
   nsHttpHandler();

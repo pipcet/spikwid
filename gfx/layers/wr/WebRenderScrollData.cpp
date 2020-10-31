@@ -7,7 +7,6 @@
 #include "mozilla/layers/WebRenderScrollData.h"
 
 #include "Layers.h"
-#include "LayersLogging.h"
 #include "mozilla/layers/LayersMessageUtils.h"
 #include "mozilla/layers/WebRenderLayerManager.h"
 #include "mozilla/ToString.h"
@@ -121,7 +120,7 @@ void WebRenderLayerScrollData::Dump(const WebRenderScrollData& aOwner) const {
   printf_stderr("LayerScrollData(%p) descendants %d\n", this, mDescendantCount);
   for (size_t i : mScrollIds) {
     printf_stderr("  metadata: %s\n",
-                  Stringify(aOwner.GetScrollMetadata(i)).c_str());
+                  ToString(aOwner.GetScrollMetadata(i)).c_str());
   }
   printf_stderr("  ancestor transform: %s\n",
                 ToString(mAncestorTransform).c_str());
@@ -212,11 +211,11 @@ uint32_t WebRenderScrollData::GetPaintSequenceNumber() const {
   return mPaintSequenceNumber;
 }
 
-void WebRenderScrollData::ApplyUpdates(ScrollUpdatesMap& aUpdates,
+void WebRenderScrollData::ApplyUpdates(ScrollUpdatesMap&& aUpdates,
                                        uint32_t aPaintSequenceNumber) {
   for (auto it = aUpdates.Iter(); !it.Done(); it.Next()) {
     if (Maybe<size_t> index = HasMetadataFor(it.Key())) {
-      mScrollMetadatas[*index].UpdatePendingScrollInfo(it.Data());
+      mScrollMetadatas[*index].UpdatePendingScrollInfo(std::move(it.Data()));
     }
   }
   mPaintSequenceNumber = aPaintSequenceNumber;

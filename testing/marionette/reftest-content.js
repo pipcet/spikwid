@@ -24,6 +24,7 @@ BrowserDOMWindow.prototype = {
   _maybeOpen(aOpenWindowInfo, aWhere) {
     if (aWhere == Ci.nsIBrowserDOMWindow.OPEN_PRINT_BROWSER) {
       return PrintUtils.startPrintWindow(
+        "window_print",
         aOpenWindowInfo.parent,
         aOpenWindowInfo
       );
@@ -60,12 +61,6 @@ BrowserDOMWindow.prototype = {
 
   get tabCount() {
     return 1;
-  },
-
-  isTabContentWindow(win) {
-    // This method is probably not needed anymore: bug 1602915
-    // In any case this gives us the default behavior.
-    return false;
   },
 };
 

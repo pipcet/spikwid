@@ -15,6 +15,8 @@
 #include "jit/CacheIRCompiler.h"
 #include "jit/CacheIROpsGenerated.h"
 #include "jit/CompileInfo.h"
+#include "jit/InlineScriptTree.h"
+#include "jit/JitRealm.h"
 #include "jit/JitScript.h"
 #include "jit/JitSpewer.h"
 #include "jit/MIRGenerator.h"
@@ -597,6 +599,8 @@ AbortReasonOr<WarpScriptSnapshot*> WarpScriptOracle::createScriptSnapshot() {
       case JSOp::StrictSetElem:
       case JSOp::ToPropertyKey:
       case JSOp::OptimizeSpreadCall:
+      case JSOp::Typeof:
+      case JSOp::TypeofExpr:
         MOZ_TRY(maybeInlineIC(opSnapshots, loc));
         break;
 
@@ -667,8 +671,6 @@ AbortReasonOr<WarpScriptSnapshot*> WarpScriptOracle::createScriptSnapshot() {
       case JSOp::ClassConstructor:
       case JSOp::DerivedConstructor:
       case JSOp::ToAsyncIter:
-      case JSOp::Typeof:
-      case JSOp::TypeofExpr:
       case JSOp::ObjWithProto:
       case JSOp::GetAliasedVar:
       case JSOp::SetAliasedVar:
@@ -1043,9 +1045,9 @@ bool WarpScriptOracle::replaceNurseryPointers(ICStub* stub,
   while (true) {
     StubField::Type fieldType = stubInfo->fieldType(field);
     switch (fieldType) {
-      case StubField::Type::RawWord:
+      case StubField::Type::RawInt32:
+      case StubField::Type::RawPointer:
       case StubField::Type::RawInt64:
-      case StubField::Type::DOMExpandoGeneration:
         break;
       case StubField::Type::Shape:
         static_assert(std::is_convertible_v<Shape*, gc::TenuredCell*>,

@@ -887,10 +887,6 @@ void nsContainerFrame::DoInlineIntrinsicISize(gfxContext* aRenderingContext,
                                               IntrinsicISizeType aType) {
   if (GetPrevInFlow()) return;  // Already added.
 
-  MOZ_ASSERT(
-      aType == nsLayoutUtils::MIN_ISIZE || aType == nsLayoutUtils::PREF_ISIZE,
-      "bad type");
-
   WritingMode wm = GetWritingMode();
   mozilla::Side startSide = wm.PhysicalSideForInlineAxis(eLogicalEdgeStart);
   mozilla::Side endSide = wm.PhysicalSideForInlineAxis(eLogicalEdgeEnd);
@@ -944,12 +940,13 @@ void nsContainerFrame::DoInlineIntrinsicISize(gfxContext* aRenderingContext,
       aData->mCurrentLine = clonePBM;
     }
     for (nsIFrame* kid : nif->mFrames) {
-      if (aType == nsLayoutUtils::MIN_ISIZE)
+      if (aType == IntrinsicISizeType::MinISize) {
         kid->AddInlineMinISize(aRenderingContext,
                                static_cast<InlineMinISizeData*>(aData));
-      else
+      } else {
         kid->AddInlinePrefISize(aRenderingContext,
                                 static_cast<InlinePrefISizeData*>(aData));
+      }
     }
 
     // After we advance to our next-in-flow, the stored line and line container
@@ -994,6 +991,7 @@ LogicalSize nsContainerFrame::ComputeAutoSize(
     // flex-basis:content.
     const nsStylePosition* pos = StylePosition();
     if (pos->ISize(aWM).IsAuto() ||
+        aFlags.contains(ComputeSizeFlag::UseAutoISize) ||
         (pos->mFlexBasis.IsContent() && IsFlexItem() &&
          nsFlexContainerFrame::IsItemInlineAxisMainAxis(this))) {
       result.ISize(aWM) =
@@ -1285,7 +1283,8 @@ void nsContainerFrame::FinishReflowChild(nsIFrame* aKidFrame,
 void nsContainerFrame::ReflowOverflowContainerChildren(
     nsPresContext* aPresContext, const ReflowInput& aReflowInput,
     nsOverflowAreas& aOverflowRects, ReflowChildFlags aFlags,
-    nsReflowStatus& aStatus, ChildFrameMerger aMergeFunc) {
+    nsReflowStatus& aStatus, ChildFrameMerger aMergeFunc,
+    Maybe<nsSize> aContainerSize) {
   MOZ_ASSERT(aPresContext, "null pointer");
 
   nsFrameList* overflowContainers =
@@ -1338,7 +1337,8 @@ void nsContainerFrame::ReflowOverflowContainerChildren(
           frame->HasAnyStateBits(NS_FRAME_IS_OVERFLOW_CONTAINER),
           "overflow container frame must have overflow container bit set");
       WritingMode wm = frame->GetWritingMode();
-      nsSize containerSize = aReflowInput.AvailableSize(wm).GetPhysicalSize(wm);
+      nsSize containerSize = aContainerSize.valueOr(
+          aReflowInput.AvailableSize(wm).GetPhysicalSize(wm));
       LogicalRect prevRect = prevInFlow->GetLogicalRect(wm, containerSize);
 
       // Initialize reflow params
@@ -2483,7 +2483,8 @@ LogicalSize nsContainerFrame::ComputeSizeWithIntrinsicDimensions(
   // a * (b / c) because of its reduced accuracy relative to a * b / c
   // or (a * b) / c (which are equivalent).
 
-  const bool isAutoISize = inlineStyleCoord->IsAuto();
+  const bool isAutoISize = inlineStyleCoord->IsAuto() ||
+                           aFlags.contains(ComputeSizeFlag::UseAutoISize);
   const bool isAutoBSize =
       nsLayoutUtils::IsAutoBSize(*blockStyleCoord, aCBSize.BSize(aWM)) ||
       aFlags.contains(ComputeSizeFlag::UseAutoBSize);
@@ -2531,7 +2532,7 @@ LogicalSize nsContainerFrame::ComputeSizeWithIntrinsicDimensions(
   } else if (MOZ_UNLIKELY(isGridItem) &&
              !parentFrame->IsMasonry(isOrthogonal ? eLogicalAxisBlock
                                                   : eLogicalAxisInline)) {
-    MOZ_ASSERT(!IS_TRUE_OVERFLOW_CONTAINER(this));
+    MOZ_ASSERT(!IsTrueOverflowContainer());
     // 'auto' inline-size for grid-level box - apply 'stretch' as needed:
     auto cbSize = aCBSize.ISize(aWM);
     if (cbSize != NS_UNCONSTRAINEDSIZE) {
@@ -2592,7 +2593,7 @@ LogicalSize nsContainerFrame::ComputeSizeWithIntrinsicDimensions(
   } else if (MOZ_UNLIKELY(isGridItem) &&
              !parentFrame->IsMasonry(isOrthogonal ? eLogicalAxisInline
                                                   : eLogicalAxisBlock)) {
-    MOZ_ASSERT(!IS_TRUE_OVERFLOW_CONTAINER(this));
+    MOZ_ASSERT(!IsTrueOverflowContainer());
     // 'auto' block-size for grid-level box - apply 'stretch' as needed:
     auto cbSize = aCBSize.BSize(aWM);
     if (cbSize != NS_UNCONSTRAINEDSIZE) {

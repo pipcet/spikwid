@@ -570,6 +570,14 @@ void RecordingPrefChanged(const char* aPrefName, void* aClosure) {
 
 #define WR_DEBUG_PREF "gfx.webrender.debug"
 
+static void WebRendeProfilerUIPrefChangeCallback(const char* aPrefName, void*) {
+  nsCString uiString;
+  if (NS_SUCCEEDED(Preferences::GetCString("gfx.webrender.debug.profiler-ui",
+                                           uiString))) {
+    gfxVars::SetWebRenderProfilerUI(uiString);
+  }
+}
+
 static void WebRenderDebugPrefChangeCallback(const char* aPrefName, void*) {
   wr::DebugFlags flags{0};
 #define GFX_WEBRENDER_DEBUG(suffix, bit)                   \
@@ -584,18 +592,11 @@ static void WebRenderDebugPrefChangeCallback(const char* aPrefName, void*) {
   GFX_WEBRENDER_DEBUG(".gpu-sample-queries", wr::DebugFlags::GPU_SAMPLE_QUERIES)
   GFX_WEBRENDER_DEBUG(".disable-batching", wr::DebugFlags::DISABLE_BATCHING)
   GFX_WEBRENDER_DEBUG(".epochs", wr::DebugFlags::EPOCHS)
-  GFX_WEBRENDER_DEBUG(".compact-profiler", wr::DebugFlags::COMPACT_PROFILER)
   GFX_WEBRENDER_DEBUG(".smart-profiler", wr::DebugFlags::SMART_PROFILER)
   GFX_WEBRENDER_DEBUG(".echo-driver-messages",
                       wr::DebugFlags::ECHO_DRIVER_MESSAGES)
-  GFX_WEBRENDER_DEBUG(".new-frame-indicator",
-                      wr::DebugFlags::NEW_FRAME_INDICATOR)
-  GFX_WEBRENDER_DEBUG(".new-scene-indicator",
-                      wr::DebugFlags::NEW_SCENE_INDICATOR)
   GFX_WEBRENDER_DEBUG(".show-overdraw", wr::DebugFlags::SHOW_OVERDRAW)
   GFX_WEBRENDER_DEBUG(".gpu-cache", wr::DebugFlags::GPU_CACHE_DBG)
-  GFX_WEBRENDER_DEBUG(".slow-frame-indicator",
-                      wr::DebugFlags::SLOW_FRAME_INDICATOR)
   GFX_WEBRENDER_DEBUG(".texture-cache.clear-evicted",
                       wr::DebugFlags::TEXTURE_CACHE_DBG_CLEAR_EVICTED)
   GFX_WEBRENDER_DEBUG(".picture-caching", wr::DebugFlags::PICTURE_CACHING_DBG)
@@ -770,6 +771,7 @@ WebRenderMemoryReporter::CollectReports(nsIHandleReportCallback* aHandleReport,
         helper.Report(aReport.render_tasks, "render-tasks");
         helper.Report(aReport.hit_testers, "hit-testers");
         helper.Report(aReport.fonts, "resource-cache/fonts");
+        helper.Report(aReport.weak_fonts, "resource-cache/weak-fonts");
         helper.Report(aReport.images, "resource-cache/images");
         helper.Report(aReport.rasterized_blobs,
                       "resource-cache/rasterized-blobs");
@@ -943,6 +945,7 @@ void gfxPlatform::Init() {
   gPlatform->InitAcceleration();
   gPlatform->InitWebRenderConfig();
 
+  gPlatform->InitWebGLConfig();
   gPlatform->InitWebGPUConfig();
 
   // When using WebRender, we defer initialization of the D3D11 devices until
@@ -1384,6 +1387,8 @@ void gfxPlatform::ShutdownLayersIPC() {
 
       Preferences::UnregisterCallback(WebRenderDebugPrefChangeCallback,
                                       WR_DEBUG_PREF);
+      Preferences::UnregisterCallback(WebRendeProfilerUIPrefChangeCallback,
+                                      "gfx.webrender.debug.profiler-ui");
     }
 
   } else {
@@ -1813,18 +1818,11 @@ nsAutoCString gfxPlatform::GetDefaultFontName(
   // this one variable:
   nsAutoCString result;
 
-  FamilyAndGeneric fam =
-      gfxPlatformFontList::PlatformFontList()->GetDefaultFontFamily(
-          aLangGroup, aGenericFamily);
-  if (fam.mFamily.mIsShared) {
-    if (fam.mFamily.mShared) {
-      fontlist::FontList* fontList =
-          gfxPlatformFontList::PlatformFontList()->SharedFontList();
-      result = fam.mFamily.mShared->DisplayName().AsString(fontList);
-    }
-  } else if (fam.mFamily.mUnshared) {
-    fam.mFamily.mUnshared->LocalizedName(result);
-  }  // (else, leave 'result' empty)
+  auto* pfl = gfxPlatformFontList::PlatformFontList();
+  FamilyAndGeneric fam = pfl->GetDefaultFontFamily(aLangGroup, aGenericFamily);
+  if (!pfl->GetLocalizedFamilyName(fam.mFamily, result)) {
+    NS_WARNING("missing default font-family name");
+  }
 
   return result;
 }
@@ -2550,28 +2548,6 @@ void gfxPlatform::InitAcceleration() {
       gfxVars::SetUseDoubleBufferingWithCompositor(true);
     }
 #endif
-
-    if (NS_SUCCEEDED(
-            gfxInfo->GetFeatureStatus(nsIGfxInfo::FEATURE_WEBGL2,
-                                      discardFailureId, &status))) {
-      gfxVars::SetAllowWebgl2(status == nsIGfxInfo::FEATURE_STATUS_OK);
-    }
-    if (NS_SUCCEEDED(
-            gfxInfo->GetFeatureStatus(nsIGfxInfo::FEATURE_WEBGL_OPENGL,
-                                      discardFailureId, &status))) {
-      gfxVars::SetWebglAllowWindowsNativeGl(status == nsIGfxInfo::FEATURE_STATUS_OK);
-    }
-
-    if (kIsMacOS) {
-      // Avoid crash for Intel HD Graphics 3000 on OSX. (Bug 1413269)
-      nsString vendorID, deviceID;
-      gfxInfo->GetAdapterVendorID(vendorID);
-      gfxInfo->GetAdapterDeviceID(deviceID);
-      if (vendorID.EqualsLiteral("0x8086") &&
-          (deviceID.EqualsLiteral("0x0116") || deviceID.EqualsLiteral("0x0126"))) {
-        gfxVars::SetWebglAllowCoreProfile(false);
-      }
-    }
   }
 
   if (Preferences::GetBool("media.hardware-video-decoding.enabled", false) &&
@@ -2756,7 +2732,7 @@ void gfxPlatform::InitWebRenderConfig() {
         gfxConfig::IsEnabled(Feature::WEBRENDER));
   }
 
-  if (Preferences::GetBool("gfx.webrender.software", false)) {
+  if (StaticPrefs::gfx_webrender_software_AtStartup()) {
     gfxVars::SetUseSoftwareWebRender(gfxConfig::IsEnabled(Feature::WEBRENDER));
   }
 
@@ -2768,6 +2744,9 @@ void gfxPlatform::InitWebRenderConfig() {
 
     Preferences::RegisterPrefixCallbackAndCall(WebRenderDebugPrefChangeCallback,
                                                WR_DEBUG_PREF);
+    Preferences::RegisterPrefixCallbackAndCall(
+        WebRendeProfilerUIPrefChangeCallback,
+        "gfx.webrender.debug.profiler-ui");
     Preferences::RegisterCallback(
         WebRenderQualityPrefChangeCallback,
         nsDependentCString(
@@ -2833,6 +2812,62 @@ void gfxPlatform::InitWebRenderConfig() {
   // The RemoveShaderCacheFromDiskIfNecessary() needs to be called after
   // WebRenderConfig initialization.
   gfxUtils::RemoveShaderCacheFromDiskIfNecessary();
+}
+
+void gfxPlatform::InitWebGLConfig() {
+  // Depends on InitWebRenderConfig() for UseWebRender().
+
+  if (!XRE_IsParentProcess()) return;
+
+  const nsCOMPtr<nsIGfxInfo> gfxInfo = services::GetGfxInfo();
+
+  const auto IsFeatureOk = [&](const int32_t feature) {
+    nsCString discardFailureId;
+    int32_t status;
+    MOZ_RELEASE_ASSERT(NS_SUCCEEDED(
+        gfxInfo->GetFeatureStatus(feature, discardFailureId, &status)));
+    return (status == nsIGfxInfo::FEATURE_STATUS_OK);
+  };
+
+  gfxVars::SetAllowWebgl2(IsFeatureOk(nsIGfxInfo::FEATURE_WEBGL2));
+  gfxVars::SetWebglAllowWindowsNativeGl(
+      IsFeatureOk(nsIGfxInfo::FEATURE_WEBGL_OPENGL));
+  gfxVars::SetAllowWebglAccelAngle(
+      IsFeatureOk(nsIGfxInfo::FEATURE_WEBGL_ANGLE));
+
+  if (kIsMacOS) {
+    // Avoid crash for Intel HD Graphics 3000 on OSX. (Bug 1413269)
+    nsString vendorID, deviceID;
+    gfxInfo->GetAdapterVendorID(vendorID);
+    gfxInfo->GetAdapterDeviceID(deviceID);
+    if (vendorID.EqualsLiteral("0x8086") &&
+        (deviceID.EqualsLiteral("0x0116") ||
+         deviceID.EqualsLiteral("0x0126"))) {
+      gfxVars::SetWebglAllowCoreProfile(false);
+    }
+  }
+
+  {
+    bool allowWebGLOop =
+        IsFeatureOk(nsIGfxInfo::FEATURE_ALLOW_WEBGL_OUT_OF_PROCESS);
+
+    const bool threadsafeGl = IsFeatureOk(nsIGfxInfo::FEATURE_THREADSAFE_GL);
+    if (gfxVars::UseWebRender() && !threadsafeGl) {
+      allowWebGLOop = false;
+    }
+
+    gfxVars::SetAllowWebglOop(allowWebGLOop);
+  }
+
+  if (kIsAndroid) {
+    // Don't enable robust buffer access on Adreno 630 devices.
+    // It causes the linking of some shaders to fail. See bug 1485441.
+    nsAutoString renderer;
+    gfxInfo->GetAdapterDeviceID(renderer);
+    if (renderer.Find("Adreno (TM) 630") != -1) {
+      gfxVars::SetAllowEglRbab(false);
+    }
+  }
 }
 
 void gfxPlatform::InitWebGPUConfig() {
@@ -3236,7 +3271,6 @@ uint32_t gfxPlatform::TargetFrameRate() {
 
 /* static */
 bool gfxPlatform::UseDesktopZoomingScrollbars() {
-  // bug 1657822 to enable this by default
   return StaticPrefs::apz_allow_zooming() &&
          !StaticPrefs::apz_force_disable_desktop_zooming_scrollbars();
 }

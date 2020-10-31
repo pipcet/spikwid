@@ -16,7 +16,16 @@ const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 const { AppConstants } = ChromeUtils.import(
   "resource://gre/modules/AppConstants.jsm"
 );
-
+ChromeUtils.defineModuleGetter(
+  this,
+  "ASRouterDefaultConfig",
+  "resource://activity-stream/lib/ASRouterDefaultConfig.jsm"
+);
+ChromeUtils.defineModuleGetter(
+  this,
+  "ASRouterNewTabHook",
+  "resource://activity-stream/lib/ASRouterNewTabHook.jsm"
+);
 ChromeUtils.defineModuleGetter(
   this,
   "ActorManagerParent",
@@ -528,7 +537,6 @@ let JSWINDOWACTORS = {
     child: {
       moduleURI: "resource://pdf.js/PdfjsChild.jsm",
     },
-    enablePreference: PREF_PDFJS_ISDEFAULT_CACHE_STATE,
     allFrames: true,
   },
 
@@ -616,6 +624,22 @@ let JSWINDOWACTORS = {
       },
     },
     matches: ["about:studies"],
+  },
+
+  ASRouter: {
+    parent: {
+      moduleURI: "resource:///actors/ASRouterParent.jsm",
+    },
+    child: {
+      moduleURI: "resource:///actors/ASRouterChild.jsm",
+      events: {
+        // This is added so the actor instantiates immediately and makes
+        // methods available to the page js on load.
+        DOMWindowCreated: {},
+      },
+    },
+    matches: ["about:home*", "about:newtab*", "about:welcome*"],
+    remoteTypes: ["privilegedabout"],
   },
 
   SwitchDocumentDirection: {
@@ -794,7 +818,6 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   HomePage: "resource:///modules/HomePage.jsm",
   Integration: "resource://gre/modules/Integration.jsm",
   LoginBreaches: "resource:///modules/LoginBreaches.jsm",
-  LiveBookmarkMigrator: "resource:///modules/LiveBookmarkMigrator.jsm",
   NewTabUtils: "resource://gre/modules/NewTabUtils.jsm",
   Normandy: "resource://normandy/Normandy.jsm",
   ObjectUtils: "resource://gre/modules/ObjectUtils.jsm",
@@ -820,7 +843,6 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   SearchTelemetry: "resource:///modules/SearchTelemetry.jsm",
   SessionStartup: "resource:///modules/sessionstore/SessionStartup.jsm",
   SessionStore: "resource:///modules/sessionstore/SessionStore.jsm",
-  ShellService: "resource:///modules/ShellService.jsm",
   TabCrashHandler: "resource:///modules/ContentCrashHandlers.jsm",
   TabUnloader: "resource:///modules/TabUnloader.jsm",
   TRRRacer: "resource:///modules/TRRPerformance.jsm",
@@ -1811,6 +1833,7 @@ BrowserGlue.prototype = {
           // exists to expose prefs once we are confident of privacy implications)
           delete snapshotData.crashes;
           delete snapshotData.modifiedPreferences;
+          delete snapshotData.printingPreferences;
           channel.send(snapshotData, target);
         });
       }
@@ -1876,6 +1899,8 @@ BrowserGlue.prototype = {
 
     PageActions.init();
 
+    DoHController.init();
+
     this._firstWindowTelemetry(aWindow);
     this._firstWindowLoaded();
 
@@ -1908,6 +1933,10 @@ BrowserGlue.prototype = {
       this._updateAutoplayPref
     );
     Services.prefs.addObserver(
+      "media.hardwaremediakeys.enabled",
+      this._updateMediaControlPref
+    );
+    Services.prefs.addObserver(
       "privacy.trackingprotection",
       this._setPrefExpectations
     );
@@ -1926,6 +1955,16 @@ BrowserGlue.prototype = {
     if (blocked in labels) {
       telemetry.add(labels[blocked]);
     }
+  },
+
+  _updateMediaControlPref() {
+    const enabled = Services.prefs.getBoolPref(
+      "media.hardwaremediakeys.enabled"
+    );
+    const telemetry = Services.telemetry.getHistogramById(
+      "MEDIA_CONTROL_SETTING_CHANGE"
+    );
+    telemetry.add(enabled ? "EnableTotal" : "DisableTotal");
   },
 
   _setPrefExpectations() {
@@ -2127,6 +2166,7 @@ BrowserGlue.prototype = {
 
     Normandy.uninit();
     RFPHelper.uninit();
+    ASRouterNewTabHook.destroy();
   },
 
   // Set up a listener to enable/disable the screenshots extension
@@ -2386,7 +2426,6 @@ BrowserGlue.prototype = {
       this._showNewInstallModal();
     }
 
-    DoHController.init();
     FirefoxMonitor.init();
   },
 
@@ -2558,24 +2597,13 @@ BrowserGlue.prototype = {
       },
 
       {
-        condition:
-          Services.prefs.getIntPref(
-            "browser.livebookmarks.migrationAttemptsLeft",
-            0
-          ) > 0,
-        task: () => {
-          LiveBookmarkMigrator.migrate().catch(Cu.reportError);
-        },
-      },
-
-      {
         task: () => {
           TabUnloader.init();
         },
       },
 
       // request startup of Chromium remote debugging protocol
-      // (observer will only be notified when --remote-debugger is passed)
+      // (observer will only be notified when --remote-debugging-port is passed)
       {
         condition: AppConstants.ENABLE_REMOTE_AGENT,
         task: () => {
@@ -2615,10 +2643,44 @@ BrowserGlue.prototype = {
       // pre-init buffer.
       {
         task: () => {
-          let FOG = Cc["@mozilla.org/toolkit/glean;1"].createInstance(
-            Ci.nsIFOG
-          );
-          FOG.initializeFOG();
+          if (AppConstants.MOZ_GLEAN) {
+            let FOG = Cc["@mozilla.org/toolkit/glean;1"].createInstance(
+              Ci.nsIFOG
+            );
+            FOG.initializeFOG();
+          }
+        },
+      },
+
+      // Add the import button if this is the first startup.
+      {
+        task: async () => {
+          if (
+            this._isNewProfile &&
+            Services.prefs.getBoolPref(
+              "browser.toolbars.bookmarks.2h2020",
+              false
+            ) &&
+            // Not in automation: the button changes CUI state, breaking tests
+            !Cu.isInAutomation
+          ) {
+            await PlacesUIUtils.maybeAddImportButton();
+          }
+
+          if (
+            Services.prefs.getBoolPref(
+              "browser.bookmarks.addedImportButton",
+              false
+            )
+          ) {
+            PlacesUIUtils.removeImportButtonWhenImportSucceeds();
+          }
+        },
+      },
+
+      {
+        task: () => {
+          ASRouterNewTabHook.createInstance(ASRouterDefaultConfig());
         },
       },
 
@@ -2727,6 +2789,8 @@ BrowserGlue.prototype = {
       () => BrowserUsageTelemetry.reportProfileCount(),
 
       () => OsEnvironment.reportAllowedAppSources(),
+
+      () => Services.search.checkWebExtensionEngines(),
     ];
 
     for (let task of idleTasks) {
@@ -3252,7 +3316,7 @@ BrowserGlue.prototype = {
   _migrateUI: function BG__migrateUI() {
     // Use an increasing number to keep track of the current migration state.
     // Completely unrelated to the current Firefox release number.
-    const UI_VERSION = 98;
+    const UI_VERSION = 101;
     const BROWSER_DOCURL = AppConstants.BROWSER_CHROME_URL;
 
     if (!Services.prefs.prefHasUserValue("browser.migration.version")) {
@@ -3520,16 +3584,6 @@ BrowserGlue.prototype = {
         );
         OS.File.remove(path, { ignoreAbsent: true });
       }
-    }
-
-    if (currentUIVersion < 75) {
-      // Ensure we try to migrate any live bookmarks the user might have, trying up to
-      // 5 times. We set this early, and here, to avoid running the migration on
-      // new profile (or, indeed, ever creating the pref there).
-      Services.prefs.setIntPref(
-        "browser.livebookmarks.migrationAttemptsLeft",
-        5
-      );
     }
 
     if (currentUIVersion < 76) {
@@ -3884,6 +3938,40 @@ BrowserGlue.prototype = {
       Services.prefs.clearUserPref("browser.search.cohort");
     }
 
+    if (currentUIVersion < 99) {
+      Services.prefs.clearUserPref("security.tls.version.enable-deprecated");
+    }
+
+    // Set a pref if the bookmarks toolbar was already visible,
+    // so we can keep it visible when navigating away from newtab
+    if (currentUIVersion < 100) {
+      let bookmarksToolbarWasVisible =
+        Services.xulStore.getValue(
+          BROWSER_DOCURL,
+          "PersonalToolbar",
+          "collapsed"
+        ) == "false";
+      if (bookmarksToolbarWasVisible) {
+        // Migrate the user to the "always visible" value. See firefox.js for
+        // the other possible states.
+        Services.prefs.setCharPref(
+          "browser.toolbars.bookmarks.visibility",
+          "always"
+        );
+      }
+      Services.xulStore.removeValue(
+        BROWSER_DOCURL,
+        "PersonalToolbar",
+        "collapsed"
+      );
+    }
+
+    if (currentUIVersion < 101) {
+      Services.prefs.clearUserPref(
+        "browser.livebookmarks.migrationAttemptsLeft"
+      );
+    }
+
     // Update the migration version.
     Services.prefs.setIntPref("browser.migration.version", UI_VERSION);
   },
@@ -3896,9 +3984,11 @@ BrowserGlue.prototype = {
           {}
         );
         if (willPrompt) {
-          // Prevent the related notification from appearing if we're
-          // showing the modal prompt.
+          // Prevent the related notification from appearing and
+          // show the modal prompt.
           DefaultBrowserNotification.notifyModalDisplayed();
+          let win = BrowserWindowTracker.getTopWindow();
+          DefaultBrowserCheck.prompt(win);
         }
       }
     );
@@ -4721,9 +4811,9 @@ var DefaultBrowserCheck = {
       shouldAsk
     );
     if (rv == 0) {
-      ShellService.setAsDefault();
+      win.getShellService().setAsDefault();
     } else if (!shouldAsk.value) {
-      ShellService.shouldCheckDefaultBrowser = false;
+      win.getShellService().shouldCheckDefaultBrowser = false;
     }
 
     try {
@@ -4743,14 +4833,17 @@ var DefaultBrowserCheck = {
    * @returns {boolean} True if the default browser check prompt will be shown.
    */
   async willCheckDefaultBrowser(isStartupCheck) {
+    let win = BrowserWindowTracker.getTopWindow();
+    let shellService = win.getShellService();
+
     // Perform default browser checking.
-    if (!ShellService) {
+    if (!shellService) {
       return false;
     }
 
     let shouldCheck =
       !AppConstants.DEBUG &&
-      ShellService.shouldCheckDefaultBrowser &&
+      shellService.shouldCheckDefaultBrowser &&
       !Services.prefs.getBoolPref(
         "browser.defaultbrowser.notificationbar",
         false
@@ -4787,7 +4880,7 @@ var DefaultBrowserCheck = {
     let isDefault = false;
     let isDefaultError = false;
     try {
-      isDefault = ShellService.isDefaultBrowser(isStartupCheck, false);
+      isDefault = shellService.isDefaultBrowser(isStartupCheck, false);
     } catch (ex) {
       isDefaultError = true;
     }
@@ -5259,7 +5352,7 @@ var AboutHomeStartupCache = {
     let state = AboutNewTab.activityStream.store.getState();
     return new Promise(resolve => {
       this._cacheDeferred = resolve;
-      this.log.trace("Parent received cache streams.");
+      this.log.trace("Parent is requesting cache streams.");
       this._procManager.sendAsyncMessage(this.CACHE_REQUEST_MESSAGE, { state });
     });
   },

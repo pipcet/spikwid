@@ -582,18 +582,12 @@ class GCPtr : public WriteBarriered<T> {
 
 #ifdef DEBUG
   ~GCPtr() {
-    // No barriers are necessary as this only happens when we are sweeping
-    // or when after GCManagedDeletePolicy has triggered the barriers for us
-    // and cleared the pointer.
+    // No barriers are necessary as this only happens when the GC is sweeping.
     //
-    // If you get a crash here, you may need to make the containing object
-    // use GCManagedDeletePolicy and use JS::DeletePolicy to destroy it.
-    //
-    // Note that when sweeping the wrapped pointer may already have been
-    // freed by this point.
-    MOZ_ASSERT_IF(
-        !CurrentThreadIsGCSweeping() && !CurrentThreadIsGCFinalizing(),
-        this->value == JS::SafelyInitialized<T>());
+    // If this assertion fails you may need to make the containing object use a
+    // HeapPtr instead, as this can be deleted from outside of GC.
+    MOZ_ASSERT(CurrentThreadIsGCSweeping() || CurrentThreadIsGCFinalizing());
+
     Poison(this, JS_FREED_HEAP_PTR_PATTERN, sizeof(*this),
            MemCheckKind::MakeNoAccess);
   }
@@ -860,11 +854,6 @@ struct DefineComparisonOps<js::WeakHeapPtr<T>> : std::true_type {
 }  // namespace JS
 
 namespace js {
-
-// A WeakRef pointer does not hold its target live and is automatically nulled
-// out when the GC discovers that it is not reachable from any other path.
-template <typename T>
-using WeakRef = WeakHeapPtr<T>;
 
 // A pre- and post-barriered Value that is specialized to be aware that it
 // resides in a slots or elements vector. This allows it to be relocated in
@@ -1172,7 +1161,6 @@ using PreBarrieredValue = PreBarriered<Value>;
 
 using GCPtrNativeObject = GCPtr<NativeObject*>;
 using GCPtrArrayObject = GCPtr<ArrayObject*>;
-using GCPtrBaseShape = GCPtr<BaseShape*>;
 using GCPtrAtom = GCPtr<JSAtom*>;
 using GCPtrBigInt = GCPtr<BigInt*>;
 using GCPtrFunction = GCPtr<JSFunction*>;
@@ -1183,7 +1171,6 @@ using GCPtrString = GCPtr<JSString*>;
 using GCPtrShape = GCPtr<Shape*>;
 using GCPtrUnownedBaseShape = GCPtr<UnownedBaseShape*>;
 using GCPtrObjectGroup = GCPtr<ObjectGroup*>;
-using GCPtrScope = GCPtr<Scope*>;
 using GCPtrValue = GCPtr<Value>;
 using GCPtrId = GCPtr<jsid>;
 
@@ -1203,6 +1190,7 @@ using WeakHeapPtrWasmInstanceObject = WeakHeapPtr<WasmInstanceObject*>;
 using WeakHeapPtrWasmTableObject = WeakHeapPtr<WasmTableObject*>;
 
 using HeapPtrJitCode = HeapPtr<jit::JitCode*>;
+using HeapPtrNativeObject = HeapPtr<NativeObject*>;
 using HeapPtrObject = HeapPtr<JSObject*>;
 using HeapPtrRegExpShared = HeapPtr<RegExpShared*>;
 using HeapPtrValue = HeapPtr<Value>;

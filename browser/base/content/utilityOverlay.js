@@ -561,8 +561,9 @@ function openLinkIn(url, where, params) {
     } catch (e) {}
 
     if (
+      !aAllowPinnedTabHostChange &&
       w.gBrowser.getTabForBrowser(targetBrowser).pinned &&
-      !aAllowPinnedTabHostChange
+      url != "about:crashcontent"
     ) {
       try {
         // nsIURI.host can throw for non-nsStandardURL nsIURIs.
@@ -697,7 +698,11 @@ function openLinkIn(url, where, params) {
       break;
   }
 
-  if (!focusUrlBar && targetBrowser == w.gBrowser.selectedBrowser) {
+  if (
+    !params.avoidBrowserFocus &&
+    !focusUrlBar &&
+    targetBrowser == w.gBrowser.selectedBrowser
+  ) {
     // Focus the content, but only if the browser used for the load is selected.
     targetBrowser.focus();
   }

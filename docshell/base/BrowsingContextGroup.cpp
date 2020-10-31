@@ -43,8 +43,7 @@ already_AddRefed<BrowsingContextGroup> BrowsingContextGroup::Create() {
   return GetOrCreate(nsContentUtils::GenerateBrowsingContextId());
 }
 
-BrowsingContextGroup::BrowsingContextGroup(uint64_t aId)
-    : mId(aId), mToplevelsSuspended(false) {
+BrowsingContextGroup::BrowsingContextGroup(uint64_t aId) : mId(aId) {
   mTimerEventQueue = ThrottledEventQueue::Create(
       GetMainThreadSerialEventTarget(), "BrowsingContextGroup timer queue");
 
@@ -94,6 +93,7 @@ void BrowsingContextGroup::EnsureHostProcess(ContentParent* aProcess) {
 
 void BrowsingContextGroup::RemoveHostProcess(ContentParent* aProcess) {
   MOZ_DIAGNOSTIC_ASSERT(aProcess);
+  MOZ_DIAGNOSTIC_ASSERT(aProcess->GetRemoteType() != PREALLOC_REMOTE_TYPE);
   auto entry = mHosts.Lookup(aProcess->GetRemoteType());
   if (entry && entry.Data() == aProcess) {
     entry.Remove();
@@ -118,6 +118,7 @@ static void CollectContextInitializers(
 void BrowsingContextGroup::Subscribe(ContentParent* aProcess) {
   MOZ_ASSERT(!mDestroyed);
   MOZ_DIAGNOSTIC_ASSERT(aProcess && !aProcess->IsLaunching());
+  MOZ_DIAGNOSTIC_ASSERT(aProcess->GetRemoteType() != PREALLOC_REMOTE_TYPE);
 
   // Check if we're already subscribed to this process.
   if (!mSubscribers.EnsureInserted(aProcess)) {
@@ -164,6 +165,7 @@ void BrowsingContextGroup::Subscribe(ContentParent* aProcess) {
 
 void BrowsingContextGroup::Unsubscribe(ContentParent* aProcess) {
   MOZ_DIAGNOSTIC_ASSERT(aProcess);
+  MOZ_DIAGNOSTIC_ASSERT(aProcess->GetRemoteType() != PREALLOC_REMOTE_TYPE);
   mSubscribers.RemoveEntry(aProcess);
   aProcess->RemoveBrowsingContextGroup(this);
 
@@ -179,24 +181,38 @@ ContentParent* BrowsingContextGroup::GetHostProcess(
   return mHosts.GetWeak(aRemoteType);
 }
 
-void BrowsingContextGroup::SetToplevelsSuspended(bool aSuspended) {
-  for (const auto& context : mToplevels) {
-    nsPIDOMWindowOuter* outer = context->GetDOMWindow();
-    if (outer) {
-      nsCOMPtr<nsPIDOMWindowInner> inner = outer->GetCurrentInnerWindow();
-      if (inner) {
-        if (aSuspended && !inner->GetWasSuspendedByGroup()) {
-          inner->Suspend();
-          inner->SetWasSuspendedByGroup(true);
-        } else if (!aSuspended && inner->GetWasSuspendedByGroup()) {
-          inner->Resume();
-          inner->SetWasSuspendedByGroup(false);
-        }
-      }
-    }
+void BrowsingContextGroup::UpdateToplevelsSuspendedIfNeeded() {
+  if (!StaticPrefs::dom_suspend_inactive_enabled()) {
+    return;
   }
 
-  mToplevelsSuspended = aSuspended;
+  mToplevelsSuspended = ShouldSuspendAllTopLevelContexts();
+  for (const auto& context : mToplevels) {
+    nsPIDOMWindowOuter* outer = context->GetDOMWindow();
+    if (!outer) {
+      continue;
+    }
+    nsCOMPtr<nsPIDOMWindowInner> inner = outer->GetCurrentInnerWindow();
+    if (!inner) {
+      continue;
+    }
+    if (mToplevelsSuspended && !inner->GetWasSuspendedByGroup()) {
+      inner->Suspend();
+      inner->SetWasSuspendedByGroup(true);
+    } else if (!mToplevelsSuspended && inner->GetWasSuspendedByGroup()) {
+      inner->Resume();
+      inner->SetWasSuspendedByGroup(false);
+    }
+  }
+}
+
+bool BrowsingContextGroup::ShouldSuspendAllTopLevelContexts() const {
+  for (const auto& context : mToplevels) {
+    if (!context->InactiveForSuspend()) {
+      return false;
+    }
+  }
+  return true;
 }
 
 BrowsingContextGroup::~BrowsingContextGroup() { Destroy(); }

@@ -41,6 +41,7 @@ class JSONPrinter;
 namespace frontend {
 
 struct CompilationInfo;
+struct CompilationAtomCache;
 struct CompilationStencil;
 struct CompilationGCOutput;
 class ScriptStencil;
@@ -138,13 +139,13 @@ class BigIntStencil {
     return buf_ != nullptr;
   }
 
-  BigInt* createBigInt(JSContext* cx) {
+  BigInt* createBigInt(JSContext* cx) const {
     mozilla::Range<const char16_t> source(buf_.get(), length_);
 
     return js::ParseBigIntLiteral(cx, source);
   }
 
-  bool isZero() {
+  bool isZero() const {
     mozilla::Range<const char16_t> source(buf_.get(), length_);
     return js::BigIntLiteralIsZero(source);
   }
@@ -244,7 +245,9 @@ class ScopeStencil {
                                  mozilla::Maybe<ScopeIndex> enclosing,
                                  ScopeIndex* index);
 
-  AbstractScopePtr enclosing(CompilationInfo& compilationInfo);
+  AbstractScopePtr enclosing(CompilationInfo& compilationInfo) const;
+  js::Scope* enclosingExistingScope(const CompilationInput& input,
+                                    const CompilationGCOutput& gcOutput) const;
 
   ScopeKind kind() const { return kind_; }
 
@@ -257,8 +260,8 @@ class ScopeStencil {
 
   bool isArrow() const { return isArrow_; }
 
-  Scope* createScope(JSContext* cx, CompilationInfo& compilationInfo,
-                     CompilationGCOutput& gcOutput);
+  Scope* createScope(JSContext* cx, CompilationInput& input,
+                     CompilationGCOutput& gcOutput) const;
 
   uint32_t nextFrameSlot() const;
 
@@ -283,8 +286,8 @@ class ScopeStencil {
   // Transfer ownership into a new UniquePtr.
   template <typename SpecificScopeType>
   UniquePtr<typename SpecificScopeType::Data> createSpecificScopeData(
-      JSContext* cx, CompilationInfo& compilationInfo,
-      CompilationGCOutput& gcOutput);
+      JSContext* cx, CompilationAtomCache& atomCache,
+      CompilationGCOutput& gcOutput) const;
 
   template <typename SpecificScopeType>
   uint32_t nextFrameSlot() const {
@@ -296,11 +299,11 @@ class ScopeStencil {
   template <typename SpecificEnvironmentType>
   MOZ_MUST_USE bool createSpecificShape(JSContext* cx, ScopeKind kind,
                                         BaseScopeData* scopeData,
-                                        MutableHandleShape shape);
+                                        MutableHandleShape shape) const;
 
   template <typename SpecificScopeType, typename SpecificEnvironmentType>
-  Scope* createSpecificScope(JSContext* cx, CompilationInfo& compilationInfo,
-                             CompilationGCOutput& gcOutput);
+  Scope* createSpecificScope(JSContext* cx, CompilationInput& input,
+                             CompilationGCOutput& gcOutput) const;
 };
 
 // As an alternative to a ScopeIndex (which references a ScopeStencil), we may
@@ -354,6 +357,7 @@ class StencilModuleEntry {
                                           uint32_t lineno, uint32_t column) {
     MOZ_ASSERT(specifier);
     StencilModuleEntry entry(lineno, column);
+    specifier->markUsedByStencil();
     entry.specifier = specifier;
     return entry;
   }
@@ -364,8 +368,11 @@ class StencilModuleEntry {
                                         uint32_t lineno, uint32_t column) {
     MOZ_ASSERT(specifier && localName && importName);
     StencilModuleEntry entry(lineno, column);
+    specifier->markUsedByStencil();
     entry.specifier = specifier;
+    localName->markUsedByStencil();
     entry.localName = localName;
+    importName->markUsedByStencil();
     entry.importName = importName;
     return entry;
   }
@@ -375,7 +382,9 @@ class StencilModuleEntry {
                                           uint32_t lineno, uint32_t column) {
     MOZ_ASSERT(localName && exportName);
     StencilModuleEntry entry(lineno, column);
+    localName->markUsedByStencil();
     entry.localName = localName;
+    exportName->markUsedByStencil();
     entry.exportName = exportName;
     return entry;
   }
@@ -387,8 +396,13 @@ class StencilModuleEntry {
     // NOTE: The `export * from "mod";` syntax generates nullptr exportName.
     MOZ_ASSERT(specifier && importName);
     StencilModuleEntry entry(lineno, column);
+    specifier->markUsedByStencil();
     entry.specifier = specifier;
+    importName->markUsedByStencil();
     entry.importName = importName;
+    if (exportName) {
+      exportName->markUsedByStencil();
+    }
     entry.exportName = exportName;
     return entry;
   }
@@ -408,8 +422,8 @@ class StencilModuleMetadata {
 
   StencilModuleMetadata() = default;
 
-  bool initModule(JSContext* cx, CompilationInfo& compilationInfo,
-                  JS::Handle<ModuleObject*> module);
+  bool initModule(JSContext* cx, CompilationAtomCache& atomCache,
+                  JS::Handle<ModuleObject*> module) const;
 
 #if defined(DEBUG) || defined(JS_JITSPEW)
   void dump();

@@ -14,6 +14,7 @@
 #include "VPXDecoder.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Logging.h"
+#include "mozilla/StaticPrefs_media.h"
 #include "mozilla/gfx/gfxVars.h"
 
 extern "C" {
@@ -29,10 +30,6 @@ namespace mozilla {
 bool AppleDecoderModule::sInitialized = false;
 bool AppleDecoderModule::sCanUseHardwareVideoDecoder = true;
 bool AppleDecoderModule::sCanUseVP9Decoder = false;
-
-AppleDecoderModule::AppleDecoderModule() {}
-
-AppleDecoderModule::~AppleDecoderModule() {}
 
 /* static */
 void AppleDecoderModule::Init() {
@@ -73,18 +70,21 @@ already_AddRefed<MediaDataDecoder> AppleDecoderModule::CreateAudioDecoder(
 
 bool AppleDecoderModule::SupportsMimeType(
     const nsACString& aMimeType, DecoderDoctorDiagnostics* aDiagnostics) const {
-  return aMimeType.EqualsLiteral("audio/mpeg") ||
+  return (aMimeType.EqualsLiteral("audio/mpeg") &&
+          !StaticPrefs::media_ffvpx_mp3_enabled()) ||
          aMimeType.EqualsLiteral("audio/mp4a-latm") ||
          MP4Decoder::IsH264(aMimeType) || VPXDecoder::IsVP9(aMimeType);
 }
 
 bool AppleDecoderModule::Supports(
-    const TrackInfo& aTrackInfo, DecoderDoctorDiagnostics* aDiagnostics) const {
-  if (aTrackInfo.IsAudio()) {
-    return SupportsMimeType(aTrackInfo.mMimeType, aDiagnostics);
+    const SupportDecoderParams& aParams,
+    DecoderDoctorDiagnostics* aDiagnostics) const {
+  const auto& trackInfo = aParams.mConfig;
+  if (trackInfo.IsAudio()) {
+    return SupportsMimeType(trackInfo.mMimeType, aDiagnostics);
   }
-  return aTrackInfo.GetAsVideoInfo() &&
-         IsVideoSupported(*aTrackInfo.GetAsVideoInfo());
+  return trackInfo.GetAsVideoInfo() &&
+         IsVideoSupported(*trackInfo.GetAsVideoInfo());
 }
 
 bool AppleDecoderModule::IsVideoSupported(
@@ -153,13 +153,20 @@ bool AppleDecoderModule::CanCreateVP9Decoder() {
 /* static */
 bool AppleDecoderModule::RegisterSupplementalVP9Decoder() {
   static bool sRegisterIfAvailable = []() {
-    if (VTRegisterSupplementalVideoDecoderIfAvailable) {
-      VTRegisterSupplementalVideoDecoderIfAvailable(kCMVideoCodecType_VP9);
-      return true;
+    if (__builtin_available(macos 10.16, *)) {
+      if (VTRegisterSupplementalVideoDecoderIfAvailable) {
+        VTRegisterSupplementalVideoDecoderIfAvailable(kCMVideoCodecType_VP9);
+        return true;
+      }
     }
     return false;
   }();
   return sRegisterIfAvailable;
+}
+
+/* static */
+already_AddRefed<PlatformDecoderModule> AppleDecoderModule::Create() {
+  return MakeAndAddRef<AppleDecoderModule>();
 }
 
 }  // namespace mozilla

@@ -7,7 +7,6 @@
 #include "ZoomConstraintsClient.h"
 
 #include <inttypes.h>
-#include "LayersLogging.h"
 #include "mozilla/layers/APZCCallbackHelper.h"
 #include "mozilla/layers/ScrollableLayerGuid.h"
 #include "mozilla/layers/ZoomConstraints.h"
@@ -254,6 +253,6 @@ void ZoomConstraintsClient::RefreshZoomConstraints() {
   }
   mGuid = Some(newGuid);
   ZCC_LOG("Sending constraints %s in %p for { %u, %" PRIu64 " }\n",
-          Stringify(mZoomConstraints).c_str(), this, presShellId, viewId);
+          ToString(mZoomConstraints).c_str(), this, presShellId, viewId);
   widget->UpdateZoomConstraints(presShellId, viewId, Some(mZoomConstraints));
 }

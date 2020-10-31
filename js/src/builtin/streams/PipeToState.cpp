@@ -13,7 +13,6 @@
 #include "mozilla/Maybe.h"  // mozilla::Maybe, mozilla::Nothing, mozilla::Some
 
 #include "jsapi.h"        // JS_ReportErrorNumberASCII
-#include "jsfriendapi.h"  // js::GetErrorMessage, JSMSG_*
 
 #include "builtin/Promise.h"  // js::RejectPromiseWithPendingError
 #include "builtin/streams/ReadableStream.h"        // js::ReadableStream
@@ -24,6 +23,7 @@
 #include "builtin/streams/WritableStreamWriterOperations.h"  // js::WritableStreamDefaultWriter{GetDesiredSize,Release,Write}
 #include "js/CallArgs.h"    // JS::CallArgsFromVp, JS::CallArgs
 #include "js/Class.h"       // JSClass, JSCLASS_HAS_RESERVED_SLOTS
+#include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
 #include "js/Promise.h"     // JS::AddPromiseReactions
 #include "js/RootingAPI.h"  // JS::Handle, JS::Rooted
 #include "js/Value.h"  // JS::{,Int32,Magic,Object}Value, JS::UndefinedHandleValue
@@ -1151,7 +1151,8 @@ static MOZ_MUST_USE bool PerformAbortAlgorithm(JSContext* cx,
   cx->check(promise);
   cx->check(signal);
 
-  Rooted<PipeToState*> state(cx, NewBuiltinClassInstance<PipeToState>(cx));
+  Rooted<PipeToState*> state(cx,
+                             NewTenuredBuiltinClassInstance<PipeToState>(cx));
   if (!state) {
     return nullptr;
   }

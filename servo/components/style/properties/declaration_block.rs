@@ -348,21 +348,6 @@ impl PropertyDeclarationBlock {
             .find(|(declaration, _)| declaration.id() == property)
     }
 
-    /// Get a declaration for a given property with the specified importance.
-    #[inline]
-    pub fn get_at_importance(
-        &self,
-        property: PropertyDeclarationId,
-        importance: Importance,
-    ) -> Option<&PropertyDeclaration> {
-        let (declaration, i) = self.get(property)?;
-        if i == importance {
-            Some(declaration)
-        } else {
-            None
-        }
-    }
-
     /// Tries to serialize a given shorthand from the declarations in this
     /// block.
     pub fn shorthand_to_css(
@@ -1288,6 +1273,7 @@ pub fn parse_one_declaration_into(
     declarations: &mut SourcePropertyDeclaration,
     id: PropertyId,
     input: &str,
+    origin: Origin,
     url_data: &UrlExtraData,
     error_reporter: Option<&dyn ParseErrorReporter>,
     parsing_mode: ParsingMode,
@@ -1295,7 +1281,7 @@ pub fn parse_one_declaration_into(
     rule_type: CssRuleType,
 ) -> Result<(), ()> {
     let context = ParserContext::new(
-        Origin::Author,
+        origin,
         url_data,
         Some(rule_type),
         parsing_mode,

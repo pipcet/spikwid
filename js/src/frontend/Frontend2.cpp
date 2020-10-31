@@ -28,6 +28,7 @@
 #include "frontend/TokenStream.h"  // TokenStreamAnyChars
 #include "irregexp/RegExpAPI.h"    // irregexp::CheckPatternSyntax
 #include "js/CharacterEncoding.h"  // JS::UTF8Chars, UTF8CharsToNewTwoByteCharsZ
+#include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
 #include "js/GCAPI.h"              // JS::AutoCheckCannotGC
 #include "js/HeapAPI.h"            // JS::GCCellPtr
 #include "js/RegExpFlags.h"        // JS::RegExpFlag, JS::RegExpFlags
@@ -430,6 +431,9 @@ bool ConvertScriptStencil(JSContext* cx, const SmooshResult& result,
     if (!script.sharedData) {
       return false;
     }
+    if (!SharedImmutableScriptData::shareScriptData(cx, script.sharedData)) {
+      return false;
+    }
   }
 
   script.extent.sourceStart = smooshScript.extent.source_start;
@@ -614,16 +618,15 @@ bool Smoosh::compileGlobalScript(JSContext* cx,
 
 #if defined(DEBUG) || defined(JS_JITSPEW)
   Sprinter sprinter(cx);
+  Rooted<JSScript*> script(cx, gcOutput.script);
   if (!sprinter.init()) {
     return false;
   }
-  if (!Disassemble(cx, gcOutput.script, true, &sprinter,
-                   DisassembleSkeptically::Yes)) {
+  if (!Disassemble(cx, script, true, &sprinter, DisassembleSkeptically::Yes)) {
     return false;
   }
   printf("%s\n", sprinter.string());
-  if (!Disassemble(cx, gcOutput.script, true, &sprinter,
-                   DisassembleSkeptically::No)) {
+  if (!Disassemble(cx, script, true, &sprinter, DisassembleSkeptically::No)) {
     return false;
   }
   // (don't bother printing it)

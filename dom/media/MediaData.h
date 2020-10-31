@@ -181,10 +181,15 @@ class AlignedBuffer {
   // Size in bytes of extra space allocated for padding.
   static size_t AlignmentPaddingSize() { return AlignmentOffset() * 2; }
 
-  void PopFront(size_t aSize) {
-    MOZ_DIAGNOSTIC_ASSERT(mLength >= aSize, "Popping too many frames");
-    PodMove(mData, mData + aSize, mLength - aSize);
-    mLength -= aSize;
+  void PopFront(size_t aCount) {
+    MOZ_DIAGNOSTIC_ASSERT(mLength >= aCount, "Popping too many elements.");
+    PodMove(mData, mData + aCount, mLength - aCount);
+    mLength -= aCount;
+  }
+
+  void PopBack(size_t aCount) {
+    MOZ_DIAGNOSTIC_ASSERT(mLength >= aCount, "Popping too many elements.");
+    mLength -= aCount;
   }
 
  private:
@@ -236,9 +241,9 @@ class AlignedBuffer {
     return true;
   }
   Type* mData;
-  size_t mLength;
+  size_t mLength;  // number of elements
   UniquePtr<uint8_t[]> mBuffer;
-  size_t mCapacity;
+  size_t mCapacity;  // in bytes
 };
 
 typedef AlignedBuffer<uint8_t> AlignedByteBuffer;
@@ -545,7 +550,16 @@ class CryptoTrack {
 
 class CryptoSample : public CryptoTrack {
  public:
-  CopyableTArray<uint16_t> mPlainSizes;
+  // The num clear bytes in each subsample. The nth element in the array is the
+  // number of clear bytes at the start of the nth subsample.
+  // Clear sizes are stored as uint16_t in containers per ISO/IEC
+  // 23001-7, but we store them as uint32_t for 2 reasons
+  // - The Widevine CDM accepts clear sizes as uint32_t.
+  // - When converting samples to Annex B we modify the clear sizes and
+  //   clear sizes near UINT16_MAX can overflow if stored in a uint16_t.
+  CopyableTArray<uint32_t> mPlainSizes;
+  // The num encrypted bytes in each subsample. The nth element in the array is
+  // the number of encrypted bytes at the start of the nth subsample.
   CopyableTArray<uint32_t> mEncryptedSizes;
   CopyableTArray<uint8_t> mIV;
   CopyableTArray<CopyableTArray<uint8_t>> mInitDatas;

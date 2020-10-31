@@ -207,6 +207,12 @@ tasks:
                 - trigger-weekly
                 - trigger-push
             - vars:
+                browser: webkitgtk_minibrowser
+                channel: beta
+              use:
+                - trigger-weekly
+                - trigger-push
+            - vars:
                 browser: servo
                 channel: nightly
               use:
@@ -585,5 +591,5 @@ tasks:
       use:
         - wpt-base
         - trigger-pr
-      command: "./wpt tc-sink-task"
+      command: "./wpt tc-sink-task --github-checks-text-file=/home/test/artifacts/checkrun.md"
       requires: all-resolved

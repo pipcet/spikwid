@@ -75,6 +75,15 @@ bool nsIFrame::IsAbsolutelyPositioned(
   return disp->IsAbsolutelyPositioned(this);
 }
 
+inline bool nsIFrame::IsTrueOverflowContainer() const {
+  return HasAnyStateBits(NS_FRAME_IS_OVERFLOW_CONTAINER) &&
+         !(HasAnyStateBits(NS_FRAME_OUT_OF_FLOW) && IsAbsolutelyPositioned());
+  // XXXfr This check isn't quite correct, because it doesn't handle cases
+  //      where the out-of-flow has overflow.. but that's rare.
+  //      We'll need to revisit the way abspos continuations are handled later
+  //      for various reasons, this detail is one of them. See bug 154892
+}
+
 bool nsIFrame::IsBlockOutside() const {
   return StyleDisplay()->IsBlockOutside(this);
 }
@@ -264,15 +273,6 @@ mozilla::LogicalPoint nsIFrame::GetLogicalNormalPosition(
   // right instead of the left
   return mozilla::LogicalPoint(aWritingMode, GetNormalPosition(),
                                aContainerSize - mRect.Size());
-}
-
-template <bool IsLessThanOrEqual(nsIFrame*, nsIFrame*)>
-/* static */ void nsIFrame::SortFrameList(nsFrameList& aFrameList) {
-  nsIFrame* head = MergeSort<IsLessThanOrEqual>(aFrameList.FirstChild());
-  aFrameList.Clear();
-  aFrameList = nsFrameList(head, nsLayoutUtils::GetLastSibling(head));
-  MOZ_ASSERT(IsFrameListSorted<IsLessThanOrEqual>(aFrameList),
-             "After we sort a frame list, it should be in sorted order...");
 }
 
 #endif

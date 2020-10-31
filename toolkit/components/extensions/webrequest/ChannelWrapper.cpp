@@ -265,10 +265,9 @@ void ChannelWrapper::Resume(const nsCString& aText, ErrorResult& aRv) {
     if (nsCOMPtr<nsIChannel> chan = MaybeChannel()) {
       rv = chan->Resume();
 
-      PROFILER_MARKER_TEXT(
-          "Extension Suspend",
-          NETWORK.WithOptions(MarkerTiming::IntervalUntilNowFrom(mSuspendTime)),
-          aText);
+      PROFILER_MARKER_TEXT("Extension Suspend", NETWORK,
+                           MarkerTiming::IntervalUntilNowFrom(mSuspendTime),
+                           aText);
     }
     if (NS_FAILED(rv)) {
       aRv.Throw(rv);
@@ -539,6 +538,15 @@ const URLInfo& ChannelWrapper::FinalURLInfo() const {
     ErrorResult rv;
     nsCOMPtr<nsIURI> uri = FinalURI();
     MOZ_ASSERT(uri);
+
+    // If this is a view-source scheme, get the nested uri.
+    while (uri && uri->SchemeIs("view-source")) {
+      nsCOMPtr<nsINestedURI> nested = do_QueryInterface(uri);
+      if (!nested) {
+        break;
+      }
+      nested->GetInnerURI(getter_AddRefs(uri));
+    }
     mFinalURLInfo.emplace(uri.get(), true);
 
     // If this is a WebSocket request, mangle the URL so that the scheme is

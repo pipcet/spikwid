@@ -238,7 +238,11 @@ void Factory::Init(const Config& aConfig) {
   MOZ_ASSERT(!sConfig);
   sConfig = new Config(aConfig);
 
+#ifdef XP_DARWIN
+  NativeFontResourceMac::RegisterMemoryReporter();
+#else
   NativeFontResource::RegisterMemoryReporter();
+#endif
 }
 
 void Factory::ShutDown() {
@@ -422,11 +426,6 @@ already_AddRefed<PathBuilder> Factory::CreateSimplePathBuilder() {
     NS_WARNING("Failed to create a path builder because we don't use Skia");
   }
   return pathBuilder.forget();
-}
-
-already_AddRefed<DrawTarget> Factory::CreateWrapAndRecordDrawTarget(
-    DrawEventRecorder* aRecorder, DrawTarget* aDT) {
-  return MakeAndAddRef<DrawTargetWrapAndRecord>(aRecorder, aDT);
 }
 
 already_AddRefed<DrawTarget> Factory::CreateRecordingDrawTarget(

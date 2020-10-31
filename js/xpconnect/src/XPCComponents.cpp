@@ -86,21 +86,6 @@ static bool JSValIsInterfaceOfType(JSContext* cx, HandleValue v, REFNSIID iid) {
          iface;
 }
 
-char* xpc::CloneAllAccess() { return moz_xstrdup("AllAccess"); }
-
-char* xpc::CheckAccessList(const char16_t* wideName, const char* const list[]) {
-  nsAutoCString asciiName;
-  CopyUTF16toUTF8(nsDependentString(wideName), asciiName);
-
-  for (const char* const* p = list; *p; p++) {
-    if (!strcmp(*p, asciiName.get())) {
-      return CloneAllAccess();
-    }
-  }
-
-  return nullptr;
-}
-
 /***************************************************************************/
 /***************************************************************************/
 /***************************************************************************/
@@ -2451,9 +2436,16 @@ nsXPCComponents_Utils::CreateSpellChecker(nsIEditorSpellCheck** aSpellChecker) {
 }
 
 NS_IMETHODIMP
-nsXPCComponents_Utils::CreateCommandLine(nsISupports** aCommandLine) {
+nsXPCComponents_Utils::CreateCommandLine(nsIFile* aWorkingDir,
+                                         nsISupports** aCommandLine) {
   NS_ENSURE_ARG_POINTER(aCommandLine);
   nsCOMPtr<nsISupports> commandLine = new nsCommandLine();
+  if (aWorkingDir) {
+    nsCOMPtr<nsICommandLineRunner> runner = do_QueryInterface(commandLine);
+    char* argv[] = {nullptr};
+    runner->Init(0, argv, aWorkingDir, nsICommandLine::STATE_REMOTE_EXPLICIT);
+  }
+
   commandLine.forget(aCommandLine);
   return NS_OK;
 }

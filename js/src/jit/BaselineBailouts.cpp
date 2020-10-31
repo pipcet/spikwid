@@ -12,9 +12,11 @@
 #include "jit/BaselineFrame.h"
 #include "jit/BaselineIC.h"
 #include "jit/BaselineJIT.h"
-#include "jit/CompileInfo.h"
+#include "jit/CalleeToken.h"
 #include "jit/Ion.h"
 #include "jit/IonScript.h"
+#include "jit/JitFrames.h"
+#include "jit/JitRuntime.h"
 #include "jit/JitSpewer.h"
 #include "jit/mips32/Simulator-mips32.h"
 #include "jit/mips64/Simulator-mips64.h"
@@ -2157,10 +2159,13 @@ bool jit::FinishBailoutToBaseline(BaselineBailoutInfo* bailoutInfoArg) {
     case BailoutKind::ArraySlice:
     case BailoutKind::TagNotEqualGuard:
     case BailoutKind::FunctionFlagsGuard:
+    case BailoutKind::FunctionIsNonBuiltinCtorGuard:
     case BailoutKind::FunctionKindGuard:
     case BailoutKind::FunctionScriptGuard:
     case BailoutKind::PackedArrayGuard:
     case BailoutKind::HasGetterSetterGuard:
+    case BailoutKind::DOMExpandoValueGenerationGuard:
+    case BailoutKind::DOMExpandoMissingOrShapeGuard:
       // Do nothing.
       break;
 

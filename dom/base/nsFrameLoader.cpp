@@ -371,8 +371,10 @@ static already_AddRefed<BrowsingContextGroup> InitialBrowsingContextGroup(
   // will only ever use 53 bits of precision, so it can be round-tripped through
   // a JS number.
   nsresult rv = NS_OK;
-  int64_t signedGroupId{attrString.ToInteger(&rv, 10)};
+  int64_t signedGroupId = attrString.ToInteger64(&rv, 10);
   if (NS_FAILED(rv) || signedGroupId <= 0) {
+    MOZ_DIAGNOSTIC_ASSERT(
+        false, "we intended to have a particular id, but failed to parse it!");
     return nullptr;
   }
 
@@ -1490,14 +1492,6 @@ nsresult nsFrameLoader::SwapWithOtherLoader(nsFrameLoader* aOther,
     return NS_ERROR_NOT_IMPLEMENTED;
   }
 
-  bool ourPaymentRequestAllowed =
-      ourContent->HasAttr(kNameSpaceID_None, nsGkAtoms::allowpaymentrequest);
-  bool otherPaymentRequestAllowed =
-      otherContent->HasAttr(kNameSpaceID_None, nsGkAtoms::allowpaymentrequest);
-  if (ourPaymentRequestAllowed != otherPaymentRequestAllowed) {
-    return NS_ERROR_NOT_IMPLEMENTED;
-  }
-
   nsILoadContext* ourLoadContext = ourContent->OwnerDoc()->GetLoadContext();
   nsILoadContext* otherLoadContext = otherContent->OwnerDoc()->GetLoadContext();
   MOZ_ASSERT(ourLoadContext && otherLoadContext,
@@ -1868,7 +1862,8 @@ void nsFrameLoader::StartDestroy(bool aForProcessSwitch) {
   bool dynamicSubframeRemoval = false;
   if (mOwnerContent) {
     doc = mOwnerContent->OwnerDoc();
-    dynamicSubframeRemoval = !mIsTopLevelContent && !doc->InUnlinkOrDeletion();
+    dynamicSubframeRemoval = !aForProcessSwitch &&
+        mPendingBrowsingContext->IsFrame() && !doc->InUnlinkOrDeletion();
     doc->SetSubDocumentFor(mOwnerContent, nullptr);
     MaybeUpdatePrimaryBrowserParent(eBrowserParentRemoved);
     SetOwnerContent(nullptr);
@@ -2761,7 +2756,6 @@ void nsFrameLoader::ActivateFrameEvent(const nsAString& aType, bool aCapture,
 
 nsresult nsFrameLoader::DoRemoteStaticClone(nsFrameLoader* aStaticCloneOf) {
   MOZ_ASSERT(aStaticCloneOf->IsRemoteFrame());
-  MOZ_DIAGNOSTIC_ASSERT(GetBrowsingContext());
   auto* cc = ContentChild::GetSingleton();
   if (!cc) {
     MOZ_DIAGNOSTIC_ASSERT(XRE_IsParentProcess());
@@ -2772,7 +2766,9 @@ nsresult nsFrameLoader::DoRemoteStaticClone(nsFrameLoader* aStaticCloneOf) {
   if (NS_WARN_IF(!bcToClone)) {
     return NS_ERROR_UNEXPECTED;
   }
-  cc->SendCloneDocumentTreeInto(bcToClone, GetBrowsingContext());
+  BrowsingContext* bc = GetBrowsingContext();
+  MOZ_DIAGNOSTIC_ASSERT(bc);
+  cc->SendCloneDocumentTreeInto(bcToClone, bc);
   return NS_OK;
 }
 
@@ -2794,6 +2790,16 @@ nsresult nsFrameLoader::FinishStaticClone(
     return NS_ERROR_UNEXPECTED;
   }
 
+  if (aStaticCloneOf->IsRemoteFrame()) {
+    return DoRemoteStaticClone(aStaticCloneOf);
+  }
+
+  nsIDocShell* origDocShell = aStaticCloneOf->GetDocShell();
+  NS_ENSURE_STATE(origDocShell);
+
+  nsCOMPtr<Document> doc = origDocShell->GetDocument();
+  NS_ENSURE_STATE(doc);
+
   MaybeCreateDocShell();
   RefPtr<nsDocShell> docShell = GetDocShell();
   NS_ENSURE_STATE(docShell);
@@ -2801,19 +2807,9 @@ nsresult nsFrameLoader::FinishStaticClone(
   nsCOMPtr<Document> kungFuDeathGrip = docShell->GetDocument();
   Unused << kungFuDeathGrip;
 
-  if (aStaticCloneOf->IsRemoteFrame()) {
-    return DoRemoteStaticClone(aStaticCloneOf);
-  }
-
   nsCOMPtr<nsIContentViewer> viewer;
   docShell->GetContentViewer(getter_AddRefs(viewer));
   NS_ENSURE_STATE(viewer);
-
-  nsIDocShell* origDocShell = aStaticCloneOf->GetDocShell();
-  NS_ENSURE_STATE(origDocShell);
-
-  nsCOMPtr<Document> doc = origDocShell->GetDocument();
-  NS_ENSURE_STATE(doc);
 
   nsCOMPtr<Document> clonedDoc =
       doc->CreateStaticClone(docShell, viewer, aOutHasInProcessPrintCallbacks);
@@ -3159,12 +3155,9 @@ class WebProgressListenerToPromise final : public nsIWebProgressListener {
   NS_IMETHOD OnStateChange(nsIWebProgress* aWebProgress, nsIRequest* aRequest,
                            uint32_t aStateFlags, nsresult aStatus) override {
     if (aStateFlags & nsIWebProgressListener::STATE_STOP &&
-        aStateFlags & nsIWebProgressListener::STATE_IS_DOCUMENT) {
-      MOZ_ASSERT(mPromise);
-      if (mPromise) {
-        mPromise->MaybeResolveWithUndefined();
-        mPromise = nullptr;
-      }
+        aStateFlags & nsIWebProgressListener::STATE_IS_DOCUMENT && mPromise) {
+      mPromise->MaybeResolveWithUndefined();
+      mPromise = nullptr;
     }
     return NS_OK;
   }
@@ -3306,7 +3299,7 @@ already_AddRefed<Promise> nsFrameLoader::PrintPreview(
       aPrintSettings,
       /* aListener = */ nullptr, docShellToCloneInto,
       nsGlobalWindowOuter::IsPreview::Yes,
-      nsGlobalWindowOuter::BlockUntilDone::No,
+      nsGlobalWindowOuter::IsForWindowDotPrint::No,
       [resolve](const PrintPreviewResultInfo& aInfo) { resolve(aInfo); }, rv);
   if (NS_WARN_IF(rv.Failed())) {
     promise->MaybeReject(std::move(rv));
@@ -3378,7 +3371,7 @@ already_AddRefed<Promise> nsFrameLoader::Print(uint64_t aOuterWindowID,
   outerWindow->Print(aPrintSettings, listener,
                      /* aDocShellToCloneInto = */ nullptr,
                      nsGlobalWindowOuter::IsPreview::No,
-                     nsGlobalWindowOuter::BlockUntilDone::No,
+                     nsGlobalWindowOuter::IsForWindowDotPrint::No,
                      /* aPrintPreviewCallback = */ nullptr, rv);
   if (rv.Failed()) {
     promise->MaybeReject(std::move(rv));

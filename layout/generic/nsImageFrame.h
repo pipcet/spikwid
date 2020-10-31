@@ -121,8 +121,6 @@ class nsImageFrame : public nsAtomicContainerFrame, public nsIReflowCallback {
   LogicalSides GetLogicalSkipSides(
       const ReflowInput* aReflowInput = nullptr) const final;
 
-  nsresult GetIntrinsicImageSize(nsSize& aSize);
-
   static void ReleaseGlobals() {
     if (gIconLoad) {
       gIconLoad->Shutdown();
@@ -287,6 +285,8 @@ class nsImageFrame : public nsAtomicContainerFrame, public nsIReflowCallback {
   nsRect PredictedDestRect(const nsRect& aFrameContentBox);
 
  private:
+  void MaybeRecordContentUrlOnImageTelemetry();
+
   // random helpers
   inline void SpecToURI(const nsAString& aSpec, nsIURI** aURI);
 

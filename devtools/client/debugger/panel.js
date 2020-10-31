@@ -51,6 +51,7 @@ class DebuggerPanel {
       client,
     } = await this.panelWin.Debugger.bootstrap({
       targetList: this.toolbox.targetList,
+      resourceWatcher: this.toolbox.resourceWatcher,
       devToolsClient: this.toolbox.target.client,
       workers: {
         sourceMaps: this.toolbox.sourceMapService,
@@ -162,8 +163,7 @@ class DebuggerPanel {
       return;
     }
 
-    const forceUnHighlightInTest = true;
-    return this._unhighlight(forceUnHighlightInTest);
+    return this._unhighlight();
   }
 
   getFrames() {

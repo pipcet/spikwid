@@ -10,6 +10,7 @@
 #include "mozilla/dom/BrowsingContext.h"
 #include "mozilla/dom/MediaControlKeySource.h"
 #include "mozilla/dom/BrowsingContextWebProgress.h"
+#include "mozilla/dom/ipc/IdType.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/MozPromise.h"
 #include "nsCycleCollectionParticipant.h"
@@ -23,6 +24,7 @@ class nsISHistory;
 class nsSHistory;
 class nsBrowserStatusFilter;
 class nsSecureBrowserUI;
+class CallerWillNotifyHistoryIndexAndLengthChanges;
 
 namespace mozilla {
 namespace net {
@@ -107,6 +109,10 @@ class CanonicalBrowsingContext final : public BrowsingContext {
 
   UniquePtr<LoadingSessionHistoryInfo> CreateLoadingSessionHistoryEntryForLoad(
       nsDocShellLoadState* aLoadState, nsIChannel* aChannel);
+
+  UniquePtr<LoadingSessionHistoryInfo> ReplaceLoadingSessionHistoryEntryForLoad(
+      LoadingSessionHistoryInfo* aInfo, nsIChannel* aChannel);
+
   void SessionHistoryCommit(uint64_t aLoadId, const nsID& aChangeID,
                             uint32_t aLoadType);
 
@@ -123,7 +129,7 @@ class CanonicalBrowsingContext final : public BrowsingContext {
   // See BrowsingContext::SetActiveSessionHistoryEntry.
   void SetActiveSessionHistoryEntry(const Maybe<nsPoint>& aPreviousScrollPos,
                                     SessionHistoryInfo* aInfo,
-                                    uint32_t aLoadType, int32_t aChildOffset,
+                                    uint32_t aLoadType,
                                     uint32_t aUpdatedCacheKey,
                                     const nsID& aChangeID);
 
@@ -133,7 +139,9 @@ class CanonicalBrowsingContext final : public BrowsingContext {
 
   void RemoveFromSessionHistory();
 
-  void HistoryGo(int32_t aIndex, std::function<void(int32_t&&)>&& aResolver);
+  void HistoryGo(int32_t aIndex, uint64_t aHistoryEpoch,
+                 Maybe<ContentParentId> aContentId,
+                 std::function<void(int32_t&&)>&& aResolver);
 
   JSObject* WrapObject(JSContext* aCx,
                        JS::Handle<JSObject*> aGivenProto) override;
@@ -191,6 +199,7 @@ class CanonicalBrowsingContext final : public BrowsingContext {
   // control all media belonging to this browsing context tree. Return nullptr
   // if the top-level browsing context has been discarded.
   MediaController* GetMediaController();
+  bool HasCreatedMediaController() const;
 
   // Attempts to start loading the given load state in this BrowsingContext,
   // without requiring any communication from a docshell. This will handle
@@ -212,8 +221,8 @@ class CanonicalBrowsingContext final : public BrowsingContext {
   // Called when the current URI changes (from an
   // nsIWebProgressListener::OnLocationChange event, so that we
   // can update our security UI for the new location, or when the
-  // mixed content state for our current window is changed.
-  void UpdateSecurityStateForLocationOrMixedContentChange();
+  // mixed content/https-only state for our current window is changed.
+  void UpdateSecurityState();
 
   void MaybeAddAsProgressListener(nsIWebProgress* aWebProgress);
 
@@ -234,6 +243,10 @@ class CanonicalBrowsingContext final : public BrowsingContext {
   void GetLoadingSessionHistoryInfoFromParent(
       Maybe<LoadingSessionHistoryInfo>& aLoadingInfo, int32_t* aRequestedIndex,
       int32_t* aLength);
+
+  void HistoryCommitIndexAndLength();
+
+  void ResetScalingZoom();
 
  protected:
   // Called when the browsing context is being discarded.
@@ -294,7 +307,9 @@ class CanonicalBrowsingContext final : public BrowsingContext {
   bool SupportsLoadingInParent(nsDocShellLoadState* aLoadState,
                                uint64_t* aOuterWindowId);
 
-  void HistoryCommitIndexAndLength(const nsID& aChangeID);
+  void HistoryCommitIndexAndLength(
+      const nsID& aChangeID,
+      const CallerWillNotifyHistoryIndexAndLengthChanges& aProofOfCaller);
 
   // XXX(farre): Store a ContentParent pointer here rather than mProcessId?
   // Indicates which process owns the docshell.

@@ -13,17 +13,19 @@
 
 #include "builtin/Eval.h"
 #include "builtin/ModuleObject.h"
-#include "builtin/TypedObject.h"
 #include "frontend/SourceNotes.h"
 #include "jit/BaselineFrame.h"
 #include "jit/BaselineInspector.h"
 #include "jit/CacheIR.h"
+#include "jit/CompileInfo.h"
+#include "jit/InlineScriptTree.h"
 #include "jit/Ion.h"
 #include "jit/IonOptimizationLevels.h"
 #include "jit/JitSpewer.h"
 #include "jit/Lowering.h"
 #include "jit/MIRGraph.h"
 #include "js/experimental/JitInfo.h"  // JSJitInfo
+#include "js/friend/ErrorMessages.h"  // JSMSG_*
 #include "js/Object.h"                // JS::GetReservedSlot
 #include "js/ScalarType.h"            // js::Scalar::Type
 #include "util/CheckedArithmetic.h"
@@ -38,9 +40,11 @@
 #include "vm/RegExpStatics.h"
 #include "vm/SelfHosting.h"
 #include "vm/TraceLogging.h"
+#include "wasm/TypedObject.h"
 
 #include "gc/Nursery-inl.h"
 #include "jit/CompileInfo-inl.h"
+#include "jit/InlineScriptTree-inl.h"
 #include "jit/shared/Lowering-shared-inl.h"
 #include "vm/BytecodeIterator-inl.h"
 #include "vm/BytecodeLocation-inl.h"
@@ -3960,7 +3964,7 @@ IonBuilder::InliningResult IonBuilder::inlineScriptedCall(CallInfo& callInfo,
   }
 
   // Capture formals in the outer resume point.
-  if (!callInfo.pushCallStack(&mirGen_, current)) {
+  if (!callInfo.pushCallStack(current)) {
     return abort(AbortReason::Alloc);
   }
 
@@ -4793,7 +4797,7 @@ AbortReasonOr<Ok> IonBuilder::inlineCalls(CallInfo& callInfo,
 
   MBasicBlock* dispatchBlock = current;
   callInfo.setImplicitlyUsedUnchecked();
-  if (!callInfo.pushCallStack(&mirGen_, dispatchBlock)) {
+  if (!callInfo.pushCallStack(dispatchBlock)) {
     return abort(AbortReason::Alloc);
   }
 
@@ -5442,7 +5446,7 @@ AbortReasonOr<Ok> IonBuilder::jsop_funcall(uint32_t argc) {
   // Save prior call stack in case we need to resolve during bailout
   // recovery of inner inlined function. This includes the JSFunction and the
   // 'call' native function.
-  if (!callInfo.savePriorCallStack(&mirGen_, current, argc + 2)) {
+  if (!callInfo.savePriorCallStack(current, argc + 2)) {
     return abort(AbortReason::Alloc);
   }
 
@@ -5790,8 +5794,7 @@ AbortReasonOr<Ok> IonBuilder::jsop_funapplyarray(uint32_t argc) {
   return pushTypeBarrier(apply, types, BarrierKind::TypeSet);
 }
 
-bool CallInfo::savePriorCallStack(MIRGenerator* mir, MBasicBlock* current,
-                                  size_t peekDepth) {
+bool CallInfo::savePriorCallStack(MBasicBlock* current, size_t peekDepth) {
   MOZ_ASSERT(priorArgs_.empty());
   if (!priorArgs_.reserve(peekDepth)) {
     return false;
@@ -5866,7 +5869,7 @@ AbortReasonOr<Ok> IonBuilder::jsop_funapplyarguments(uint32_t argc) {
 
   CallInfo callInfo(alloc(), pc, /* constructing = */ false,
                     /* ignoresReturnValue = */ BytecodeIsPopped(pc));
-  if (!callInfo.savePriorCallStack(&mirGen_, current, 4)) {
+  if (!callInfo.savePriorCallStack(current, 4)) {
     return abort(AbortReason::Alloc);
   }
 
@@ -8863,10 +8866,8 @@ AbortReasonOr<Ok> IonBuilder::jsop_getelem_dense(MDefinition* obj,
 }
 
 MInstruction* IonBuilder::addArrayBufferByteLength(MDefinition* obj) {
-  MLoadFixedSlot* ins = MLoadFixedSlot::New(
-      alloc(), obj, size_t(ArrayBufferObject::BYTE_LENGTH_SLOT));
+  auto* ins = MArrayBufferByteLengthInt32::New(alloc(), obj);
   current->add(ins);
-  ins->setResultType(MIRType::Int32);
   return ins;
 }
 

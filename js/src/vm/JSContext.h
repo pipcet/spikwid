@@ -523,12 +523,8 @@ struct JS_PUBLIC_API JSContext : public JS::RootingContext,
   js::ContextData<DtoaState*> dtoaState;
 
   /*
-   * When this flag is non-zero, any attempt to GC will be skipped. It is used
-   * to suppress GC when reporting an OOM (see ReportOutOfMemory) and in
-   * debugging facilities that cannot tolerate a GC and would rather OOM
-   * immediately, such as utilities exposed to GDB. Setting this flag is
-   * extremely dangerous and should only be used when in an OOM situation or
-   * in non-exposed debugging facilities.
+   * When this flag is non-zero, any attempt to GC will be skipped. See the
+   * AutoSuppressGC class for for details.
    */
   js::ContextData<int32_t> suppressGC;
 
@@ -594,11 +590,6 @@ struct JS_PUBLIC_API JSContext : public JS::RootingContext,
   // We are currently running a simulated OOM test.
   js::ContextData<bool> runningOOMTest;
 #endif
-
-  // True if we should assert that
-  //     !comp->validAccessPtr || *comp->validAccessPtr
-  // is true for every |comp| that we run JS code in.
-  js::ContextData<unsigned> enableAccessValidation;
 
   /*
    * Some regions of code are hard for the static rooting hazard analysis to
@@ -1133,7 +1124,7 @@ class MOZ_RAII AutoLockScriptData {
     MOZ_ASSERT(CurrentThreadCanAccessRuntime(rt) ||
                CurrentThreadIsParseThread());
     runtime = rt;
-    if (runtime->hasHelperThreadZones()) {
+    if (runtime->hasParseTasks()) {
       runtime->scriptDataLock.lock();
     } else {
       MOZ_ASSERT(!runtime->activeThreadHasScriptDataAccess);
@@ -1143,7 +1134,7 @@ class MOZ_RAII AutoLockScriptData {
     }
   }
   ~AutoLockScriptData() {
-    if (runtime->hasHelperThreadZones()) {
+    if (runtime->hasParseTasks()) {
       runtime->scriptDataLock.unlock();
     } else {
       MOZ_ASSERT(runtime->activeThreadHasScriptDataAccess);

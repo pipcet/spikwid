@@ -7,29 +7,27 @@
 #ifndef jit_WarpCacheIRTranspiler_h
 #define jit_WarpCacheIRTranspiler_h
 
-#include "js/AllocPolicy.h"
-#include "js/Vector.h"
+#include "mozilla/Attributes.h"
 
-#include "vm/BytecodeLocation.h"
+#include <initializer_list>
 
 namespace js {
+
+class BytecodeLocation;
+
 namespace jit {
 
 class CallInfo;
-class MBasicBlock;
 class MDefinition;
-class MInstruction;
 class WarpBuilder;
 class WarpCacheIR;
 
-using MDefinitionStackVector = Vector<MDefinition*, 8, SystemAllocPolicy>;
-
 // Generate MIR from a Baseline ICStub's CacheIR.
-MOZ_MUST_USE bool TranspileCacheIRToMIR(WarpBuilder* builder,
-                                        BytecodeLocation loc,
-                                        const WarpCacheIR* cacheIRSnapshot,
-                                        const MDefinitionStackVector& inputs,
-                                        CallInfo* maybeCallInfo = nullptr);
+MOZ_MUST_USE bool TranspileCacheIRToMIR(
+    WarpBuilder* builder, BytecodeLocation loc,
+    const WarpCacheIR* cacheIRSnapshot,
+    std::initializer_list<MDefinition*> inputs,
+    CallInfo* maybeCallInfo = nullptr);
 
 }  // namespace jit
 }  // namespace js

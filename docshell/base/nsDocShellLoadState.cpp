@@ -118,7 +118,12 @@ nsDocShellLoadState::nsDocShellLoadState(const nsDocShellLoadState& aOther)
       mOriginalURIString(aOther.mOriginalURIString),
       mCancelContentJSEpoch(aOther.mCancelContentJSEpoch),
       mLoadIdentifier(aOther.mLoadIdentifier),
-      mChannelInitialized(aOther.mChannelInitialized) {}
+      mChannelInitialized(aOther.mChannelInitialized) {
+  if (aOther.mLoadingSessionHistoryInfo) {
+    mLoadingSessionHistoryInfo = MakeUnique<LoadingSessionHistoryInfo>(
+        *aOther.mLoadingSessionHistoryInfo);
+  }
+}
 
 nsDocShellLoadState::nsDocShellLoadState(nsIURI* aURI, uint64_t aLoadIdentifier)
     : mURI(aURI),
@@ -254,7 +259,6 @@ nsresult nsDocShellLoadState::CreateFromLoadURIOptions(
     if (!XRE_IsContentProcess()) {
       nsCOMPtr<nsIURIFixupInfo> fixupInfo;
       sURIFixup->GetFixupURIInfo(uriString, fixupFlags,
-                                 getter_AddRefs(fixupStream),
                                  getter_AddRefs(fixupInfo));
       if (fixupInfo) {
         // We could fix the uri, clear NS_ERROR_MALFORMED_URI.
@@ -263,6 +267,7 @@ nsresult nsDocShellLoadState::CreateFromLoadURIOptions(
         fixupInfo->SetConsumer(aBrowsingContext);
         fixupInfo->GetKeywordProviderName(searchProvider);
         fixupInfo->GetKeywordAsSent(keyword);
+        fixupInfo->GetPostData(getter_AddRefs(fixupStream));
         didFixup = true;
 
         if (fixupInfo &&

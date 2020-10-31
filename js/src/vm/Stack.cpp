@@ -18,6 +18,8 @@
 #include "gc/Marking.h"
 #include "gc/Tracer.h"  // js::TraceRoot
 #include "jit/JitcodeMap.h"
+#include "jit/JitRuntime.h"
+#include "js/friend/ErrorMessages.h"  // JSMSG_*
 #include "js/Value.h"      // JS::Value
 #include "vm/FrameIter.h"  // js::FrameIter
 #include "vm/JSContext.h"

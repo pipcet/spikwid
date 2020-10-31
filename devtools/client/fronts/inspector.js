@@ -12,7 +12,6 @@ const {
   registerFront,
 } = require("devtools/shared/protocol.js");
 const { inspectorSpec } = require("devtools/shared/specs/inspector");
-loader.lazyRequireGetter(this, "flags", "devtools/shared/flags");
 
 const TELEMETRY_EYEDROPPER_OPENED = "DEVTOOLS_EYEDROPPER_OPENED_COUNT";
 const TELEMETRY_EYEDROPPER_OPENED_MENU =
@@ -35,15 +34,23 @@ class InspectorFront extends FrontClassWithSpec(inspectorSpec) {
 
     // Attribute name from which to retrieve the actorID out of the target actor's form
     this.formAttributeName = "inspectorActor";
+
+    // Map of highlighter types to unsettled promises to create a highlighter of that type
+    this._pendingGetHighlighterMap = new Map();
   }
 
   // async initialization
   async initialize() {
-    await Promise.all([
+    if (this.initialized) {
+      return this.initialized;
+    }
+
+    this.initialized = await Promise.all([
       this._getWalker(),
-      this._getHighlighter(),
       this._getPageStyle(),
     ]);
+
+    return this.initialized;
   }
 
   async _getWalker() {
@@ -65,11 +72,6 @@ class InspectorFront extends FrontClassWithSpec(inspectorSpec) {
     await this.walker.reparentRemoteFrame();
   }
 
-  async _getHighlighter() {
-    const autohide = !flags.testing;
-    this.highlighter = await this.getHighlighter(autohide);
-  }
-
   hasHighlighter(type) {
     return this._highlighters.has(type);
   }
@@ -88,7 +90,7 @@ class InspectorFront extends FrontClassWithSpec(inspectorSpec) {
 
   destroy() {
     this._compatibility = null;
-    // Highlighter fronts are managed by InspectorFront and so will be
+    // CustomHighlighter fronts are managed by InspectorFront and so will be
     // automatically destroyed. But we have to clear the `_highlighters`
     // Map as well as explicitly call `finalize` request on all of them.
     this.destroyHighlighters();
@@ -124,12 +126,38 @@ class InspectorFront extends FrontClassWithSpec(inspectorSpec) {
     return this._highlighters.get(type);
   }
 
+  /**
+   * Return a highlighter instance of the given type.
+   * If an instance was previously created, return it. Else, create and return a new one.
+   *
+   * Store a promise for the request to create a new highlighter. If another request
+   * comes in before that promise is resolved, wait for it to resolve and return the
+   * highlighter instance it resolved with instead of creating a new request.
+   *
+   * @param  {String} type
+   *         Highlighter type
+   * @return {Promise}
+   *         Promise which resolves with a highlighter instance of the given type
+   */
   async getOrCreateHighlighterByType(type) {
     let front = this._highlighters.get(type);
-    if (!front) {
-      front = await this.getHighlighterByType(type);
-      this._highlighters.set(type, front);
+    let pendingGetHighlighter = this._pendingGetHighlighterMap.get(type);
+
+    if (!front && !pendingGetHighlighter) {
+      pendingGetHighlighter = (async () => {
+        const highlighter = await this.getHighlighterByType(type);
+        this._highlighters.set(type, highlighter);
+        return highlighter;
+      })();
+
+      this._pendingGetHighlighterMap.set(type, pendingGetHighlighter);
     }
+
+    if (pendingGetHighlighter) {
+      front = await pendingGetHighlighter;
+      this._pendingGetHighlighterMap.delete(type);
+    }
+
     return front;
   }
 

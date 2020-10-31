@@ -40,6 +40,7 @@
 #include "mozilla/Components.h"
 #include "mozilla/HashTable.h"
 #include "mozilla/Logging.h"
+#include "mozilla/MediaFeatureChange.h"
 #include "mozilla/ResultExtensions.h"
 #include "mozilla/Services.h"
 #include "mozilla/StaticPrefs_fission.h"
@@ -73,10 +74,16 @@ namespace IPC {
 // Allow serialization and deserialization of OrientationType over IPC
 template <>
 struct ParamTraits<mozilla::dom::OrientationType>
-    : public ContiguousEnumSerializerInclusive<
+    : public ContiguousEnumSerializer<
           mozilla::dom::OrientationType,
           mozilla::dom::OrientationType::Portrait_primary,
-          mozilla::dom::OrientationType::Landscape_secondary> {};
+          mozilla::dom::OrientationType::EndGuard_> {};
+
+template <>
+struct ParamTraits<mozilla::dom::DisplayMode>
+    : public ContiguousEnumSerializer<mozilla::dom::DisplayMode,
+                                      mozilla::dom::DisplayMode::Browser,
+                                      mozilla::dom::DisplayMode::EndGuard_> {};
 
 }  // namespace IPC
 
@@ -144,6 +151,17 @@ BrowsingContext* BrowsingContext::Top() {
     bc = bc->GetParent();
   }
   return bc;
+}
+
+int32_t BrowsingContext::IndexOf(BrowsingContext* aChild) {
+  int32_t index = -1;
+  for (BrowsingContext* child : Children()) {
+    ++index;
+    if (child == aChild) {
+      break;
+    }
+  }
+  return index;
 }
 
 WindowContext* BrowsingContext::GetTopWindowContext() {
@@ -2145,33 +2163,68 @@ void BrowsingContext::DidSet(FieldIndex<IDX_GVInaudibleAutoplayRequestStatus>) {
 }
 
 void BrowsingContext::DidSet(FieldIndex<IDX_IsActive>, bool aOldValue) {
-  if (!IsTop() || aOldValue == GetIsActive() ||
-      !StaticPrefs::dom_suspend_inactive_enabled()) {
+  if (!IsTop() || aOldValue == GetIsActive()) {
+    return;
+  }
+  Group()->UpdateToplevelsSuspendedIfNeeded();
+}
+
+bool BrowsingContext::CanSet(FieldIndex<IDX_HasMainMediaController>,
+                             bool aNewValue, ContentParent* aSource) {
+  return IsTop() && CheckOnlyOwningProcessCanSet(aSource);
+}
+
+void BrowsingContext::DidSet(FieldIndex<IDX_HasMainMediaController>,
+                             bool aOldValue) {
+  if (!IsTop() || aOldValue == GetHasMainMediaController()) {
+    return;
+  }
+  Group()->UpdateToplevelsSuspendedIfNeeded();
+}
+
+bool BrowsingContext::InactiveForSuspend() const {
+  if (!StaticPrefs::dom_suspend_inactive_enabled()) {
+    return false;
+  }
+  // We should suspend a page only when it's inactive and doesn't have a main
+  // media controller. Having a main controller in context means it might be
+  // playing media, or waiting media keys to control media (could be not playing
+  // anything currently)
+  return !GetIsActive() && !GetHasMainMediaController();
+}
+
+bool BrowsingContext::CanSet(FieldIndex<IDX_DisplayMode>,
+                             const enum DisplayMode& aDisplayMOde,
+                             ContentParent* aSource) {
+  return IsTop();
+}
+
+void BrowsingContext::DidSet(FieldIndex<IDX_DisplayMode>,
+                             enum DisplayMode aOldValue) {
+  MOZ_ASSERT(IsTop());
+
+  if (GetDisplayMode() == aOldValue) {
     return;
   }
 
-  if (!GetIsActive() && !Group()->GetToplevelsSuspended()) {
-    // If all toplevels in our group are inactive, suspend the group.
-    bool allInactive = true;
-    nsTArray<RefPtr<BrowsingContext>>& toplevels = Group()->Toplevels();
-    for (const auto& context : toplevels) {
-      if (context->GetIsActive()) {
-        allInactive = false;
-        break;
+  PreOrderWalk([&](BrowsingContext* aContext) {
+    if (nsIDocShell* shell = aContext->GetDocShell()) {
+      if (nsPresContext* pc = shell->GetPresContext()) {
+        pc->MediaFeatureValuesChanged(
+            {MediaFeatureChangeReason::DisplayModeChange},
+            // We're already iterating through sub documents, so we don't need
+            // to propagate the change again.
+            //
+            // Images and other resources don't change their display-mode
+            // evaluation, display-mode is a property of the browsing context.
+            MediaFeatureChangePropagation::JustThisDocument);
       }
     }
-
-    if (allInactive) {
-      Group()->SetToplevelsSuspended(true);
-    }
-  } else if (GetIsActive() && Group()->GetToplevelsSuspended()) {
-    // Unsuspend the group since we now have an active toplevel
-    Group()->SetToplevelsSuspended(false);
-  }
+  });
 }
 
 void BrowsingContext::DidSet(FieldIndex<IDX_Muted>) {
-  MOZ_ASSERT(!GetParent(), "Set muted flag on non top-level context!");
+  MOZ_ASSERT(IsTop(), "Set muted flag on non top-level context!");
   USER_ACTIVATION_LOG("Set audio muted %d for %s browsing context 0x%08" PRIx64,
                       GetMuted(), XRE_IsParentProcess() ? "Parent" : "Child",
                       Id());
@@ -2502,6 +2555,19 @@ void BrowsingContext::DidSet(FieldIndex<IDX_AncestorLoading>) {
   }
 }
 
+void BrowsingContext::DidSet(FieldIndex<IDX_AuthorStyleDisabledDefault>) {
+  MOZ_ASSERT(IsTop(),
+             "Should only set AuthorStyleDisabledDefault in the top "
+             "browsing context");
+
+  // We don't need to handle changes to this field, since PageStyleChild.jsm
+  // will respond to the PageStyle:Disable message in all content processes.
+  //
+  // But we store the state here on the top BrowsingContext so that the
+  // docshell has somewhere to look for the current author style disabling
+  // state when new iframes are inserted.
+}
+
 void BrowsingContext::DidSet(FieldIndex<IDX_TextZoom>, float aOldValue) {
   if (GetTextZoom() == aOldValue) {
     return;
@@ -2570,6 +2636,14 @@ void BrowsingContext::AddDeprioritizedLoadRunner(nsIRunnable* aRunner) {
   NS_DispatchToCurrentThreadQueue(
       runner.forget(), StaticPrefs::page_load_deprioritization_period(),
       EventQueuePriority::Idle);
+}
+
+void BrowsingContext::GetHistoryID(JSContext* aCx,
+                                   JS::MutableHandle<JS::Value> aVal,
+                                   ErrorResult& aError) {
+  if (!xpc::ID2JSValue(aCx, GetHistoryID(), aVal)) {
+    aError.Throw(NS_ERROR_OUT_OF_MEMORY);
+  }
 }
 
 void BrowsingContext::InitSessionHistory() {
@@ -2681,24 +2755,24 @@ bool BrowsingContext::IsPopupAllowed() {
 
 void BrowsingContext::SetActiveSessionHistoryEntry(
     const Maybe<nsPoint>& aPreviousScrollPos, SessionHistoryInfo* aInfo,
-    uint32_t aLoadType, int32_t aChildOffset, uint32_t aUpdatedCacheKey) {
+    uint32_t aLoadType, uint32_t aUpdatedCacheKey) {
   if (XRE_IsContentProcess()) {
+    // XXX Why we update cache key only in content process case?
     if (aUpdatedCacheKey != 0) {
       aInfo->SetCacheKey(aUpdatedCacheKey);
     }
 
     nsID changeID = {};
-    RefPtr<ChildSHistory> shistory = GetChildSessionHistory();
+    RefPtr<ChildSHistory> shistory = Top()->GetChildSessionHistory();
     if (shistory) {
-      changeID = shistory->AddPendingHistoryChange(1, 1);
+      changeID = shistory->AddPendingHistoryChange();
     }
     ContentChild::GetSingleton()->SendSetActiveSessionHistoryEntry(
-        this, aPreviousScrollPos, *aInfo, aLoadType, aChildOffset,
-        aUpdatedCacheKey, changeID);
+        this, aPreviousScrollPos, *aInfo, aLoadType, aUpdatedCacheKey,
+        changeID);
   } else {
-    Canonical()->SetActiveSessionHistoryEntry(aPreviousScrollPos, aInfo,
-                                              aLoadType, aChildOffset,
-                                              aUpdatedCacheKey, nsID());
+    Canonical()->SetActiveSessionHistoryEntry(
+        aPreviousScrollPos, aInfo, aLoadType, aUpdatedCacheKey, nsID());
   }
 }
 
@@ -2729,15 +2803,20 @@ void BrowsingContext::RemoveFromSessionHistory() {
   }
 }
 
-void BrowsingContext::HistoryGo(int32_t aIndex,
+void BrowsingContext::HistoryGo(int32_t aOffset, uint64_t aHistoryEpoch,
                                 std::function<void(int32_t&&)>&& aResolver) {
   if (XRE_IsContentProcess()) {
     ContentChild::GetSingleton()->SendHistoryGo(
-        this, aIndex, std::move(aResolver),
+        this, aOffset, aHistoryEpoch, std::move(aResolver),
         [](mozilla::ipc::
                ResponseRejectReason) { /* FIXME Is ignoring this fine? */ });
   } else {
-    Canonical()->HistoryGo(aIndex, std::move(aResolver));
+    Canonical()->HistoryGo(
+        aOffset, aHistoryEpoch,
+        Canonical()->GetContentParent()
+            ? Some(Canonical()->GetContentParent()->ChildID())
+            : Nothing(),
+        std::move(aResolver));
   }
 }
 
@@ -2845,6 +2924,7 @@ void IPDLParamTraits<dom::BrowsingContext::IPCInitializer>::Write(
   WriteIPDLParam(aMessage, aActor, aInit.mWindowless);
   WriteIPDLParam(aMessage, aActor, aInit.mUseRemoteTabs);
   WriteIPDLParam(aMessage, aActor, aInit.mUseRemoteSubframes);
+  WriteIPDLParam(aMessage, aActor, aInit.mCreatedDynamically);
   WriteIPDLParam(aMessage, aActor, aInit.mOriginAttributes);
   WriteIPDLParam(aMessage, aActor, aInit.mRequestContextId);
   WriteIPDLParam(aMessage, aActor, aInit.mSessionHistoryIndex);
@@ -2862,6 +2942,8 @@ bool IPDLParamTraits<dom::BrowsingContext::IPCInitializer>::Read(
       !ReadIPDLParam(aMessage, aIterator, aActor, &aInit->mUseRemoteTabs) ||
       !ReadIPDLParam(aMessage, aIterator, aActor,
                      &aInit->mUseRemoteSubframes) ||
+      !ReadIPDLParam(aMessage, aIterator, aActor,
+                     &aInit->mCreatedDynamically) ||
       !ReadIPDLParam(aMessage, aIterator, aActor, &aInit->mOriginAttributes) ||
       !ReadIPDLParam(aMessage, aIterator, aActor, &aInit->mRequestContextId) ||
       !ReadIPDLParam(aMessage, aIterator, aActor,

@@ -381,6 +381,12 @@ class LayerManager : public FrameRecorder {
    */
   virtual void ScheduleComposite() {}
 
+  /**
+   * Force a composition with the remote Compositor, if one exists
+   * for this LayerManager, as soon as possible.
+   */
+  virtual void ForceComposite() {}
+
   virtual void SetNeedsComposite(bool aNeedsComposite) {}
   virtual bool NeedsComposite() const { return false; }
 
@@ -813,10 +819,10 @@ class LayerManager : public FrameRecorder {
    * per-scrollid basis. This is used for empty transactions that push over
    * scroll position updates to the APZ code.
    */
-  virtual bool SetPendingScrollUpdateForNextTransaction(
+  virtual bool AddPendingScrollUpdateForNextTransaction(
       ScrollableLayerGuid::ViewID aScrollId,
       const ScrollPositionUpdate& aUpdateInfo);
-  Maybe<ScrollPositionUpdate> GetPendingScrollInfoUpdate(
+  Maybe<nsTArray<ScrollPositionUpdate>> GetPendingScrollInfoUpdate(
       ScrollableLayerGuid::ViewID aScrollId);
   std::unordered_set<ScrollableLayerGuid::ViewID>
   ClearPendingScrollInfoUpdate();

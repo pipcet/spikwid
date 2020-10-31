@@ -210,7 +210,7 @@ win64-fuzzing/debug:
             - win64-node
             - win64-winchecksec
     optimization:
-        build-fuzzing: null
+        skip-unless-expanded: null
 
 win64-plain/debug:
     description: "Win64 Debug Plain"
@@ -872,7 +872,7 @@ win64-ccov/opt:
     use-sccache: true
     fetches:
         toolchain:
-            - win64-clang-cl-9
+            - win64-clang-cl
             - win64-rust
             - win64-rust-size
             - win64-cbindgen
@@ -1051,7 +1051,7 @@ win64-asan-fuzzing/opt:
             - win64-node
             - win64-winchecksec
     optimization:
-        build-fuzzing: null
+        skip-unless-expanded: null
 
 win32-devedition/opt:
     description: "Win32 Dev Edition (shippable)"

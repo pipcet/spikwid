@@ -3,11 +3,16 @@
 [
   Exposed=Window
 ] interface Sanitizer {
-  [RaisesException] constructor(optional SanitizerConfig sanitizerConfig = {});
-  [CallWith=ScriptState, RaisesException] DocumentFragment sanitize(DOMString input);
-  [CallWith=ScriptState, RaisesException] DOMString sanitizeToString(DOMString input);
+  constructor(optional SanitizerConfig sanitizerConfig = {});
+  DocumentFragment sanitize(DOMString input);
+  DOMString sanitizeToString(DOMString input);
 };
 
 dictionary SanitizerConfig {
-  sequence<DOMString>? dropElements;
+  sequence<DOMString> allowElements;
+  sequence<DOMString> blockElements;
+  sequence<DOMString> dropElements;
+  sequence<DOMString> allowAttributes;
+  sequence<DOMString> blockAttributes;
+  sequence<DOMString> dropAttributes;
 };

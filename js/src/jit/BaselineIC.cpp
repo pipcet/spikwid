@@ -24,7 +24,11 @@
 #include "jit/BaselineDebugModeOSR.h"
 #include "jit/BaselineJIT.h"
 #include "jit/InlinableNatives.h"
+#include "jit/JitFrames.h"
+#include "jit/JitRealm.h"
+#include "jit/JitRuntime.h"
 #include "jit/JitSpewer.h"
+#include "jit/JitZone.h"
 #include "jit/Linker.h"
 #include "jit/Lowering.h"
 #ifdef JS_ION_PERF
@@ -33,6 +37,7 @@
 #include "jit/SharedICHelpers.h"
 #include "jit/VMFunctions.h"
 #include "js/Conversions.h"
+#include "js/friend/ErrorMessages.h"  // JSMSG_*
 #include "js/GCVector.h"
 #include "vm/BytecodeIterator.h"
 #include "vm/BytecodeLocation.h"
@@ -48,7 +53,6 @@
 
 #include "builtin/Boolean-inl.h"
 
-#include "jit/JitFrames-inl.h"
 #include "jit/MacroAssembler-inl.h"
 #include "jit/shared/Lowering-shared-inl.h"
 #include "jit/SharedICHelpers-inl.h"
@@ -622,6 +626,11 @@ uint32_t ICStub::getEnteredCount() const {
   }
 }
 
+void ICFallbackStub::trackNotAttached(JSContext* cx, JSScript* script) {
+  maybeInvalidateWarp(cx, script);
+  state().trackNotAttached();
+}
+
 void ICFallbackStub::maybeInvalidateWarp(JSContext* cx, JSScript* script) {
   if (!state_.usedByTranspiler()) {
     return;
@@ -632,6 +641,8 @@ void ICFallbackStub::maybeInvalidateWarp(JSContext* cx, JSScript* script) {
 
   if (script->hasIonScript()) {
     Invalidate(cx, script);
+  } else {
+    CancelOffThreadIonCompile(script);
   }
 }
 
@@ -770,7 +781,7 @@ static void TryAttachStub(const char* name, JSContext* cx, BaselineFrame* frame,
         break;
     }
     if (!attached) {
-      stub->state().trackNotAttached();
+      stub->trackNotAttached(cx, frame->invalidationScript());
     }
   }
 }
@@ -1599,41 +1610,8 @@ bool DoTypeUpdateFallback(JSContext* cx, BaselineFrame* frame,
   MOZ_ASSERT(obj->group() == group);
 #endif
 
-  // If we're storing null/undefined to a typed object property, check if
-  // we want to include it in this property's type information.
-  bool addType = true;
-  if (MOZ_UNLIKELY(obj->is<TypedObject>()) && value.isNullOrUndefined()) {
-    StructTypeDescr* structDescr =
-        &obj->as<TypedObject>().typeDescr().as<StructTypeDescr>();
-    size_t fieldIndex;
-    MOZ_ALWAYS_TRUE(structDescr->fieldIndex(id, &fieldIndex));
-
-    TypeDescr* fieldDescr = &structDescr->fieldDescr(fieldIndex);
-    ReferenceType type = fieldDescr->as<ReferenceTypeDescr>().type();
-    if (type == ReferenceType::TYPE_ANY) {
-      // Ignore undefined values, which are included implicitly in type
-      // information for this property.
-      if (value.isUndefined()) {
-        addType = false;
-      }
-    } else {
-      MOZ_ASSERT(type == ReferenceType::TYPE_OBJECT ||
-                 type == ReferenceType::TYPE_WASM_ANYREF);
-
-      // Ignore null values being written here. Null is included
-      // implicitly in type information for this property. Note that
-      // non-object, non-null values are not possible here, these
-      // should have been filtered out by the IR emitter.
-      if (value.isNull()) {
-        addType = false;
-      }
-    }
-  }
-
-  if (MOZ_LIKELY(addType)) {
-    JSObject* maybeSingleton = obj->isSingleton() ? obj.get() : nullptr;
-    AddTypePropertyId(cx, group, maybeSingleton, id, value);
-  }
+  JSObject* maybeSingleton = obj->isSingleton() ? obj.get() : nullptr;
+  AddTypePropertyId(cx, group, maybeSingleton, id, value);
 
   if (MOZ_UNLIKELY(
           !stub->addUpdateStubForValue(cx, script, obj, group, id, value))) {
@@ -1854,7 +1832,12 @@ static bool TryAttachGetPropStub(const char* name, JSContext* cx,
         MOZ_ASSERT_UNREACHABLE("No deferred GetProp stubs");
         break;
     }
+
+    if (!attached) {
+      stub->trackNotAttached(cx, frame->invalidationScript());
+    }
   }
+
   return attached;
 }
 
@@ -2238,7 +2221,7 @@ bool DoSetElemFallback(JSContext* cx, BaselineFrame* frame,
     }
   }
   if (!attached && canAttachStub) {
-    stub->state().trackNotAttached();
+    stub->trackNotAttached(cx, frame->invalidationScript());
   }
   return true;
 }
@@ -2880,7 +2863,7 @@ bool DoSetPropFallback(JSContext* cx, BaselineFrame* frame,
     }
   }
   if (!attached && canAttachStub) {
-    stub->state().trackNotAttached();
+    stub->trackNotAttached(cx, frame->invalidationScript());
   }
 
   return true;
@@ -3072,7 +3055,7 @@ bool DoCallFallback(JSContext* cx, BaselineFrame* frame, ICCall_Fallback* stub,
   }
 
   if (!handled && canAttachStub) {
-    stub->state().trackNotAttached();
+    stub->trackNotAttached(cx, frame->invalidationScript());
   }
   return true;
 }
@@ -3139,6 +3122,9 @@ bool DoSpreadCallFallback(JSContext* cx, BaselineFrame* frame,
       case AttachDecision::Deferred:
         MOZ_ASSERT_UNREACHABLE("No deferred optimizations for spread calls");
         break;
+    }
+    if (!handled) {
+      stub->trackNotAttached(cx, frame->invalidationScript());
     }
   }
 
@@ -3444,7 +3430,7 @@ bool DoInstanceOfFallback(JSContext* cx, BaselineFrame* frame,
     // ensure we've recorded at least one failure, so we can detect there was a
     // non-optimizable case
     if (!stub->state().hasFailures()) {
-      stub->state().trackNotAttached();
+      stub->trackNotAttached(cx, frame->invalidationScript());
     }
     return true;
   }

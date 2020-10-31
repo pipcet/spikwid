@@ -105,6 +105,7 @@ class WindowContext : public nsISupports, public nsWrapperCache {
 
   nsGlobalWindowInner* GetInnerWindow() const;
   Document* GetDocument() const;
+  Document* GetExtantDoc() const;
 
   // Get the parent WindowContext of this WindowContext, taking the BFCache into
   // account. This will not cross chrome/content <browser> boundaries.
@@ -135,11 +136,10 @@ class WindowContext : public nsISupports, public nsWrapperCache {
 
   static void CreateFromIPC(IPCInitializer&& aInit);
 
-  // Add new mixed content security state flags.
-  // These should be some of the four nsIWebProgressListener
-  // 'MIXED' state flags, and should only be called on the
-  // top window context.
-  void AddMixedContentSecurityState(uint32_t aStateFlags);
+  // Add new security state flags.
+  // These should be some of the nsIWebProgressListener 'HTTPS_ONLY_MODE' or
+  // 'MIXED' state flags, and should only be called on the top window context.
+  void AddSecurityState(uint32_t aStateFlags);
 
   // This function would be called when its corresponding window is activated
   // by user gesture.

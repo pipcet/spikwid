@@ -140,6 +140,7 @@ static const char SandboxPolicyContent[] = R"SANDBOX_LITERAL(
     (sysctl-name "hw.optional.sse4_2")
     (sysctl-name "hw.optional.avx1_0")
     (sysctl-name "hw.optional.avx2_0")
+    (sysctl-name "hw.optional.avx512f")
     (sysctl-name "machdep.cpu.vendor")
     (sysctl-name "machdep.cpu.family")
     (sysctl-name "machdep.cpu.model")
@@ -195,6 +196,7 @@ static const char SandboxPolicyContent[] = R"SANDBOX_LITERAL(
   (if (defined? 'iokit-get-properties)
     (allow iokit-get-properties
       (iokit-property "board-id")
+      (iokit-property "class-code")
       (iokit-property "vendor-id")
       (iokit-property "device-id")
       (iokit-property "IODVDBundleName")

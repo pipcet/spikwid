@@ -20,25 +20,37 @@
 #include <algorithm>
 #include <initializer_list>
 
-#include "builtin/ModuleObject.h"
+#include "NamespaceImports.h"
+
+#include "gc/Allocator.h"
 #include "jit/AtomicOp.h"
-#include "jit/BaselineIC.h"
 #include "jit/FixedList.h"
 #include "jit/InlineList.h"
+#include "jit/InlineScriptTree.h"
 #include "jit/JitAllocPolicy.h"
+#include "jit/MacroAssembler.h"
 #include "jit/MOpcodesGenerated.h"
-#include "jit/TIOracle.h"
 #include "jit/TypePolicy.h"
 #include "js/experimental/JitInfo.h"  // JSJit{Getter,Setter}Op, JSJitInfo
 #include "js/HeapAPI.h"
+#include "js/Id.h"
 #include "js/ScalarType.h"  // js::Scalar::Type
+#include "js/Value.h"
+#include "js/Vector.h"
 #include "vm/ArrayObject.h"
 #include "vm/BuiltinObjectKind.h"
 #include "vm/EnvironmentObject.h"
 #include "vm/FunctionFlags.h"  // js::FunctionFlags
+#include "vm/JSContext.h"
+#include "vm/ReceiverGuard.h"
 #include "vm/RegExpObject.h"
 #include "vm/SharedMem.h"
 #include "vm/TypedArrayObject.h"
+#include "vm/TypeSet.h"
+
+namespace JS {
+struct ExpandoAndGeneration;
+}
 
 namespace js {
 
@@ -46,9 +58,12 @@ namespace wasm {
 class FuncExport;
 }
 
+class GenericPrinter;
 class StringObject;
 
 enum class UnaryMathFunction : uint8_t;
+
+bool CurrentThreadIsIonCompiling();
 
 namespace jit {
 
@@ -66,7 +81,8 @@ class MDefinitionVisitorDefaultNoop {
 #undef VISIT_INS
 };
 
-class BaselineInspector;
+class CompactBufferWriter;
+class IonBuilder;
 class Range;
 
 template <typename T>
@@ -377,10 +393,14 @@ class AliasSet {
     // frame during exception bailouts.)
     ExceptionState = 1 << 13,
 
-    Last = ExceptionState,
+    // Used for instructions that load the privateSlot of DOM proxies and
+    // the ExpandoAndGeneration.
+    DOMProxyExpando = 1 << 14,
+
+    Last = DOMProxyExpando,
     Any = Last | (Last - 1),
 
-    NumCategories = 14,
+    NumCategories = 15,
 
     // Indicates load or store.
     Store_ = 1 << 31
@@ -4082,6 +4102,45 @@ class MExtendInt32ToInt64 : public MUnaryInstruction,
   AliasSet getAliasSet() const override { return AliasSet::None(); }
 };
 
+// The same as MWasmTruncateToInt64 but with the TLS dependency.
+// It used only for arm now because on arm we need to call builtin to truncate
+// to i64.
+class MWasmBuiltinTruncateToInt64 : public MAryInstruction<2>,
+                                    public NoTypePolicy::Data {
+  TruncFlags flags_;
+  wasm::BytecodeOffset bytecodeOffset_;
+
+  MWasmBuiltinTruncateToInt64(MDefinition* def, MDefinition* tls,
+                              TruncFlags flags,
+                              wasm::BytecodeOffset bytecodeOffset)
+      : MAryInstruction(classOpcode),
+        flags_(flags),
+        bytecodeOffset_(bytecodeOffset) {
+    initOperand(0, def);
+    initOperand(1, tls);
+
+    setResultType(MIRType::Int64);
+    setGuard();  // neither removable nor movable because of possible
+                 // side-effects.
+  }
+
+ public:
+  INSTRUCTION_HEADER(WasmBuiltinTruncateToInt64)
+  NAMED_OPERANDS((0, input), (1, tls));
+  TRIVIAL_NEW_WRAPPERS
+
+  bool isUnsigned() const { return flags_ & TRUNC_UNSIGNED; }
+  bool isSaturating() const { return flags_ & TRUNC_SATURATING; }
+  TruncFlags flags() const { return flags_; }
+  wasm::BytecodeOffset bytecodeOffset() const { return bytecodeOffset_; }
+
+  bool congruentTo(const MDefinition* ins) const override {
+    return congruentIfOperandsEqual(ins) &&
+           ins->toWasmBuiltinTruncateToInt64()->flags() == flags_;
+  }
+  AliasSet getAliasSet() const override { return AliasSet::None(); }
+};
+
 class MWasmTruncateToInt64 : public MUnaryInstruction,
                              public NoTypePolicy::Data {
   TruncFlags flags_;
@@ -4213,6 +4272,46 @@ class MInt64ToFloatingPoint : public MUnaryInstruction,
       return false;
     }
     if (ins->toInt64ToFloatingPoint()->isUnsigned_ != isUnsigned_) {
+      return false;
+    }
+    return congruentIfOperandsEqual(ins);
+  }
+  AliasSet getAliasSet() const override { return AliasSet::None(); }
+};
+
+// It used only for arm now because on arm we need to call builtin to convert
+// i64 to float.
+class MBuiltinInt64ToFloatingPoint : public MAryInstruction<2>,
+                                     public NoTypePolicy::Data {
+  bool isUnsigned_;
+  wasm::BytecodeOffset bytecodeOffset_;
+
+  MBuiltinInt64ToFloatingPoint(MDefinition* def, MDefinition* tls, MIRType type,
+                               wasm::BytecodeOffset bytecodeOffset,
+                               bool isUnsigned)
+      : MAryInstruction(classOpcode),
+        isUnsigned_(isUnsigned),
+        bytecodeOffset_(bytecodeOffset) {
+    MOZ_ASSERT(IsFloatingPointType(type));
+    initOperand(0, def);
+    initOperand(1, tls);
+    setResultType(type);
+    setMovable();
+  }
+
+ public:
+  INSTRUCTION_HEADER(BuiltinInt64ToFloatingPoint)
+  NAMED_OPERANDS((0, input), (1, tls));
+  TRIVIAL_NEW_WRAPPERS
+
+  bool isUnsigned() const { return isUnsigned_; }
+  wasm::BytecodeOffset bytecodeOffset() const { return bytecodeOffset_; }
+
+  bool congruentTo(const MDefinition* ins) const override {
+    if (!ins->isBuiltinInt64ToFloatingPoint()) {
+      return false;
+    }
+    if (ins->toBuiltinInt64ToFloatingPoint()->isUnsigned_ != isUnsigned_) {
       return false;
     }
     return congruentIfOperandsEqual(ins);
@@ -4376,6 +4475,41 @@ class MTruncateToInt32 : public MUnaryInstruction, public ToInt32Policy::Data {
   ALLOW_CLONE(MTruncateToInt32)
 };
 
+// It is like MTruncateToInt32 but with tls dependency.
+class MWasmBuiltinTruncateToInt32 : public MAryInstruction<2>,
+                                    public ToInt32Policy::Data {
+  wasm::BytecodeOffset bytecodeOffset_;
+
+  MWasmBuiltinTruncateToInt32(
+      MDefinition* def, MDefinition* tls,
+      wasm::BytecodeOffset bytecodeOffset = wasm::BytecodeOffset())
+      : MAryInstruction(classOpcode), bytecodeOffset_(bytecodeOffset) {
+    initOperand(0, def);
+    initOperand(1, tls);
+    setResultType(MIRType::Int32);
+    setMovable();
+
+    // Guard unless the conversion is known to be non-effectful & non-throwing.
+    if (MTruncateToInt32::mightHaveSideEffects(def)) {
+      setGuard();
+    }
+  }
+
+ public:
+  INSTRUCTION_HEADER(WasmBuiltinTruncateToInt32)
+  NAMED_OPERANDS((0, input), (1, tls))
+  TRIVIAL_NEW_WRAPPERS
+
+  bool congruentTo(const MDefinition* ins) const override {
+    return congruentIfOperandsEqual(ins);
+  }
+  AliasSet getAliasSet() const override { return AliasSet::None(); }
+
+  wasm::BytecodeOffset bytecodeOffset() const { return bytecodeOffset_; }
+
+  ALLOW_CLONE(MWasmBuiltinTruncateToInt32)
+};
+
 // Converts a primitive (either typed or untyped) to a BigInt. If the input is
 // not primitive at runtime, a bailout occurs.
 class MToBigInt : public MUnaryInstruction, public ToBigIntPolicy::Data {
@@ -4501,26 +4635,22 @@ class MToString : public MUnaryInstruction, public ToStringPolicy::Data {
       : MUnaryInstruction(classOpcode, def), sideEffects_(sideEffects) {
     setResultType(MIRType::String);
 
-    if (JitOptions.warpBuilder) {
+    if (!def->definitelyType({MIRType::Undefined, MIRType::Null,
+                              MIRType::Boolean, MIRType::Int32, MIRType::Double,
+                              MIRType::Float32, MIRType::String,
+                              MIRType::BigInt})) {
       mightHaveSideEffects_ = true;
-    } else {
-      if (!def->definitelyType({MIRType::Undefined, MIRType::Null,
-                                MIRType::Boolean, MIRType::Int32,
-                                MIRType::Double, MIRType::Float32,
-                                MIRType::String, MIRType::BigInt})) {
-        mightHaveSideEffects_ = true;
-      }
+    }
 
-      // If this instruction is not effectful, mark it as movable and set the
-      // Guard flag if needed. If the operation is effectful it won't be
-      // optimized anyway so there's no need to set any flags.
-      if (!isEffectful()) {
-        setMovable();
-        // Objects might override toString; Symbol throws. We bailout in those
-        // cases and run side-effects in baseline instead.
-        if (mightHaveSideEffects_) {
-          setGuard();
-        }
+    // If this instruction is not effectful, mark it as movable and set the
+    // Guard flag if needed. If the operation is effectful it won't be
+    // optimized anyway so there's no need to set any flags.
+    if (!isEffectful()) {
+      setMovable();
+      // Objects might override toString; Symbol throws. We bailout in those
+      // cases and run side-effects in baseline instead.
+      if (mightHaveSideEffects_) {
+        setGuard();
       }
     }
   }
@@ -4627,7 +4757,8 @@ class MBitNot : public MUnaryInstruction, public BitwisePolicy::Data {
   ALLOW_CLONE(MBitNot)
 };
 
-class MTypeOf : public MUnaryInstruction, public BoxInputsPolicy::Data {
+class MTypeOf : public MUnaryInstruction,
+                public BoxExceptPolicy<0, MIRType::Object>::Data {
   bool inputMaybeCallableOrEmulatesUndefined_;
 
   explicit MTypeOf(MDefinition* def)
@@ -5823,6 +5954,85 @@ class MDiv : public MBinaryArithInstruction {
   ALLOW_CLONE(MDiv)
 };
 
+class MWasmBuiltinDivI64 : public MAryInstruction<3>, public ArithPolicy::Data {
+  bool canBeNegativeZero_;
+  bool canBeNegativeOverflow_;
+  bool canBeDivideByZero_;
+  bool canBeNegativeDividend_;
+  bool unsigned_;  // If false, signedness will be derived from operands
+  bool trapOnError_;
+  wasm::BytecodeOffset bytecodeOffset_;
+
+  MWasmBuiltinDivI64(MDefinition* left, MDefinition* right, MDefinition* tls)
+      : MAryInstruction(classOpcode),
+        canBeNegativeZero_(true),
+        canBeNegativeOverflow_(true),
+        canBeDivideByZero_(true),
+        canBeNegativeDividend_(true),
+        unsigned_(false),
+        trapOnError_(false) {
+    initOperand(0, left);
+    initOperand(1, right);
+    initOperand(2, tls);
+
+    setResultType(MIRType::Int64);
+    setMovable();
+  }
+
+ public:
+  INSTRUCTION_HEADER(WasmBuiltinDivI64)
+
+  NAMED_OPERANDS((0, lhs), (1, rhs), (2, tls))
+
+  static MWasmBuiltinDivI64* New(
+      TempAllocator& alloc, MDefinition* left, MDefinition* right,
+      MDefinition* tls, bool unsignd, bool trapOnError = false,
+      wasm::BytecodeOffset bytecodeOffset = wasm::BytecodeOffset()) {
+    auto* wasm64Div = new (alloc) MWasmBuiltinDivI64(left, right, tls);
+    wasm64Div->unsigned_ = unsignd;
+    wasm64Div->trapOnError_ = trapOnError;
+    wasm64Div->bytecodeOffset_ = bytecodeOffset;
+    if (trapOnError) {
+      wasm64Div->setGuard();  // not removable because of possible side-effects.
+      wasm64Div->setNotMovable();
+    }
+    return wasm64Div;
+  }
+
+  bool canBeNegativeZero() const { return canBeNegativeZero_; }
+  void setCanBeNegativeZero(bool negativeZero) {
+    canBeNegativeZero_ = negativeZero;
+  }
+
+  bool canBeNegativeOverflow() const { return canBeNegativeOverflow_; }
+
+  bool canBeDivideByZero() const { return canBeDivideByZero_; }
+
+  bool canBeNegativeDividend() const {
+    // "Dividend" is an ambiguous concept for unsigned truncated
+    // division, because of the truncation procedure:
+    // ((x>>>0)/2)|0, for example, gets transformed in
+    // MWasmDiv::truncate into a node with lhs representing x (not
+    // x>>>0) and rhs representing the constant 2; in other words,
+    // the MIR node corresponds to "cast operands to unsigned and
+    // divide" operation. In this case, is the dividend x or is it
+    // x>>>0? In order to resolve such ambiguities, we disallow
+    // the usage of this method for unsigned division.
+    MOZ_ASSERT(!unsigned_);
+    return canBeNegativeDividend_;
+  }
+
+  bool isUnsigned() const { return unsigned_; }
+
+  bool trapOnError() const { return trapOnError_; }
+  wasm::BytecodeOffset bytecodeOffset() const {
+    MOZ_ASSERT(bytecodeOffset_.isValid());
+    return bytecodeOffset_;
+  }
+
+  ALLOW_CLONE(MWasmBuiltinDivI64)
+};
+
 class MMod : public MBinaryArithInstruction {
   bool unsigned_;  // If false, signedness will be derived from operands
   bool canBeNegativeDividend_;
@@ -5914,6 +6124,101 @@ class MMod : public MBinaryArithInstruction {
   bool possiblyCalls() const override { return type() == MIRType::Double; }
 
   ALLOW_CLONE(MMod)
+};
+
+class MWasmBuiltinModD : public MAryInstruction<3>, public ArithPolicy::Data {
+  wasm::BytecodeOffset bytecodeOffset_;
+
+  MWasmBuiltinModD(MDefinition* left, MDefinition* right, MDefinition* tls,
+                   MIRType type)
+      : MAryInstruction(classOpcode) {
+    initOperand(0, left);
+    initOperand(1, right);
+    initOperand(2, tls);
+
+    setResultType(type);
+    setMovable();
+  }
+
+ public:
+  INSTRUCTION_HEADER(WasmBuiltinModD)
+  NAMED_OPERANDS((0, lhs), (1, rhs), (2, tls))
+
+  static MWasmBuiltinModD* New(
+      TempAllocator& alloc, MDefinition* left, MDefinition* right,
+      MDefinition* tls, MIRType type,
+      wasm::BytecodeOffset bytecodeOffset = wasm::BytecodeOffset()) {
+    auto* wasmBuiltinModD =
+        new (alloc) MWasmBuiltinModD(left, right, tls, type);
+    wasmBuiltinModD->bytecodeOffset_ = bytecodeOffset;
+    return wasmBuiltinModD;
+  }
+
+  wasm::BytecodeOffset bytecodeOffset() const {
+    MOZ_ASSERT(bytecodeOffset_.isValid());
+    return bytecodeOffset_;
+  }
+
+  ALLOW_CLONE(MWasmBuiltinModD)
+};
+
+class MWasmBuiltinModI64 : public MAryInstruction<3>, public ArithPolicy::Data {
+  bool unsigned_;  // If false, signedness will be derived from operands
+  bool canBeNegativeDividend_;
+  bool canBeDivideByZero_;
+  bool trapOnError_;
+  wasm::BytecodeOffset bytecodeOffset_;
+
+  MWasmBuiltinModI64(MDefinition* left, MDefinition* right, MDefinition* tls)
+      : MAryInstruction(classOpcode),
+        unsigned_(false),
+        canBeNegativeDividend_(true),
+        canBeDivideByZero_(true),
+        trapOnError_(false) {
+    initOperand(0, left);
+    initOperand(1, right);
+    initOperand(2, tls);
+
+    setResultType(MIRType::Int64);
+    setMovable();
+  }
+
+ public:
+  INSTRUCTION_HEADER(WasmBuiltinModI64)
+
+  NAMED_OPERANDS((0, lhs), (1, rhs), (2, tls))
+
+  static MWasmBuiltinModI64* New(
+      TempAllocator& alloc, MDefinition* left, MDefinition* right,
+      MDefinition* tls, bool unsignd, bool trapOnError = false,
+      wasm::BytecodeOffset bytecodeOffset = wasm::BytecodeOffset()) {
+    auto* mod = new (alloc) MWasmBuiltinModI64(left, right, tls);
+    mod->unsigned_ = unsignd;
+    mod->trapOnError_ = trapOnError;
+    mod->bytecodeOffset_ = bytecodeOffset;
+    if (trapOnError) {
+      mod->setGuard();  // not removable because of possible side-effects.
+      mod->setNotMovable();
+    }
+    return mod;
+  }
+
+  bool canBeNegativeDividend() const {
+    MOZ_ASSERT(!unsigned_);
+    return canBeNegativeDividend_;
+  }
+
+  bool canBeDivideByZero() const { return canBeDivideByZero_; }
+
+  bool isUnsigned() const { return unsigned_; }
+
+  bool trapOnError() const { return trapOnError_; }
+  wasm::BytecodeOffset bytecodeOffset() const {
+    MOZ_ASSERT(bytecodeOffset_.isValid());
+    return bytecodeOffset_;
+  }
+
+  ALLOW_CLONE(MWasmBuiltinModI64)
 };
 
 class MConcat : public MBinaryInstruction,
@@ -6298,11 +6603,17 @@ class MPhi final : public MDefinition,
   }
 
   // Use only if capacity has been reserved by reserveLength
-  void addInput(MDefinition* ins) { inputs_.infallibleEmplaceBack(ins, this); }
+  void addInput(MDefinition* ins) {
+    MOZ_ASSERT_IF(JitOptions.warpBuilder && type() != MIRType::Value,
+                  ins->type() == type());
+    inputs_.infallibleEmplaceBack(ins, this);
+  }
 
   // Appends a new input to the input vector. May perform reallocation.
   // Prefer reserveLength() and addInput() instead, where possible.
   MOZ_MUST_USE bool addInputSlow(MDefinition* ins) {
+    MOZ_ASSERT_IF(JitOptions.warpBuilder && type() != MIRType::Value,
+                  ins->type() == type());
     return inputs_.emplaceBack(ins, this);
   }
 
@@ -6713,7 +7024,6 @@ class MRegExpMatcher : public MTernaryInstruction,
   MRegExpMatcher(MDefinition* regexp, MDefinition* string,
                  MDefinition* lastIndex)
       : MTernaryInstruction(classOpcode, regexp, string, lastIndex) {
-    setMovable();
     // May be object or null.
     setResultType(MIRType::Value);
   }
@@ -6738,7 +7048,6 @@ class MRegExpSearcher : public MTernaryInstruction,
   MRegExpSearcher(MDefinition* regexp, MDefinition* string,
                   MDefinition* lastIndex)
       : MTernaryInstruction(classOpcode, regexp, string, lastIndex) {
-    setMovable();
     setResultType(MIRType::Int32);
   }
 
@@ -6762,7 +7071,6 @@ class MRegExpTester : public MTernaryInstruction,
   MRegExpTester(MDefinition* regexp, MDefinition* string,
                 MDefinition* lastIndex)
       : MTernaryInstruction(classOpcode, regexp, string, lastIndex) {
-    setMovable();
     setResultType(MIRType::Int32);
   }
 
@@ -7466,6 +7774,28 @@ class MGetNextEntryForIterator
   NAMED_OPERANDS((0, iter), (1, result))
 
   Mode mode() const { return mode_; }
+};
+
+// Read the byte length of an array buffer as int32.
+class MArrayBufferByteLengthInt32 : public MUnaryInstruction,
+                                    public SingleObjectPolicy::Data {
+  explicit MArrayBufferByteLengthInt32(MDefinition* obj)
+      : MUnaryInstruction(classOpcode, obj) {
+    setResultType(MIRType::Int32);
+    setMovable();
+  }
+
+ public:
+  INSTRUCTION_HEADER(ArrayBufferByteLengthInt32)
+  TRIVIAL_NEW_WRAPPERS
+  NAMED_OPERANDS((0, object))
+
+  bool congruentTo(const MDefinition* ins) const override {
+    return congruentIfOperandsEqual(ins);
+  }
+  AliasSet getAliasSet() const override {
+    return AliasSet::Load(AliasSet::FixedSlot);
+  }
 };
 
 // Read the length of an array buffer view.
@@ -8430,8 +8760,6 @@ class MStoreUnboxedScalar : public MTernaryInstruction,
         requiresBarrier_(requiresBarrier == DoesRequireMemoryBarrier) {
     if (requiresBarrier_) {
       setGuard();  // Not removable or movable
-    } else {
-      setMovable();
     }
     MOZ_ASSERT(elements->type() == MIRType::Elements);
     MOZ_ASSERT(index->type() == MIRType::Int32);
@@ -8466,7 +8794,6 @@ class MStoreDataViewElement : public MQuaternaryInstruction,
       : MQuaternaryInstruction(classOpcode, elements, index, value,
                                littleEndian),
         StoreUnboxedScalarBase(storageType) {
-    setMovable();
     MOZ_ASSERT(elements->type() == MIRType::Elements);
     MOZ_ASSERT(index->type() == MIRType::Int32);
     MOZ_ASSERT(storageType >= 0 && storageType < Scalar::MaxTypedArrayViewType);
@@ -8498,7 +8825,6 @@ class MStoreTypedArrayElementHole : public MQuaternaryInstruction,
                               Scalar::Type arrayType)
       : MQuaternaryInstruction(classOpcode, elements, length, index, value),
         StoreUnboxedScalarBase(arrayType) {
-    setMovable();
     MOZ_ASSERT(elements->type() == MIRType::Elements);
     MOZ_ASSERT(length->type() == MIRType::Int32);
     MOZ_ASSERT(index->type() == MIRType::Int32);
@@ -9810,7 +10136,11 @@ class MGuardNullOrUndefined : public MUnaryInstruction,
 // Guard on function flags
 class MGuardFunctionFlags : public MUnaryInstruction,
                             public SingleObjectPolicy::Data {
+  // At least one of the expected flags must be set, but not necessarily all
+  // expected flags.
   uint16_t expectedFlags_;
+
+  // None of the unexpected flags must be set.
   uint16_t unexpectedFlags_;
 
   explicit MGuardFunctionFlags(MDefinition* fun, uint16_t expectedFlags,
@@ -9846,6 +10176,30 @@ class MGuardFunctionFlags : public MUnaryInstruction,
     if (unexpectedFlags() != ins->toGuardFunctionFlags()->unexpectedFlags()) {
       return false;
     }
+    return congruentIfOperandsEqual(ins);
+  }
+  AliasSet getAliasSet() const override {
+    return AliasSet::Load(AliasSet::ObjectFields);
+  }
+};
+
+// Guard the function is a non-builtin constructor.
+class MGuardFunctionIsNonBuiltinCtor : public MUnaryInstruction,
+                                       public SingleObjectPolicy::Data {
+  explicit MGuardFunctionIsNonBuiltinCtor(MDefinition* fun)
+      : MUnaryInstruction(classOpcode, fun) {
+    setGuard();
+    setMovable();
+    setResultType(MIRType::Object);
+    setResultTypeSet(fun->resultTypeSet());
+  }
+
+ public:
+  INSTRUCTION_HEADER(GuardFunctionIsNonBuiltinCtor)
+  TRIVIAL_NEW_WRAPPERS
+  NAMED_OPERANDS((0, function))
+
+  bool congruentTo(const MDefinition* ins) const override {
     return congruentIfOperandsEqual(ins);
   }
   AliasSet getAliasSet() const override {
@@ -10966,6 +11320,132 @@ class MGetDOMMember : public MGetDOMPropertyBase {
     }
 
     return baseCongruentTo(ins->toGetDOMMember());
+  }
+};
+
+// Load the private value expando from a DOM proxy. The target is stored in the
+// proxy object's private slot.
+// This is either an UndefinedValue (no expando), ObjectValue (the expando
+// object), or PrivateValue(ExpandoAndGeneration*).
+class MLoadDOMExpandoValue : public MUnaryInstruction,
+                             public SingleObjectPolicy::Data {
+  explicit MLoadDOMExpandoValue(MDefinition* proxy)
+      : MUnaryInstruction(classOpcode, proxy) {
+    setMovable();
+    setResultType(MIRType::Value);
+  }
+
+ public:
+  INSTRUCTION_HEADER(LoadDOMExpandoValue)
+  TRIVIAL_NEW_WRAPPERS
+  NAMED_OPERANDS((0, proxy))
+
+  bool congruentTo(const MDefinition* ins) const override {
+    return congruentIfOperandsEqual(ins);
+  }
+  AliasSet getAliasSet() const override {
+    return AliasSet::Load(AliasSet::DOMProxyExpando);
+  }
+};
+
+class MLoadDOMExpandoValueGuardGeneration : public MUnaryInstruction,
+                                            public SingleObjectPolicy::Data {
+  JS::ExpandoAndGeneration* expandoAndGeneration_;
+  uint64_t generation_;
+
+  MLoadDOMExpandoValueGuardGeneration(
+      MDefinition* proxy, JS::ExpandoAndGeneration* expandoAndGeneration,
+      uint64_t generation)
+      : MUnaryInstruction(classOpcode, proxy),
+        expandoAndGeneration_(expandoAndGeneration),
+        generation_(generation) {
+    setGuard();
+    setMovable();
+    setResultType(MIRType::Value);
+  }
+
+ public:
+  INSTRUCTION_HEADER(LoadDOMExpandoValueGuardGeneration)
+  TRIVIAL_NEW_WRAPPERS
+  NAMED_OPERANDS((0, proxy))
+
+  JS::ExpandoAndGeneration* expandoAndGeneration() const {
+    return expandoAndGeneration_;
+  }
+  uint64_t generation() const { return generation_; }
+
+  bool congruentTo(const MDefinition* ins) const override {
+    if (!ins->isLoadDOMExpandoValueGuardGeneration()) {
+      return false;
+    }
+    const auto* other = ins->toLoadDOMExpandoValueGuardGeneration();
+    if (expandoAndGeneration() != other->expandoAndGeneration() ||
+        generation() != other->generation()) {
+      return false;
+    }
+    return congruentIfOperandsEqual(ins);
+  }
+  AliasSet getAliasSet() const override {
+    return AliasSet::Load(AliasSet::DOMProxyExpando);
+  }
+};
+
+class MLoadDOMExpandoValueIgnoreGeneration : public MUnaryInstruction,
+                                             public SingleObjectPolicy::Data {
+  explicit MLoadDOMExpandoValueIgnoreGeneration(MDefinition* proxy)
+      : MUnaryInstruction(classOpcode, proxy) {
+    setMovable();
+    setResultType(MIRType::Value);
+  }
+
+ public:
+  INSTRUCTION_HEADER(LoadDOMExpandoValueIgnoreGeneration)
+  TRIVIAL_NEW_WRAPPERS
+  NAMED_OPERANDS((0, proxy))
+
+  bool congruentTo(const MDefinition* ins) const override {
+    return congruentIfOperandsEqual(ins);
+  }
+  AliasSet getAliasSet() const override {
+    return AliasSet::Load(AliasSet::DOMProxyExpando);
+  }
+};
+
+// Takes an expando Value as input, then guards it's either UndefinedValue or
+// an object with the expected shape.
+class MGuardDOMExpandoMissingOrGuardShape : public MUnaryInstruction,
+                                            public BoxInputsPolicy::Data {
+  CompilerShape shape_;
+
+  MGuardDOMExpandoMissingOrGuardShape(MDefinition* obj, Shape* shape)
+      : MUnaryInstruction(classOpcode, obj), shape_(shape) {
+    setGuard();
+    setMovable();
+    setResultType(MIRType::Value);
+  }
+
+ public:
+  INSTRUCTION_HEADER(GuardDOMExpandoMissingOrGuardShape)
+  TRIVIAL_NEW_WRAPPERS
+  NAMED_OPERANDS((0, expando))
+
+  const Shape* shape() const { return shape_; }
+
+  bool congruentTo(const MDefinition* ins) const override {
+    if (!ins->isGuardDOMExpandoMissingOrGuardShape()) {
+      return false;
+    }
+    if (shape() != ins->toGuardDOMExpandoMissingOrGuardShape()->shape()) {
+      return false;
+    }
+    return congruentIfOperandsEqual(ins);
+  }
+  AliasSet getAliasSet() const override {
+    return AliasSet::Load(AliasSet::ObjectFields);
+  }
+
+  bool appendRoots(MRootList& roots) const override {
+    return roots.append(shape_);
   }
 };
 
@@ -13426,10 +13906,12 @@ class MWasmParameter : public MNullaryInstruction {
   ABIArg abi() const { return abi_; }
 };
 
-class MWasmReturn : public MAryControlInstruction<1, 0>,
+class MWasmReturn : public MAryControlInstruction<2, 0>,
                     public NoTypePolicy::Data {
-  explicit MWasmReturn(MDefinition* ins) : MAryControlInstruction(classOpcode) {
+  MWasmReturn(MDefinition* ins, MDefinition* tls)
+      : MAryControlInstruction(classOpcode) {
     initOperand(0, ins);
+    initOperand(1, tls);
   }
 
  public:
@@ -13437,9 +13919,12 @@ class MWasmReturn : public MAryControlInstruction<1, 0>,
   TRIVIAL_NEW_WRAPPERS
 };
 
-class MWasmReturnVoid : public MAryControlInstruction<0, 0>,
+class MWasmReturnVoid : public MAryControlInstruction<1, 0>,
                         public NoTypePolicy::Data {
-  MWasmReturnVoid() : MAryControlInstruction(classOpcode) {}
+  explicit MWasmReturnVoid(MDefinition* tls)
+      : MAryControlInstruction(classOpcode) {
+    initOperand(0, tls);
+  }
 
  public:
   INSTRUCTION_HEADER(WasmReturnVoid)
@@ -13819,6 +14304,9 @@ class MWasmBinarySimd128 : public MBinaryInstruction,
     return ins->toWasmBinarySimd128()->simdOp() == simdOp_ &&
            congruentIfOperandsEqual(ins);
   }
+#ifdef ENABLE_WASM_SIMD
+  MDefinition* foldsTo(TempAllocator& alloc) override;
+#endif
 
   wasm::SimdOp simdOp() const { return simdOp_; }
 
@@ -13875,7 +14363,7 @@ class MWasmShuffleSimd128 : public MBinaryInstruction,
 
   AliasSet getAliasSet() const override { return AliasSet::None(); }
   bool congruentTo(const MDefinition* ins) const override {
-    return ins->toWasmShuffleSimd128()->control() == control_ &&
+    return ins->toWasmShuffleSimd128()->control().bitwiseEqual(control_) &&
            congruentIfOperandsEqual(ins);
   }
 

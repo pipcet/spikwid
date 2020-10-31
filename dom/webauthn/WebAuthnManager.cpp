@@ -39,15 +39,17 @@ NS_IMPL_ISUPPORTS_CYCLE_COLLECTION_INHERITED_0(WebAuthnManager,
                                                WebAuthnManagerBase)
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(WebAuthnManager)
+
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(WebAuthnManager,
                                                 WebAuthnManagerBase)
-  NS_IMPL_CYCLE_COLLECTION_UNLINK(mFollowingSignal)
+  AbortFollower::Unlink(static_cast<AbortFollower*>(tmp));
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mTransaction)
   tmp->mTransaction.reset();
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(WebAuthnManager,
                                                   WebAuthnManagerBase)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mFollowingSignal)
+  AbortFollower::Traverse(static_cast<AbortFollower*>(tmp), cb);
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mTransaction)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
@@ -416,9 +418,9 @@ already_AddRefed<Promise> WebAuthnManager::MakeCredential(
     return promise.forget();
   }
 
-  WebAuthnMakeCredentialInfo info(origin, NS_ConvertUTF8toUTF16(rpId),
-                                  challenge, clientDataJSON, adjustedTimeout,
-                                  excludeList, Some(extra), context->Id());
+  WebAuthnMakeCredentialInfo info(
+      origin, NS_ConvertUTF8toUTF16(rpId), challenge, clientDataJSON,
+      adjustedTimeout, excludeList, Some(extra), context->Top()->Id());
 
 #ifdef OS_WIN
   if (!WinWebAuthnManager::AreWebAuthNApisAvailable()) {
@@ -624,7 +626,7 @@ already_AddRefed<Promise> WebAuthnManager::GetAssertion(
 
   WebAuthnGetAssertionInfo info(origin, NS_ConvertUTF8toUTF16(rpId), challenge,
                                 clientDataJSON, adjustedTimeout, allowList,
-                                Some(extra), context->Id());
+                                Some(extra), context->Top()->Id());
 
 #ifdef OS_WIN
   if (!WinWebAuthnManager::AreWebAuthNApisAvailable()) {
@@ -826,7 +828,9 @@ void WebAuthnManager::RequestAborted(const uint64_t& aTransactionId,
   }
 }
 
-void WebAuthnManager::Abort() { CancelTransaction(NS_ERROR_DOM_ABORT_ERR); }
+void WebAuthnManager::RunAbortAlgorithm() {
+  CancelTransaction(NS_ERROR_DOM_ABORT_ERR);
+}
 
 }  // namespace dom
 }  // namespace mozilla

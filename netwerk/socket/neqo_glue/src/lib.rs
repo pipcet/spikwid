@@ -3,12 +3,13 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 use neqo_common::{self as common, qlog::NeqoQlog, qwarn, Datagram, Role};
+use neqo_common::event::Provider;
 use neqo_crypto::{init, PRErrorCode};
 use neqo_http3::Error as Http3Error;
 use neqo_http3::{Http3Client, Http3ClientEvent, Http3Parameters, Http3State};
 use neqo_qpack::QpackSettings;
 use neqo_transport::Error as TransportError;
-use neqo_transport::{FixedConnectionIdManager, Output, QuicVersion};
+use neqo_transport::{CongestionControlAlgorithm, FixedConnectionIdManager, Output, QuicVersion};
 use nserror::*;
 use nsstring::*;
 use qlog::QlogStreamer;
@@ -77,6 +78,7 @@ impl NeqoHttp3Conn {
         };
 
         let quic_version = match alpn_conv {
+            "h3-30" => QuicVersion::Draft30,
             "h3-29" => QuicVersion::Draft29,
             "h3-28" => QuicVersion::Draft28,
             "h3-27" => QuicVersion::Draft27,
@@ -85,10 +87,10 @@ impl NeqoHttp3Conn {
 
         let mut conn = match Http3Client::new(
             origin_conv,
-            &[alpn_conv],
             Rc::new(RefCell::new(FixedConnectionIdManager::new(3))),
             local,
             remote,
+            &CongestionControlAlgorithm::NewReno,
             quic_version,
             &http3_settings,
         ) {
@@ -360,9 +362,7 @@ pub extern "C" fn neqo_http3conn_fetch(
             *stream_id = id;
             NS_OK
         }
-        Err(Http3Error::StreamLimitError) => {
-            NS_BASE_STREAM_WOULD_BLOCK
-        }
+        Err(Http3Error::StreamLimitError) => NS_BASE_STREAM_WOULD_BLOCK,
         Err(_) => NS_ERROR_UNEXPECTED,
     }
 }
@@ -587,7 +587,7 @@ pub extern "C" fn neqo_http3conn_event(
                     let e = (token.expiration_time() - Instant::now()).as_micros();
                     if let Ok(expire_in) = u64::try_from(e) {
                         data.extend_from_slice(token.as_ref());
-                        Http3Event::ResumptionToken{ expire_in }
+                        Http3Event::ResumptionToken { expire_in }
                     } else {
                         Http3Event::NoEvent
                     }

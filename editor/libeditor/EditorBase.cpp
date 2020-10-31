@@ -384,7 +384,11 @@ nsresult EditorBase::PostCreate() {
     // If the text control gets reframed during focus, Focus() would not be
     // called, so take a chance here to see if we need to spell check the text
     // control.
-    mEventListener->SpellCheckIfNeeded();
+    RefPtr<EditorEventListener> eventListener = mEventListener;
+    eventListener->SpellCheckIfNeeded();
+    if (NS_WARN_IF(Destroyed())) {
+      return EditorBase::ToGenericNSResult(NS_ERROR_EDITOR_DESTROYED);
+    }
 
     IMEState newState;
     nsresult rv = GetPreferredIMEState(&newState);
@@ -786,7 +790,7 @@ NS_IMETHODIMP EditorBase::DoTransaction(nsITransaction* aTransaction) {
 
 nsresult EditorBase::DoTransactionInternal(nsITransaction* aTransaction) {
   MOZ_ASSERT(IsEditActionDataAvailable());
-  MOZ_ASSERT(!NeedsToDispatchBeforeInputEvent(),
+  MOZ_ASSERT(!ShouldAlreadyHaveHandledBeforeInputEventDispatching(),
              "beforeinput event hasn't been dispatched yet");
 
   if (mPlaceholderBatch && !mPlaceholderTransaction) {
@@ -1097,14 +1101,14 @@ nsresult EditorBase::SelectAllInternal() {
   return rv;
 }
 
-NS_IMETHODIMP EditorBase::BeginningOfDocument() {
+MOZ_CAN_RUN_SCRIPT_BOUNDARY NS_IMETHODIMP EditorBase::BeginningOfDocument() {
   AutoEditActionDataSetter editActionData(*this, EditAction::eNotEditing);
   if (NS_WARN_IF(!editActionData.CanHandle())) {
     return NS_ERROR_NOT_INITIALIZED;
   }
 
   // get the root element
-  Element* rootElement = GetRoot();
+  RefPtr<Element> rootElement = GetRoot();
   if (NS_WARN_IF(!rootElement)) {
     return NS_ERROR_NULL_POINTER;
   }
@@ -1113,7 +1117,8 @@ NS_IMETHODIMP EditorBase::BeginningOfDocument() {
   nsCOMPtr<nsINode> firstNode = GetFirstEditableNode(rootElement);
   if (!firstNode) {
     // just the root node, set selection to inside the root
-    nsresult rv = SelectionRefPtr()->CollapseInLimiter(rootElement, 0);
+    nsresult rv =
+        MOZ_KnownLive(SelectionRefPtr())->CollapseInLimiter(rootElement, 0);
     NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
                          "Selection::CollapseInLimiter() failed");
     return rv;
@@ -1121,7 +1126,8 @@ NS_IMETHODIMP EditorBase::BeginningOfDocument() {
 
   if (firstNode->IsText()) {
     // If firstNode is text, set selection to beginning of the text node.
-    nsresult rv = SelectionRefPtr()->CollapseInLimiter(firstNode, 0);
+    nsresult rv =
+        MOZ_KnownLive(SelectionRefPtr())->CollapseInLimiter(firstNode, 0);
     NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
                          "Selection::CollapseInLimiter() failed");
     return rv;
@@ -1136,7 +1142,7 @@ NS_IMETHODIMP EditorBase::BeginningOfDocument() {
   MOZ_ASSERT(
       parent->ComputeIndexOf(firstNode) == 0,
       "How come the first node isn't the left most child in its parent?");
-  nsresult rv = SelectionRefPtr()->CollapseInLimiter(parent, 0);
+  nsresult rv = MOZ_KnownLive(SelectionRefPtr())->CollapseInLimiter(parent, 0);
   NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
                        "Selection::CollapseInLimiter() failed");
   return rv;
@@ -1169,7 +1175,7 @@ nsresult EditorBase::CollapseSelectionToEnd() const {
     return NS_ERROR_NULL_POINTER;
   }
 
-  nsIContent* lastContent = rootElement;
+  nsCOMPtr<nsIContent> lastContent = rootElement;
   for (nsIContent* child = lastContent->GetLastChild();
        child && (IsTextEditor() || HTMLEditUtils::IsContainerNode(*child));
        child = child->GetLastChild()) {
@@ -1177,8 +1183,9 @@ nsresult EditorBase::CollapseSelectionToEnd() const {
   }
 
   uint32_t length = lastContent->Length();
-  nsresult rv = SelectionRefPtr()->CollapseInLimiter(
-      lastContent, static_cast<int32_t>(length));
+  nsresult rv =
+      MOZ_KnownLive(SelectionRefPtr())
+          ->CollapseInLimiter(lastContent, static_cast<int32_t>(length));
   NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
                        "Selection::CollapseInLimiter() failed");
   return rv;
@@ -1784,7 +1791,7 @@ void EditorBase::DispatchInputEvent() {
              "If preceding beforeinput event is canceled, we shouldn't "
              "dispatch input event");
   MOZ_ASSERT(
-      !NeedsToDispatchBeforeInputEvent(),
+      !ShouldAlreadyHaveHandledBeforeInputEventDispatching(),
       "We've not handled beforeinput event but trying to dispatch input event");
 
   // We don't need to dispatch multiple input events if there is a pending
@@ -1803,8 +1810,10 @@ void EditorBase::DispatchInputEvent() {
   RefPtr<DataTransfer> dataTransfer = GetInputEventDataTransfer();
   DebugOnly<nsresult> rvIgnored = nsContentUtils::DispatchInputEvent(
       targetElement, eEditorInput, ToInputType(GetEditAction()), textEditor,
-      dataTransfer ? InputEventOptions(dataTransfer)
-                   : InputEventOptions(GetInputEventData()));
+      dataTransfer ? InputEventOptions(dataTransfer,
+                                       InputEventOptions::NeverCancelable::No)
+                   : InputEventOptions(GetInputEventData(),
+                                       InputEventOptions::NeverCancelable::No));
   NS_WARNING_ASSERTION(
       NS_SUCCEEDED(rvIgnored),
       "nsContentUtils::DispatchInputEvent() failed, but ignored");
@@ -2479,7 +2488,7 @@ EditorBase::ComputeInsertedRange(const EditorDOMPointInText& aInsertedPoint,
   // The DOM was potentially modified during the transaction. This is possible
   // through mutation event listeners. That is, the node could've been removed
   // from the doc or otherwise modified.
-  if (!MaybeHasMutationEventListeners(
+  if (!MayHaveMutationEventListeners(
           NS_EVENT_BITS_MUTATION_CHARACTERDATAMODIFIED)) {
     EditorDOMPointInText endOfInsertion(
         aInsertedPoint.ContainerAsText(),
@@ -2689,7 +2698,7 @@ nsresult EditorBase::SetTextNodeWithoutTransaction(const nsAString& aString,
   if (!mActionListeners.IsEmpty() && length) {
     for (auto& listener : mActionListeners.Clone()) {
       DebugOnly<nsresult> rvIgnored =
-          listener->WillDeleteText(&aTextNode, 0, length);
+          listener->WillDeleteText(MOZ_KnownLive(&aTextNode), 0, length);
       if (NS_WARN_IF(Destroyed())) {
         NS_WARNING(
             "nsIEditActionListener::WillDeleteText() failed, but ignored");
@@ -2709,7 +2718,8 @@ nsresult EditorBase::SetTextNodeWithoutTransaction(const nsAString& aString,
   }
 
   DebugOnly<nsresult> rvIgnored =
-      SelectionRefPtr()->CollapseInLimiter(&aTextNode, aString.Length());
+      MOZ_KnownLive(SelectionRefPtr())
+          ->CollapseInLimiter(MOZ_KnownLive(&aTextNode), aString.Length());
   if (NS_WARN_IF(Destroyed())) {
     return NS_ERROR_EDITOR_DESTROYED;
   }
@@ -3239,8 +3249,8 @@ nsresult EditorBase::MaybeCreatePaddingBRElementForEmptyEditor() {
   }
 
   // Set selection.
-  SelectionRefPtr()->CollapseInLimiter(EditorRawDOMPoint(rootElement, 0),
-                                       ignoredError);
+  MOZ_KnownLive(SelectionRefPtr())
+      ->CollapseInLimiter(EditorRawDOMPoint(rootElement, 0), ignoredError);
   if (NS_WARN_IF(Destroyed())) {
     return NS_ERROR_EDITOR_DESTROYED;
   }
@@ -3665,7 +3675,7 @@ nsresult EditorBase::DeleteSelectionAsAction(
           break;
         }
         ErrorResult error;
-        SelectionRefPtr()->CollapseToStart(error);
+        MOZ_KnownLive(SelectionRefPtr())->CollapseToStart(error);
         if (NS_WARN_IF(Destroyed())) {
           error.SuppressException();
           return EditorBase::ToGenericNSResult(NS_ERROR_EDITOR_DESTROYED);
@@ -4344,12 +4354,12 @@ void EditorBase::ReinitializeSelection(Element& aElement) {
   // turn on it, spellcheck state is mismatched.  So we need to re-sync it.
   SyncRealTimeSpell();
 
-  nsPresContext* context = GetPresContext();
-  if (NS_WARN_IF(!context)) {
+  RefPtr<nsPresContext> presContext = GetPresContext();
+  if (NS_WARN_IF(!presContext)) {
     return;
   }
   nsCOMPtr<nsIContent> focusedContent = GetFocusedContentForIME();
-  IMEStateManager::OnFocusInEditor(context, focusedContent, *this);
+  IMEStateManager::OnFocusInEditor(presContext, focusedContent, *this);
 }
 
 Element* EditorBase::GetEditorRoot() const { return GetRoot(); }
@@ -5119,7 +5129,9 @@ EditorBase::AutoEditActionDataSetter::AutoEditActionDataSetter(
       mTopLevelEditSubAction(EditSubAction::eNone),
       mAborted(false),
       mHasTriedToDispatchBeforeInputEvent(false),
-      mBeforeInputEventCanceled(false) {
+      mBeforeInputEventCanceled(false),
+      mMakeBeforeInputEventNonCancelable(false),
+      mHasTriedToDispatchClipboardEvent(false) {
   // If we're nested edit action, copies necessary data from the parent.
   if (mParentData) {
     mSelection = mParentData->mSelection;
@@ -5131,6 +5143,17 @@ EditorBase::AutoEditActionDataSetter::AutoEditActionDataSetter(
     // just returns something.
     if (aEditAction != EditAction::eNotEditing) {
       mEditAction = aEditAction;
+    } else {
+      mEditAction = mParentData->mEditAction;
+      // If we inherit an edit action whose handler needs to dispatch a
+      // clipboard event, we should inherit the clipboard dispatching state
+      // too because this nest occurs by a clipboard event listener or
+      // a beforeinput/mutation event listener is important for checking
+      // whether we've already called `MaybeDispatchBeforeInputEvent()`
+      // property in some points.  If the former case, not yet dispatching
+      // beforeinput event is okay (not fine).
+      mHasTriedToDispatchClipboardEvent =
+          mParentData->mHasTriedToDispatchClipboardEvent;
     }
     mTopLevelEditSubAction = mParentData->mTopLevelEditSubAction;
 
@@ -5308,7 +5331,8 @@ nsresult EditorBase::AutoEditActionDataSetter::MaybeDispatchBeforeInputEvent(
   MOZ_ASSERT(!HasTriedToDispatchBeforeInputEvent(),
              "We've already handled beforeinput event");
   MOZ_ASSERT(CanHandle());
-  MOZ_ASSERT(!IsBeforeInputEventEnabled() || NeedsToDispatchBeforeInputEvent());
+  MOZ_ASSERT(!IsBeforeInputEventEnabled() ||
+             ShouldAlreadyHaveHandledBeforeInputEventDispatching());
   MOZ_ASSERT_IF(!MayEditActionDeleteAroundCollapsedSelection(mEditAction),
                 aDeleteDirectionAndAmount == nsIEditor::eNone);
 
@@ -5327,8 +5351,14 @@ nsresult EditorBase::AutoEditActionDataSetter::MaybeDispatchBeforeInputEvent(
   }
 
   RefPtr<Element> targetElement = mEditorBase.GetInputEventTargetElement();
-  if (NS_WARN_IF(!targetElement)) {
-    return NS_ERROR_FAILURE;
+  if (!targetElement) {
+    // If selection is not in editable element and it is outside of any
+    // editing hosts, there may be no target element to dispatch `beforeinput`
+    // event.  In this case, the caller shouldn't keep handling the edit
+    // action since web apps cannot override it with `beforeinput` event
+    // listener, but for backward compatibility, we should return a special
+    // success code instead of error.
+    return NS_OK;
   }
   OwningNonNull<TextEditor> textEditor = *mEditorBase.AsTextEditor();
   EditorInputType inputType = ToInputType(mEditAction);
@@ -5393,10 +5423,16 @@ nsresult EditorBase::AutoEditActionDataSetter::MaybeDispatchBeforeInputEvent(
     }
   }
   nsEventStatus status = nsEventStatus_eIgnore;
+  InputEventOptions::NeverCancelable neverCancelable =
+      mMakeBeforeInputEventNonCancelable
+          ? InputEventOptions::NeverCancelable::Yes
+          : InputEventOptions::NeverCancelable::No;
   nsresult rv = nsContentUtils::DispatchInputEvent(
       targetElement, eEditorBeforeInput, inputType, textEditor,
-      mDataTransfer ? InputEventOptions(mDataTransfer, std::move(mTargetRanges))
-                    : InputEventOptions(mData, std::move(mTargetRanges)),
+      mDataTransfer
+          ? InputEventOptions(mDataTransfer, std::move(mTargetRanges),
+                              neverCancelable)
+          : InputEventOptions(mData, std::move(mTargetRanges), neverCancelable),
       &status);
   if (NS_WARN_IF(mEditorBase.Destroyed())) {
     return NS_ERROR_EDITOR_DESTROYED;
@@ -5406,6 +5442,9 @@ nsresult EditorBase::AutoEditActionDataSetter::MaybeDispatchBeforeInputEvent(
     return rv;
   }
   mBeforeInputEventCanceled = status == nsEventStatus_eConsumeNoDefault;
+  if (mBeforeInputEventCanceled && mEditorBase.IsHTMLEditor()) {
+    mEditorBase.AsHTMLEditor()->mHasBeforeInputBeenCanceled = true;
+  }
   return mBeforeInputEventCanceled ? NS_ERROR_EDITOR_ACTION_CANCELED : NS_OK;
 }
 

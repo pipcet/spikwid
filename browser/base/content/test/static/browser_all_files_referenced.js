@@ -176,8 +176,6 @@ var whitelist = [
     file: "resource://gre/modules/OSCrypto.jsm",
     platforms: ["linux", "macosx"],
   },
-  // Bug 1356031 (only used by devtools)
-  { file: "chrome://global/skin/icons/error-16.png" },
   // Bug 1344267
   { file: "chrome://marionette/content/test.xhtml" },
   { file: "chrome://marionette/content/test_dialog.properties" },
@@ -223,6 +221,9 @@ var whitelist = [
 
   // services/fxaccounts/RustFxAccount.js
   { file: "resource://gre/modules/RustFxAccount.js" },
+
+  // dom/media/mediacontrol/MediaControlService.cpp
+  { file: "resource://gre/localization/en-US/dom/media.ftl" },
 ];
 
 if (AppConstants.NIGHTLY_BUILD && AppConstants.platform != "win") {

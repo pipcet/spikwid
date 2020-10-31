@@ -75,34 +75,8 @@ function setup() {
 }
 
 setup();
-registerCleanupFunction(() => {
-  Services.prefs.clearUserPref("network.trr.mode");
-  Services.prefs.clearUserPref("network.trr.uri");
-  Services.prefs.clearUserPref("network.trr.credentials");
-  Services.prefs.clearUserPref("network.trr.wait-for-portal");
-  Services.prefs.clearUserPref("network.trr.allow-rfc1918");
-  Services.prefs.clearUserPref("network.trr.useGET");
-  Services.prefs.clearUserPref("network.trr.confirmationNS");
-  Services.prefs.clearUserPref("network.trr.bootstrapAddress");
-  Services.prefs.clearUserPref("network.trr.blacklist-duration");
-  Services.prefs.clearUserPref("network.trr.request_timeout_ms");
-  Services.prefs.clearUserPref("network.trr.request_timeout_mode_trronly_ms");
-  Services.prefs.clearUserPref("network.trr.disable-ECS");
-  Services.prefs.clearUserPref("network.trr.early-AAAA");
-  Services.prefs.clearUserPref("network.trr.skip-AAAA-when-not-supported");
-  Services.prefs.clearUserPref("network.trr.wait-for-A-and-AAAA");
-  Services.prefs.clearUserPref("network.trr.excluded-domains");
-  Services.prefs.clearUserPref("network.trr.builtin-excluded-domains");
-  Services.prefs.clearUserPref("network.trr.clear-cache-on-pref-change");
-  Services.prefs.clearUserPref("captivedetect.canonicalURL");
-
-  Services.prefs.clearUserPref("network.http.spdy.enabled");
-  Services.prefs.clearUserPref("network.http.spdy.enabled.http2");
-  Services.prefs.clearUserPref("network.dns.localDomains");
-  Services.prefs.clearUserPref("network.dns.native-is-localhost");
-  Services.prefs.clearUserPref(
-    "network.trr.send_empty_accept-encoding_headers"
-  );
+registerCleanupFunction(async () => {
+  trr_clear_prefs();
 });
 
 // This is an IP that is local, so we don't crash when connecting to it,
@@ -1003,7 +977,7 @@ add_task(async function test24k() {
   await new DNSListener("bar.example.com", "127.0.0.1");
 });
 
-// TRR-only that resolving localhost with TRR-only mode will use the remote
+// TRR-only that resolving excluded with TRR-only mode will use the remote
 // resolver if it's not in the excluded domains
 add_task(async function test25() {
   dns.clearCache(true);
@@ -1015,27 +989,27 @@ add_task(async function test25() {
     `https://foo.example.com:${h2Port}/doh?responseIP=192.192.192.192`
   );
 
-  await new DNSListener("localhost", "192.192.192.192", true);
+  await new DNSListener("excluded", "192.192.192.192", true);
 });
 
-// TRR-only check that localhost goes directly to native lookup when in the excluded-domains
+// TRR-only check that excluded goes directly to native lookup when in the excluded-domains
 add_task(async function test25b() {
   dns.clearCache(true);
   Services.prefs.setIntPref("network.trr.mode", 3); // TRR-only
-  Services.prefs.setCharPref("network.trr.excluded-domains", "localhost");
+  Services.prefs.setCharPref("network.trr.excluded-domains", "excluded");
   Services.prefs.setCharPref(
     "network.trr.uri",
     `https://foo.example.com:${h2Port}/doh?responseIP=192.192.192.192`
   );
 
-  await new DNSListener("localhost", "127.0.0.1");
+  await new DNSListener("excluded", "127.0.0.1");
 });
 
 // TRR-only check that test.local is resolved via native DNS
 add_task(async function test25c() {
   dns.clearCache(true);
   Services.prefs.setIntPref("network.trr.mode", 3); // TRR-only
-  Services.prefs.setCharPref("network.trr.excluded-domains", "localhost,local");
+  Services.prefs.setCharPref("network.trr.excluded-domains", "excluded,local");
   Services.prefs.setCharPref(
     "network.trr.uri",
     `https://foo.example.com:${h2Port}/doh?responseIP=192.192.192.192`
@@ -1050,7 +1024,7 @@ add_task(async function test25d() {
   Services.prefs.setIntPref("network.trr.mode", 3); // TRR-only
   Services.prefs.setCharPref(
     "network.trr.excluded-domains",
-    "localhost,local,other"
+    "excluded,local,other"
   );
   Services.prefs.setCharPref(
     "network.trr.uri",
@@ -1115,21 +1089,21 @@ add_task(async function test25f() {
   await SetParentalControlEnabled(false);
 });
 
-// TRR-only check that localhost goes directly to native lookup when in the builtin-excluded-domains
+// TRR-only check that excluded goes directly to native lookup when in the builtin-excluded-domains
 add_task(async function test25g() {
   dns.clearCache(true);
   Services.prefs.setIntPref("network.trr.mode", 3); // TRR-only
   Services.prefs.setCharPref("network.trr.excluded-domains", "");
   Services.prefs.setCharPref(
     "network.trr.builtin-excluded-domains",
-    "localhost"
+    "excluded"
   );
   Services.prefs.setCharPref(
     "network.trr.uri",
     `https://foo.example.com:${h2Port}/doh?responseIP=192.192.192.192`
   );
 
-  await new DNSListener("localhost", "127.0.0.1");
+  await new DNSListener("excluded", "127.0.0.1");
 });
 
 // TRR-only check that test.local is resolved via native DNS
@@ -1138,7 +1112,7 @@ add_task(async function test25h() {
   Services.prefs.setIntPref("network.trr.mode", 3); // TRR-only
   Services.prefs.setCharPref(
     "network.trr.builtin-excluded-domains",
-    "localhost,local"
+    "excluded,local"
   );
   Services.prefs.setCharPref(
     "network.trr.uri",
@@ -1154,7 +1128,7 @@ add_task(async function test25i() {
   Services.prefs.setIntPref("network.trr.mode", 3); // TRR-only
   Services.prefs.setCharPref(
     "network.trr.builtin-excluded-domains",
-    "localhost,local,other"
+    "excluded,local,other"
   );
   Services.prefs.setCharPref(
     "network.trr.uri",
@@ -1199,7 +1173,7 @@ add_task(async function test_connection_closed() {
 add_task(async function test_connection_closed_no_bootstrap() {
   dns.clearCache(true);
   Services.prefs.setIntPref("network.trr.mode", 3); // TRR-only
-  Services.prefs.setCharPref("network.trr.excluded-domains", "localhost,local");
+  Services.prefs.setCharPref("network.trr.excluded-domains", "excluded,local");
   Services.prefs.setCharPref(
     "network.trr.uri",
     `https://foo.example.com:${h2Port}/doh?responseIP=3.3.3.3`
@@ -1221,7 +1195,7 @@ add_task(async function test_connection_closed_no_bootstrap() {
 add_task(async function test_connection_closed_no_bootstrap_localhost() {
   dns.clearCache(true);
   Services.prefs.setIntPref("network.trr.mode", 3); // TRR-only
-  Services.prefs.setCharPref("network.trr.excluded-domains", "localhost");
+  Services.prefs.setCharPref("network.trr.excluded-domains", "excluded");
   Services.prefs.setCharPref(
     "network.trr.uri",
     `https://localhost:${h2Port}/doh?responseIP=3.3.3.3`

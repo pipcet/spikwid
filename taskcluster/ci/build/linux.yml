@@ -132,7 +132,7 @@ linux64-fuzzing/debug:
             # this dependency can be removed.
             - linux64-fix-stacks
     optimization:
-        build-fuzzing: null
+        skip-unless-expanded: null
 
 linux64/debug:
     description: "Linux64 Debug"
@@ -242,6 +242,7 @@ linux64/codeql-cpp:
                 mozilla-release: ["tom@mozilla.com", "freddy@mozilla.com"]
                 try: ["{config[params][owner]}"]
                 default: []
+    optimization: null
 
 
 linux64-plain/debug:
@@ -772,7 +773,7 @@ linux64-tsan-fuzzing/opt:
             - linux64-lucetc
             - wasi-sysroot
     optimization:
-        build-fuzzing: null
+        skip-unless-expanded: null
 
 linux64-asan-fuzzing/opt:
     description: "Linux64 Fuzzing Opt ASAN"
@@ -819,7 +820,7 @@ linux64-asan-fuzzing/opt:
             - linux64-lucetc
             - wasi-sysroot
     optimization:
-        build-fuzzing: null
+        skip-unless-expanded: null
 
 linux64-asan-fuzzing-ccov/opt:
     description: "Linux64 Fuzzing Opt ASAN w/ Coverage"
@@ -855,7 +856,7 @@ linux64-asan-fuzzing-ccov/opt:
     fetches:
         toolchain:
             - linux64-binutils
-            - linux64-clang-9
+            - linux64-clang
             - linux64-rust
             - linux64-rust-size
             - linux64-cbindgen
@@ -864,7 +865,7 @@ linux64-asan-fuzzing-ccov/opt:
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
-            - wasi-sysroot-9
+            - wasi-sysroot
 
 linux64-fuzzing-ccov/opt:
     description: "Linux64 Fuzzing Opt w/ Coverage"
@@ -899,7 +900,7 @@ linux64-fuzzing-ccov/opt:
     fetches:
         toolchain:
             - linux64-binutils
-            - linux64-clang-9
+            - linux64-clang
             - linux64-gcc-7
             - linux64-cbindgen
             - linux64-dump-syms
@@ -909,9 +910,9 @@ linux64-fuzzing-ccov/opt:
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
-            - wasi-sysroot-9
+            - wasi-sysroot
     optimization:
-        build-fuzzing: null
+        skip-unless-expanded: null
 
 linux64-asan-reporter-shippable/opt:
     description: "Linux64 Opt ASAN Reporter (Shippable)"
@@ -1229,7 +1230,7 @@ linux64-ccov/opt:
     fetches:
         toolchain:
             - linux64-binutils
-            - linux64-clang-9
+            - linux64-clang
             - linux64-rust
             - linux64-gcc-7
             - linux64-cbindgen
@@ -1239,7 +1240,7 @@ linux64-ccov/opt:
             - linux64-node
             - linux64-grcov
             - linux64-lucetc
-            - wasi-sysroot-9
+            - wasi-sysroot
 
 linux64-add-on-devel/opt:
     description: "Linux64 add-on-devel"

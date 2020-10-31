@@ -8,6 +8,7 @@
 
 #include "Accessible-inl.h"
 #include "nsAccessibilityService.h"
+#include "nsAccessiblePivot.h"
 #include "nsIAccessibleTypes.h"
 #include "DocAccessible.h"
 #include "HTMLListAccessible.h"
@@ -49,6 +50,116 @@
 
 using namespace mozilla;
 using namespace mozilla::a11y;
+
+/**
+ * This class is used in HyperTextAccessible to search for paragraph
+ * boundaries.
+ */
+class ParagraphBoundaryRule : public PivotRule {
+ public:
+  explicit ParagraphBoundaryRule(Accessible* aAnchor,
+                                 uint32_t aAnchorTextoffset,
+                                 nsDirection aDirection,
+                                 bool aSkipAnchorSubtree = false)
+      : mAnchor(aAnchor),
+        mAnchorTextOffset(aAnchorTextoffset),
+        mDirection(aDirection),
+        mSkipAnchorSubtree(aSkipAnchorSubtree),
+        mLastMatchTextOffset(0) {}
+
+  virtual uint16_t Match(const AccessibleOrProxy& aAccOrProxy) override {
+    MOZ_ASSERT(aAccOrProxy.IsAccessible());
+    Accessible* acc = aAccOrProxy.AsAccessible();
+    if (acc->IsOuterDoc()) {
+      // The child document might be remote and we can't (and don't want to)
+      // handle remote documents. Also, iframes are inline anyway and thus
+      // can't be paragraph boundaries. Therefore, skip this unconditionally.
+      return nsIAccessibleTraversalRule::FILTER_IGNORE_SUBTREE;
+    }
+
+    uint16_t result = nsIAccessibleTraversalRule::FILTER_IGNORE;
+    if (mSkipAnchorSubtree && acc == mAnchor) {
+      result |= nsIAccessibleTraversalRule::FILTER_IGNORE_SUBTREE;
+    }
+
+    // First, deal with the case that we encountered a line break, for example,
+    // a br in a paragraph.
+    if (acc->Role() == roles::WHITESPACE) {
+      result |= nsIAccessibleTraversalRule::FILTER_MATCH;
+      return result;
+    }
+
+    // Now, deal with the case that we encounter a new block level accessible.
+    // This also means a new paragraph boundary start.
+    nsIFrame* frame = acc->GetFrame();
+    if (frame && frame->IsBlockFrame()) {
+      result |= nsIAccessibleTraversalRule::FILTER_MATCH;
+      return result;
+    }
+
+    // A text leaf can contain a line break if it's pre-formatted text.
+    if (acc->IsTextLeaf()) {
+      nsAutoString name;
+      acc->Name(name);
+      int32_t offset;
+      if (mDirection == eDirPrevious) {
+        if (acc == mAnchor && mAnchorTextOffset == 0) {
+          // We're already at the start of this node, so there can be no line
+          // break before.
+          return result;
+        }
+        // If we began on a line break, we don't want to match it, so search
+        // from 1 before our anchor offset.
+        offset =
+            name.RFindChar('\n', acc == mAnchor ? mAnchorTextOffset - 1 : -1);
+      } else {
+        offset = name.FindChar('\n', acc == mAnchor ? mAnchorTextOffset : 0);
+      }
+      if (offset != -1) {
+        // Line ebreak!
+        mLastMatchTextOffset = offset;
+        result |= nsIAccessibleTraversalRule::FILTER_MATCH;
+      }
+    }
+
+    return result;
+  }
+
+  // This is only valid if the last match was a text leaf. It returns the
+  // offset of the line break character in that text leaf.
+  uint32_t GetLastMatchTextOffset() { return mLastMatchTextOffset; }
+
+ private:
+  Accessible* mAnchor;
+  uint32_t mAnchorTextOffset;
+  nsDirection mDirection;
+  bool mSkipAnchorSubtree;
+  uint32_t mLastMatchTextOffset;
+};
+
+/**
+ * This class is used in HyperTextAccessible::FindParagraphStartOffset to
+ * search forward exactly one step from a match found by the above.
+ * It should only be initialized with a boundary, and it will skip that
+ * boundary's sub tree if it is a block element boundary.
+ */
+class SkipParagraphBoundaryRule : public PivotRule {
+ public:
+  explicit SkipParagraphBoundaryRule(AccessibleOrProxy& aBoundary)
+      : mBoundary(aBoundary) {}
+
+  virtual uint16_t Match(const AccessibleOrProxy& aAccOrProxy) override {
+    MOZ_ASSERT(aAccOrProxy.IsAccessible());
+    // If matching the boundary, skip its sub tree.
+    if (aAccOrProxy == mBoundary) {
+      return nsIAccessibleTraversalRule::FILTER_IGNORE_SUBTREE;
+    }
+    return nsIAccessibleTraversalRule::FILTER_MATCH;
+  }
+
+ private:
+  AccessibleOrProxy& mBoundary;
+};
 
 ////////////////////////////////////////////////////////////////////////////////
 // HyperTextAccessible
@@ -413,7 +524,6 @@ uint32_t HyperTextAccessible::FindOffset(uint32_t aOffset,
         switch (aAmount) {
           case eSelectLine:
           case eSelectEndLine:
-          case eSelectParagraph:
             // Ask a text leaf next (if not empty) to the bullet for an offset
             // since list item may be multiline.
             return nextOffset < CharacterCount()
@@ -475,13 +585,11 @@ uint32_t HyperTextAccessible::FindOffset(uint32_t aOffset,
   uint32_t hyperTextOffset = DOMPointToOffset(
       pos.mResultContent, pos.mContentOffset, aDirection == eDirNext);
 
-  if ((fallBackToSelectEndLine || aAmount == eSelectParagraph) &&
-      IsLineEndCharAt(hyperTextOffset)) {
+  if (fallBackToSelectEndLine && IsLineEndCharAt(hyperTextOffset)) {
     // We used eSelectEndLine, but the caller requested eSelectLine.
-    // Or, we were asked for the paragraph.
-    // If there's a '\n' at the end of the line, eSelectEndLine and
-    // eSelectParagraph will stop on it rather than after it. This is not what
-    // we want, since the caller wants the next line, not the same line.
+    // If there's a '\n' at the end of the line, eSelectEndLine will stop on
+    // it rather than after it. This is not what we want, since the caller
+    // wants the next line, not the same line.
     ++hyperTextOffset;
   }
 
@@ -491,8 +599,7 @@ uint32_t HyperTextAccessible::FindOffset(uint32_t aOffset,
     if (hyperTextOffset == CharacterCount()) return 0;
 
     // PeekOffset stops right before bullet so return 0 to workaround it.
-    if (IsHTMLListItem() &&
-        (aAmount == eSelectBeginLine || aAmount == eSelectParagraph) &&
+    if (IsHTMLListItem() && aAmount == eSelectBeginLine &&
         hyperTextOffset > 0) {
       Accessible* prevOffsetChild = GetChildAtOffset(hyperTextOffset - 1);
       if (prevOffsetChild == AsHTMLListItem()->Bullet()) return 0;
@@ -626,11 +733,30 @@ uint32_t HyperTextAccessible::FindLineBoundary(
       return FindOffset(tmpOffset, eDirNext, eSelectEndLine);
     }
 
-    case eThisLineBegin:
+    case eThisLineBegin: {
       if (IsEmptyLastLineOffset(aOffset)) return aOffset;
 
       // Move to begin of the current line (as home key was pressed).
-      return FindOffset(aOffset, eDirPrevious, eSelectBeginLine);
+      uint32_t thisLineBeginOffset =
+          FindOffset(aOffset, eDirPrevious, eSelectBeginLine);
+      if (IsCharAt(thisLineBeginOffset, kEmbeddedObjectChar)) {
+        // We landed on an embedded character, don't mess with possible embedded
+        // line breaks, and assume the offset is correct.
+        return thisLineBeginOffset;
+      }
+
+      // Sometimes, there is the possibility layout returned an
+      // offset smaller than it should. Sanity-check by moving to the end of the
+      // previous line and see if that has a greater offset.
+      uint32_t tmpOffset = FindOffset(aOffset, eDirPrevious, eSelectLine);
+      tmpOffset = FindOffset(tmpOffset, eDirNext, eSelectEndLine);
+      if (tmpOffset > thisLineBeginOffset && tmpOffset < aOffset) {
+        // We found a previous line offset. Return the next character after it
+        // as our start offset if it points to a line end char.
+        return IsLineEndCharAt(tmpOffset) ? tmpOffset + 1 : tmpOffset;
+      }
+      return thisLineBeginOffset;
+    }
 
     case eThisLineEnd:
       if (IsEmptyLastLineOffset(aOffset)) return aOffset;
@@ -644,9 +770,66 @@ uint32_t HyperTextAccessible::FindLineBoundary(
       // Move to begin of the next line if any (arrow down and home keys),
       // otherwise end of the current line (arrow down only).
       uint32_t tmpOffset = FindOffset(aOffset, eDirNext, eSelectLine);
-      if (tmpOffset == CharacterCount()) return tmpOffset;
+      uint32_t characterCount = CharacterCount();
+      if (tmpOffset == characterCount) {
+        return tmpOffset;
+      }
 
-      return FindOffset(tmpOffset, eDirPrevious, eSelectBeginLine);
+      // Now, simulate the Home key on the next line to get its real offset.
+      uint32_t nextLineBeginOffset =
+          FindOffset(tmpOffset, eDirPrevious, eSelectBeginLine);
+      // Sometimes, there are line breaks inside embedded characters. If this
+      // is the case, the cursor is after the line break, but the offset will
+      // be that of the embedded character, which points to before the line
+      // break. We definitely want the line break included.
+      if (IsCharAt(nextLineBeginOffset, kEmbeddedObjectChar)) {
+        // We can determine if there is a line break by pressing End from
+        // the queried offset. If there is a line break, the offset will be 1
+        // greater, since this line ends with the embed. If there is not, the
+        // value will be different even if a line break follows right after the
+        // embed.
+        uint32_t thisLineEndOffset =
+            FindOffset(aOffset, eDirNext, eSelectEndLine);
+        if (thisLineEndOffset == nextLineBeginOffset + 1) {
+          // If we're querying the offset of the embedded character, we want
+          // the end offset of the parent line instead. Press End
+          // once more from the current position, which is after the embed.
+          if (nextLineBeginOffset == aOffset) {
+            uint32_t thisLineEndOffset2 =
+                FindOffset(thisLineEndOffset, eDirNext, eSelectEndLine);
+            // The above returns an offset exclusive the final line break, so we
+            // need to add 1 to it to return an inclusive end offset. Make sure
+            // we don't overshoot if we've started from another embedded
+            // character that has a line break, or landed on another embedded
+            // character, or if the result is the very end.
+            return (thisLineEndOffset2 == characterCount ||
+                    (IsCharAt(thisLineEndOffset, kEmbeddedObjectChar) &&
+                     thisLineEndOffset2 == thisLineEndOffset + 1) ||
+                    IsCharAt(thisLineEndOffset2, kEmbeddedObjectChar))
+                       ? thisLineEndOffset2
+                       : thisLineEndOffset2 + 1;
+          }
+
+          return thisLineEndOffset;
+        }
+        return nextLineBeginOffset;
+      }
+
+      // If the resulting offset is not greater than the offset we started from,
+      // layout could not find the offset for us. This can happen with certain
+      // inline-block elements.
+      if (nextLineBeginOffset <= aOffset) {
+        // Walk back from the tmpOffset to the offset we started from,
+        // stopping after a line end character.
+        nextLineBeginOffset = tmpOffset;
+        while (nextLineBeginOffset >= aOffset &&
+               !IsLineEndCharAt(nextLineBeginOffset - 1)) {
+          nextLineBeginOffset--;
+        }
+        return nextLineBeginOffset;
+      }
+
+      return nextLineBeginOffset;
     }
 
     case eNextLineEnd: {
@@ -661,6 +844,110 @@ uint32_t HyperTextAccessible::FindLineBoundary(
   }
 
   return 0;
+}
+
+int32_t HyperTextAccessible::FindParagraphStartOffset(uint32_t aOffset) {
+  // Because layout often gives us offsets that are incompatible with
+  // accessibility API requirements, for example when a paragraph contains
+  // presentational line breaks as found in Google Docs, use the accessibility
+  // tree to find the start offset instead.
+  Accessible* child = GetChildAtOffset(aOffset);
+  if (!child) {
+    return -1;  // Invalid offset
+  }
+
+  // Use the pivot class to search for the start  offset.
+  Pivot p = Pivot(this);
+  ParagraphBoundaryRule boundaryRule = ParagraphBoundaryRule(
+      child, child->IsTextLeaf() ? aOffset - GetChildOffset(child) : 0,
+      eDirPrevious);
+  AccessibleOrProxy wrappedChild = AccessibleOrProxy(child);
+  AccessibleOrProxy match = p.Prev(wrappedChild, boundaryRule, true);
+  if (match.IsNull() || match.AsAccessible() == this) {
+    // Found nothing, or pivot found the root of the search, startOffset is 0.
+    // This will include all relevant text nodes.
+    return 0;
+  }
+
+  if (match == wrappedChild) {
+    // We started out on a boundary.
+    if (match.Role() == roles::WHITESPACE) {
+      // We are on a line break boundary, so force pivot to find the previous
+      // boundary. What we want is any text before this, if any.
+      match = p.Prev(match, boundaryRule);
+      if (match.IsNull() || match.AsAccessible() == this) {
+        // Same as before, we landed on the root, so offset is definitely 0.
+        return 0;
+      }
+    } else if (!match.AsAccessible()->IsTextLeaf()) {
+      // The match is a block element, which is always a starting point, so
+      // just return its offset.
+      return TransformOffset(match.AsAccessible(), 0, false);
+    }
+  }
+
+  if (match.AsAccessible()->IsTextLeaf()) {
+    // ParagraphBoundaryRule only returns a text leaf if it contains a line
+    // break. We want to stop after that.
+    return TransformOffset(match.AsAccessible(),
+                           boundaryRule.GetLastMatchTextOffset() + 1, false);
+  }
+
+  // This is a previous boundary, we don't want to include it itself.
+  // So, walk forward one accessible, excluding the descendants of this
+  // boundary if it is a block element. The below call to Next should always be
+  // initialized with a boundary.
+  SkipParagraphBoundaryRule goForwardOneRule = SkipParagraphBoundaryRule(match);
+  match = p.Next(match, goForwardOneRule);
+  // We already know that the search skipped over at least one accessible,
+  // so match can't be null. Get its transformed offset.
+  MOZ_ASSERT(!match.IsNull());
+  return TransformOffset(match.AsAccessible(), 0, false);
+}
+
+int32_t HyperTextAccessible::FindParagraphEndOffset(uint32_t aOffset) {
+  // Because layout often gives us offsets that are incompatible with
+  // accessibility API requirements, for example when a paragraph contains
+  // presentational line breaks as found in Google Docs, use the accessibility
+  // tree to find the end offset instead.
+  Accessible* child = GetChildAtOffset(aOffset);
+  if (!child) {
+    return -1;  // invalid offset
+  }
+
+  // Use the pivot class to search for the end offset.
+  Pivot p = Pivot(this);
+  AccessibleOrProxy wrappedChild = AccessibleOrProxy(child);
+  ParagraphBoundaryRule boundaryRule = ParagraphBoundaryRule(
+      child, child->IsTextLeaf() ? aOffset - GetChildOffset(child) : 0,
+      eDirNext,
+      // In order to encompass all paragraphs inside embedded objects, not just
+      // the first, we want to skip the anchor's subtree.
+      /* aSkipAnchorSubtree */ true);
+  // Search forward for the end offset, including wrappedChild. We don't want
+  // to go beyond this point if this offset indicates a paragraph boundary.
+  AccessibleOrProxy match = p.Next(wrappedChild, boundaryRule, true);
+  if (!match.IsNull()) {
+    // Found something of relevance, adjust end offset.
+    Accessible* matchAcc = match.AsAccessible();
+    uint32_t matchOffset;
+    if (matchAcc->IsTextLeaf()) {
+      // ParagraphBoundaryRule only returns a text leaf if it contains a line
+      // break.
+      matchOffset = boundaryRule.GetLastMatchTextOffset() + 1;
+    } else if (matchAcc->Role() != roles::WHITESPACE && matchAcc != child) {
+      // We found a block boundary that wasn't our origin. We want to stop
+      // right on it, not after it, since we don't want to include the content
+      // of the block.
+      matchOffset = 0;
+    } else {
+      matchOffset = nsAccUtils::TextLength(matchAcc);
+    }
+    return TransformOffset(matchAcc, matchOffset, true);
+  }
+
+  // Didn't find anything, end offset is character count.
+  return CharacterCount();
 }
 
 void HyperTextAccessible::TextBeforeOffset(int32_t aOffset,
@@ -815,33 +1102,8 @@ void HyperTextAccessible::TextAtOffset(int32_t aOffset,
         break;
       }
 
-      if (IsLineEndCharAt(adjustedOffset)) {
-        // Layout gives us different results for a paragraph with line breaks.
-        // For the text, we get the text, for the line break, we get the text
-        // with the line break included. We adjust for the former case in
-        // FindOffset. However, querying on the whitespace also gives us text
-        // from the next chunk, which is never what we want. So, adjust the
-        // offset to make sure we always get the text with the '\n' included.
-        if (adjustedOffset == 0 || IsLineEndCharAt(adjustedOffset - 1)) {
-          // However, if the line break is at the start of the enclosing
-          // paragraph, or the character before this is also a line break, we
-          // want this to be only '\n'. In addition, layout would still
-          // give us the text of the next chunk here, too, which is still
-          // not what we want, either.
-          *aStartOffset = adjustedOffset;
-          *aEndOffset = adjustedOffset + 1;
-          TextSubstring(*aStartOffset, *aEndOffset, aText);
-          break;
-        }
-
-        // We're on a non-line-end character, adjust the offset and
-        // calculate the paragraph text and offsets as usual.
-        adjustedOffset--;
-      }
-
-      *aStartOffset =
-          FindOffset(adjustedOffset, eDirPrevious, eSelectParagraph);
-      *aEndOffset = FindOffset(adjustedOffset, eDirNext, eSelectParagraph);
+      *aStartOffset = FindParagraphStartOffset(adjustedOffset);
+      *aEndOffset = FindParagraphEndOffset(adjustedOffset);
       TextSubstring(*aStartOffset, *aEndOffset, aText);
       break;
     }

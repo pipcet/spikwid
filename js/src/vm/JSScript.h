@@ -29,7 +29,6 @@
 #include "frontend/SourceNotes.h"  // SrcNote
 #include "gc/Barrier.h"
 #include "gc/Rooting.h"
-#include "jit/JitCode.h"
 #include "js/CompileOptions.h"
 #include "js/UbiNode.h"
 #include "js/UniquePtr.h"
@@ -64,6 +63,7 @@ class LCovSource;
 namespace jit {
 class AutoKeepJitScripts;
 class BaselineScript;
+class IonScript;
 struct IonScriptCounts;
 class JitScript;
 }  // namespace jit
@@ -1361,6 +1361,10 @@ struct MemberInitializers {
 //
 // Accessing this array just requires calling the appropriate public
 // Span-computing function.
+//
+// This class doesn't use the GC barrier wrapper classes. BaseScript::swapData
+// performs a manual pre-write barrier when detaching PrivateScriptData from a
+// script.
 class alignas(uintptr_t) PrivateScriptData final : public TrailingArray {
  private:
   uint32_t ngcthings = 0;
@@ -1403,7 +1407,7 @@ class alignas(uintptr_t) PrivateScriptData final : public TrailingArray {
     return memberInitializers_;
   }
 
-  // Allocate a new PrivateScriptData. Headers and GCPtrs are initialized.
+  // Allocate a new PrivateScriptData. Headers and GCCellPtrs are initialized.
   static PrivateScriptData* new_(JSContext* cx, uint32_t ngcthings);
 
   template <XDRMode mode>
@@ -1850,10 +1854,7 @@ class BaseScript : public gc::TenuredCellWithNonGCPointer<uint8_t> {
   }
 
   SharedImmutableScriptData* sharedData() const { return sharedData_; }
-  void initSharedData(SharedImmutableScriptData* data) {
-    MOZ_ASSERT(sharedData_ == nullptr);
-    sharedData_ = data;
-  }
+  inline void initSharedData(SharedImmutableScriptData* data);
   void freeSharedData() { sharedData_ = nullptr; }
 
   // NOTE: Script only has bytecode if JSScript::fullyInitFromStencil completes
@@ -1956,16 +1957,6 @@ extern void SweepScriptData(JSRuntime* rt);
 
 } /* namespace js */
 
-namespace JS {
-
-// Define a GCManagedDeletePolicy to allow deleting type outside of normal
-// sweeping.
-template <>
-struct DeletePolicy<js::PrivateScriptData>
-    : public js::GCManagedDeletePolicy<js::PrivateScriptData> {};
-
-} /* namespace JS */
-
 class JSScript : public js::BaseScript {
  private:
   template <js::XDRMode mode>
@@ -2016,14 +2007,15 @@ class JSScript : public js::BaseScript {
   static bool fullyInitFromStencil(
       JSContext* cx, js::frontend::CompilationInfo& compilationInfo,
       js::frontend::CompilationGCOutput& gcOutput, js::HandleScript script,
-      js::frontend::ScriptStencil& scriptStencil, js::HandleFunction function);
+      const js::frontend::ScriptStencil& scriptStencil,
+      js::HandleFunction function);
 
   // Allocate a JSScript and initialize it with bytecode. This consumes
   // allocations within the stencil.
   static JSScript* fromStencil(JSContext* cx,
                                js::frontend::CompilationInfo& compilationInfo,
                                js::frontend::CompilationGCOutput& gcOutput,
-                               js::frontend::ScriptStencil& scriptStencil,
+                               const js::frontend::ScriptStencil& scriptStencil,
                                js::HandleFunction function);
 
 #ifdef DEBUG
@@ -2598,8 +2590,8 @@ namespace js {
 extern unsigned PCToLineNumber(JSScript* script, jsbytecode* pc,
                                unsigned* columnp = nullptr);
 
-extern unsigned PCToLineNumber(unsigned startLine, SrcNote* notes,
-                               jsbytecode* code, jsbytecode* pc,
+extern unsigned PCToLineNumber(unsigned startLine, unsigned startCol,
+                               SrcNote* notes, jsbytecode* code, jsbytecode* pc,
                                unsigned* columnp = nullptr);
 
 /*
@@ -2626,6 +2618,16 @@ JSScript* CloneScriptIntoFunction(JSContext* cx, HandleScope enclosingScope,
 
 JSScript* CloneGlobalScript(JSContext* cx, ScopeKind scopeKind,
                             HandleScript src);
+
+bool CheckCompileOptionsMatch(const JS::ReadOnlyCompileOptions& options,
+                              js::ImmutableScriptFlags flags,
+                              bool isMultiDecode);
+
+void FillImmutableFlagsFromCompileOptionsForTopLevel(
+    const JS::ReadOnlyCompileOptions& options, js::ImmutableScriptFlags& flags);
+
+void FillImmutableFlagsFromCompileOptionsForFunction(
+    const JS::ReadOnlyCompileOptions& options, js::ImmutableScriptFlags& flags);
 
 } /* namespace js */
 

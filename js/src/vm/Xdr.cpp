@@ -20,7 +20,7 @@
 #include "builtin/ModuleObject.h"
 #include "debugger/DebugAPI.h"
 #include "frontend/CompilationInfo.h"  // frontend::CompilationStencil, frontend::CompilationInfo, frontend::CompilationInfoVector
-#include "frontend/ParserAtom.h"       // XDRParserAtom
+#include "frontend/ParserAtom.h"       // XDRParserAtomData
 #include "js/BuildId.h"                // JS::BuildIdCharVector
 #include "vm/JSContext.h"
 #include "vm/JSScript.h"
@@ -316,9 +316,14 @@ static XDRResult ParserAtomTable(XDRState<mode>* xdr) {
   MOZ_TRY(XDRAtomCount(xdr, &atomCount));
   MOZ_ASSERT(!xdr->hasAtomTable());
 
+  if (!xdr->parserAtomTable().reserve(atomCount)) {
+    ReportOutOfMemory(xdr->cx());
+    return xdr->fail(JS::TranscodeResult_Throw);
+  }
+
   for (uint32_t i = 0; i < atomCount; i++) {
     const frontend::ParserAtom* atom = nullptr;
-    MOZ_TRY(XDRParserAtom(xdr, &atom));
+    MOZ_TRY(XDRParserAtomData(xdr, &atom));
     if (!xdr->parserAtomTable().append(atom)) {
       ReportOutOfMemory(xdr->cx());
       return xdr->fail(JS::TranscodeResult_Throw);

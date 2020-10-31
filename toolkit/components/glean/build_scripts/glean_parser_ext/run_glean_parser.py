@@ -4,7 +4,8 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-import os
+import cpp
+import js
 import re
 import rust
 import sys
@@ -14,46 +15,29 @@ from pathlib import Path
 
 
 def get_parser_options(moz_app_version):
-    app_version_major = moz_app_version.split('.', 1)[0]
+    app_version_major = moz_app_version.split(".", 1)[0]
     return {
         "allow_reserved": False,
-        "custom_is_expired":
-            lambda expires:
-                expires == "expired" or expires != "never" and int(
-                    expires) <= int(app_version_major),
-        "custom_validate_expires":
-            lambda expires:
-                expires in ("expired", "never") or re.fullmatch(r"\d\d+", expires, flags=re.ASCII),
+        "custom_is_expired": lambda expires: expires == "expired"
+        or expires != "never"
+        and int(expires) <= int(app_version_major),
+        "custom_validate_expires": lambda expires: expires in ("expired", "never")
+        or re.fullmatch(r"\d\d+", expires, flags=re.ASCII),
     }
 
 
-def input_files_from_index(metrics_index_path, which_array):
+def parse(args):
     """
-    Get the paths to all input files to look at.
-
-    This select the input files to use by loading the index
-    and selecting the appropriate array.
-    It then normalizes relatives paths into absolute paths
-    based on the `TOPSRCDIR` environment variable.
+    Parse and lint the input files,
+    then return the parsed objects for further processing.
     """
 
-    # Source the list of input files from `metrics_index.py`
-    sys.path.append(str(Path(metrics_index_path).parent))
-    from metrics_index import METRICS, PINGS
-    if which_array == 'METRICS':
-        input_files = METRICS
-    elif which_array == 'PINGS':
-        input_files = PINGS
-    else:
-        print("Build system's asking for unknown array {}".format(which_array))
-        sys.exit(1)
+    # Unfortunately, GeneratedFile appends `flags` directly after `inputs`
+    # instead of listifying either, so we need to pull stuff from a *args.
+    yaml_array = args[:-1]
+    moz_app_version = args[-1]
 
-    topsrcdir = Path(os.environ.get("TOPSRCDIR", "."))
-    return [topsrcdir / Path(x) for x in input_files]
-
-
-def main(output_fd, metrics_index_path, which_array, moz_app_version):
-    input_files = input_files_from_index(metrics_index_path, which_array)
+    input_files = [Path(x) for x in yaml_array]
 
     # Derived heavily from glean_parser.translate.translate.
     # Adapted to how mozbuild sends us a fd, and to expire on versions not dates.
@@ -67,8 +51,23 @@ def main(output_fd, metrics_index_path, which_array, moz_app_version):
         # Treat Warnings as Errors in FOG
         sys.exit(1)
 
-    rust.output_rust(all_objs.value, output_fd, options)
+    return all_objs.value, options
 
 
-if __name__ == '__main__':
+def main(output_fd, _metrics_index, *args):
+    all_objs, options = parse(args)
+    rust.output_rust(all_objs, output_fd, options)
+
+
+def cpp_metrics(output_fd, _metrics_index, *args):
+    all_objs, options = parse(args)
+    cpp.output_cpp(all_objs, output_fd, options)
+
+
+def js_metrics(output_fd, _metrics_index, *args):
+    all_objs, options = parse(args)
+    js.output_js(all_objs, output_fd, options)
+
+
+if __name__ == "__main__":
     main(sys.stdout, *sys.argv[1:])

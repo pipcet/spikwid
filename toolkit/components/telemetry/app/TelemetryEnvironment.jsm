@@ -277,7 +277,6 @@ const DEFAULT_ENVIRONMENT_PREFS = new Map([
   ["extensions.update.url", { what: RECORD_PREF_VALUE }],
   ["extensions.update.background.url", { what: RECORD_PREF_VALUE }],
   ["extensions.screenshots.disabled", { what: RECORD_PREF_VALUE }],
-  ["fission.autostart", { what: RECORD_DEFAULTPREF_VALUE }],
   ["general.config.filename", { what: RECORD_DEFAULTPREF_STATE }],
   ["general.smoothScroll", { what: RECORD_PREF_VALUE }],
   ["gfx.direct2d.disabled", { what: RECORD_PREF_VALUE }],
@@ -322,6 +321,12 @@ const DEFAULT_ENVIRONMENT_PREFS = new Map([
   ["signon.generation.enabled", { what: RECORD_PREF_VALUE }],
   ["signon.rememberSignons", { what: RECORD_PREF_VALUE }],
   ["toolkit.telemetry.pioneerId", { what: RECORD_PREF_STATE }],
+  ["widget.content.allow-gtk-dark-theme", { what: RECORD_DEFAULTPREF_VALUE }],
+  ["widget.content.gtk-theme-override", { what: RECORD_PREF_STATE }],
+  [
+    "widget.content.gtk-high-contrast.enabled",
+    { what: RECORD_DEFAULTPREF_VALUE },
+  ],
   ["xpinstall.signatures.required", { what: RECORD_PREF_VALUE }],
 ]);
 
@@ -1603,6 +1608,7 @@ EnvironmentCache.prototype = {
       ),
       e10sEnabled: Services.appinfo.browserTabsRemoteAutostart,
       e10sMultiProcesses: Services.appinfo.maxWebProcessCount,
+      fissionEnabled: Services.appinfo.fissionAutostart,
       telemetryEnabled: Utils.isTelemetryEnabled,
       locale: getBrowserLocale(),
       // We need to wait for browser-delayed-startup-finished to ensure that the locales
@@ -2074,6 +2080,10 @@ EnvironmentCache.prototype = {
     if (this._shutdown) {
       this._log.trace("_onEnvironmentChange - Already shut down.");
       return;
+    }
+
+    if (ObjectUtils.deepEqual(this._currentEnvironment, oldEnvironment)) {
+      Services.telemetry.scalarAdd("telemetry.environment_didnt_change", 1);
     }
 
     for (let [name, listener] of this._changeListeners) {

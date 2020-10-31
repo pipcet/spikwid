@@ -8,12 +8,16 @@
 
 #include "mozilla/DebugOnly.h"
 
+#include "jit/BaselineFrame.h"
 #include "jit/CacheIR.h"
+#include "jit/CompileInfo.h"
+#include "jit/InlineScriptTree.h"
 #include "jit/MIR.h"
 #include "jit/MIRGenerator.h"
 #include "jit/MIRGraph.h"
 #include "jit/WarpCacheIRTranspiler.h"
 #include "jit/WarpSnapshot.h"
+#include "js/friend/ErrorMessages.h"  // JSMSG_BAD_CONST_ASSIGN
 #include "vm/Opcodes.h"
 
 #include "jit/JitScript-inl.h"
@@ -1492,9 +1496,6 @@ bool WarpBuilder::build_Not(BytecodeLocation loc) {
 bool WarpBuilder::build_ToString(BytecodeLocation loc) {
   MDefinition* value = current->pop();
 
-  // TODO: Consider making MToString non-effectul similar to Ion. That way GVN
-  // will be able to fold away MToString(string) automatically. For now simply
-  // handle this case here.
   if (value->type() == MIRType::String) {
     value->setImplicitlyUsedUnchecked();
     current->push(value);
@@ -1505,8 +1506,10 @@ bool WarpBuilder::build_ToString(BytecodeLocation loc) {
       MToString::New(alloc(), value, MToString::SideEffectHandling::Supported);
   current->add(ins);
   current->push(ins);
-  MOZ_ASSERT(ins->isEffectful());
-  return resumeAfter(ins, loc);
+  if (ins->isEffectful()) {
+    return resumeAfter(ins, loc);
+  }
+  return true;
 }
 
 bool WarpBuilder::usesEnvironmentChain() const {
@@ -1621,12 +1624,9 @@ bool WarpBuilder::build_ToPropertyKey(BytecodeLocation loc) {
   return buildIC(loc, CacheKind::ToPropertyKey, {value});
 }
 
-bool WarpBuilder::build_Typeof(BytecodeLocation) {
+bool WarpBuilder::build_Typeof(BytecodeLocation loc) {
   MDefinition* input = current->pop();
-  MTypeOf* ins = MTypeOf::New(alloc(), input);
-  current->add(ins);
-  current->push(ins);
-  return true;
+  return buildIC(loc, CacheKind::TypeOf, {input});
 }
 
 bool WarpBuilder::build_TypeofExpr(BytecodeLocation loc) {
@@ -1774,12 +1774,7 @@ bool WarpBuilder::transpileCall(BytecodeLocation loc,
   auto* argc = MConstant::New(alloc(), Int32Value(callInfo->argc()));
   current->add(argc);
 
-  MDefinitionStackVector inputs;
-  if (!inputs.append(argc)) {
-    return false;
-  }
-
-  return TranspileCacheIRToMIR(this, loc, cacheIRSnapshot, inputs, callInfo);
+  return TranspileCacheIRToMIR(this, loc, cacheIRSnapshot, {argc}, callInfo);
 }
 
 bool WarpBuilder::buildCallOp(BytecodeLocation loc) {
@@ -2932,11 +2927,7 @@ bool WarpBuilder::buildIC(BytecodeLocation loc, CacheKind kind,
   MOZ_ASSERT(numInputs == NumInputsForCacheKind(kind));
 
   if (auto* cacheIRSnapshot = getOpSnapshot<WarpCacheIR>(loc)) {
-    MDefinitionStackVector inputs_;
-    if (!inputs_.append(inputs.begin(), inputs.end())) {
-      return false;
-    }
-    return TranspileCacheIRToMIR(this, loc, cacheIRSnapshot, inputs_);
+    return TranspileCacheIRToMIR(this, loc, cacheIRSnapshot, inputs);
   }
 
   if (getOpSnapshot<WarpBailout>(loc)) {
@@ -2953,12 +2944,8 @@ bool WarpBuilder::buildIC(BytecodeLocation loc, CacheKind kind,
     CallInfo callInfo(alloc(), pc, /*constructing =*/false, ignoresRval);
     callInfo.markAsInlined();
 
-    MDefinitionStackVector inputs_;
-    if (!inputs_.append(inputs.begin(), inputs.end())) {
-      return false;
-    }
     if (!TranspileCacheIRToMIR(this, loc, inliningSnapshot->cacheIRSnapshot(),
-                               inputs_, &callInfo)) {
+                               inputs, &callInfo)) {
       return false;
     }
     return buildInlinedCall(loc, inliningSnapshot, callInfo);
@@ -3135,9 +3122,16 @@ bool WarpBuilder::buildIC(BytecodeLocation loc, CacheKind kind,
       current->push(ins);
       return resumeAfter(ins, loc);
     }
+    case CacheKind::TypeOf: {
+      // Note: Warp does not have a TypeOf IC, it just inlines the operation.
+      MOZ_ASSERT(numInputs == 1);
+      auto* ins = MTypeOf::New(alloc(), getInput(0));
+      current->add(ins);
+      current->push(ins);
+      return true;
+    }
     case CacheKind::GetIntrinsic:
     case CacheKind::ToBool:
-    case CacheKind::TypeOf:
     case CacheKind::Call:
     case CacheKind::NewObject:
       // We're currently not using an IC or transpiling CacheIR for these kinds.
@@ -3237,7 +3231,7 @@ bool WarpBuilder::buildInlinedCall(BytecodeLocation loc,
   callInfo.setImplicitlyUsedUnchecked();
 
   // Capture formals in the outer resume point.
-  if (!callInfo.pushCallStack(&mirGen(), current)) {
+  if (!callInfo.pushCallStack(current)) {
     return false;
   }
   MResumePoint* outerResumePoint =

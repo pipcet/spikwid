@@ -32,6 +32,7 @@
 #include "gc/MaybeRooted.h"
 #include "gc/Nursery.h"
 #include "js/CharacterEncoding.h"
+#include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
 #include "js/StableStringChars.h"
 #include "js/Symbol.h"
 #include "js/UbiNode.h"
@@ -2159,7 +2160,7 @@ UniqueChars js::EncodeLatin1(JSContext* cx, JSString* str) {
 
   JS::AutoCheckCannotGC nogc;
   if (linear->hasTwoByteChars()) {
-    Latin1CharsZ chars =
+    JS::Latin1CharsZ chars =
         JS::LossyTwoByteCharsToNewLatin1CharsZ(cx, linear->twoByteRange(nogc));
     return UniqueChars(chars.c_str());
   }

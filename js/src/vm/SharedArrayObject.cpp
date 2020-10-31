@@ -13,6 +13,7 @@
 
 #include "gc/FreeOp.h"
 #include "jit/AtomicOperations.h"
+#include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
 #include "js/PropertySpec.h"
 #include "js/SharedArrayBuffer.h"
 #include "js/Wrapper.h"
@@ -108,6 +109,7 @@ void SharedArrayRawBuffer::tryGrowMaxSizeInPlace(uint64_t deltaMaxSize) {
 
 bool SharedArrayRawBuffer::wasmGrowToSizeInPlace(const Lock&,
                                                  uint32_t newLength) {
+  // Note, caller must guard on the limit appropriate to the memory type
   if (newLength > ArrayBufferObject::MaxBufferByteLength) {
     return false;
   }
@@ -278,7 +280,7 @@ bool SharedArrayBufferObject::acceptRawBuffer(SharedArrayRawBuffer* buffer,
   }
 
   setReservedSlot(RAWBUF_SLOT, PrivateValue(buffer));
-  setReservedSlot(LENGTH_SLOT, PrivateUint32Value(length));
+  setReservedSlot(LENGTH_SLOT, PrivateValue(length));
   return true;
 }
 

@@ -25,6 +25,7 @@ use std::{
     ptr::null_mut,
     slice,
     sync::atomic::{AtomicBool, Ordering},
+    sync::Arc,
 };
 
 use ::libc;
@@ -32,7 +33,7 @@ use libc::{fclose, fopen, fread, free, malloc, memset, FILE};
 
 use crate::{
     double_to_s15Fixed16Number,
-    transform::{get_rgb_colorants, precache_output, precache_release, set_rgb_colorants},
+    transform::{get_rgb_colorants, precache_output, set_rgb_colorants},
 };
 use crate::{
     matrix::matrix, qcms_intent, s15Fixed16Number, s15Fixed16Number_to_float,
@@ -75,7 +76,7 @@ pub const XYZ_SIGNATURE: u32 = 0x58595A20;
 pub const LAB_SIGNATURE: u32 = 0x4C616220;
 
 #[repr(C)]
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct qcms_profile {
     pub class_type: u32,
     pub color_space: u32,
@@ -93,25 +94,9 @@ pub struct qcms_profile {
     pub mAB: Option<Box<lutmABType>>,
     pub mBA: Option<Box<lutmABType>>,
     pub chromaticAdaption: matrix,
-    pub output_table_r: *mut precache_output,
-    pub output_table_g: *mut precache_output,
-    pub output_table_b: *mut precache_output,
-}
-
-impl Drop for qcms_profile {
-    fn drop(&mut self) {
-        unsafe {
-            if !self.output_table_r.is_null() {
-                precache_release(self.output_table_r);
-            }
-            if !self.output_table_g.is_null() {
-                precache_release(self.output_table_g);
-            }
-            if !self.output_table_b.is_null() {
-                precache_release(self.output_table_b);
-            }
-        }
-    }
+    pub output_table_r: Option<Arc<precache_output>>,
+    pub output_table_g: Option<Arc<precache_output>>,
+    pub output_table_b: Option<Arc<precache_output>>,
 }
 
 #[repr(C)]
@@ -170,7 +155,7 @@ pub struct lutType {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 pub struct XYZNumber {
     pub X: s15Fixed16Number,
     pub Y: s15Fixed16Number,
@@ -978,7 +963,7 @@ fn read_tag_lutType(mut src: &mut mem_source, mut tag: &tag) -> Option<Box<lutTy
 
     let mut output_table =
         Vec::with_capacity((num_output_table_entries * out_chan as u16) as usize);
-    for i in 0..num_output_table_entries * out_chan as u16 {
+    for i in 0..num_output_table_entries as i32 * out_chan as i32 {
         if type_0 == LUT8_TYPE {
             output_table.push(uInt8Number_to_float(read_uInt8Number(
                 src,
@@ -1021,12 +1006,12 @@ fn read_rendering_intent(mut profile: &mut qcms_profile, mut src: &mut mem_sourc
     };
 }
 #[no_mangle]
-pub unsafe extern "C" fn qcms_profile_create() -> Box<qcms_profile> {
-    Box::new(std::mem::zeroed())
+pub extern "C" fn qcms_profile_create() -> Box<qcms_profile> {
+    Box::new(qcms_profile::default())
 }
 /* build sRGB gamma table */
 /* based on cmsBuildParametricGamma() */
-unsafe extern "C" fn build_sRGB_gamma_table(mut num_entries: i32) -> *mut u16 {
+fn build_sRGB_gamma_table(mut num_entries: i32) -> Vec<u16> {
     let mut i: i32;
     /* taken from lcms: Build_sRGBGamma() */
     let mut gamma: f64 = 2.4f64;
@@ -1034,13 +1019,9 @@ unsafe extern "C" fn build_sRGB_gamma_table(mut num_entries: i32) -> *mut u16 {
     let mut b: f64 = 0.055f64 / 1.055f64;
     let mut c: f64 = 1.0f64 / 12.92f64;
     let mut d: f64 = 0.04045f64;
-    let mut table: *mut u16 =
-        malloc(::std::mem::size_of::<u16>() * num_entries as usize) as *mut u16;
-    if table.is_null() {
-        return 0 as *mut u16;
-    }
-    i = 0;
-    while i < num_entries {
+    let mut table = Vec::with_capacity(num_entries as usize);
+
+    for i in 0..num_entries {
         let mut x: f64 = i as f64 / (num_entries - 1) as f64;
         let mut y: f64;
         let mut output: f64;
@@ -1065,8 +1046,7 @@ unsafe extern "C" fn build_sRGB_gamma_table(mut num_entries: i32) -> *mut u16 {
         if output < 0f64 {
             output = 0f64
         }
-        *table.offset(i as isize) = output.floor() as u16;
-        i += 1
+        table.push(output.floor() as u16);
     }
     return table;
 }
@@ -1145,27 +1125,35 @@ pub unsafe extern "C" fn qcms_profile_create_rgb_with_gamma(
 pub unsafe extern "C" fn qcms_profile_create_rgb_with_table(
     mut white_point: qcms_CIE_xyY,
     mut primaries: qcms_CIE_xyYTRIPLE,
-    mut table: *mut u16,
+    mut table: *const u16,
     mut num_entries: i32,
 ) -> *mut qcms_profile {
+    let table = slice::from_raw_parts(table, num_entries as usize);
+    let profile = profile_create_rgb_with_table(white_point, primaries, table);
+    match profile {
+        Some(profile) => Box::into_raw(profile),
+        None => null_mut(),
+    }
+}
+
+fn profile_create_rgb_with_table(
+    mut white_point: qcms_CIE_xyY,
+    mut primaries: qcms_CIE_xyYTRIPLE,
+    table: &[u16],
+) -> Option<Box<qcms_profile>> {
     let mut profile = qcms_profile_create();
     //XXX: should store the whitepoint
     if !set_rgb_colorants(&mut profile, white_point, primaries) {
-        return 0 as *mut qcms_profile;
+        return None;
     }
-    let table = slice::from_raw_parts(table, num_entries as usize);
-    (*profile).redTRC = Some(curve_from_table(table));
-    (*profile).blueTRC = Some(curve_from_table(table));
-    (*profile).greenTRC = Some(curve_from_table(table));
-    if (*profile).redTRC.is_none() || (*profile).blueTRC.is_none() || (*profile).greenTRC.is_none()
-    {
-        return 0 as *mut qcms_profile;
-    }
-    (*profile).class_type = DISPLAY_DEVICE_PROFILE;
-    (*profile).rendering_intent = QCMS_INTENT_PERCEPTUAL;
-    (*profile).color_space = RGB_SIGNATURE;
-    (*profile).pcs = XYZ_TYPE;
-    return Box::into_raw(profile);
+    profile.redTRC = Some(curve_from_table(table));
+    profile.blueTRC = Some(curve_from_table(table));
+    profile.greenTRC = Some(curve_from_table(table));
+    profile.class_type = DISPLAY_DEVICE_PROFILE;
+    profile.rendering_intent = QCMS_INTENT_PERCEPTUAL;
+    profile.color_space = RGB_SIGNATURE;
+    profile.pcs = XYZ_TYPE;
+    return Some(profile);
 }
 /* from lcms: cmsWhitePointFromTemp */
 /* tempK must be >= 4000. and <= 25000.
@@ -1226,7 +1214,7 @@ pub unsafe extern "C" fn qcms_white_point_sRGB() -> qcms_CIE_xyY {
 #[no_mangle]
 pub unsafe extern "C" fn qcms_profile_sRGB() -> *mut qcms_profile {
     let mut profile: *mut qcms_profile;
-    let mut table: *mut u16;
+    let mut table: Vec<u16>;
     let mut Rec709Primaries: qcms_CIE_xyYTRIPLE = {
         let mut init = qcms_CIE_xyYTRIPLE {
             red: {
@@ -1258,11 +1246,8 @@ pub unsafe extern "C" fn qcms_profile_sRGB() -> *mut qcms_profile {
     };
     let D65 = qcms_white_point_sRGB();
     table = build_sRGB_gamma_table(1024);
-    if table.is_null() {
-        return 0 as *mut qcms_profile;
-    }
-    profile = qcms_profile_create_rgb_with_table(D65, Rec709Primaries, table, 1024);
-    free(table as *mut libc::c_void);
+
+    profile = qcms_profile_create_rgb_with_table(D65, Rec709Primaries, table.as_ptr(), 1024);
     return profile;
 }
 /* qcms_profile_from_memory does not hold a reference to the memory passed in */
@@ -1271,29 +1256,37 @@ pub unsafe extern "C" fn qcms_profile_from_memory(
     mut mem: *const libc::c_void,
     mut size: usize,
 ) -> *mut qcms_profile {
+    let mem = slice::from_raw_parts(mem as *const libc::c_uchar, size);
+    let profile = profile_from_slice(mem);
+    match profile {
+        Some(profile) => Box::into_raw(profile),
+        None => null_mut(),
+    }
+}
+
+pub fn profile_from_slice(mem: &[u8]) -> Option<Box<qcms_profile>> {
     let mut length: u32;
     let mut source: mem_source = mem_source {
-        buf: &[],
+        buf: mem,
         valid: false,
         invalid_reason: None,
     };
     let mut index;
-    source.buf = slice::from_raw_parts(mem as *const libc::c_uchar, size);
     source.valid = true;
     let mut src: &mut mem_source = &mut source;
-    if size < 4 {
-        return null_mut();
+    if mem.len() < 4 {
+        return None;
     }
     length = read_u32(src, 0);
-    if length as usize <= size {
+    if length as usize <= mem.len() {
         // shrink the area that we can read if appropriate
         (*src).buf = &(*src).buf[0..length as usize];
     } else {
-        return null_mut();
+        return None;
     }
     /* ensure that the profile size is sane so it's easier to reason about */
     if src.buf.len() <= 64 || src.buf.len() >= MAX_PROFILE_SIZE {
-        return null_mut();
+        return None;
     }
     let mut profile = qcms_profile_create();
 
@@ -1305,12 +1298,12 @@ pub unsafe extern "C" fn qcms_profile_from_memory(
     read_pcs(&mut profile, src);
     //TODO read rest of profile stuff
     if !(*src).valid {
-        return null_mut();
+        return None;
     }
 
     index = read_tag_table(&mut profile, src);
     if !(*src).valid || index.is_empty() {
-        return null_mut();
+        return None;
     }
 
     if find_tag(&index, TAG_CHAD).is_some() {
@@ -1348,7 +1341,7 @@ pub unsafe extern "C" fn qcms_profile_from_memory(
                 (*profile).blueColorant = read_tag_XYZType(src, &index, TAG_bXYZ)
             }
             if !(*src).valid {
-                return null_mut();
+                return None;
             }
 
             if find_tag(&index, TAG_rTRC).is_some() || !qcms_supports_iccv4.load(Ordering::Relaxed)
@@ -1360,27 +1353,26 @@ pub unsafe extern "C" fn qcms_profile_from_memory(
                     || (*profile).blueTRC.is_none()
                     || (*profile).greenTRC.is_none()
                 {
-                    return null_mut();
+                    return None;
                 }
             }
         } else if (*profile).color_space == GRAY_SIGNATURE {
             (*profile).grayTRC = read_tag_curveType(src, &index, TAG_kTRC);
             if (*profile).grayTRC.is_none() {
-                return null_mut();
+                return None;
             }
         } else {
             debug_assert!(false, "read_color_space protects against entering here");
-            return null_mut();
+            return None;
         }
     } else {
-        return null_mut();
+        return None;
     }
 
     if !(*src).valid {
-        return null_mut();
+        return None;
     }
-
-    Box::into_raw(profile)
+    Some(profile)
 }
 #[no_mangle]
 pub unsafe extern "C" fn qcms_profile_get_rendering_intent(

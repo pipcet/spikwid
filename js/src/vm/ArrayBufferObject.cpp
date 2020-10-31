@@ -41,6 +41,7 @@
 #include "js/ArrayBuffer.h"
 #include "js/Conversions.h"
 #include "js/experimental/TypedData.h"  // JS_IsArrayBufferViewObject
+#include "js/friend/ErrorMessages.h"    // js::GetErrorMessage, JSMSG_*
 #include "js/MemoryMetrics.h"
 #include "js/PropertySpec.h"
 #include "js/SharedArrayBuffer.h"
@@ -61,6 +62,7 @@
 #include "gc/Nursery-inl.h"
 #include "vm/JSAtom-inl.h"
 #include "vm/NativeObject-inl.h"
+#include "vm/Realm-inl.h"  // js::AutoRealm
 #include "vm/Shape-inl.h"
 
 using JS::ToInt32;
@@ -676,8 +678,11 @@ WasmArrayRawBuffer* ArrayBufferObject::BufferContents::wasmBuffer() const {
 template <typename ObjT, typename RawbufT>
 static bool CreateSpecificWasmBuffer(
     JSContext* cx, uint32_t initialSize, const Maybe<uint64_t>& maxSize,
+    wasm::MemoryKind memKind,
     MutableHandleArrayBufferObjectMaybeShared maybeSharedObject) {
   bool useHugeMemory = wasm::IsHugeMemoryEnabled();
+
+  MOZ_RELEASE_ASSERT(memKind == wasm::MemoryKind::Memory32);
 
   Maybe<uint64_t> clampedMaxSize = maxSize;
   if (clampedMaxSize) {
@@ -688,7 +693,7 @@ static bool CreateSpecificWasmBuffer(
     // wasm::PageSize == 0
     if (!useHugeMemory &&
         clampedMaxSize.value() >= (UINT32_MAX - wasm::PageSize)) {
-      uint64_t clamp = (wasm::MaxMemoryLimitField - 2) * wasm::PageSize;
+      uint64_t clamp = (wasm::MaxMemory32LimitField - 2) * wasm::PageSize;
       MOZ_ASSERT(clamp < UINT32_MAX);
       MOZ_ASSERT(initialSize <= clamp);
       clampedMaxSize = Some(clamp);
@@ -806,14 +811,12 @@ static bool CreateSpecificWasmBuffer(
   return true;
 }
 
-bool js::CreateWasmBuffer(JSContext* cx, const wasm::Limits& memory,
+bool js::CreateWasmBuffer(JSContext* cx, wasm::MemoryKind memKind,
+                          const wasm::Limits& memory,
                           MutableHandleArrayBufferObjectMaybeShared buffer) {
   MOZ_ASSERT(memory.initial % wasm::PageSize == 0);
   MOZ_RELEASE_ASSERT(cx->wasmHaveSignalHandlers);
   MOZ_RELEASE_ASSERT(memory.initial <= ArrayBufferObject::MaxBufferByteLength);
-  static_assert(ArrayBufferObject::MaxBufferByteLength <= UINT32_MAX,
-                "wasm memory uses uint32_t and is limited by"
-                "MaxBufferByteLength");
 
   if (memory.shared == wasm::Shareable::True) {
     if (!cx->realm()->creationOptions().getSharedMemoryAndAtomicsEnabled()) {
@@ -823,10 +826,10 @@ bool js::CreateWasmBuffer(JSContext* cx, const wasm::Limits& memory,
     }
     return CreateSpecificWasmBuffer<SharedArrayBufferObject,
                                     SharedArrayRawBuffer>(
-        cx, uint32_t(memory.initial), memory.maximum, buffer);
+        cx, uint32_t(memory.initial), memory.maximum, memKind, buffer);
   }
   return CreateSpecificWasmBuffer<ArrayBufferObject, WasmArrayRawBuffer>(
-      cx, uint32_t(memory.initial), memory.maximum, buffer);
+      cx, uint32_t(memory.initial), memory.maximum, memKind, buffer);
 }
 
 bool ArrayBufferObject::prepareForAsmJS() {
@@ -952,7 +955,9 @@ void ArrayBufferObject::setDataPointer(BufferContents contents) {
 }
 
 uint32_t ArrayBufferObject::byteLength() const {
-  return getFixedSlot(BYTE_LENGTH_SLOT).toInt32();
+  size_t len = size_t(getFixedSlot(BYTE_LENGTH_SLOT).toPrivate());
+  MOZ_ASSERT(len <= INT32_MAX);
+  return len;
 }
 
 inline size_t ArrayBufferObject::associatedBytes() const {
@@ -967,7 +972,7 @@ inline size_t ArrayBufferObject::associatedBytes() const {
 
 void ArrayBufferObject::setByteLength(uint32_t length) {
   MOZ_ASSERT(length <= INT32_MAX);
-  setFixedSlot(BYTE_LENGTH_SLOT, Int32Value(length));
+  setFixedSlot(BYTE_LENGTH_SLOT, PrivateValue(length));
 }
 
 size_t ArrayBufferObject::wasmMappedSize() const {
@@ -1024,6 +1029,7 @@ bool ArrayBufferObject::wasmGrowToSizeInPlace(
   // wasm-visible length of the buffer has been increased so it must be the
   // last fallible operation.
 
+  // Note, caller must guard on limit appropriate for the memory type
   if (newSize > ArrayBufferObject::MaxBufferByteLength) {
     return false;
   }
@@ -1066,6 +1072,7 @@ bool ArrayBufferObject::wasmMovingGrowToSize(
   // On failure, do not throw and ensure that the original buffer is
   // unmodified and valid.
 
+  // Note, caller must guard on the limit appropriate to the memory type
   if (newSize > ArrayBufferObject::MaxBufferByteLength) {
     return false;
   }
@@ -1682,25 +1689,41 @@ JS_FRIEND_API uint8_t* JS::GetArrayBufferData(JSObject* obj,
   return aobj->dataPointer();
 }
 
+static ArrayBufferObject* UnwrapArrayBuffer(
+    JSContext* cx, JS::Handle<JSObject*> maybeArrayBuffer) {
+  JSObject* obj = CheckedUnwrapStatic(maybeArrayBuffer);
+  if (!obj) {
+    ReportAccessDenied(cx);
+    return nullptr;
+  }
+
+  if (!obj->is<ArrayBufferObject>()) {
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                              JSMSG_ARRAYBUFFER_REQUIRED);
+    return nullptr;
+  }
+
+  return &obj->as<ArrayBufferObject>();
+}
+
 JS_FRIEND_API bool JS::DetachArrayBuffer(JSContext* cx, HandleObject obj) {
   AssertHeapIsIdle();
   CHECK_THREAD(cx);
   cx->check(obj);
 
-  if (!obj->is<ArrayBufferObject>()) {
-    JS_ReportErrorASCII(cx, "ArrayBuffer object required");
+  Rooted<ArrayBufferObject*> unwrappedBuffer(cx, UnwrapArrayBuffer(cx, obj));
+  if (!unwrappedBuffer) {
     return false;
   }
 
-  Rooted<ArrayBufferObject*> buffer(cx, &obj->as<ArrayBufferObject>());
-
-  if (buffer->isWasm() || buffer->isPreparedForAsmJS()) {
+  if (unwrappedBuffer->isWasm() || unwrappedBuffer->isPreparedForAsmJS()) {
     JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
                               JSMSG_WASM_NO_TRANSFER);
     return false;
   }
 
-  ArrayBufferObject::detach(cx, buffer);
+  AutoRealm ar(cx, unwrappedBuffer);
+  ArrayBufferObject::detach(cx, unwrappedBuffer);
   return true;
 }
 
@@ -1736,23 +1759,6 @@ JS_PUBLIC_API JSObject* JS::NewArrayBufferWithContents(JSContext* cx,
 
   BufferContents contents = BufferContents::createMalloced(data);
   return ArrayBufferObject::createForContents(cx, nbytes, contents);
-}
-
-static ArrayBufferObject* UnwrapArrayBuffer(
-    JSContext* cx, JS::Handle<JSObject*> maybeArrayBuffer) {
-  JSObject* obj = CheckedUnwrapStatic(maybeArrayBuffer);
-  if (!obj) {
-    ReportAccessDenied(cx);
-    return nullptr;
-  }
-
-  if (!obj->is<ArrayBufferObject>()) {
-    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
-                              JSMSG_TYPED_ARRAY_BAD_ARGS);
-    return nullptr;
-  }
-
-  return &obj->as<ArrayBufferObject>();
 }
 
 JS_PUBLIC_API JSObject* JS::CopyArrayBuffer(JSContext* cx,
@@ -1818,38 +1824,30 @@ JS_FRIEND_API JSObject* JS::UnwrapSharedArrayBuffer(JSObject* obj) {
 }
 
 JS_PUBLIC_API void* JS::StealArrayBufferContents(JSContext* cx,
-                                                 HandleObject objArg) {
+                                                 HandleObject obj) {
   AssertHeapIsIdle();
   CHECK_THREAD(cx);
-  cx->check(objArg);
+  cx->check(obj);
 
-  JSObject* obj = CheckedUnwrapStatic(objArg);
-  if (!obj) {
-    ReportAccessDenied(cx);
+  Rooted<ArrayBufferObject*> unwrappedBuffer(cx, UnwrapArrayBuffer(cx, obj));
+  if (!unwrappedBuffer) {
     return nullptr;
   }
 
-  if (!obj->is<ArrayBufferObject>()) {
-    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
-                              JSMSG_TYPED_ARRAY_BAD_ARGS);
-    return nullptr;
-  }
-
-  Rooted<ArrayBufferObject*> buffer(cx, &obj->as<ArrayBufferObject>());
-  if (buffer->isDetached()) {
+  if (unwrappedBuffer->isDetached()) {
     JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
                               JSMSG_TYPED_ARRAY_DETACHED);
     return nullptr;
   }
 
-  if (buffer->isWasm() || buffer->isPreparedForAsmJS()) {
+  if (unwrappedBuffer->isWasm() || unwrappedBuffer->isPreparedForAsmJS()) {
     JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
                               JSMSG_WASM_NO_TRANSFER);
     return nullptr;
   }
 
-  AutoRealm ar(cx, buffer);
-  return ArrayBufferObject::stealMallocedContents(cx, buffer);
+  AutoRealm ar(cx, unwrappedBuffer);
+  return ArrayBufferObject::stealMallocedContents(cx, unwrappedBuffer);
 }
 
 JS_PUBLIC_API JSObject* JS::NewMappedArrayBufferWithContents(JSContext* cx,

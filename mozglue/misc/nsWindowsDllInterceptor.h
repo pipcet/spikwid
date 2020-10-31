@@ -221,18 +221,19 @@ class MOZ_ONLY_USED_TO_AVOID_STATIC_CONSTRUCTORS FuncHookCrossProcess final {
   FuncHookCrossProcess() {}
 #endif  // defined(DEBUG)
 
-  bool Set(HANDLE aProcess, InterceptorT& aInterceptor, const char* aName,
-           FuncPtrT aHookDest) {
+  bool Set(nt::CrossExecTransferManager& aTransferMgr,
+           InterceptorT& aInterceptor, const char* aName, FuncPtrT aHookDest) {
     FuncPtrT origFunc;
     if (!aInterceptor.AddHook(aName, reinterpret_cast<intptr_t>(aHookDest),
                               reinterpret_cast<void**>(&origFunc))) {
       return false;
     }
 
-    return CopyStubToChildProcess(origFunc, aProcess);
+    return CopyStubToChildProcess(aTransferMgr, aInterceptor, origFunc);
   }
 
-  bool SetDetour(HANDLE aProcess, InterceptorT& aInterceptor, const char* aName,
+  bool SetDetour(nt::CrossExecTransferManager& aTransferMgr,
+                 InterceptorT& aInterceptor, const char* aName,
                  FuncPtrT aHookDest) {
     FuncPtrT origFunc;
     if (!aInterceptor.AddDetour(aName, reinterpret_cast<intptr_t>(aHookDest),
@@ -240,7 +241,7 @@ class MOZ_ONLY_USED_TO_AVOID_STATIC_CONSTRUCTORS FuncHookCrossProcess final {
       return false;
     }
 
-    return CopyStubToChildProcess(origFunc, aProcess);
+    return CopyStubToChildProcess(aTransferMgr, aInterceptor, origFunc);
   }
 
   explicit operator bool() const { return !!mOrigFunc; }
@@ -261,11 +262,21 @@ class MOZ_ONLY_USED_TO_AVOID_STATIC_CONSTRUCTORS FuncHookCrossProcess final {
 #endif  // defined(DEBUG)
 
  private:
-  bool CopyStubToChildProcess(FuncPtrT aStub, HANDLE aProcess) {
-    SIZE_T bytesWritten;
-    return ::WriteProcessMemory(aProcess, &mOrigFunc, &aStub, sizeof(FuncPtrT),
-                                &bytesWritten) &&
-           bytesWritten == sizeof(FuncPtrT);
+  bool CopyStubToChildProcess(nt::CrossExecTransferManager& aTransferMgr,
+                              InterceptorT& aInterceptor, FuncPtrT aStub) {
+    LauncherVoidResult writeResult =
+        aTransferMgr.Transfer(&mOrigFunc, &aStub, sizeof(FuncPtrT));
+    if (writeResult.isErr()) {
+#ifdef MOZ_USE_LAUNCHER_ERROR
+      const mozilla::WindowsError& err = writeResult.inspectErr().mError;
+#else
+      const mozilla::WindowsError& err = writeResult.inspectErr();
+#endif
+      aInterceptor.SetLastDetourError(FUNCHOOKCROSSPROCESS_COPYSTUB_ERROR,
+                                      err.AsHResult());
+      return false;
+    }
+    return true;
   }
 
  private:
@@ -362,10 +373,14 @@ class WindowsDllInterceptor final
   }
 
 #if defined(NIGHTLY_BUILD)
-  const Maybe<DetourError>& GetLastError() const {
-    return mDetourPatcher.GetLastError();
+  const Maybe<DetourError>& GetLastDetourError() const {
+    return mDetourPatcher.GetLastDetourError();
   }
 #endif  // defined(NIGHTLY_BUILD)
+  template <typename... Args>
+  void SetLastDetourError(Args&&... aArgs) {
+    return mDetourPatcher.SetLastDetourError(std::forward<Args>(aArgs)...);
+  }
 
   constexpr static uint32_t GetWorstCaseRequiredBytesToPatch() {
     return WindowsDllDetourPatcherPrimitive<
@@ -387,25 +402,26 @@ class WindowsDllInterceptor final
     // Use a nop space patch if possible, otherwise fall back to a detour.
     // This should be the preferred method for adding hooks.
     if (!mModule) {
-      mDetourPatcher.SetLastError(DetourResultCode::INTERCEPTOR_MOD_NULL);
+      mDetourPatcher.SetLastDetourError(DetourResultCode::INTERCEPTOR_MOD_NULL);
       return false;
     }
 
     if (!mDetourPatcher.IsPageAccessible(
             nt::PEHeaders::HModuleToBaseAddr<uintptr_t>(mModule))) {
-      mDetourPatcher.SetLastError(
+      mDetourPatcher.SetLastDetourError(
           DetourResultCode::INTERCEPTOR_MOD_INACCESSIBLE);
       return false;
     }
 
     FARPROC proc = mDetourPatcher.GetProcAddress(mModule, aName);
     if (!proc) {
-      mDetourPatcher.SetLastError(DetourResultCode::INTERCEPTOR_PROC_NULL);
+      mDetourPatcher.SetLastDetourError(
+          DetourResultCode::INTERCEPTOR_PROC_NULL);
       return false;
     }
 
     if (!mDetourPatcher.IsPageAccessible(reinterpret_cast<uintptr_t>(proc))) {
-      mDetourPatcher.SetLastError(
+      mDetourPatcher.SetLastDetourError(
           DetourResultCode::INTERCEPTOR_PROC_INACCESSIBLE);
       return false;
     }
@@ -433,25 +449,26 @@ class WindowsDllInterceptor final
     // Generally, code should not call this method directly. Use AddHook unless
     // there is a specific need to avoid nop space patches.
     if (!mModule) {
-      mDetourPatcher.SetLastError(DetourResultCode::INTERCEPTOR_MOD_NULL);
+      mDetourPatcher.SetLastDetourError(DetourResultCode::INTERCEPTOR_MOD_NULL);
       return false;
     }
 
     if (!mDetourPatcher.IsPageAccessible(
             nt::PEHeaders::HModuleToBaseAddr<uintptr_t>(mModule))) {
-      mDetourPatcher.SetLastError(
+      mDetourPatcher.SetLastDetourError(
           DetourResultCode::INTERCEPTOR_MOD_INACCESSIBLE);
       return false;
     }
 
     FARPROC proc = mDetourPatcher.GetProcAddress(mModule, aName);
     if (!proc) {
-      mDetourPatcher.SetLastError(DetourResultCode::INTERCEPTOR_PROC_NULL);
+      mDetourPatcher.SetLastDetourError(
+          DetourResultCode::INTERCEPTOR_PROC_NULL);
       return false;
     }
 
     if (!mDetourPatcher.IsPageAccessible(reinterpret_cast<uintptr_t>(proc))) {
-      mDetourPatcher.SetLastError(
+      mDetourPatcher.SetLastDetourError(
           DetourResultCode::INTERCEPTOR_PROC_INACCESSIBLE);
       return false;
     }

@@ -3019,4 +3019,17 @@ bool nsHttpHandler::UseHTTPSRRAsAltSvcEnabled() const {
   return StaticPrefs::network_dns_use_https_rr_as_altsvc();
 }
 
+bool nsHttpHandler::EchConfigEnabled() const {
+  return StaticPrefs::network_dns_echconfig_enabled();
+}
+
+bool nsHttpHandler::FallbackToOriginIfConfigsAreECHAndAllFailed() const {
+  return StaticPrefs::
+      network_dns_echconfig_fallback_to_origin_when_all_failed();
+}
+
+bool nsHttpHandler::UseHTTPSRRForSpeculativeConnection() const {
+  return StaticPrefs::network_dns_use_https_rr_for_speculative_connection();
+}
+
 }  // namespace mozilla::net

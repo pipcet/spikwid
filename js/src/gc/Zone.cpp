@@ -16,7 +16,7 @@
 #include "jit/BaselineIC.h"
 #include "jit/BaselineJIT.h"
 #include "jit/Ion.h"
-#include "jit/JitRealm.h"
+#include "jit/JitZone.h"
 #include "vm/Runtime.h"
 #include "wasm/WasmInstance.h"
 
@@ -104,7 +104,7 @@ bool ZoneAllocator::addSharedMemory(void* mem, size_t nbytes, MemoryUse use) {
     ptr->value().nbytes = nbytes;
   }
 
-  maybeMallocTriggerZoneGC();
+  maybeTriggerGCOnMalloc();
 
   return true;
 }
@@ -150,6 +150,7 @@ JS::Zone::Zone(JSRuntime* rt)
       data(this, nullptr),
       tenuredStrings(this, 0),
       tenuredBigInts(this, 0),
+      nurseryAllocatedStrings(this, 0),
       allocNurseryStrings(this, true),
       allocNurseryBigInts(this, true),
       suppressAllocationMetadataBuilder(this, false),

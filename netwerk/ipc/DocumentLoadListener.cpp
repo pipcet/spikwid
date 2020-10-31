@@ -97,10 +97,8 @@ static auto SecurityFlagsForLoadInfo(nsDocShellLoadState* aLoadState)
         true,  // aInheritForAboutBlank
         isSrcdoc);
 
-    bool isURIUniqueOrigin =
-        StaticPrefs::security_data_uri_unique_opaque_origin() &&
-        SchemeIsData(aLoadState->URI());
-    if (inheritAttrs && !isURIUniqueOrigin) {
+    bool isData = SchemeIsData(aLoadState->URI());
+    if (inheritAttrs && !isData) {
       securityFlags |= nsILoadInfo::SEC_FORCE_INHERIT_PRINCIPAL;
     }
   }
@@ -477,6 +475,21 @@ auto DocumentLoadListener::Open(nsDocShellLoadState* aLoadState,
     return nullptr;
   }
 
+  auto* documentContext = GetDocumentBrowsingContext();
+  if (documentContext && mozilla::SessionHistoryInParent()) {
+    // It's hard to know at this point whether session history will be enabled
+    // in the browsing context, so we always create an entry for a load here.
+    mLoadingSessionHistoryInfo =
+        documentContext->CreateLoadingSessionHistoryEntryForLoad(aLoadState,
+                                                                 mChannel);
+    if (!mLoadingSessionHistoryInfo) {
+      *aRv = NS_BINDING_ABORTED;
+      mParentChannelListener = nullptr;
+      mChannel = nullptr;
+      return nullptr;
+    }
+  }
+
   nsCOMPtr<nsIURI> uriBeingLoaded;
   Unused << NS_WARN_IF(
       NS_FAILED(mChannel->GetURI(getter_AddRefs(uriBeingLoaded))));
@@ -539,7 +552,6 @@ auto DocumentLoadListener::Open(nsDocShellLoadState* aLoadState,
   // across any serviceworker related data between channels as needed.
   AddClientChannelHelperInParent(mChannel, std::move(aInfo));
 
-  auto* documentContext = GetDocumentBrowsingContext();
   if (documentContext && !documentContext->StartDocumentLoad(this)) {
     LOG(("DocumentLoadListener::Open failed StartDocumentLoad [this=%p]",
          this));
@@ -627,13 +639,6 @@ auto DocumentLoadListener::Open(nsDocShellLoadState* aLoadState,
   mSrcdocData = aLoadState->SrcdocData();
   mBaseURI = aLoadState->BaseURI();
   mOriginalUriString = aLoadState->GetOriginalURIString();
-  if (documentContext && mozilla::SessionHistoryInParent()) {
-    // It's hard to know at this point whether session history will be enabled
-    // in the browsing context, so we always create an entry for a load here.
-    mLoadingSessionHistoryInfo =
-        documentContext->CreateLoadingSessionHistoryEntryForLoad(aLoadState,
-                                                                 mChannel);
-  }
   if (documentContext) {
     mParentWindowContext = documentContext->GetParentWindowContext();
   } else {
@@ -2389,12 +2394,20 @@ DocumentLoadListener::AsyncOnChannelRedirect(
     return NS_OK;
   }
 
-  if (GetDocumentBrowsingContext() && !net::ChannelIsPost(aOldChannel)) {
-    AddURIVisit(aOldChannel, 0);
+  if (GetDocumentBrowsingContext()) {
+    if (mLoadingSessionHistoryInfo) {
+      mLoadingSessionHistoryInfo =
+          GetDocumentBrowsingContext()
+              ->ReplaceLoadingSessionHistoryEntryForLoad(
+                  mLoadingSessionHistoryInfo.get(), aNewChannel);
+    }
+    if (!net::ChannelIsPost(aOldChannel)) {
+      AddURIVisit(aOldChannel, 0);
 
-    nsCOMPtr<nsIURI> oldURI;
-    aOldChannel->GetURI(getter_AddRefs(oldURI));
-    nsDocShell::SaveLastVisit(aNewChannel, oldURI, aFlags);
+      nsCOMPtr<nsIURI> oldURI;
+      aOldChannel->GetURI(getter_AddRefs(oldURI));
+      nsDocShell::SaveLastVisit(aNewChannel, oldURI, aFlags);
+    }
   }
   mHaveVisibleRedirect |= true;
 

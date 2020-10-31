@@ -551,25 +551,27 @@
       <hbox id="ctrlTab-showAll-container" pack="center"/>
     </panel>
 
-    <panel id="pageActionPanel"
-           class="cui-widget-panel panel-no-padding"
-           role="group"
-           type="arrow"
-           hidden="true"
-           flip="slide"
-           position="bottomcenter topright"
-           tabspecific="true"
-           noautofocus="true">
-      <panelmultiview id="pageActionPanelMultiView"
-                      mainViewId="pageActionPanelMainView"
-                      viewCacheId="appMenu-viewCache">
-        <panelview id="pageActionPanelMainView"
-                   context="pageActionContextMenu"
-                   class="PanelUI-subView">
-          <vbox class="panel-subview-body"/>
-        </panelview>
-      </panelmultiview>
-    </panel>
+    <html:template id="pageActionPanelTemplate">
+      <panel id="pageActionPanel"
+             class="cui-widget-panel panel-no-padding"
+             role="group"
+             type="arrow"
+             hidden="true"
+             flip="slide"
+             position="bottomcenter topright"
+             tabspecific="true"
+             noautofocus="true">
+        <panelmultiview id="pageActionPanelMultiView"
+                        mainViewId="pageActionPanelMainView"
+                        viewCacheId="appMenu-viewCache">
+          <panelview id="pageActionPanelMainView"
+                     context="pageActionContextMenu"
+                     class="PanelUI-subView">
+            <vbox class="panel-subview-body"/>
+          </panelview>
+        </panelmultiview>
+      </panel>
+    </html:template>
 
     <html:template id="confirmation-hint-wrapper">
       <panel id="confirmation-hint"
@@ -1889,7 +1891,7 @@
                        hidden="true"
                        onclick="AboutReaderParent.buttonClick(event);"/>
                 <toolbarbutton id="urlbar-zoom-button"
-                       onclick="FullZoom.reset();"
+                       onclick="FullZoom.reset(); FullZoom.resetScalingZoom();"
                        tooltip="dynamic-shortcut-tooltip"
                        hidden="true"/>
                 <box id="pageActionSeparator" class="urlbar-page-action"/>
@@ -1997,6 +1999,7 @@
                        class="toolbarbutton-1"
                        hidden="true"
                        badged="true"
+                       tooltiptext="Ion"
                        onmousedown="switchToTabHavingURI('about:ion', true);"
                        onkeypress="switchToTabHavingURI('about:ion', true);"/>
         <toolbarbutton id="whats-new-menu-button"
@@ -2039,25 +2042,8 @@
              context="toolbar-context-menu"
              toolbarname="&personalbarCmd.label;" accesskey="&personalbarCmd.accesskey;"
              aria-label="&personalbar.accessibleLabel;"
-             collapsed="true"
              customizable="true">
       <toolbartabstop skipintoolbarset="true"/>
-
-      <toolbarbutton id="managed-bookmarks"
-                     class="bookmark-item"
-                     data-l10n-id="managed-bookmarks"
-                     context="placesContextManaged"
-                     container="true"
-                     removable="false"
-                     hidden="true"
-                     type="menu">
-        <menupopup id="managed-bookmarks-popup"
-                   oncommand="PlacesToolbarHelper.openManagedBookmark(event);"
-                   onclick="checkForMiddleClick(this, event);"
-                   ondragover="event.dataTransfer.effectAllowed='none';"
-                   ondragstart="PlacesToolbarHelper.onDragStartManaged(event);"
-                   onpopupshowing="PlacesToolbarHelper.populateManagedBookmarks(this);"/>
-      </toolbarbutton>
 
       <toolbaritem id="personal-bookmarks"
                    title="&bookmarksToolbarItem.label;"
@@ -2100,12 +2086,29 @@
                          tooltip="bhTooltip" popupsinherittooltip="true"
                          context="placesContext"/>
             </toolbarbutton>
+            <toolbarbutton type="menu"
+                           id="OtherBookmarks"
+                           class="bookmark-item"
+                           hidden="true"
+                           label="&bookmarksMenuButton.other.label;"
+                           container="true"
+                           onpopupshowing="document.getElementById('PlacesToolbar')
+                                                   ._placesView._onOtherBookmarksPopupShowing(event);">
+              <menupopup id="OtherBookmarksPopup"
+                         is="places-popup"
+                         placespopup="true"
+                         context="placesContext" />
+            </toolbarbutton>
           </hbox>
         </hbox>
       </toolbaritem>
     </toolbar>
 
     <html:template id="BrowserToolbarPalette">
+      <toolbarbutton id="import-button"
+                     class="toolbarbutton-1 chromeclass-toolbar-additional"
+                     oncommand="MigrationUtils.showMigrationWizard(window, [MigrationUtils.MIGRATION_ENTRYPOINT_BOOKMARKS_TOOLBAR]);"
+                     data-l10n-id="browser-import-button"/>
 
       <toolbarbutton id="print-button" class="toolbarbutton-1 chromeclass-toolbar-additional"
 #ifdef XP_MACOSX
@@ -2114,6 +2117,7 @@
                      command="cmd_printPreview"
                      print-button-title="&printButton.tooltip;"
 #endif
+                     keepbroadcastattributeswhencustomizing="true"
                      tooltip="dynamic-shortcut-tooltip"
                      label="&printButton.label;"/>
 
@@ -2144,6 +2148,7 @@
                      ondrop="PlacesMenuDNDHandler.onDrop(event);"
                      oncommand="BookmarkingUI.onCommand(event);">
         <menupopup id="BMB_bookmarksPopup"
+                   type="arrow"
                    is="places-popup-arrow"
                    class="cui-widget-panel cui-widget-panelview cui-widget-panelWithFooter PanelUI-subView"
                    placespopup="true"

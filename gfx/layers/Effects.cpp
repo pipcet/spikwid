@@ -5,7 +5,6 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "Effects.h"
-#include "LayersLogging.h"  // for AppendToString
 #include "nsAString.h"
 #include "nsPrintfCString.h"  // for nsPrintfCString
 #include "nsString.h"         // for nsAutoCString
@@ -24,7 +23,7 @@ void TexturedEffect::PrintInfo(std::stringstream& aStream,
     aStream << " [not-premultiplied]";
   }
 
-  AppendToString(aStream, mSamplingFilter, " [filter=", "]");
+  aStream << " [filter=" << mSamplingFilter << "]";
 }
 
 void EffectMask::PrintInfo(std::stringstream& aStream, const char* aPrefix) {
@@ -58,6 +57,6 @@ void EffectBlendMode::PrintInfo(std::stringstream& aStream,
 void EffectColorMatrix::PrintInfo(std::stringstream& aStream,
                                   const char* aPrefix) {
   aStream << aPrefix;
-  aStream << nsPrintfCString("EffectColorMatrix (0x%p)", this).get();
-  AppendToString(aStream, mColorMatrix, " [matrix=", "]");
+  aStream << nsPrintfCString("EffectColorMatrix (0x%p)", this).get()
+          << " [matrix=" << mColorMatrix << "]";
 }

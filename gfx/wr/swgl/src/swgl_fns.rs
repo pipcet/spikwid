@@ -153,12 +153,11 @@ extern "C" {
         transpose: GLboolean,
         value: *const GLfloat,
     );
-
     fn DrawElementsInstanced(
         mode: GLenum,
         count: GLsizei,
         type_: GLenum,
-        indices: *const c_void,
+        indices: GLintptr,
         instancecount: GLsizei,
     );
     fn EnableVertexAttribArray(index: GLuint);
@@ -315,6 +314,7 @@ extern "C" {
         locked_u: *mut LockedTexture,
         locked_v: *mut LockedTexture,
         color_space: YUVColorSpace,
+        color_depth: GLuint,
         src_x: GLint,
         src_y: GLint,
         src_width: GLsizei,
@@ -1528,7 +1528,15 @@ impl Gl for Context {
     }
 
     fn draw_arrays(&self, mode: GLenum, first: GLint, count: GLsizei) {
-        panic!();
+        unsafe {
+            DrawElementsInstanced(
+                mode,
+                count,
+                NONE,
+                first as GLintptr,
+                1,
+            );
+        }
     }
 
     fn draw_arrays_instanced(
@@ -1538,7 +1546,15 @@ impl Gl for Context {
         count: GLsizei,
         primcount: GLsizei,
     ) {
-        panic!();
+        unsafe {
+            DrawElementsInstanced(
+                mode,
+                count,
+                NONE,
+                first as GLintptr,
+                primcount,
+            );
+        }
     }
 
     fn draw_elements(
@@ -1558,7 +1574,7 @@ impl Gl for Context {
                 mode,
                 count,
                 element_type,
-                indices_offset as *const c_void,
+                indices_offset as GLintptr,
                 1,
             );
         }
@@ -1582,7 +1598,7 @@ impl Gl for Context {
                 mode,
                 count,
                 element_type,
-                indices_offset as *const c_void,
+                indices_offset as GLintptr,
                 primcount,
             );
         }
@@ -2370,6 +2386,7 @@ impl LockedResource {
         locked_u: &LockedResource,
         locked_v: &LockedResource,
         color_space: YUVColorSpace,
+        color_depth: GLuint,
         src_x: GLint,
         src_y: GLint,
         src_width: GLsizei,
@@ -2389,6 +2406,7 @@ impl LockedResource {
                 locked_u.0,
                 locked_v.0,
                 color_space,
+                color_depth,
                 src_x,
                 src_y,
                 src_width,

@@ -74,6 +74,7 @@ NSSCertDBTrustDomain::NSSCertDBTrustDomain(
     ValidityCheckingMode validityCheckingMode, CertVerifier::SHA1Mode sha1Mode,
     NetscapeStepUpPolicy netscapeStepUpPolicy,
     DistrustedCAPolicy distrustedCAPolicy, CRLiteMode crliteMode,
+    uint64_t crliteCTMergeDelaySeconds,
     const OriginAttributes& originAttributes,
     const Vector<Input>& thirdPartyRootInputs,
     const Vector<Input>& thirdPartyIntermediateInputs,
@@ -96,6 +97,7 @@ NSSCertDBTrustDomain::NSSCertDBTrustDomain(
       mNetscapeStepUpPolicy(netscapeStepUpPolicy),
       mDistrustedCAPolicy(distrustedCAPolicy),
       mCRLiteMode(crliteMode),
+      mCRLiteCTMergeDelaySeconds(crliteCTMergeDelaySeconds),
       mSawDistrustedCAByPolicyError(false),
       mOriginAttributes(originAttributes),
       mThirdPartyRootInputs(thirdPartyRootInputs),
@@ -348,7 +350,7 @@ Result NSSCertDBTrustDomain::FindIssuer(Input encodedIssuerName,
   }
 
   // Try all root certs first and then all (presumably) intermediates.
-  if (!geckoRootCandidates.appendAll(geckoIntermediateCandidates)) {
+  if (!geckoRootCandidates.appendAll(std::move(geckoIntermediateCandidates))) {
     return Result::FATAL_ERROR_NO_MEMORY;
   }
 
@@ -388,7 +390,7 @@ Result NSSCertDBTrustDomain::FindIssuer(Input encodedIssuerName,
       }
     }
   }
-  if (!nssRootCandidates.appendAll(nssIntermediateCandidates)) {
+  if (!nssRootCandidates.appendAll(std::move(nssIntermediateCandidates))) {
     return Result::FATAL_ERROR_NO_MEMORY;
   }
 
@@ -677,6 +679,7 @@ Result NSSCertDBTrustDomain::CheckRevocation(
         issuerBytes, issuerSubjectPublicKeyInfoBytes, serialNumberBytes,
         &filterTimestamp, &crliteRevocationState);
     TimeStamp crliteLookupAfter = TimeStamp::Now();
+    bool certificateFoundValidInCRLiteFilter = false;
     if (NS_FAILED(rv)) {
       MOZ_LOG(gCertVerifierLog, LogLevel::Debug,
               ("NSSCertDBTrustDomain::CheckRevocation: CRLite call failed"));
@@ -711,6 +714,27 @@ Result NSSCertDBTrustDomain::CheckRevocation(
       // SCT timestamps are milliseconds since the epoch.
       Time earliestCertificateTimestamp(
           TimeFromEpochInSeconds(*earliestSCTTimestamp / 1000));
+      Result result =
+          earliestCertificateTimestamp.AddSeconds(mCRLiteCTMergeDelaySeconds);
+      if (result != Success) {
+        // This shouldn't happen - the merge delay is at most a year in seconds,
+        // and the SCT timestamp is supposed to be in the past.
+        MOZ_LOG(gCertVerifierLog, LogLevel::Debug,
+                ("NSSCertDBTrustDomain::CheckRevocation: integer overflow "
+                 "calculating sct timestamp + merge delay (%llu + %llu)",
+                 static_cast<unsigned long long>(*earliestSCTTimestamp / 1000),
+                 static_cast<unsigned long long>(mCRLiteCTMergeDelaySeconds)));
+        if (mCRLiteMode == CRLiteMode::Enforce) {
+          // While we do have control over the possible values of the CT merge
+          // delay parameter, we don't have control over the SCT timestamp.
+          // Thus, if we've reached this point, the CA has probably made a
+          // mistake and we should treat this certificate as revoked.
+          return Result::ERROR_REVOKED_CERTIFICATE;
+        }
+        // If Time::AddSeconds fails, the original value is unchanged. Since in
+        // this case `earliestCertificateTimestamp` must represent a value far
+        // in the future, any CRLite result will be discarded.
+      }
       if (earliestCertificateTimestamp <= filterTimestampTime &&
           crliteRevocationState == nsICertStorage::STATE_ENFORCE) {
         if (mCRLiteTelemetryInfo) {
@@ -752,10 +776,12 @@ Result NSSCertDBTrustDomain::CheckRevocation(
           mCRLiteTelemetryInfo->mLookupResult =
               CRLiteLookupResult::CertificateTooNew;
         }
-      } else if (crliteRevocationState == nsICertStorage::STATE_UNSET &&
-                 mCRLiteTelemetryInfo) {
-        mCRLiteTelemetryInfo->mLookupResult =
-            CRLiteLookupResult::CertificateValid;
+      } else if (crliteRevocationState == nsICertStorage::STATE_UNSET) {
+        certificateFoundValidInCRLiteFilter = true;
+        if (mCRLiteTelemetryInfo) {
+          mCRLiteTelemetryInfo->mLookupResult =
+              CRLiteLookupResult::CertificateValid;
+        }
       }
     }
 
@@ -770,6 +796,10 @@ Result NSSCertDBTrustDomain::CheckRevocation(
       MOZ_LOG(gCertVerifierLog, LogLevel::Debug,
               ("NSSCertDBTrustDomain::CheckRevocation: IsCertRevokedByStash "
                "failed"));
+      if (mCRLiteTelemetryInfo) {
+        mCRLiteTelemetryInfo->mLookupResult =
+            CRLiteLookupResult::LibraryFailure;
+      }
       if (mCRLiteMode == CRLiteMode::Enforce) {
         return Result::FATAL_ERROR_LIBRARY_FAILURE;
       }
@@ -777,9 +807,19 @@ Result NSSCertDBTrustDomain::CheckRevocation(
       MOZ_LOG(gCertVerifierLog, LogLevel::Debug,
               ("NSSCertDBTrustDomain::CheckRevocation: IsCertRevokedByStash "
                "returned true"));
+      if (mCRLiteTelemetryInfo) {
+        mCRLiteTelemetryInfo->mLookupResult =
+            CRLiteLookupResult::CertRevokedByStash;
+      }
       if (mCRLiteMode == CRLiteMode::Enforce) {
         return Result::ERROR_REVOKED_CERTIFICATE;
       }
+    } else if (certificateFoundValidInCRLiteFilter &&
+               mCRLiteMode == CRLiteMode::Enforce) {
+      MOZ_LOG(gCertVerifierLog, LogLevel::Debug,
+              ("NSSCertDBTrustDomain::CheckRevocation: certificate covered by "
+               "CRLite, found to be valid -> skipping OCSP processing"));
+      return Success;
     }
   }
 #else

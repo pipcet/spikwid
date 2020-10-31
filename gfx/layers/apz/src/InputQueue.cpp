@@ -8,14 +8,15 @@
 
 #include "AsyncPanZoomController.h"
 
+#include "GestureEventListener.h"
 #include "InputBlockState.h"
-#include "LayersLogging.h"
 #include "mozilla/layers/APZThreadUtils.h"
 #include "mozilla/ToString.h"
 #include "OverscrollHandoffState.h"
 #include "QueuedInput.h"
 #include "mozilla/StaticPrefs_apz.h"
 #include "mozilla/StaticPrefs_layout.h"
+#include "mozilla/StaticPrefs_ui.h"
 
 static mozilla::LazyLogModule sApzInpLog("apz.inputqueue");
 #define INPQ_LOG(...) MOZ_LOG(sApzInpLog, LogLevel::Debug, (__VA_ARGS__))
@@ -244,14 +245,15 @@ nsEventStatus InputQueue::ReceiveMouseInput(
     MOZ_ASSERT(newBlock);
     block = new DragBlockState(aTarget, aFlags, aEvent);
 
-    INPQ_LOG("started new drag block %p id %" PRIu64
-             " for %sconfirmed target %p and %s a scrollthumb\n",
-             block, block->GetBlockId(), aFlags.mTargetConfirmed ? "" : "un",
-             aTarget.get(), aFlags.mHitScrollThumb ? "hits" : "doesn't hit");
+    INPQ_LOG(
+        "started new drag block %p id %" PRIu64
+        "for %sconfirmed target %p; on scrollbar: %d; on scrollthumb: %d\n",
+        block, block->GetBlockId(), aFlags.mTargetConfirmed ? "" : "un",
+        aTarget.get(), aFlags.mHitScrollbar, aFlags.mHitScrollThumb);
 
     mActiveDragBlock = block;
 
-    if (aFlags.mHitScrollThumb) {
+    if (aFlags.mHitScrollThumb || !aFlags.mHitScrollbar) {
       CancelAnimationsForNewBlock(block);
     }
     MaybeRequestContentResponse(aTarget, block);

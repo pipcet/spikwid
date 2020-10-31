@@ -1,4 +1,7 @@
 const PRINT_DOCUMENT_URI = "chrome://global/content/print.html";
+const { MockFilePicker } = SpecialPowers;
+
+let pickerMocked = false;
 
 class PrintHelper {
   static async withTestPage(testFn) {
@@ -19,6 +22,7 @@ class PrintHelper {
     for (let name of Services.prefs.getChildList("print.")) {
       Services.prefs.clearUserPref(name);
     }
+    Services.prefs.clearUserPref("print_printer");
 
     return taskReturn;
   }
@@ -51,12 +55,31 @@ class PrintHelper {
     );
   }
 
+  // This is used only for the old print preview. For tests
+  // involving the newer UI, use waitForPreview instead.
+  static waitForOldPrintPreview(expectedBrowser) {
+    const { PrintingParent } = ChromeUtils.import(
+      "resource://gre/actors/PrintingParent.jsm"
+    );
+
+    return new Promise(resolve => {
+      PrintingParent.setTestListener(browser => {
+        if (browser == expectedBrowser) {
+          PrintingParent.setTestListener(null);
+          resolve();
+        }
+      });
+    });
+  }
+
   constructor(sourceBrowser) {
     this.sourceBrowser = sourceBrowser;
   }
 
   async startPrint() {
-    document.getElementById("cmd_print").doCommand();
+    this.sourceBrowser.ownerGlobal.document
+      .getElementById("cmd_print")
+      .doCommand();
     let dialog = await TestUtils.waitForCondition(
       () => this.dialog,
       "Wait for dialog"
@@ -119,7 +142,19 @@ class PrintHelper {
     ok(BrowserTestUtils.is_hidden(this.dialog._box), "The dialog is hidden");
   }
 
-  async setupMockPrint() {
+  async assertPrintToFile(file, testFn) {
+    ok(!file.exists(), "File does not exist before printing");
+    await this.withClosingFn(testFn);
+    await TestUtils.waitForCondition(
+      () => file.exists(),
+      "Wait for printed file",
+      50
+    );
+
+    ok(file.exists(), "Printed the file");
+  }
+
+  setupMockPrint() {
     if (this.resolveShowSystemDialog) {
       throw new Error("Print already mocked");
     }
@@ -138,7 +173,10 @@ class PrintHelper {
 
     // Mock PrintEventHandler with our Promises.
     this.win.PrintEventHandler._showPrintDialog = () => showSystemDialogPromise;
-    this.win.PrintEventHandler._doPrint = () => printPromise;
+    this.win.PrintEventHandler._doPrint = (bc, settings) => {
+      this._printedSettings = settings;
+      return printPromise;
+    };
   }
 
   addMockPrinter(name = "Mock Printer") {
@@ -156,7 +194,7 @@ class PrintHelper {
       supportsColor: Promise.resolve(true),
       supportsMonochrome: Promise.resolve(true),
       paperList: Promise.resolve([]),
-      createDefaultSettings: name => {
+      createDefaultSettings: () => {
         let settings = PSSVC.newPrintSettings;
         for (let [key, value] of Object.entries(defaultSettings)) {
           settings[key] = value;
@@ -238,8 +276,11 @@ class PrintHelper {
     EventUtils.sendString(text, this.win);
   }
 
-  async openMoreSettings() {
-    this.click(this.get("more-settings").firstElementChild);
+  async openMoreSettings(options) {
+    let details = this.get("more-settings");
+    if (!details.open) {
+      this.click(details.firstElementChild, options);
+    }
     await this.awaitAnimationFrame();
   }
 
@@ -266,6 +307,17 @@ class PrintHelper {
     }
   }
 
+  assertPrintedWithSettings(expected) {
+    ok(this._printedSettings, "Printed settings have been recorded");
+    for (let [setting, value] of Object.entries(expected)) {
+      is(
+        this._printedSettings[setting],
+        value,
+        `${setting} matches printed setting`
+      );
+    }
+  }
+
   async assertSettingsChanged(from, to, changeFn) {
     is(
       Object.keys(from).length,
@@ -287,5 +339,31 @@ class PrintHelper {
 
   awaitAnimationFrame() {
     return new Promise(resolve => this.win.requestAnimationFrame(resolve));
+  }
+
+  mockFilePickerCancel() {
+    if (!pickerMocked) {
+      pickerMocked = true;
+      MockFilePicker.init(window);
+      registerCleanupFunction(() => MockFilePicker.cleanup());
+    }
+    MockFilePicker.returnValue = MockFilePicker.returnCancel;
+  }
+
+  mockFilePicker(filename) {
+    if (!pickerMocked) {
+      pickerMocked = true;
+      MockFilePicker.init(window);
+      registerCleanupFunction(() => MockFilePicker.cleanup());
+    }
+    let file = Services.dirsvc.get("TmpD", Ci.nsIFile);
+    file.append(filename);
+    registerCleanupFunction(() => {
+      if (file.exists()) {
+        file.remove(false);
+      }
+    });
+    MockFilePicker.setFiles([file]);
+    return file;
   }
 }

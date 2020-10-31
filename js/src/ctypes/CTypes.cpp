@@ -6,6 +6,7 @@
 
 #include "ctypes/CTypes.h"
 
+#include "mozilla/CheckedInt.h"
 #include "mozilla/FloatingPoint.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Sprintf.h"
@@ -34,7 +35,6 @@
 #include "jsexn.h"
 #include "jsnum.h"
 
-#include "builtin/TypedObject.h"
 #include "ctypes/Library.h"
 #include "gc/FreeOp.h"
 #include "gc/Policy.h"
@@ -43,6 +43,7 @@
 #include "js/ArrayBuffer.h"  // JS::{IsArrayBufferObject,GetArrayBufferData,GetArrayBuffer{ByteLength,Data}}
 #include "js/CharacterEncoding.h"
 #include "js/experimental/TypedData.h"  // JS_GetArrayBufferView{Type,Data}, JS_GetTypedArrayByteLength, JS_IsArrayBufferViewObject, JS_IsTypedArrayObject
+#include "js/friend/ErrorMessages.h"    // js::GetErrorMessage, JSMSG_*
 #include "js/Object.h"  // JS::GetPrivate, JS::GetReservedSlot, JS::SetPrivate
 #include "js/PropertySpec.h"
 #include "js/SharedArrayBuffer.h"  // JS::{GetSharedArrayBuffer{ByteLength,Data},IsSharedArrayBufferObject}
@@ -61,6 +62,7 @@
 
 using std::numeric_limits;
 
+using mozilla::CheckedInt;
 using mozilla::IsAsciiAlpha;
 using mozilla::IsAsciiDigit;
 

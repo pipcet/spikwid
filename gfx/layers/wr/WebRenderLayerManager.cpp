@@ -9,7 +9,6 @@
 #include "BasicLayers.h"
 
 #include "GeckoProfiler.h"
-#include "LayersLogging.h"
 #include "mozilla/StaticPrefs_apz.h"
 #include "mozilla/StaticPrefs_layers.h"
 #include "mozilla/dom/BrowserChild.h"
@@ -158,7 +157,7 @@ CompositorBridgeChild* WebRenderLayerManager::GetCompositorBridgeChild() {
 }
 
 void WebRenderLayerManager::GetBackendName(nsAString& name) {
-  if (gfx::gfxVars::UseSoftwareWebRender()) {
+  if (WrBridge()->GetTextureFactoryIdentifier().mUsingSoftwareWebRender) {
     name.AssignLiteral("WebRender (Software)");
   } else {
     name.AssignLiteral("WebRender");
@@ -708,6 +707,10 @@ void WebRenderLayerManager::SendInvalidRegion(const nsIntRegion& aRegion) {
 
 void WebRenderLayerManager::ScheduleComposite() {
   WrBridge()->SendScheduleComposite();
+}
+
+void WebRenderLayerManager::ForceComposite() {
+  WrBridge()->SendForceComposite();
 }
 
 void WebRenderLayerManager::SetRoot(Layer* aLayer) {

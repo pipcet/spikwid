@@ -6,6 +6,7 @@
 #include "TrackEncoder.h"
 
 #include "AudioChannelFormat.h"
+#include "DriftCompensation.h"
 #include "GeckoProfiler.h"
 #include "MediaTrackGraph.h"
 #include "MediaTrackListener.h"
@@ -13,6 +14,7 @@
 #include "mozilla/Logging.h"
 #include "VideoUtils.h"
 #include "mozilla/Logging.h"
+#include "mozilla/Telemetry.h"
 
 namespace mozilla {
 
@@ -32,7 +34,6 @@ static const unsigned int DEFAULT_KEYFRAME_INTERVAL_MS = 1000;
 
 TrackEncoder::TrackEncoder(TrackRate aTrackRate)
     : mEncodingComplete(false),
-      mEosSetInEncoder(false),
       mInitialized(false),
       mEndOfStream(false),
       mCanceled(false),
@@ -142,7 +143,8 @@ void AudioTrackEncoder::AppendAudioSegment(AudioSegment&& aSegment) {
     mOutgoingBuffer.AppendFrom(&aSegment);
   }
 
-  if (mInitialized && mOutgoingBuffer.GetDuration() >= GetPacketDuration()) {
+  if (mInitialized &&
+      mOutgoingBuffer.GetDuration() >= NumInputFramesPerPacket()) {
     OnDataAvailable();
   }
 }
@@ -178,7 +180,7 @@ void AudioTrackEncoder::TryInit(const AudioSegment& aSegment,
       continue;
     }
 
-    nsresult rv = Init(iter->mChannelData.Length(), mTrackRate);
+    nsresult rv = Init(iter->mChannelData.Length());
 
     if (NS_SUCCEEDED(rv)) {
       TRACK_LOG(LogLevel::Info,
@@ -204,7 +206,7 @@ void AudioTrackEncoder::TryInit(const AudioSegment& aSegment,
               ("[AudioTrackEncoder]: Initialize failed for %ds. Attempting to "
                "init with %d (default) channels!",
                AUDIO_INIT_FAILED_DURATION, DEFAULT_CHANNELS));
-    nsresult rv = Init(DEFAULT_CHANNELS, mTrackRate);
+    nsresult rv = Init(DEFAULT_CHANNELS);
     Telemetry::Accumulate(
         Telemetry::MEDIA_RECORDER_TRACK_ENCODER_INIT_TIMEOUT_TYPE, 0);
     if (NS_FAILED(rv)) {
@@ -231,7 +233,7 @@ void AudioTrackEncoder::NotifyEndOfStream() {
   if (!mCanceled && !mInitialized) {
     // If source audio track is completely silent till the end of encoding,
     // initialize the encoder with a default channel count.
-    Init(DEFAULT_CHANNELS, mTrackRate);
+    Init(DEFAULT_CHANNELS);
   }
 
   mEndOfStream = true;

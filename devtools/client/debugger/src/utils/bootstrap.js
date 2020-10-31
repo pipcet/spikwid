@@ -11,7 +11,9 @@ const { Provider } = require("react-redux");
 
 import ToolboxProvider from "devtools/client/framework/store-provider";
 import { isFirefoxPanel, isDevelopment, isTesting } from "devtools-environment";
-import { AppConstants } from "devtools-modules";
+
+// $FlowIgnore
+const { AppConstants } = require("resource://gre/modules/AppConstants.jsm");
 
 import SourceMaps, {
   startSourceMapWorker,
@@ -32,32 +34,6 @@ import type { Panel } from "../client/firefox/types";
 
 let parser;
 
-function renderPanel(component, store, panel: Panel) {
-  const root = document.createElement("div");
-  root.className = "launchpad-root theme-body";
-  root.style.setProperty("flex", "1");
-  const mount = document.querySelector("#mount");
-  if (!mount) {
-    return;
-  }
-  mount.appendChild(root);
-
-  const toolboxDoc = panel.panelWin.parent.document;
-
-  ReactDOM.render(
-    React.createElement(
-      Provider,
-      { store },
-      React.createElement(
-        ToolboxProvider,
-        { store: panel.getToolboxStore() },
-        React.createElement(component, { toolboxDoc })
-      )
-    ),
-    root
-  );
-}
-
 type Workers = {
   sourceMaps: typeof SourceMaps,
   evaluationsParser: typeof ParserDispatcher,
@@ -69,7 +45,7 @@ export function bootstrapStore(
   panel: Panel,
   initialState: Object
 ): any {
-  const debugJsModules = AppConstants.AppConstants.DEBUG_JS_MODULES == "1";
+  const debugJsModules = AppConstants.DEBUG_JS_MODULES == "1";
   const createStore = configureStore({
     log: prefs.logging || isTesting(),
     timing: debugJsModules || isDevelopment(),
@@ -122,12 +98,30 @@ export function teardownWorkers(): void {
 }
 
 export function bootstrapApp(store: any, panel: Panel): void {
-  if (isFirefoxPanel()) {
-    renderPanel(App, store, panel);
-  } else {
-    const { renderRoot } = require("devtools-launchpad");
-    renderRoot(React, ReactDOM, App, store);
+  const root = document.createElement("div");
+  root.className = "launchpad-root theme-body";
+  root.style.setProperty("flex", "1");
+  const mount = document.querySelector("#mount");
+  if (!mount) {
+    return;
   }
+
+  mount.appendChild(root);
+
+  const toolboxDoc = panel.panelWin.parent.document;
+
+  ReactDOM.render(
+    React.createElement(
+      Provider,
+      { store },
+      React.createElement(
+        ToolboxProvider,
+        { store: panel.getToolboxStore() },
+        React.createElement(App, { toolboxDoc })
+      )
+    ),
+    root
+  );
 }
 
 function registerStoreObserver(store, subscriber) {

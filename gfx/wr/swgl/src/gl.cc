@@ -24,8 +24,10 @@
 
 #ifdef _WIN32
 #  define ALWAYS_INLINE __forceinline
+#  define NO_INLINE __declspec(noinline)
 #else
 #  define ALWAYS_INLINE __attribute__((always_inline)) inline
+#  define NO_INLINE __attribute__((noinline))
 #endif
 
 #define UNREACHABLE __builtin_unreachable()
@@ -131,6 +133,10 @@ static int bytes_for_internal_format(GLenum internal_format) {
     case GL_DEPTH_COMPONENT24:
     case GL_DEPTH_COMPONENT32:
       return 4;
+    case GL_RGB_RAW_422_APPLE:
+      return 2;
+    case GL_R16:
+      return 2;
     default:
       debugf("internal format: %x\n", internal_format);
       assert(0);
@@ -152,6 +158,10 @@ static TextureFormat gl_format_to_texture_format(int type) {
       return TextureFormat::R8;
     case GL_RG8:
       return TextureFormat::RG8;
+    case GL_R16:
+      return TextureFormat::R16;
+    case GL_RGB_RAW_422_APPLE:
+      return TextureFormat::YUV422;
     default:
       assert(0);
       return TextureFormat::RGBA8;
@@ -628,6 +638,8 @@ struct Texture {
 struct VertexArray {
   VertexAttrib attribs[MAX_ATTRIBS];
   int max_attrib = -1;
+  // The GL spec defines element array buffer binding to be part of VAO state.
+  GLuint element_array_buffer_binding = 0;
 
   void validate();
 };
@@ -817,7 +829,6 @@ struct Context {
   GLuint pixel_pack_buffer_binding = 0;
   GLuint pixel_unpack_buffer_binding = 0;
   GLuint array_buffer_binding = 0;
-  GLuint element_array_buffer_binding = 0;
   GLuint time_elapsed_query = 0;
   GLuint samples_passed_query = 0;
   GLuint renderbuffer_binding = 0;
@@ -834,7 +845,7 @@ struct Context {
       case GL_ARRAY_BUFFER:
         return array_buffer_binding;
       case GL_ELEMENT_ARRAY_BUFFER:
-        return element_array_buffer_binding;
+        return vertex_arrays[current_vertex_array].element_array_buffer_binding;
       case GL_TEXTURE_2D:
         return texture_units[active_texture_unit].texture_2d_binding;
       case GL_TEXTURE_2D_ARRAY:
@@ -1043,19 +1054,40 @@ void load_attrib(T& attrib, VertexAttrib& va, uint32_t start, int instance,
     attrib = T(load_attrib_scalar<scalar_type>(va, src));
   } else {
     // Specialized for WR's primitive vertex order/winding.
-    // Triangles must be indexed at offsets 0, 1, 2.
-    // Quads must be successive triangles indexed at offsets 0, 1, 2, 2, 1, 3.
-    // Triangle vertexes fill vertex shader SIMD lanes as 0, 1, 2, 2.
-    // Quad vertexes fill vertex shader SIMD lanes as 0, 1, 3, 2, so that the
-    // points form a convex path that can be traversed by the rasterizer.
     if (!count) return;
-    assert(count == 3 || count == 4);
+    assert(count >= 2 && count <= 4);
     char* src = (char*)va.buf + va.stride * start + va.offset;
-    attrib = (T){load_attrib_scalar<scalar_type>(va, src),
-                 load_attrib_scalar<scalar_type>(va, src + va.stride),
-                 load_attrib_scalar<scalar_type>(
-                     va, src + va.stride * 2 + (count > 3 ? va.stride : 0)),
-                 load_attrib_scalar<scalar_type>(va, src + va.stride * 2)};
+    switch (count) {
+      case 2: {
+        // Lines must be indexed at offsets 0, 1.
+        // Line vertexes fill vertex shader SIMD lanes as 0, 1, 1, 0.
+        scalar_type lanes[2] = {
+            load_attrib_scalar<scalar_type>(va, src),
+            load_attrib_scalar<scalar_type>(va, src + va.stride)};
+        attrib = (T){lanes[0], lanes[1], lanes[1], lanes[0]};
+        break;
+      }
+      case 3: {
+        // Triangles must be indexed at offsets 0, 1, 2.
+        // Triangle vertexes fill vertex shader SIMD lanes as 0, 1, 2, 2.
+        scalar_type lanes[3] = {
+            load_attrib_scalar<scalar_type>(va, src),
+            load_attrib_scalar<scalar_type>(va, src + va.stride),
+            load_attrib_scalar<scalar_type>(va, src + va.stride * 2)};
+        attrib = (T){lanes[0], lanes[1], lanes[2], lanes[2]};
+        break;
+      }
+      default:
+        // Quads must be successive triangles indexed at offsets 0, 1, 2, 2,
+        // 1, 3. Quad vertexes fill vertex shader SIMD lanes as 0, 1, 3, 2, so
+        // that the points form a convex path that can be traversed by the
+        // rasterizer.
+        attrib = (T){load_attrib_scalar<scalar_type>(va, src),
+                     load_attrib_scalar<scalar_type>(va, src + va.stride),
+                     load_attrib_scalar<scalar_type>(va, src + va.stride * 3),
+                     load_attrib_scalar<scalar_type>(va, src + va.stride * 2)};
+        break;
+    }
   }
 }
 
@@ -1148,6 +1180,7 @@ static const char* const extensions[] = {
     "GL_ARB_draw_instanced",      "GL_ARB_explicit_attrib_location",
     "GL_ARB_instanced_arrays",    "GL_ARB_invalidate_subdata",
     "GL_ARB_texture_storage",     "GL_EXT_timer_query",
+    "GL_APPLE_rgb_422",
 };
 
 void GetIntegerv(GLenum pname, GLint* params) {
@@ -1374,7 +1407,6 @@ void DeleteBuffer(GLuint n) {
     unlink(ctx->pixel_pack_buffer_binding, n);
     unlink(ctx->pixel_unpack_buffer_binding, n);
     unlink(ctx->array_buffer_binding, n);
-    unlink(ctx->element_array_buffer_binding, n);
   }
 }
 
@@ -1588,6 +1620,8 @@ static GLenum remap_internal_format(GLenum format) {
       return GL_R8;
     case GL_RG:
       return GL_RG8;
+    case GL_RGB_422_APPLE:
+      return GL_RGB_RAW_422_APPLE;
     default:
       return format;
   }
@@ -1611,11 +1645,64 @@ void TexStorage3D(GLenum target, GLint levels, GLenum internal_format,
   t.allocate(changed);
 }
 
-static void set_tex_storage(Texture& t, GLenum internal_format, GLsizei width,
+}  // extern "C"
+
+static bool format_requires_conversion(GLenum external_format,
+                                       GLenum internal_format) {
+  switch (external_format) {
+    case GL_RGBA:
+      return internal_format == GL_RGBA8;
+    default:
+      return false;
+  }
+}
+
+static inline void copy_bgra8_to_rgba8(uint32_t* dest, const uint32_t* src,
+                                       int width) {
+  for (; width >= 4; width -= 4, dest += 4, src += 4) {
+    U32 p = unaligned_load<U32>(src);
+    U32 rb = p & 0x00FF00FF;
+    unaligned_store(dest, (p & 0xFF00FF00) | (rb << 16) | (rb >> 16));
+  }
+  for (; width > 0; width--, dest++, src++) {
+    uint32_t p = *src;
+    uint32_t rb = p & 0x00FF00FF;
+    *dest = (p & 0xFF00FF00) | (rb << 16) | (rb >> 16);
+  }
+}
+
+static void convert_copy(GLenum external_format, GLenum internal_format,
+                         uint8_t* dst_buf, size_t dst_stride,
+                         const uint8_t* src_buf, size_t src_stride,
+                         size_t width, size_t height) {
+  switch (external_format) {
+    case GL_RGBA:
+      if (internal_format == GL_RGBA8) {
+        for (; height; height--) {
+          copy_bgra8_to_rgba8((uint32_t*)dst_buf, (const uint32_t*)src_buf,
+                              width);
+          dst_buf += dst_stride;
+          src_buf += src_stride;
+        }
+        return;
+      }
+      break;
+    default:
+      break;
+  }
+  size_t row_bytes = width * bytes_for_internal_format(internal_format);
+  for (; height; height--) {
+    memcpy(dst_buf, src_buf, row_bytes);
+    dst_buf += dst_stride;
+    src_buf += src_stride;
+  }
+}
+
+static void set_tex_storage(Texture& t, GLenum external_format, GLsizei width,
                             GLsizei height, void* buf = nullptr,
                             GLsizei stride = 0, GLsizei min_width = 0,
                             GLsizei min_height = 0) {
-  internal_format = remap_internal_format(internal_format);
+  GLenum internal_format = remap_internal_format(external_format);
   bool changed = false;
   if (t.width != width || t.height != height || t.depth != 0 ||
       t.internal_format != internal_format) {
@@ -1627,7 +1714,11 @@ static void set_tex_storage(Texture& t, GLenum internal_format, GLsizei width,
   }
   // If we are changed from an internally managed buffer to an externally
   // supplied one or vice versa, ensure that we clean up old buffer state.
-  bool should_free = buf == nullptr;
+  // However, if we have to convert the data from a non-native format, then
+  // always treat it as internally managed since we will need to copy to an
+  // internally managed native format buffer.
+  bool should_free = buf == nullptr || format_requires_conversion(
+                                           external_format, internal_format);
   if (t.should_free() != should_free) {
     changed = true;
     t.cleanup();
@@ -1639,7 +1730,14 @@ static void set_tex_storage(Texture& t, GLenum internal_format, GLsizei width,
   }
   t.disable_delayed_clear();
   t.allocate(changed, min_width, min_height);
+  // If we have a buffer that needs format conversion, then do that now.
+  if (buf && should_free) {
+    convert_copy(external_format, internal_format, (uint8_t*)t.buf, t.stride(),
+                 (const uint8_t*)buf, stride, width, height);
+  }
 }
+
+extern "C" {
 
 void TexStorage2D(GLenum target, GLint levels, GLenum internal_format,
                   GLsizei width, GLsizei height) {
@@ -1660,24 +1758,15 @@ GLenum internal_format_for_data(GLenum format, GLenum ty) {
     return GL_RGBA32I;
   } else if (format == GL_RG && ty == GL_UNSIGNED_BYTE) {
     return GL_RG8;
+  } else if (format == GL_RGB_422_APPLE &&
+             ty == GL_UNSIGNED_SHORT_8_8_REV_APPLE) {
+    return GL_RGB_RAW_422_APPLE;
+  } else if (format == GL_RED && ty == GL_UNSIGNED_SHORT) {
+    return GL_R16;
   } else {
     debugf("unknown internal format for format %x, type %x\n", format, ty);
     assert(false);
     return 0;
-  }
-}
-
-static inline void copy_bgra8_to_rgba8(uint32_t* dest, uint32_t* src,
-                                       int width) {
-  for (; width >= 4; width -= 4, dest += 4, src += 4) {
-    U32 p = unaligned_load<U32>(src);
-    U32 rb = p & 0x00FF00FF;
-    unaligned_store(dest, (p & 0xFF00FF00) | (rb << 16) | (rb >> 16));
-  }
-  for (; width > 0; width--, dest++, src++) {
-    uint32_t p = *src;
-    uint32_t rb = p & 0x00FF00FF;
-    *dest = (p & 0xFF00FF00) | (rb << 16) | (rb >> 16);
   }
 }
 
@@ -1725,20 +1814,13 @@ void TexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
   GLsizei row_length =
       ctx->unpack_row_length != 0 ? ctx->unpack_row_length : width;
   assert(t.internal_format == internal_format_for_data(format, ty));
-  int bpp = t.bpp();
-  if (!bpp || !t.buf) return;
-  size_t dest_stride = t.stride();
-  char* dest = t.sample_ptr(xoffset, yoffset);
-  char* src = (char*)data;
-  for (int y = 0; y < height; y++) {
-    if (t.internal_format == GL_RGBA8 && format != GL_BGRA) {
-      copy_bgra8_to_rgba8((uint32_t*)dest, (uint32_t*)src, width);
-    } else {
-      memcpy(dest, src, width * bpp);
-    }
-    dest += dest_stride;
-    src += row_length * bpp;
-  }
+  int src_bpp = format_requires_conversion(format, t.internal_format)
+                    ? bytes_for_internal_format(format)
+                    : t.bpp();
+  if (!src_bpp || !t.buf) return;
+  convert_copy(format, t.internal_format,
+               (uint8_t*)t.sample_ptr(xoffset, yoffset), t.stride(),
+               (const uint8_t*)data, row_length * src_bpp, width, height);
 }
 
 void TexImage2D(GLenum target, GLint level, GLint internal_format,
@@ -1767,30 +1849,22 @@ void TexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
   assert(ctx->unpack_row_length == 0 || ctx->unpack_row_length >= width);
   GLsizei row_length =
       ctx->unpack_row_length != 0 ? ctx->unpack_row_length : width;
-  if (format == GL_BGRA) {
-    assert(ty == GL_UNSIGNED_BYTE || ty == GL_UNSIGNED_INT_8_8_8_8_REV);
-    assert(t.internal_format == GL_RGBA8);
-  } else {
-    assert(t.internal_format == internal_format_for_data(format, ty));
-  }
-  int bpp = t.bpp();
-  if (!bpp || !t.buf) return;
-  char* src = (char*)data;
+  assert(t.internal_format == internal_format_for_data(format, ty));
+  int src_bpp = format_requires_conversion(format, t.internal_format)
+                    ? bytes_for_internal_format(format)
+                    : t.bpp();
+  if (!src_bpp || !t.buf) return;
+  const uint8_t* src = (const uint8_t*)data;
   assert(xoffset + width <= t.width);
   assert(yoffset + height <= t.height);
   assert(zoffset + depth <= t.depth);
   size_t dest_stride = t.stride();
+  size_t src_stride = row_length * src_bpp;
   for (int z = 0; z < depth; z++) {
-    char* dest = t.sample_ptr(xoffset, yoffset, zoffset + z);
-    for (int y = 0; y < height; y++) {
-      if (t.internal_format == GL_RGBA8 && format != GL_BGRA) {
-        copy_bgra8_to_rgba8((uint32_t*)dest, (uint32_t*)src, width);
-      } else {
-        memcpy(dest, src, width * bpp);
-      }
-      dest += dest_stride;
-      src += row_length * bpp;
-    }
+    convert_copy(format, t.internal_format,
+                 (uint8_t*)t.sample_ptr(xoffset, yoffset, zoffset + z),
+                 dest_stride, src, src_stride, width, height);
+    src += src_stride * height;
   }
 }
 
@@ -2456,19 +2530,12 @@ void ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format,
            internal_format_for_data(format, type));
     assert(false);
   }
-  int bpp = t.bpp();
-  char* dest = (char*)data;
-  size_t src_stride = t.stride();
-  char* src = t.sample_ptr(x, y, fb->layer);
-  for (; height > 0; height--) {
-    if (t.internal_format == GL_RGBA8 && format != GL_BGRA) {
-      copy_bgra8_to_rgba8((uint32_t*)dest, (uint32_t*)src, width);
-    } else {
-      memcpy(dest, src, width * bpp);
-    }
-    dest += width * bpp;
-    src += src_stride;
-  }
+  // Only support readback conversions that are reversible
+  assert(!format_requires_conversion(format, t.internal_format) ||
+         bytes_for_internal_format(format) == t.bpp());
+  convert_copy(format, t.internal_format, (uint8_t*)data, width * t.bpp(),
+               (const uint8_t*)t.sample_ptr(x, y, fb->layer), t.stride(), width,
+               height);
 }
 
 void CopyImageSubData(GLuint srcName, GLenum srcTarget, UNUSED GLint srcLevel,
@@ -2547,13 +2614,24 @@ using HalfRGBA8 = V8<uint16_t>;
 
 static inline WideRGBA8 unpack(PackedRGBA8 p) { return CONVERT(p, WideRGBA8); }
 
+template <int N>
+UNUSED static ALWAYS_INLINE VectorType<uint8_t, N> genericPackWide(
+    VectorType<uint16_t, N> p) {
+  typedef VectorType<uint8_t, N> packed_type;
+  // Generic conversions only mask off the low byte without actually clamping
+  // like a real pack. First force the word to all 1s if it overflows, and then
+  // add on the sign bit to cause it to roll over to 0 if it was negative.
+  p = (p | (p > 255)) + (p >> 15);
+  return CONVERT(p, packed_type);
+}
+
 static inline PackedRGBA8 pack(WideRGBA8 p) {
 #if USE_SSE2
   return _mm_packus_epi16(lowHalf(p), highHalf(p));
 #elif USE_NEON
   return vcombine_u8(vqmovn_u16(lowHalf(p)), vqmovn_u16(highHalf(p)));
 #else
-  return CONVERT(p, PackedRGBA8);
+  return genericPackWide(p);
 #endif
 }
 
@@ -2590,7 +2668,7 @@ static inline PackedR8 pack(WideR8 p) {
 #elif USE_NEON
   return lowHalf(bit_cast<V8<uint8_t>>(vqmovn_u16(expand(p))));
 #else
-  return CONVERT(p, PackedR8);
+  return genericPackWide(p);
 #endif
 }
 
@@ -2603,7 +2681,7 @@ static inline PackedRG8 pack(WideRG8 p) {
 #elif USE_NEON
   return bit_cast<V8<uint8_t>>(vqmovn_u16(p));
 #else
-  return CONVERT(p, PackedRG8);
+  return genericPackWide(p);
 #endif
 }
 
@@ -2679,10 +2757,10 @@ static inline WideRGBA8 pack_pixels_RGBA8(const vec4& v) {
   ivec4 i = round_pixel(v);
   HalfRGBA8 xz = packRGBA8(i.z, i.x);
   HalfRGBA8 yw = packRGBA8(i.y, i.w);
-  HalfRGBA8 xy = zipLow(xz, yw);
-  HalfRGBA8 zw = zipHigh(xz, yw);
-  HalfRGBA8 lo = zip2Low(xy, zw);
-  HalfRGBA8 hi = zip2High(xy, zw);
+  HalfRGBA8 xyzwl = zipLow(xz, yw);
+  HalfRGBA8 xyzwh = zipHigh(xz, yw);
+  HalfRGBA8 lo = zip2Low(xyzwl, xyzwh);
+  HalfRGBA8 hi = zip2High(xyzwl, xyzwh);
   return combine(lo, hi);
 }
 
@@ -2872,7 +2950,7 @@ static inline WideR8 span_mask(uint8_t*, int span) {
   return span_mask_R8(span);
 }
 
-static inline PackedRG8 span_mask_RG8(int span) {
+UNUSED static inline PackedRG8 span_mask_RG8(int span) {
   return bit_cast<PackedRG8>(I16(span) < I16{1, 2, 3, 4});
 }
 
@@ -3736,6 +3814,8 @@ static inline void draw_perspective_clipped(int nump, Point3D* p_clip,
 // batches that are known ahead of time to not need perspective-correction.
 static void draw_perspective(int nump, Interpolants interp_outs[4],
                              Texture& colortex, int layer, Texture& depthtex) {
+  // Lines are not supported with perspective.
+  assert(nump >= 3);
   // Convert output of vertex shader to screen space.
   vec4 pos = vertex_shader->gl_Position;
   vec3_scalar scale =
@@ -3850,6 +3930,31 @@ static void draw_quad(int nump, Texture& colortex, int layer,
   fragment_shader->gl_FragCoord.z = screenZ;
   fragment_shader->gl_FragCoord.w = w;
 
+  // If supplied a line, adjust it so that it is a quad at least 1 pixel thick.
+  // Assume that for a line that all 4 SIMD lanes were actually filled with
+  // vertexes 0, 1, 1, 0.
+  if (nump == 2) {
+    // Nudge Y height to span at least 1 pixel by advancing to next pixel
+    // boundary so that we step at least 1 row when drawing spans.
+    if (int(p[0].y + 0.5f) == int(p[1].y + 0.5f)) {
+      p[2].y = 1 + int(p[1].y + 0.5f);
+      p[3].y = p[2].y;
+      // Nudge X width to span at least 1 pixel so that rounded coords fall on
+      // separate pixels.
+      if (int(p[0].x + 0.5f) == int(p[1].x + 0.5f)) {
+        p[1].x += 1.0f;
+        p[2].x += 1.0f;
+      }
+    } else {
+      // If the line already spans at least 1 row, then assume line is vertical
+      // or diagonal and just needs to be dilated horizontally.
+      p[2].x += 1.0f;
+      p[3].x += 1.0f;
+    }
+    // Pretend that it's a quad now...
+    nump = 4;
+  }
+
   // Finally draw 2D spans for the quad. Currently only supports drawing to
   // RGBA8 and R8 color buffers.
   if (colortex.internal_format == GL_RGBA8) {
@@ -3882,9 +3987,13 @@ void VertexArray::validate() {
 
 template <typename INDEX>
 static inline void draw_elements(GLsizei count, GLsizei instancecount,
-                                 Buffer& indices_buf, size_t offset,
-                                 VertexArray& v, Texture& colortex, int layer,
+                                 size_t offset, VertexArray& v,
+                                 Texture& colortex, int layer,
                                  Texture& depthtex) {
+  Buffer& indices_buf = ctx->buffers[v.element_array_buffer_binding];
+  if (!indices_buf.buf || offset >= indices_buf.size) {
+    return;
+  }
   assert((offset & (sizeof(INDEX) - 1)) == 0);
   INDEX* indices = (INDEX*)(indices_buf.buf + offset);
   count = min(count, (GLsizei)((indices_buf.size - offset) / sizeof(INDEX)));
@@ -3909,15 +4018,16 @@ static inline void draw_elements(GLsizei count, GLsizei instancecount,
             indices[i + 2] != indices[i] + 2) {
           continue;
         }
-        int nump = 3;
         if (i + 6 <= count && indices[i + 5] == indices[i] + 3) {
           assert(indices[i + 3] == indices[i] + 2 &&
                  indices[i + 4] == indices[i] + 1);
-          nump = 4;
+          vertex_shader->load_attribs(v.attribs, indices[i], instance, 4);
+          draw_quad(4, colortex, layer, depthtex);
           i += 3;
+        } else {
+          vertex_shader->load_attribs(v.attribs, indices[i], instance, 3);
+          draw_quad(3, colortex, layer, depthtex);
         }
-        vertex_shader->load_attribs(v.attribs, indices[i], instance, nump);
-        draw_quad(nump, colortex, layer, depthtex);
       }
     }
   }
@@ -3926,10 +4036,8 @@ static inline void draw_elements(GLsizei count, GLsizei instancecount,
 extern "C" {
 
 void DrawElementsInstanced(GLenum mode, GLsizei count, GLenum type,
-                           void* indicesptr, GLsizei instancecount) {
-  assert(mode == GL_TRIANGLES);
-  assert(type == GL_UNSIGNED_SHORT || type == GL_UNSIGNED_INT);
-  if (count <= 0 || instancecount <= 0) {
+                           GLintptr offset, GLsizei instancecount) {
+  if (offset < 0 || count <= 0 || instancecount <= 0) {
     return;
   }
 
@@ -3946,12 +4054,6 @@ void DrawElementsInstanced(GLenum mode, GLsizei count, GLenum type,
     assert(depthtex.internal_format == GL_DEPTH_COMPONENT16);
     assert(colortex.width == depthtex.width &&
            colortex.height == depthtex.height);
-  }
-
-  Buffer& indices_buf = ctx->buffers[ctx->element_array_buffer_binding];
-  size_t offset = (size_t)indicesptr;
-  if (!indices_buf.buf || offset >= indices_buf.size) {
-    return;
   }
 
   // debugf("current_vertex_array %d\n", ctx->current_vertex_array);
@@ -3971,14 +4073,43 @@ void DrawElementsInstanced(GLenum mode, GLsizei count, GLenum type,
 
   vertex_shader->init_batch();
 
-  if (type == GL_UNSIGNED_SHORT) {
-    draw_elements<uint16_t>(count, instancecount, indices_buf, offset, v,
-                            colortex, fb.layer, depthtex);
-  } else if (type == GL_UNSIGNED_INT) {
-    draw_elements<uint32_t>(count, instancecount, indices_buf, offset, v,
-                            colortex, fb.layer, depthtex);
-  } else {
-    assert(false);
+  switch (type) {
+    case GL_UNSIGNED_SHORT:
+      assert(mode == GL_TRIANGLES);
+      draw_elements<uint16_t>(count, instancecount, offset, v, colortex,
+                              fb.layer, depthtex);
+      break;
+    case GL_UNSIGNED_INT:
+      assert(mode == GL_TRIANGLES);
+      draw_elements<uint32_t>(count, instancecount, offset, v, colortex,
+                              fb.layer, depthtex);
+      break;
+    case GL_NONE:
+      // Non-standard GL extension - if element type is GL_NONE, then we don't
+      // use any element buffer and behave as if DrawArrays was called instead.
+      for (GLsizei instance = 0; instance < instancecount; instance++) {
+        switch (mode) {
+          case GL_LINES:
+            for (GLsizei i = 0; i + 2 <= count; i += 2) {
+              vertex_shader->load_attribs(v.attribs, offset + i, instance, 2);
+              draw_quad(2, colortex, fb.layer, depthtex);
+            }
+            break;
+          case GL_TRIANGLES:
+            for (GLsizei i = 0; i + 3 <= count; i += 3) {
+              vertex_shader->load_attribs(v.attribs, offset + i, instance, 3);
+              draw_quad(3, colortex, fb.layer, depthtex);
+            }
+            break;
+          default:
+            assert(false);
+            break;
+        }
+      }
+      break;
+    default:
+      assert(false);
+      break;
   }
 
   if (ctx->samples_passed_query) {

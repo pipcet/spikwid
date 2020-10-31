@@ -12,7 +12,7 @@
         # chromium uses pymod_do_main, but gyp doesn't set a sensible
         # Python sys.path (gyp_chromium does).
         'python%': '<(python)',
-        'host_arch%': '<!(<(python) <(DEPTH)/coreconf/detect_host_arch.py)',
+        'host_arch%': '<!("<(python)" <(DEPTH)/coreconf/detect_host_arch.py)',
       },
       'python%': '<(python)',
       'host_arch%': '<(host_arch)',
@@ -66,12 +66,12 @@
           ],
         }],
         ['"<(GENERATOR)"=="ninja"', {
-          'cc_is_clang%': '<!(<(python) <(DEPTH)/coreconf/check_cc.py clang)',
+          'cc_is_clang%': '<!("<(python)" <(DEPTH)/coreconf/check_cc.py clang)',
         }, {
           'cc_is_clang%': '0',
         }],
         ['"<(GENERATOR)"=="ninja"', {
-          'cc_is_gcc%': '<!(<(python) <(DEPTH)/coreconf/check_cc.py gcc)',
+          'cc_is_gcc%': '<!("<(python)" <(DEPTH)/coreconf/check_cc.py gcc)',
         }, {
           'cc_is_gcc%': '0',
         }],
@@ -132,6 +132,7 @@
     'mozpkix_only%': 0,
     'coverage%': 0,
     'softfp_cflags%': '',
+    'enable_draft_hpke%': 0,
   },
   'target_defaults': {
     # Settings specific to targets should go here.
@@ -441,11 +442,11 @@
           }],
           [ 'disable_werror==0 and OS!="android" and OS!="win"', {
             'cflags': [
-              '<!@(<(python) <(DEPTH)/coreconf/werror.py)',
+              '<!@("<(python)" <(DEPTH)/coreconf/werror.py)',
             ],
             'xcode_settings': {
               'OTHER_CFLAGS': [
-                '<!@(<(python) <(DEPTH)/coreconf/werror.py)',
+                '<!@("<(python)" <(DEPTH)/coreconf/werror.py)',
               ],
             },
           }],
@@ -566,6 +567,11 @@
           [ 'disable_dbm==1', {
             'defines': [
               'NSS_DISABLE_DBM',
+            ],
+          }],
+          [ 'enable_draft_hpke==1', {
+            'defines': [
+              'NSS_ENABLE_DRAFT_HPKE',
             ],
           }],
           [ 'disable_libpkix==1', {
