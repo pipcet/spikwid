@@ -7,6 +7,7 @@
 #include "nsSocketTransport2.h"
 
 #include "mozilla/Attributes.h"
+#include "mozilla/SyncRunnable.h"
 #include "mozilla/Telemetry.h"
 #include "nsIOService.h"
 #include "nsStreamUtils.h"
@@ -34,6 +35,7 @@
 #include "nsIDNSRecord.h"
 #include "nsIDNSByTypeRecord.h"
 #include "nsICancelable.h"
+#include "NetworkDataCountLayer.h"
 #include "QuicSocketControl.h"
 #include "TCPFastOpenLayer.h"
 #include <algorithm>
@@ -1028,8 +1030,25 @@ nsresult nsSocketTransport::ResolveHost() {
     }
   }
 
-  nsCOMPtr<nsIDNSService> dns = do_GetService(kDNSServiceCID, &rv);
-  if (NS_FAILED(rv)) return rv;
+  nsCOMPtr<nsIDNSService> dns = nullptr;
+  auto initTask = [&dns]() { dns = do_GetService(kDNSServiceCID); };
+  if (!NS_IsMainThread()) {
+    // Forward to the main thread synchronously.
+    RefPtr<nsIThread> mainThread = do_GetMainThread();
+    if (!mainThread) {
+      return NS_ERROR_FAILURE;
+    }
+
+    SyncRunnable::DispatchToThread(
+        mainThread,
+        new SyncRunnable(NS_NewRunnableFunction(
+            "nsSocketTransport::ResolveHost->GetDNSService", initTask)));
+  } else {
+    initTask();
+  }
+  if (!dns) {
+    return NS_ERROR_FAILURE;
+  }
 
   mResolving = true;
 
@@ -1532,6 +1551,7 @@ nsresult nsSocketTransport::InitiateSocket() {
   // Initiate the connect() to the host...
   //
   PRNetAddr prAddr;
+  memset(&prAddr, 0, sizeof(prAddr));
   {
     if (mBindAddr) {
       MutexAutoLock lock(mLock);
@@ -1607,6 +1627,16 @@ nsresult nsSocketTransport::InitiateSocket() {
       SOCKET_LOG(
           ("nsSocketTransport::InitiateSocket TCP Fast Open "
            "started [this=%p]\n",
+           this));
+    }
+  }
+
+  if (Telemetry::CanRecordPrereleaseData() ||
+      Telemetry::CanRecordReleaseData()) {
+    if (NS_FAILED(AttachNetworkDataCountLayer(fd))) {
+      SOCKET_LOG(
+          ("nsSocketTransport::InitiateSocket "
+           "AttachNetworkDataCountLayer failed [this=%p]\n",
            this));
     }
   }

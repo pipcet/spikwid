@@ -339,13 +339,13 @@
     "PASS"
   ],
   "Emulation Page.viewport should support touch emulation (emulation.spec.ts)": [
-    "FAIL"
+    "PASS"
   ],
   "Emulation Page.viewport should be detectable by Modernizr (emulation.spec.ts)": [
-    "FAIL"
+    "PASS"
   ],
   "Emulation Page.viewport should detect touch when applying viewport with touches (emulation.spec.ts)": [
-    "FAIL"
+    "PASS"
   ],
   "Emulation Page.viewport should support landscape emulation (emulation.spec.ts)": [
     "FAIL"
@@ -1071,7 +1071,7 @@
     "TIMEOUT"
   ],
   "navigation Frame.goto should return matching responses (navigation.spec.ts)": [
-    "FAIL"
+    "TIMEOUT"
   ],
   "navigation Frame.waitForNavigation should work (navigation.spec.ts)": [
     "FAIL"
@@ -1197,7 +1197,7 @@
     "PASS"
   ],
   "Page Page.close should run beforeunload if asked for (page.spec.ts)": [
-    "FAIL"
+    "TIMEOUT"
   ],
   "Page Page.close should *not* run beforeunload by default (page.spec.ts)": [
     "TIMEOUT"

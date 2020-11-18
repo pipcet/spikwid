@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use api::{ColorF, YuvColorSpace, YuvFormat, ImageRendering, ExternalImageId};
+use api::{ColorF, YuvColorSpace, YuvFormat, ImageRendering, ExternalImageId, ImageBufferKind};
 use api::units::*;
 use crate::batch::{resolve_image, get_buffer_kind};
 use euclid::Transform3D;
@@ -11,7 +11,6 @@ use crate::gpu_types::{ZBufferId, ZBufferIdGenerator};
 use crate::internal_types::TextureSource;
 use crate::picture::{ImageDependency, ResolvedSurfaceTexture, TileCacheInstance, TileId, TileSurface};
 use crate::prim_store::DeferredResolve;
-use crate::renderer::ImageBufferKind;
 use crate::resource_cache::{ImageRequest, ResourceCache};
 use crate::util::Preallocator;
 use crate::tile_cache::PictureCacheDebugInfo;
@@ -94,6 +93,7 @@ pub struct CompositeTile {
     pub clip_rect: DeviceRect,
     pub dirty_rect: DeviceRect,
     pub valid_rect: DeviceRect,
+    pub transform: Option<CompositorSurfaceTransform>,
     pub z_id: ZBufferId,
 }
 
@@ -348,7 +348,6 @@ pub struct CompositeTileDescriptor {
 #[derive(PartialEq, Clone)]
 pub struct CompositeSurfaceDescriptor {
     pub surface_id: Option<NativeSurfaceId>,
-    pub offset: DevicePoint,
     pub clip_rect: DeviceRect,
     pub transform: CompositorSurfaceTransform,
     // A list of image keys and generations that this compositor surface
@@ -528,7 +527,14 @@ impl CompositeState {
 
             // Accumulate this tile into the overall surface bounds. This is used below
             // to clamp the size of the supplied clip rect to a reasonable value.
-            surface_device_rect = surface_device_rect.union(&device_rect);
+            // NOTE: This clip rect must include the device_valid_rect rather than
+            //       the tile device rect. This ensures that in the case of a picture
+            //       cache slice that is smaller than a single tile, the clip rect in
+            //       the composite descriptor will change if the position of that slice
+            //       is changed. Otherwise, WR may conclude that no composite is needed
+            //       if the tile itself was not invalidated due to changing content.
+            //       See bug #1675414 for more detail.
+            surface_device_rect = surface_device_rect.union(&tile.device_valid_rect);
 
             let descriptor = CompositeTileDescriptor {
                 surface_kind: surface.into(),
@@ -569,6 +575,7 @@ impl CompositeState {
                 valid_rect: tile.device_valid_rect.translate(-device_rect.origin.to_vector()),
                 dirty_rect: tile.device_dirty_rect.translate(-device_rect.origin.to_vector()),
                 clip_rect: device_clip_rect,
+                transform: None,
                 z_id: tile.z_id,
             };
 
@@ -595,11 +602,12 @@ impl CompositeState {
             self.descriptor.surfaces.push(
                 CompositeSurfaceDescriptor {
                     surface_id: tile_cache.native_surface.as_ref().map(|s| s.opaque),
-                    offset: tile_cache.device_position,
                     clip_rect: surface_clip_rect,
-                    transform: CompositorSurfaceTransform::translation(tile_cache.device_position.x,
-                                                                              tile_cache.device_position.y,
-                                                                              0.0),
+                    transform: CompositorSurfaceTransform::translation(
+                        tile_cache.device_position.x,
+                        tile_cache.device_position.y,
+                        0.0,
+                    ),
                     image_dependencies: [ImageDependency::INVALID; 3],
                     image_rendering: ImageRendering::CrispEdges,
                     tile_descriptors: opaque_tile_descriptors,
@@ -738,6 +746,7 @@ impl CompositeState {
                 valid_rect: external_surface.device_rect.translate(-external_surface.device_rect.origin.to_vector()),
                 dirty_rect: external_surface.device_rect.translate(-external_surface.device_rect.origin.to_vector()),
                 clip_rect,
+                transform: Some(external_surface.transform),
                 z_id: external_surface.z_id,
             };
 
@@ -747,7 +756,6 @@ impl CompositeState {
             self.descriptor.surfaces.push(
                 CompositeSurfaceDescriptor {
                     surface_id: external_surface.native_surface_id,
-                    offset: tile.rect.origin,
                     clip_rect,
                     transform: external_surface.transform,
                     image_dependencies: image_dependencies,
@@ -764,11 +772,12 @@ impl CompositeState {
             self.descriptor.surfaces.push(
                 CompositeSurfaceDescriptor {
                     surface_id: tile_cache.native_surface.as_ref().map(|s| s.alpha),
-                    offset: tile_cache.device_position,
                     clip_rect: surface_clip_rect,
-                    transform: CompositorSurfaceTransform::translation(tile_cache.device_position.x,
-                                                                              tile_cache.device_position.y,
-                                                                              0.0),
+                    transform: CompositorSurfaceTransform::translation(
+                        tile_cache.device_position.x,
+                        tile_cache.device_position.y,
+                        0.0,
+                    ),
                     image_dependencies: [ImageDependency::INVALID; 3],
                     image_rendering: ImageRendering::CrispEdges,
                     tile_descriptors: alpha_tile_descriptors,
@@ -986,8 +995,12 @@ pub trait Compositor {
 
     /// Notify the compositor that all tiles have been invalidated and all
     /// native surfaces have been added, thus it is safe to start compositing
-    /// valid surfaces.
-    fn start_compositing(&mut self) {}
+    /// valid surfaces. The dirty rects array allows native compositors that
+    /// support partial present to skip copying unchanged areas.
+    fn start_compositing(
+        &mut self,
+        _dirty_rects: &[DeviceIntRect],
+    ) {}
 
     /// Commit any changes in the compositor tree for this frame. WR calls
     /// this once when all surface and visual updates are complete, to signal
@@ -1011,10 +1024,6 @@ pub trait Compositor {
 /// TODO: Use the Compositor trait for native and non-native compositors, and integrate
 /// this functionality there.
 pub trait PartialPresentCompositor {
-    /// Returns the age of the current backbuffer. This should be used, if
-    /// draw_previous_partial_present_regions is true, to determine the
-    /// region which must be rendered in addition to the current frame's dirty rect.
-    fn get_buffer_age(&self) -> usize;
     /// Allows webrender to specify the total region that will be rendered to this frame,
     /// ie the frame's dirty region and some previous frames' dirty regions, if applicable
     /// (calculated using the buffer age). Must be called before anything has been rendered

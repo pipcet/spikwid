@@ -152,6 +152,7 @@ class WindowProxyHolder;
   FIELD(CurrentOrientationType, mozilla::dom::OrientationType)               \
   FIELD(OrientationLock, mozilla::hal::ScreenOrientation)                    \
   FIELD(UserAgentOverride, nsString)                                         \
+  FIELD(TouchEventsOverrideInternal, mozilla::dom::TouchEventsOverride)      \
   FIELD(EmbedderElementType, Maybe<nsString>)                                \
   FIELD(MessageManagerGroup, nsString)                                       \
   FIELD(MaxTouchPointsOverride, uint8_t)                                     \
@@ -406,8 +407,8 @@ class BrowsingContext : public nsILoadContext, public nsWrapperCache {
   already_AddRefed<BrowsingContext> GetOnePermittedSandboxedNavigator() const {
     return Get(GetOnePermittedSandboxedNavigatorId());
   }
-  MOZ_MUST_USE nsresult
-  SetOnePermittedSandboxedNavigator(BrowsingContext* aNavigator) {
+  [[nodiscard]] nsresult SetOnePermittedSandboxedNavigator(
+      BrowsingContext* aNavigator) {
     if (GetOnePermittedSandboxedNavigatorId()) {
       MOZ_ASSERT(false,
                  "One Permitted Sandboxed Navigator should only be set once.");
@@ -462,6 +463,12 @@ class BrowsingContext : public nsILoadContext, public nsWrapperCache {
   bool WatchedByDevTools();
   void SetWatchedByDevTools(bool aWatchedByDevTools, ErrorResult& aRv);
 
+  mozilla::dom::TouchEventsOverride TouchEventsOverride();
+  void SetTouchEventsOverride(
+      const enum TouchEventsOverride aTouchEventsOverride, ErrorResult& aRv);
+  MOZ_MUST_USE nsresult
+  SetTouchEventsOverride(const enum TouchEventsOverride aTouchEventsOverride);
+
   bool FullscreenAllowed() const;
 
   float FullZoom() const { return GetFullZoom(); }
@@ -496,8 +503,8 @@ class BrowsingContext : public nsILoadContext, public nsWrapperCache {
   }
 
   // ScreenOrientation related APIs
-  MOZ_MUST_USE nsresult SetCurrentOrientation(OrientationType aType,
-                                              float aAngle) {
+  [[nodiscard]] nsresult SetCurrentOrientation(OrientationType aType,
+                                               float aAngle) {
     Transaction txn;
     txn.SetCurrentOrientationType(aType);
     txn.SetCurrentOrientationAngle(aAngle);
@@ -612,7 +619,7 @@ class BrowsingContext : public nsILoadContext, public nsWrapperCache {
 
   void StartDelayedAutoplayMediaComponents();
 
-  MOZ_MUST_USE nsresult ResetGVAutoplayRequestStatus();
+  [[nodiscard]] nsresult ResetGVAutoplayRequestStatus();
 
   /**
    * Information required to initialize a BrowsingContext in another process.
@@ -833,6 +840,10 @@ class BrowsingContext : public nsILoadContext, public nsWrapperCache {
   bool CanSet(FieldIndex<IDX_SuspendMediaWhenInactive>, bool, ContentParent*) {
     return IsTop();
   }
+
+  bool CanSet(FieldIndex<IDX_TouchEventsOverrideInternal>,
+              const enum TouchEventsOverride& aTouchEventsOverride,
+              ContentParent* aSource);
 
   bool CanSet(FieldIndex<IDX_DisplayMode>, const enum DisplayMode& aDisplayMode,
               ContentParent* aSource);

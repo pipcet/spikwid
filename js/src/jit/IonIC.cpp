@@ -225,6 +225,15 @@ bool IonGetPropertyIC::update(JSContext* cx, HandleScript outerScript,
       Invalidate(cx, outerScript);
     }
 
+    // IonBuilder::createScriptedThis does not use InvalidedIdempotentCache
+    // flag so prevent bailout-loop by disabling Ion for the script.
+    MOZ_ASSERT(ic->kind() == CacheKind::GetProp);
+    if (idVal.toString()->asAtom().asPropertyName() == cx->names().prototype) {
+      if (val.isObject() && val.toObject().is<JSFunction>()) {
+        outerScript->disableIon();
+      }
+    }
+
     // We will redo the potentially effectful lookup in Baseline.
     return true;
   }
@@ -238,13 +247,6 @@ bool IonGetPropertyIC::update(JSContext* cx, HandleScript outerScript,
     MOZ_ASSERT(ic->kind() == CacheKind::GetElem);
     if (!GetElementOperation(cx, JSOp(*ic->pc()), val, idVal, res)) {
       return false;
-    }
-  }
-
-  if (!ic->idempotent()) {
-    // Monitor changes to cache entry.
-    if (!ic->monitoredResult()) {
-      JitScript::MonitorBytecodeType(cx, ic->script(), ic->pc(), res);
     }
   }
 
@@ -285,8 +287,6 @@ bool IonGetPropSuperIC::update(JSContext* cx, HandleScript outerScript,
     }
   }
 
-  // Monitor changes to cache entry.
-  JitScript::MonitorBytecodeType(cx, ic->script(), ic->pc(), res);
   return true;
 }
 

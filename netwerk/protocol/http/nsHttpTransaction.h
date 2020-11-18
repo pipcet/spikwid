@@ -15,6 +15,7 @@
 #include "nsIAsyncOutputStream.h"
 #include "nsThreadUtils.h"
 #include "nsIInterfaceRequestor.h"
+#include "nsIAsyncOutputStream.h"
 #include "nsITimer.h"
 #include "TimingStruct.h"
 #include "Http2Push.h"
@@ -92,6 +93,12 @@ class nsHttpTransaction final : public nsAHttpTransaction,
   // Sets mPendingTime to the current time stamp or to a null time stamp (if now
   // is false)
   void SetPendingTime(bool now = true) {
+    if (!now && !mPendingTime.IsNull()) {
+      // Remember how long it took. We will use this vaule to record
+      // TRANSACTION_WAIT_TIME_HTTP2_SUP_HTTP3 telemetry, but we need to wait
+      // for the response headers.
+      mPendingDurationTime = TimeStamp::Now() - mPendingTime;
+    }
     mPendingTime = now ? TimeStamp::Now() : TimeStamp();
   }
   const TimeStamp GetPendingTime() { return mPendingTime; }
@@ -102,7 +109,7 @@ class nsHttpTransaction final : public nsAHttpTransaction,
   void RemoveDispatchedAsBlocking();
 
   void DisableSpdy() override;
-  void DisableHttp3();
+  void DisableHttp3() override;
 
   nsHttpTransaction* QueryHttpTransaction() override { return this; }
 
@@ -400,6 +407,7 @@ class nsHttpTransaction final : public nsAHttpTransaction,
 
   // The time when the transaction was submitted to the Connection Manager
   TimeStamp mPendingTime;
+  TimeDuration mPendingDurationTime;
 
   uint64_t mTopLevelOuterContentWindowId;
 
@@ -505,6 +513,10 @@ class nsHttpTransaction final : public nsAHttpTransaction,
     TRANSACTION_RESTART_DOWNGRADE_WITH_EARLY_DATA = 4,
     TRANSACTION_RESTART_OTHERS = 5,
   };
+
+  nsDataHashtable<nsUint32HashKey, uint32_t> mEchRetryCounterMap;
+
+  bool mSupportsHTTP3 = false;
 };
 
 }  // namespace net

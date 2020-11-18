@@ -147,17 +147,35 @@ struct Text {
   static constexpr Span<const char> MarkerTypeName() {
     return MakeStringSpan("Text");
   }
-  static void StreamJSONMarkerData(JSONWriter& aWriter,
+  static void StreamJSONMarkerData(baseprofiler::SpliceableJSONWriter& aWriter,
                                    const ProfilerString8View& aText) {
     aWriter.StringProperty("name", aText);
   }
-  static mozilla::MarkerSchema MarkerTypeDisplay() {
-    using MS = mozilla::MarkerSchema;
+  static MarkerSchema MarkerTypeDisplay() {
+    using MS = MarkerSchema;
     MS schema{MS::Location::markerChart, MS::Location::markerTable};
     schema.SetChartLabel("{marker.name} - {marker.data.name}");
     schema.SetTableLabel("{marker.name} - {marker.data.name}");
-    schema.AddKeyLabelFormat("name", "Details",
-                             mozilla::MarkerSchema::Format::string);
+    schema.AddKeyLabelFormat("name", "Details", MarkerSchema::Format::string);
+    return schema;
+  }
+};
+
+struct Tracing {
+  static constexpr Span<const char> MarkerTypeName() {
+    return MakeStringSpan("tracing");
+  }
+  static void StreamJSONMarkerData(SpliceableJSONWriter& aWriter,
+                                   const ProfilerString8View& aCategory) {
+    if (aCategory.Length() != 0) {
+      aWriter.StringProperty("category", aCategory);
+    }
+  }
+  static MarkerSchema MarkerTypeDisplay() {
+    using MS = MarkerSchema;
+    MS schema{MS::Location::markerChart, MS::Location::markerTable,
+              MS::Location::timelineOverview};
+    schema.AddKeyLabelFormat("category", "Type", MS::Format::string);
     return schema;
   }
 };

@@ -144,21 +144,18 @@ raptor-fetch-firefox:
     - raptor-unity-webgl-firefox
     - raptor-wasm-misc-firefox
     - raptor-wasm-misc-baseline-firefox
-    - raptor-wasm-misc-ion-firefox
-    - raptor-wasm-misc-cranelift-firefox
+    - raptor-wasm-misc-optimizing-firefox
     - raptor-wasm-godot-baseline-firefox
-    - raptor-wasm-godot-ion-firefox
-    - raptor-wasm-godot-cranelift-firefox
+    - raptor-wasm-godot-optimizing-firefox
     - raptor-assorted-dom-firefox
 
 raptor-fetch-profiling:
     - raptor-unity-webgl-firefox-profiling
     - raptor-wasm-misc-firefox-profiling
     - raptor-wasm-misc-baseline-firefox-profiling
-    - raptor-wasm-misc-ion-firefox-profiling
+    - raptor-wasm-misc-optimizing-firefox-profiling
     - raptor-wasm-godot-baseline-firefox-profiling
-    - raptor-wasm-godot-ion-firefox-profiling
-    - raptor-wasm-godot-cranelift-firefox-profiling
+    - raptor-wasm-godot-optimizing-firefox-profiling
     - raptor-assorted-dom-firefox-profiling
 
 raptor-fetch-chromium:
@@ -190,14 +187,14 @@ ccov-code-coverage-tests:
     - test-coverage
     - test-coverage-wpt
 
-marionette-gpu-tests:
-    - marionette-gpu
-
 mochitest-headless:
     - mochitest-plain-headless
 
 mochitest-valgrind:
     - mochitest-valgrind
+
+marionette-framescript:
+    - marionette-framescript
 
 marionette-headless:
     - marionette-headless
@@ -397,6 +394,11 @@ windows-talos:
 # macOS
 
 macosx1014-64-tests:
+    - crashtest
+    - reftest
+    - web-platform-tests-reftest
+
+macosx1014-64-qr-tests:
     - cppunit
     - crashtest
     - firefox-ui-functional-local
@@ -425,11 +427,6 @@ macosx1014-64-tests:
     - test-verify-gpu
     - test-verify-wpt
     - xpcshell
-
-macosx1014-64-qr-tests:
-    - crashtest
-    - reftest
-    - web-platform-tests-reftest
 
 macosx64-talos:
     - talos-bcv

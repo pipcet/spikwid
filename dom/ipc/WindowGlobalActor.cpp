@@ -22,8 +22,7 @@
 
 #include "nsGlobalWindowInner.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 // CORPP 3.1.3 https://mikewest.github.io/corpp/#integration-html
 static nsILoadInfo::CrossOriginEmbedderPolicy InheritedPolicy(
@@ -158,12 +157,13 @@ already_AddRefed<JSActorProtocol> WindowGlobalActor::MatchingJSActorProtocol(
     return nullptr;
   }
 
-  if (!proto->Matches(BrowsingContext(), GetDocumentURI(), GetRemoteType())) {
-    aRv.Throw(NS_ERROR_NOT_AVAILABLE);
+  if (!proto->Matches(BrowsingContext(), GetDocumentURI(), GetRemoteType(),
+                      aRv)) {
+    MOZ_ASSERT(aRv.Failed());
     return nullptr;
   }
+  MOZ_ASSERT(!aRv.Failed());
   return proto.forget();
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

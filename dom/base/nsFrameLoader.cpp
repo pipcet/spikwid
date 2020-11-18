@@ -53,6 +53,7 @@
 #include "nsIURI.h"
 #include "nsIXULRuntime.h"
 #include "nsNetUtil.h"
+#include "nsFocusManager.h"
 
 #include "nsGkAtoms.h"
 #include "nsNameSpaceManager.h"
@@ -1863,7 +1864,8 @@ void nsFrameLoader::StartDestroy(bool aForProcessSwitch) {
   if (mOwnerContent) {
     doc = mOwnerContent->OwnerDoc();
     dynamicSubframeRemoval = !aForProcessSwitch &&
-        mPendingBrowsingContext->IsFrame() && !doc->InUnlinkOrDeletion();
+                             mPendingBrowsingContext->IsFrame() &&
+                             !doc->InUnlinkOrDeletion();
     doc->SetSubDocumentFor(mOwnerContent, nullptr);
     MaybeUpdatePrimaryBrowserParent(eBrowserParentRemoved);
     SetOwnerContent(nullptr);
@@ -2712,7 +2714,7 @@ void nsFrameLoader::ActivateRemoteFrame(ErrorResult& aRv) {
     return;
   }
 
-  browserParent->Activate();
+  browserParent->Activate(nsFocusManager::GenerateFocusActionId());
 }
 
 void nsFrameLoader::DeactivateRemoteFrame(ErrorResult& aRv) {
@@ -2722,7 +2724,7 @@ void nsFrameLoader::DeactivateRemoteFrame(ErrorResult& aRv) {
     return;
   }
 
-  browserParent->Deactivate(false);
+  browserParent->Deactivate(false, nsFocusManager::GenerateFocusActionId());
 }
 
 void nsFrameLoader::SendCrossProcessMouseEvent(const nsAString& aType, float aX,

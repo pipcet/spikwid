@@ -4,8 +4,6 @@
 
 "use strict";
 
-// eslint-disable-next-line mozilla/reject-some-requires
-const { gDevTools } = require("devtools/client/framework/devtools");
 const { throttle } = require("devtools/shared/throttle");
 
 class ResourceWatcher {
@@ -24,7 +22,6 @@ class ResourceWatcher {
 
   constructor(targetList) {
     this.targetList = targetList;
-    this.descriptorFront = targetList.descriptorFront;
 
     this._onTargetAvailable = this._onTargetAvailable.bind(this);
     this._onTargetDestroyed = this._onTargetDestroyed.bind(this);
@@ -45,6 +42,10 @@ class ResourceWatcher {
 
     this._notifyWatchers = this._notifyWatchers.bind(this);
     this._throttledNotifyWatchers = throttle(this._notifyWatchers, 100);
+  }
+
+  get watcherFront() {
+    return this.targetList.watcherFront;
   }
 
   /**
@@ -105,27 +106,27 @@ class ResourceWatcher {
       );
     }
 
-    // Cache the Watcher once for all, the first time we call `watch()`.
-    // This `watcher` attribute may be then used in any function of the ResourceWatcher after this.
-    if (!this.watcher) {
-      const supportsWatcher = this.descriptorFront?.traits?.watcher;
-      if (supportsWatcher) {
-        this.watcher = await this.descriptorFront.getWatcher();
-        // Resources watched from the parent process will be emitted on the Watcher Actor.
-        // So that we also have to listen for this event on it, in addition to all targets.
-        this.watcher.on(
-          "resource-available-form",
-          this._onResourceAvailable.bind(this, { watcherFront: this.watcher })
-        );
-        this.watcher.on(
-          "resource-updated-form",
-          this._onResourceUpdated.bind(this, { watcherFront: this.watcher })
-        );
-        this.watcher.on(
-          "resource-destroyed-form",
-          this._onResourceDestroyed.bind(this, { watcherFront: this.watcher })
-        );
-      }
+    // Bug 1675763: Watcher actor is not available in all situations yet.
+    if (!this._listenerRegistered && this.watcherFront) {
+      this._listenerRegistered = true;
+      // Resources watched from the parent process will be emitted on the Watcher Actor.
+      // So that we also have to listen for this event on it, in addition to all targets.
+      this.watcherFront.on(
+        "resource-available-form",
+        this._onResourceAvailable.bind(this, {
+          watcherFront: this.watcherFront,
+        })
+      );
+      this.watcherFront.on(
+        "resource-updated-form",
+        this._onResourceUpdated.bind(this, { watcherFront: this.watcherFront })
+      );
+      this.watcherFront.on(
+        "resource-destroyed-form",
+        this._onResourceDestroyed.bind(this, {
+          watcherFront: this.watcherFront,
+        })
+      );
     }
 
     // First ensuring enabling listening to targets.
@@ -293,7 +294,7 @@ class ResourceWatcher {
         // ...request existing resource and new one to come from this one target
         // *but* only do that for backward compat, where we don't have the watcher API
         // (See bug 1626647)
-        if (this.hasWatcherSupport(resourceType)) {
+        if (this.hasResourceWatcherSupport(resourceType)) {
           continue;
         }
         await this._watchResourcesForTarget(targetFront, resourceType);
@@ -372,8 +373,7 @@ class ResourceWatcher {
           resource,
           targetList: this.targetList,
           targetFront,
-          isFissionEnabledOnContentToolbox: gDevTools.isFissionContentToolboxEnabled(),
-          watcher: this.watcher,
+          watcherFront: this.watcherFront,
         });
       }
 
@@ -601,7 +601,7 @@ class ResourceWatcher {
       );
       return null;
     }
-    return this.watcher.getBrowsingContextTarget(browsingContextID);
+    return this.watcherFront.getBrowsingContextTarget(browsingContextID);
   }
 
   _onWillNavigate(targetFront) {
@@ -615,8 +615,8 @@ class ResourceWatcher {
     );
   }
 
-  hasWatcherSupport(resourceType) {
-    return this.watcher?.traits?.resources?.[resourceType];
+  hasResourceWatcherSupport(resourceType) {
+    return this.watcherFront?.traits?.resources?.[resourceType];
   }
 
   /**
@@ -646,8 +646,8 @@ class ResourceWatcher {
 
     // If the server supports the Watcher API and the Watcher supports
     // this resource type, use this API
-    if (this.hasWatcherSupport(resourceType)) {
-      await this.watcher.watchResources([resourceType]);
+    if (this.hasResourceWatcherSupport(resourceType)) {
+      await this.watcherFront.watchResources([resourceType]);
       return;
     }
     // Otherwise, fallback on backward compat mode and use LegacyListeners.
@@ -691,7 +691,6 @@ class ResourceWatcher {
     return LegacyListeners[resourceType]({
       targetList: this.targetList,
       targetFront,
-      isFissionEnabledOnContentToolbox: gDevTools.isFissionContentToolboxEnabled(),
       onAvailable,
       onDestroyed,
       onUpdated,
@@ -726,8 +725,8 @@ class ResourceWatcher {
 
     // If the server supports the Watcher API and the Watcher supports
     // this resource type, use this API
-    if (this.hasWatcherSupport(resourceType)) {
-      this.watcher.unwatchResources([resourceType]);
+    if (this.hasResourceWatcherSupport(resourceType)) {
+      this.watcherFront.unwatchResources([resourceType]);
       return;
     }
     // Otherwise, fallback on backward compat mode and use LegacyListeners.
@@ -846,11 +845,11 @@ const ResourceTransformers = {
   [ResourceWatcher.TYPES
     .ERROR_MESSAGE]: require("devtools/shared/resources/transformers/error-messages"),
   [ResourceWatcher.TYPES
-    .INDEXED_DB]: require("devtools/shared/resources/transformers/storage-indexed-db.js"),
-  [ResourceWatcher.TYPES
     .LOCAL_STORAGE]: require("devtools/shared/resources/transformers/storage-local-storage.js"),
   [ResourceWatcher.TYPES
     .ROOT_NODE]: require("devtools/shared/resources/transformers/root-node"),
   [ResourceWatcher.TYPES
     .SESSION_STORAGE]: require("devtools/shared/resources/transformers/storage-session-storage.js"),
+  [ResourceWatcher.TYPES
+    .NETWORK_EVENT]: require("devtools/shared/resources/transformers/network-events"),
 };

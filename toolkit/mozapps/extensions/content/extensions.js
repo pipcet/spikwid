@@ -6,7 +6,6 @@
 
 /* import-globals-from ../../../content/customElements.js */
 /* import-globals-from aboutaddonsCommon.js */
-/* globals ProcessingInstruction */
 /* exported loadView */
 
 const { AddonManager } = ChromeUtils.import(
@@ -30,11 +29,6 @@ Object.defineProperty(this, "gIsInitializing", {
 });
 
 function initialize(event) {
-  // XXXbz this listener gets _all_ load events for all nodes in the
-  // document... but relies on not being called "too early".
-  if (event.target instanceof ProcessingInstruction) {
-    return;
-  }
   document.removeEventListener("load", initialize, true);
 
   if (!isDiscoverEnabled()) {
@@ -100,19 +94,13 @@ async function recordViewTelemetry(param) {
     addon = await AddonManager.getAddonByID(id);
   }
 
-  AMTelemetry.recordViewEvent({ view: getCurrentViewName(), addon, type });
-}
-
-function getCurrentViewName() {
-  let view = gViewController.currentViewObj;
-  let entries = Object.entries(gViewController.viewObjects);
-  let viewIndex = entries.findIndex(([name, viewObj]) => {
-    return viewObj == view;
+  let { currentViewId } = gViewController;
+  let viewType = gViewController.parseViewId(currentViewId)?.type;
+  AMTelemetry.recordViewEvent({
+    view: viewType || "other",
+    addon,
+    type,
   });
-  if (viewIndex != -1) {
-    return entries[viewIndex][0];
-  }
-  return "other";
 }
 
 // Used by external callers to load a specific view into the manager
@@ -246,6 +234,7 @@ var gViewController = {
   currentViewId: "",
   currentViewObj: null,
   currentViewRequest: 0,
+  isLoading: true,
   // All historyEntryId values must be unique within one session, because the
   // IDs are used to map history entries to page state. It is not possible to
   // see whether a historyEntryId was used in history entries before this page
@@ -287,18 +276,6 @@ var gViewController = {
     }
     this.currentViewRequest = 0;
 
-    for (let type in this.viewObjects) {
-      let view = this.viewObjects[type];
-      if ("shutdown" in view) {
-        try {
-          view.shutdown();
-        } catch (e) {
-          // this shouldn't be fatal
-          Cu.reportError(e);
-        }
-      }
-    }
-
     window.controllers.removeController(this);
   },
 
@@ -326,12 +303,6 @@ var gViewController = {
     var matchRegex = /^addons:\/\/([^\/]+)\/(.*)$/;
     var [, viewType, viewParam] = aViewId.match(matchRegex) || [];
     return { type: viewType, param: decodeURIComponent(viewParam) };
-  },
-
-  get isLoading() {
-    return (
-      !this.currentViewObj || this.currentViewObj.node.hasAttribute("loading")
-    );
   },
 
   loadView(aViewId) {
@@ -426,7 +397,7 @@ var gViewController = {
         if (canHide === false) {
           return;
         }
-        this.displayedView.removeAttribute("loading");
+        this.isLoading = false;
       } catch (e) {
         // this shouldn't be fatal
         Cu.reportError(e);
@@ -437,7 +408,7 @@ var gViewController = {
     this.currentViewObj = viewObj;
 
     this.displayedView = this.currentViewObj;
-    this.currentViewObj.node.setAttribute("loading", "true");
+    this.isLoading = true;
 
     recordViewTelemetry(view.param);
 
@@ -461,7 +432,7 @@ var gViewController = {
   },
 
   notifyViewChanged() {
-    this.displayedView.removeAttribute("loading");
+    this.isLoading = false;
 
     if (this.viewChangeCallback) {
       this.viewChangeCallback();

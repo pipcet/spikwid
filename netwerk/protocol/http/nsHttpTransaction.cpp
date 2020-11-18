@@ -1038,6 +1038,19 @@ int64_t nsHttpTransaction::GetTransferSize() { return mTransferSize; }
 
 int64_t nsHttpTransaction::GetRequestSize() { return mRequestSize; }
 
+bool nsHttpTransaction::Http2Disabled() const {
+  return mCaps & NS_HTTP_DISALLOW_SPDY;
+}
+
+bool nsHttpTransaction::Http3Disabled() const {
+  return mCaps & NS_HTTP_DISALLOW_HTTP3;
+}
+
+already_AddRefed<nsHttpConnectionInfo> nsHttpTransaction::GetConnInfo() const {
+  RefPtr<nsHttpConnectionInfo> connInfo = mConnInfo->Clone();
+  return connInfo.forget();
+}
+
 already_AddRefed<Http2PushedStreamWrapper>
 nsHttpTransaction::TakePushedStreamById(uint32_t aStreamId) {
   MOZ_ASSERT(mConsumerTarget->IsOnCurrentThread());
@@ -1168,11 +1181,22 @@ void nsHttpTransaction::PrepareConnInfoForRetry(nsresult aReason) {
     return;
   }
 
+  Telemetry::HistogramID id = Telemetry::TRANSACTION_ECH_RETRY_OTHERS_COUNT;
+  auto updateCount = MakeScopeExit([&] {
+    uint32_t count = 0;
+    bool existed = mEchRetryCounterMap.Get(id, &count);
+    MOZ_ASSERT(existed, "table not initialized");
+    if (existed) {
+      mEchRetryCounterMap.Put(id, ++count);
+    }
+  });
+
   if (aReason ==
       psm::GetXPCOMFromNSSError(MOCK_SSL_ERROR_ECH_RETRY_WITHOUT_ECH)) {
     LOG((" Got SSL_ERROR_ECH_RETRY_WITHOUT_ECH, use empty echConfig to retry"));
     failedConnInfo->SetEchConfig(EmptyCString());
     failedConnInfo.swap(mConnInfo);
+    id = Telemetry::TRANSACTION_ECH_RETRY_WITHOUT_ECH_COUNT;
     return;
   }
 
@@ -1196,6 +1220,7 @@ void nsHttpTransaction::PrepareConnInfoForRetry(nsresult aReason) {
       failedConnInfo->SetEchConfig(retryEchConfig);
       failedConnInfo.swap(mConnInfo);
     }
+    id = Telemetry::TRANSACTION_ECH_RETRY_WITH_ECH_COUNT;
     return;
   }
 
@@ -1204,7 +1229,9 @@ void nsHttpTransaction::PrepareConnInfoForRetry(nsresult aReason) {
   if (aReason == psm::GetXPCOMFromNSSError(MOCK_SSL_ERROR_ECH_FAILED) ||
       NS_FAILED(aReason)) {
     LOG((" Got SSL_ERROR_ECH_FAILED, try other records"));
-
+    if (aReason == psm::GetXPCOMFromNSSError(MOCK_SSL_ERROR_ECH_FAILED)) {
+      id = Telemetry::TRANSACTION_ECH_RETRY_ECH_FAILED_COUNT;
+    }
     if (mRecordsForRetry.IsEmpty()) {
       if (mHTTPSSVCRecord) {
         bool allRecordsHaveEchConfig = true;
@@ -1387,6 +1414,7 @@ void nsHttpTransaction::Close(nsresult reason) {
       mNoContent = false;
       mSentData = false;
       mReceivedData = false;
+      mSupportsHTTP3 = false;
       LOG(("transaction force restarted\n"));
       // Only record the first restart attempt.
       if (!mRestartCount) {
@@ -1593,6 +1621,11 @@ void nsHttpTransaction::Close(nsresult reason) {
   if (mChunkedDecoder) {
     delete mChunkedDecoder;
     mChunkedDecoder = nullptr;
+  }
+
+  for (auto iter = mEchRetryCounterMap.ConstIter(); !iter.Done(); iter.Next()) {
+    Telemetry::Accumulate(static_cast<Telemetry::HistogramID>(iter.Key()),
+                          iter.UserData());
   }
 
   // closing this pipe triggers the channel's OnStopRequest method.
@@ -2060,6 +2093,27 @@ nsresult nsHttpTransaction::HandleContentStart() {
         break;
     }
 
+    // Remember whether HTTP3 is supported
+    if ((mHttpVersion >= HttpVersion::v2_0) &&
+        (mResponseHead->Status() < 500) && (mResponseHead->Status() != 421)) {
+      nsAutoCString altSvc;
+      Unused << mResponseHead->GetHeader(nsHttp::Alternate_Service, altSvc);
+      if (!altSvc.IsEmpty() || nsHttp::IsReasonableHeaderValue(altSvc)) {
+        for (uint32_t i = 0; i < kHttp3VersionCount; i++) {
+          if (PL_strstr(altSvc.get(), kHttp3Versions[i].get())) {
+            mSupportsHTTP3 = true;
+            break;
+          }
+        }
+      }
+    }
+
+    // Report telemetry
+    if (mSupportsHTTP3) {
+      Accumulate(Telemetry::TRANSACTION_WAIT_TIME_HTTP2_SUP_HTTP3,
+                 mPendingDurationTime.ToMilliseconds());
+    }
+
     // If we're only connecting then we're going to be upgrading this
     // connection since we were successful. Any data from now on belongs to
     // the upgrade handler. If we're not successful the content body doesn't
@@ -2381,6 +2435,11 @@ void nsHttpTransaction::DisableHttp3() {
     // After CloneAsDirectRoute(), http3 will be disabled.
     RefPtr<nsHttpConnectionInfo> connInfo;
     mConnInfo->CloneAsDirectRoute(getter_AddRefs(connInfo));
+    if (mRequestHead) {
+      DebugOnly<nsresult> rv =
+          mRequestHead->SetHeader(nsHttp::Alternate_Service_Used, "0"_ns);
+      MOZ_ASSERT(NS_SUCCEEDED(rv));
+    }
     MOZ_ASSERT(!connInfo->IsHttp3());
     mConnInfo.swap(connInfo);
   }
@@ -2771,6 +2830,11 @@ nsresult nsHttpTransaction::RestartOnFastOpenError() {
     RefPtr<nsHttpConnectionInfo> ci;
     mConnInfo->CloneAsDirectRoute(getter_AddRefs(ci));
     mConnInfo = ci;
+    if (mRequestHead) {
+      DebugOnly<nsresult> rv =
+          mRequestHead->SetHeader(nsHttp::Alternate_Service_Used, "0"_ns);
+      MOZ_ASSERT(NS_SUCCEEDED(rv));
+    }
   }
   mEarlyDataDisposition = EARLY_NONE;
   m0RTTInProgress = false;
@@ -3029,6 +3093,16 @@ nsresult nsHttpTransaction::OnHTTPSRRAvailable(
     mResolver->PrefetchAddrRecord(targetName, mCaps & NS_HTTP_REFRESH_DNS);
   }
 
+  // echConfig is used, so initialize the retry counters to 0.
+  if (!mConnInfo->GetEchConfig().IsEmpty()) {
+    mEchRetryCounterMap.Put(Telemetry::TRANSACTION_ECH_RETRY_WITH_ECH_COUNT, 0);
+    mEchRetryCounterMap.Put(Telemetry::TRANSACTION_ECH_RETRY_WITHOUT_ECH_COUNT,
+                            0);
+    mEchRetryCounterMap.Put(Telemetry::TRANSACTION_ECH_RETRY_ECH_FAILED_COUNT,
+                            0);
+    mEchRetryCounterMap.Put(Telemetry::TRANSACTION_ECH_RETRY_OTHERS_COUNT, 0);
+  }
+
   return NS_OK;
 }
 
@@ -3082,6 +3156,8 @@ nsHttpTransaction::Notify(nsITimer* aTimer) {
 
   return NS_OK;
 }
+
+bool nsHttpTransaction::GetSupportsHTTP3() { return mSupportsHTTP3; }
 
 }  // namespace net
 }  // namespace mozilla

@@ -41,6 +41,8 @@ using namespace mozilla::a11y;
 - (BOOL)providesLabelNotTitle;
 
 - (nsStaticAtom*)ARIARole;
+
+- (void)maybePostLiveRegionChanged;
 @end
 
 @implementation mozAccessible
@@ -167,7 +169,7 @@ static const uint64_t kCacheInitialized = ((uint64_t)0x1) << 63;
   // They may be named explicitly, but they still provide a label not a title.
   return mRole == roles::GROUPING || mRole == roles::RADIO_GROUP ||
          mRole == roles::FIGURE || mRole == roles::GRAPHIC ||
-         mRole == roles::DOCUMENT;
+         mRole == roles::DOCUMENT || mRole == roles::OUTLINE;
 }
 
 - (mozilla::a11y::AccessibleOrProxy)geckoAccessible {
@@ -205,6 +207,12 @@ static const uint64_t kCacheInitialized = ((uint64_t)0x1) << 63;
 
   if (selector == @selector(moxSetFocused:)) {
     return [self stateWithMask:states::FOCUSABLE] == 0;
+  }
+
+  if (selector == @selector(moxARIALive) ||
+      selector == @selector(moxARIAAtomic) ||
+      selector == @selector(moxARIARelevant)) {
+    return ![self moxIsLiveRegion];
   }
 
   return [super moxBlockSelector:selector];
@@ -258,6 +266,10 @@ static const uint64_t kCacheInitialized = ((uint64_t)0x1) << 63;
 
   return [MOXTextMarkerDelegate
       getOrCreateForDoc:mGeckoAccessible.AsProxy()->Document()];
+}
+
+- (BOOL)moxIsLiveRegion {
+  return mIsLiveRegion;
 }
 
 - (id)moxHitTest:(NSPoint)point {
@@ -538,9 +550,6 @@ struct RoleDescrComparator {
 };
 
 - (NSString*)moxRoleDescription {
-  if (mRole == roles::DOCUMENT)
-    return utils::LocalizedString(u"htmlContent"_ns);
-
   if (mRole == roles::FIGURE) return utils::LocalizedString(u"figure"_ns);
 
   if (mRole == roles::HEADING) return utils::LocalizedString(u"heading"_ns);
@@ -710,6 +719,23 @@ struct RoleDescrComparator {
   }
 
   return utils::GetAccAttr(self, "current");
+}
+
+- (NSNumber*)moxARIAAtomic {
+  return @(utils::GetAccAttr(self, "atomic") != nil);
+}
+
+- (NSString*)moxARIALive {
+  return utils::GetAccAttr(self, "live");
+}
+
+- (NSString*)moxARIARelevant {
+  if (NSString* relevant = utils::GetAccAttr(self, "container-relevant")) {
+    return relevant;
+  }
+
+  // Default aria-relevant value
+  return @"additions text";
 }
 
 - (id)moxTitleUIElement {
@@ -914,11 +940,20 @@ struct RoleDescrComparator {
   return NO;
 }
 
+- (void)maybePostLiveRegionChanged {
+  for (id element = self; [element conformsToProtocol:@protocol(MOXAccessible)];
+       element = [element moxUnignoredParent]) {
+    if ([element moxIsLiveRegion]) {
+      [element moxPostNotification:@"AXLiveRegionChanged"];
+      return;
+    }
+  }
+}
+
 - (void)handleAccessibleTextChangeEvent:(NSString*)change
                                inserted:(BOOL)isInserted
                             inContainer:(const AccessibleOrProxy&)container
                                      at:(int32_t)start {
-  // XXX: Eventually live region handling will go here.
 }
 
 - (void)handleAccessibleEvent:(uint32_t)eventType {
@@ -941,6 +976,9 @@ struct RoleDescrComparator {
                 NSAccessibilitySelectedChildrenChangedNotification];
       break;
     case nsIAccessibleEvent::EVENT_TEXT_CARET_MOVED: {
+      if (![self stateWithMask:states::SELECTABLE_TEXT]) {
+        break;
+      }
       // We consider any caret move event to be a selected text change event.
       // So dispatching an event for EVENT_TEXT_SELECTION_CHANGED would be
       // reduntant.
@@ -963,6 +1001,17 @@ struct RoleDescrComparator {
                  withUserInfo:userInfo];
       break;
     }
+    case nsIAccessibleEvent::EVENT_LIVE_REGION_ADDED:
+      mIsLiveRegion = true;
+      [self moxPostNotification:@"AXLiveRegionCreated"];
+      break;
+    case nsIAccessibleEvent::EVENT_LIVE_REGION_REMOVED:
+      mIsLiveRegion = false;
+      break;
+    case nsIAccessibleEvent::EVENT_REORDER:
+    case nsIAccessibleEvent::EVENT_NAME_CHANGE:
+      [self maybePostLiveRegionChanged];
+      break;
   }
 }
 

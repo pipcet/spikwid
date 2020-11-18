@@ -21,8 +21,8 @@
 #include "jit/mips32/Simulator-mips32.h"
 #include "jit/mips64/Simulator-mips64.h"
 #include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
-#include "js/friend/StackLimits.h"  // js::CheckRecursionLimitWithExtra
-#include "js/friend/WindowProxy.h"  // js::IsWindow
+#include "js/friend/StackLimits.h"    // js::CheckRecursionLimitWithExtra
+#include "js/friend/WindowProxy.h"    // js::IsWindow
 #include "js/Printf.h"
 #include "vm/ArrayObject.h"
 #include "vm/EqualityOperations.h"  // js::StrictlyEqual
@@ -908,6 +908,7 @@ template bool StringsCompare<ComparisonKind::GreaterThanOrEqual>(
 bool ArrayPopDense(JSContext* cx, HandleObject obj, MutableHandleValue rval) {
   MOZ_ASSERT(obj->is<ArrayObject>());
 
+  // TODO(no-TI): remove AutoDetectInvalidation.
   AutoDetectInvalidation adi(cx, rval);
 
   JS::RootedValueArray<2> argv(cx);
@@ -917,14 +918,7 @@ bool ArrayPopDense(JSContext* cx, HandleObject obj, MutableHandleValue rval) {
     return false;
   }
 
-  // If the result is |undefined|, the array was probably empty and we
-  // have to monitor the return value.
   rval.set(argv[0]);
-  if (rval.isUndefined()) {
-    jsbytecode* pc;
-    JSScript* script = cx->currentScript(&pc);
-    JitScript::MonitorBytecodeType(cx, script, pc, rval);
-  }
   return true;
 }
 
@@ -987,14 +981,7 @@ bool ArrayShiftDense(JSContext* cx, HandleObject obj, MutableHandleValue rval) {
     return false;
   }
 
-  // If the result is |undefined|, the array was probably empty and we
-  // have to monitor the return value.
   rval.set(argv[0]);
-  if (rval.isUndefined()) {
-    jsbytecode* pc;
-    JSScript* script = cx->currentScript(&pc);
-    JitScript::MonitorBytecodeType(cx, script, pc, rval);
-  }
   return true;
 }
 
@@ -1155,22 +1142,7 @@ bool OperatorInI(JSContext* cx, int32_t index, HandleObject obj, bool* out) {
 
 bool GetIntrinsicValue(JSContext* cx, HandlePropertyName name,
                        MutableHandleValue rval) {
-  if (!GlobalObject::getIntrinsicValue(cx, cx->global(), name, rval)) {
-    return false;
-  }
-
-  // This function is called when we try to compile a cold getintrinsic
-  // op. MCallGetIntrinsicValue has an AliasSet of None for optimization
-  // purposes, as its side effect is not observable from JS. We are
-  // guaranteed to bail out after this function, but because of its AliasSet,
-  // type info will not be reflowed. Manually monitor here.
-  if (!JitOptions.warpBuilder) {
-    jsbytecode* pc;
-    JSScript* script = cx->currentScript(&pc);
-    JitScript::MonitorBytecodeType(cx, script, pc, rval);
-  }
-
-  return true;
+  return GlobalObject::getIntrinsicValue(cx, cx->global(), name, rval);
 }
 
 bool CreateThisFromIC(JSContext* cx, HandleObject callee,
@@ -2337,7 +2309,8 @@ bool HasNativeElementPure(JSContext* cx, NativeObject* obj, int32_t index,
   }
   // TypedArrayObject are also native and contain indexed properties.
   if (MOZ_UNLIKELY(obj->is<TypedArrayObject>())) {
-    vp[0].setBoolean(uint32_t(index) < obj->as<TypedArrayObject>().length());
+    size_t length = obj->as<TypedArrayObject>().length().get();
+    vp[0].setBoolean(uint32_t(index) < length);
     return true;
   }
 
@@ -2444,9 +2417,6 @@ bool DoConcatStringObject(JSContext* cx, HandleValue lhs, HandleValue rhs,
       return false;
     }
   }
-
-  // Note: we don't have to call JitScript::MonitorBytecodeType because we
-  // monitored the string-type when attaching the IC stub.
 
   res.setString(str);
   return true;
@@ -2713,7 +2683,8 @@ static int32_t AtomicsCompareExchange(TypedArrayObject* typedArray,
   AutoUnsafeCallWithABI unsafe;
 
   MOZ_ASSERT(!typedArray->hasDetachedBuffer());
-  MOZ_ASSERT(index >= 0 && uint32_t(index) < typedArray->length());
+  MOZ_ASSERT(index >= 0 &&
+             uint32_t(index) < typedArray->length().deprecatedGetUint32());
 
   SharedMem<T*> addr = typedArray->dataPointerEither().cast<T*>();
   return jit::AtomicOperations::compareExchangeSeqCst(addr + index, T(expected),
@@ -2745,7 +2716,8 @@ static int32_t AtomicsExchange(TypedArrayObject* typedArray, int32_t index,
   AutoUnsafeCallWithABI unsafe;
 
   MOZ_ASSERT(!typedArray->hasDetachedBuffer());
-  MOZ_ASSERT(index >= 0 && uint32_t(index) < typedArray->length());
+  MOZ_ASSERT(index >= 0 &&
+             uint32_t(index) < typedArray->length().deprecatedGetUint32());
 
   SharedMem<T*> addr = typedArray->dataPointerEither().cast<T*>();
   return jit::AtomicOperations::exchangeSeqCst(addr + index, T(value));
@@ -2776,7 +2748,8 @@ static int32_t AtomicsAdd(TypedArrayObject* typedArray, int32_t index,
   AutoUnsafeCallWithABI unsafe;
 
   MOZ_ASSERT(!typedArray->hasDetachedBuffer());
-  MOZ_ASSERT(index >= 0 && uint32_t(index) < typedArray->length());
+  MOZ_ASSERT(index >= 0 &&
+             uint32_t(index) < typedArray->length().deprecatedGetUint32());
 
   SharedMem<T*> addr = typedArray->dataPointerEither().cast<T*>();
   return jit::AtomicOperations::fetchAddSeqCst(addr + index, T(value));
@@ -2807,7 +2780,8 @@ static int32_t AtomicsSub(TypedArrayObject* typedArray, int32_t index,
   AutoUnsafeCallWithABI unsafe;
 
   MOZ_ASSERT(!typedArray->hasDetachedBuffer());
-  MOZ_ASSERT(index >= 0 && uint32_t(index) < typedArray->length());
+  MOZ_ASSERT(index >= 0 &&
+             uint32_t(index) < typedArray->length().deprecatedGetUint32());
 
   SharedMem<T*> addr = typedArray->dataPointerEither().cast<T*>();
   return jit::AtomicOperations::fetchSubSeqCst(addr + index, T(value));
@@ -2838,7 +2812,8 @@ static int32_t AtomicsAnd(TypedArrayObject* typedArray, int32_t index,
   AutoUnsafeCallWithABI unsafe;
 
   MOZ_ASSERT(!typedArray->hasDetachedBuffer());
-  MOZ_ASSERT(index >= 0 && uint32_t(index) < typedArray->length());
+  MOZ_ASSERT(index >= 0 &&
+             uint32_t(index) < typedArray->length().deprecatedGetUint32());
 
   SharedMem<T*> addr = typedArray->dataPointerEither().cast<T*>();
   return jit::AtomicOperations::fetchAndSeqCst(addr + index, T(value));
@@ -2869,7 +2844,8 @@ static int32_t AtomicsOr(TypedArrayObject* typedArray, int32_t index,
   AutoUnsafeCallWithABI unsafe;
 
   MOZ_ASSERT(!typedArray->hasDetachedBuffer());
-  MOZ_ASSERT(index >= 0 && uint32_t(index) < typedArray->length());
+  MOZ_ASSERT(index >= 0 &&
+             uint32_t(index) < typedArray->length().deprecatedGetUint32());
 
   SharedMem<T*> addr = typedArray->dataPointerEither().cast<T*>();
   return jit::AtomicOperations::fetchOrSeqCst(addr + index, T(value));
@@ -2900,7 +2876,8 @@ static int32_t AtomicsXor(TypedArrayObject* typedArray, int32_t index,
   AutoUnsafeCallWithABI unsafe;
 
   MOZ_ASSERT(!typedArray->hasDetachedBuffer());
-  MOZ_ASSERT(index >= 0 && uint32_t(index) < typedArray->length());
+  MOZ_ASSERT(index >= 0 &&
+             uint32_t(index) < typedArray->length().deprecatedGetUint32());
 
   SharedMem<T*> addr = typedArray->dataPointerEither().cast<T*>();
   return jit::AtomicOperations::fetchXorSeqCst(addr + index, T(value));

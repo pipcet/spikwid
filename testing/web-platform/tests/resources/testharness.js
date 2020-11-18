@@ -1384,10 +1384,16 @@ policies and contribution forms [3].
                "expected a number but got a ${type_actual}",
                {type_actual:typeof actual});
 
-        assert(Math.abs(actual - expected) <= epsilon,
-               "assert_approx_equals", description,
-               "expected ${expected} +/- ${epsilon} but got ${actual}",
-               {expected:expected, actual:actual, epsilon:epsilon});
+        // The epsilon math below does not place nice with NaN and Infinity
+        // But in this case Infinity = Infinity and NaN = NaN
+        if (isFinite(actual) || isFinite(expected)) {
+            assert(Math.abs(actual - expected) <= epsilon,
+                   "assert_approx_equals", description,
+                   "expected ${expected} +/- ${epsilon} but got ${actual}",
+                   {expected:expected, actual:actual, epsilon:epsilon});
+        } else {
+            assert_equals(actual, expected);
+        }
     }
     expose(assert_approx_equals, "assert_approx_equals");
 
@@ -2950,22 +2956,16 @@ policies and contribution forms [3].
     }
 
     function sanitize_unpaired_surrogates(str) {
-        return str.replace(/([\ud800-\udbff])(?![\udc00-\udfff])/g,
-                           function(_, unpaired)
-                           {
-                               return code_unit_str(unpaired);
-                           })
-                  // This replacement is intentionally implemented without an
-                  // ES2018 negative lookbehind assertion to support runtimes
-                  // which do not yet implement that language feature.
-                  .replace(/(^|[^\ud800-\udbff])([\udc00-\udfff])/g,
-                           function(_, previous, unpaired) {
-                              if (/[\udc00-\udfff]/.test(previous)) {
-                                  previous = code_unit_str(previous);
-                              }
-
-                              return previous + code_unit_str(unpaired);
-                           });
+        return str.replace(
+            /([\ud800-\udbff]+)(?![\udc00-\udfff])|(^|[^\ud800-\udbff])([\udc00-\udfff]+)/g,
+            function(_, low, prefix, high) {
+                var output = prefix || "";  // prefix may be undefined
+                var string = low || high;  // only one of these alternates can match
+                for (var i = 0; i < string.length; i++) {
+                    output += code_unit_str(string[i]);
+                }
+                return output;
+            });
     }
 
     function sanitize_all_unpaired_surrogates(tests) {
@@ -3606,6 +3606,9 @@ policies and contribution forms [3].
 
     function AssertionError(message)
     {
+        if (typeof message == "string") {
+            message = sanitize_unpaired_surrogates(message);
+        }
         this.message = message;
         this.stack = this.get_stack();
     }

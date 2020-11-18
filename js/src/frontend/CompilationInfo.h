@@ -9,6 +9,7 @@
 
 #include "mozilla/Attributes.h"
 #include "mozilla/RefPtr.h"
+#include "mozilla/Span.h"
 #include "mozilla/Variant.h"
 
 #include "builtin/ModuleObject.h"
@@ -92,12 +93,22 @@ struct ScopeContext {
 };
 
 struct CompilationAtomCache {
-  // Atoms lowered into or converted from CompilationStencil.parserAtoms.
+ private:
+  // Atoms lowered into or converted from CompilationStencil.parserAtomData.
   //
   // This field is here instead of in CompilationGCOutput because atoms lowered
   // from JSAtom is part of input (enclosing scope bindings, lazy function name,
   // etc), and having 2 vectors in both input/output is error prone.
-  JS::GCVector<JSAtom*, 0, js::SystemAllocPolicy> atoms;
+  JS::GCVector<JSAtom*, 0, js::SystemAllocPolicy> atoms_;
+
+ public:
+  JSAtom* getExistingAtomAt(ParserAtomIndex index) const;
+  JSAtom* getExistingAtomAt(JSContext* cx,
+                            TaggedParserAtomIndex taggedIndex) const;
+  JSAtom* getAtomAt(ParserAtomIndex index) const;
+  bool hasAtomAt(ParserAtomIndex index) const;
+  bool setAtomAt(JSContext* cx, ParserAtomIndex index, JSAtom* atom);
+  bool allocate(JSContext* cx, size_t length);
 
   void trace(JSTracer* trc);
 } JS_HAZ_GC_POINTER;
@@ -193,6 +204,8 @@ struct CompilationInput {
   void trace(JSTracer* trc);
 } JS_HAZ_GC_POINTER;
 
+struct CompilationStencil;
+
 struct MOZ_RAII CompilationState {
   // Until we have dealt with Atoms in the front end, we need to hold
   // onto them.
@@ -203,18 +216,21 @@ struct MOZ_RAII CompilationState {
   UsedNameTracker usedNames;
   LifoAllocScope& allocScope;
 
-  CompilationState(JSContext* cx, LifoAllocScope& alloc,
+  // Table of parser atoms for this compilation.
+  ParserAtomsTable parserAtoms;
+
+  CompilationState(JSContext* cx, LifoAllocScope& frontendAllocScope,
                    const JS::ReadOnlyCompileOptions& options,
-                   Scope* enclosingScope = nullptr,
-                   JSObject* enclosingEnv = nullptr)
-      : directives(options.forceStrictMode()),
-        scopeContext(cx, enclosingScope, enclosingEnv),
-        usedNames(cx),
-        allocScope(alloc) {}
+                   CompilationStencil& stencil, Scope* enclosingScope = nullptr,
+                   JSObject* enclosingEnv = nullptr);
 };
 
 // The top level struct of stencil.
 struct CompilationStencil {
+  // This holds allocations that do not require destructors to be run but are
+  // live until the stencil is released.
+  LifoAlloc alloc;
+
   // Hold onto the RegExpStencil, BigIntStencil, and ObjLiteralStencil that are
   // allocated during parse to ensure correct destruction.
   Vector<RegExpStencil, 0, js::SystemAllocPolicy> regExpData;
@@ -245,10 +261,34 @@ struct CompilationStencil {
           mozilla::DefaultHasher<FunctionIndex>, js::SystemAllocPolicy>
       asmJS;
 
-  // Table of parser atoms for this compilation.
-  ParserAtomsTable parserAtoms;
+  // List of parser atoms for this compilation.
+  // This may contain nullptr entries when round-tripping with XDR if the atom
+  // was generated in original parse but not used by stencil.
+  ParserAtomVector parserAtomData;
 
-  explicit CompilationStencil(JSRuntime* rt) : parserAtoms(rt) {}
+  // Parameterized chunk size to use for LifoAlloc.
+  static constexpr size_t LifoAllocChunkSize = 512;
+
+  CompilationStencil() : alloc(LifoAllocChunkSize) {}
+
+  // We need a move-constructor to work with Rooted, but must be explicit in
+  // order to steal the LifoAlloc data.
+  CompilationStencil(CompilationStencil&& other) noexcept
+      : alloc(LifoAllocChunkSize),
+        regExpData(std::move(other.regExpData)),
+        bigIntData(std::move(other.bigIntData)),
+        objLiteralData(std::move(other.objLiteralData)),
+        scriptData(std::move(other.scriptData)),
+        scopeData(std::move(other.scopeData)),
+        moduleMetadata(std::move(other.moduleMetadata)),
+        asmJS(std::move(other.asmJS)),
+        parserAtomData(std::move(other.parserAtomData)) {
+    // Steal the data from the LifoAlloc.
+    alloc.steal(&other.alloc);
+  }
+
+  const ParserAtom* getParserAtomAt(JSContext* cx,
+                                    TaggedParserAtomIndex taggedIndex) const;
 
 #if defined(DEBUG) || defined(JS_JITSPEW)
   void dump();
@@ -391,7 +431,7 @@ struct CompilationInfo {
 
   // Construct a CompilationInfo
   CompilationInfo(JSContext* cx, const JS::ReadOnlyCompileOptions& options)
-      : input(options), stencil(cx->runtime()) {}
+      : input(options) {}
 
   MOZ_MUST_USE bool prepareInputAndStencilForInstantiate(JSContext* cx);
   MOZ_MUST_USE bool prepareGCOutputForInstantiate(
@@ -406,11 +446,6 @@ struct CompilationInfo {
 
   MOZ_MUST_USE bool serializeStencils(JSContext* cx, JS::TranscodeBuffer& buf,
                                       bool* succeededOut = nullptr);
-
-  const ParserAtom* lowerJSAtomToParserAtom(JSContext* cx, JSAtom* atom) {
-    auto result = stencil.parserAtoms.internJSAtom(cx, *this, atom);
-    return result.unwrapOr(nullptr);
-  }
 
   // Move constructor is necessary to use Rooted.
   CompilationInfo(CompilationInfo&&) = default;
@@ -432,17 +467,18 @@ struct CompilationInfo {
 struct CompilationInfoVector {
  private:
   using FunctionKey = uint64_t;
-  using FunctionMap = HashMap<FunctionKey, FunctionIndex>;
+  using FunctionIndexVector = Vector<FunctionIndex, 0, js::SystemAllocPolicy>;
 
   static FunctionKey toFunctionKey(const SourceExtent& extent) {
     return (FunctionKey)extent.sourceStart << 32 | extent.sourceEnd;
   }
 
-  MOZ_MUST_USE bool buildDelazificationStencilMap(FunctionMap& functionMap);
+  MOZ_MUST_USE bool buildDelazificationIndices(JSContext* cx);
 
  public:
   frontend::CompilationInfo initial;
   GCVector<frontend::CompilationInfo, 0, js::SystemAllocPolicy> delazifications;
+  FunctionIndexVector delazificationIndices;
 
   CompilationInfoVector(JSContext* cx,
                         const JS::ReadOnlyCompileOptions& options)
@@ -469,6 +505,10 @@ struct CompilationInfoVector {
 
   void trace(JSTracer* trc);
 };
+
+// Allocate an uninitialized script-things array using the Stencil's allocator.
+mozilla::Span<TaggedScriptThingIndex> NewScriptThingSpanUninitialized(
+    JSContext* cx, LifoAlloc& alloc, uint32_t ngcthings);
 
 }  // namespace frontend
 }  // namespace js

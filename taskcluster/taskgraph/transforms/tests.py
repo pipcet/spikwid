@@ -162,7 +162,7 @@ def runs_on_central(task):
     return match_run_on_projects("mozilla-central", task["run-on-projects"])
 
 
-def gv_e10s_multi_filter(task):
+def gv_e10s_filter(task):
     return get_mobile_project(task) == "geckoview" and task["e10s"]
 
 
@@ -175,17 +175,31 @@ def fission_filter(task):
 
 
 TEST_VARIANTS = {
-    "geckoview-e10s-multi": {
-        "description": "{description} with e10s-multi enabled",
-        "filterfn": gv_e10s_multi_filter,
+    "geckoview-e10s-single": {
+        "description": "{description} with single-process e10s",
+        "filterfn": gv_e10s_filter,
         "replace": {
             "run-on-projects": ["trunk"],
         },
-        "suffix": "e10s-multi",
+        "suffix": "e10s-single",
         "merge": {
             "mozharness": {
                 "extra-options": [
-                    "--setpref=dom.ipc.processCount=3",
+                    "--setpref=dom.ipc.processCount=1",
+                ],
+            },
+        },
+    },
+    "geckoview-fission": {
+        "description": "{description} with fission enabled",
+        "filterfn": gv_e10s_filter,
+        "suffix": "fis",
+        "merge": {
+            # Ensures the default state is to not run anywhere.
+            "fission-run-on-projects": [],
+            "mozharness": {
+                "extra-options": [
+                    "--enable-fission",
                 ],
             },
         },
@@ -272,7 +286,7 @@ TEST_VARIANTS = {
         },
     },
     "webgl-ipc": {
-        # TODO: After November 1st 2020, verify this variant is still needed.
+        # TODO: After 2021-02-01, verify this variant is still needed.
         "description": "{description} with WebGL IPC process enabled",
         "suffix": "gli",
         "replace": {
@@ -806,16 +820,13 @@ def set_target(config, tasks):
 def set_treeherder_machine_platform(config, tasks):
     """Set the appropriate task.extra.treeherder.machine.platform"""
     translation = {
-        # Linux64 build platforms for asan and pgo are specified differently to
+        # Linux64 build platform for asan is specified differently to
         # treeherder.
-        "linux64-pgo/opt": "linux64/pgo",
         "macosx1014-64/debug": "osx-10-14/debug",
         "macosx1014-64/opt": "osx-10-14/opt",
         "macosx1014-64-shippable/opt": "osx-10-14-shippable/opt",
         "win64-asan/opt": "windows10-64/asan",
         "win64-aarch64/opt": "windows10-aarch64/opt",
-        "win32-pgo/opt": "windows7-32/pgo",
-        "win64-pgo/opt": "windows10-64/pgo",
     }
     for task in tasks:
         # For most desktop platforms, the above table is not used for "regular"
@@ -878,17 +889,16 @@ def set_tier(config, tasks):
             if task["test-platform"] in [
                 "linux64/opt",
                 "linux64/debug",
-                "linux64-pgo/opt",
                 "linux64-shippable/opt",
                 "linux64-devedition/opt",
                 "linux64-asan/opt",
                 "linux64-qr/opt",
                 "linux64-qr/debug",
-                "linux64-pgo-qr/opt",
                 "linux64-shippable-qr/opt",
                 "linux1804-64/opt",
                 "linux1804-64/debug",
                 "linux1804-64-shippable/opt",
+                "linux1804-64-devedition/opt",
                 "linux1804-64-qr/opt",
                 "linux1804-64-qr/debug",
                 "linux1804-64-shippable-qr/opt",
@@ -896,19 +906,16 @@ def set_tier(config, tasks):
                 "linux1804-64-tsan/opt",
                 "windows7-32/debug",
                 "windows7-32/opt",
-                "windows7-32-pgo/opt",
                 "windows7-32-devedition/opt",
                 "windows7-32-shippable/opt",
                 "windows10-aarch64/opt",
                 "windows10-64/debug",
                 "windows10-64/opt",
-                "windows10-64-pgo/opt",
                 "windows10-64-shippable/opt",
                 "windows10-64-devedition/opt",
                 "windows10-64-asan/opt",
                 "windows10-64-qr/opt",
                 "windows10-64-qr/debug",
-                "windows10-64-pgo-qr/opt",
                 "windows10-64-shippable-qr/opt",
                 "macosx1014-64/opt",
                 "macosx1014-64/debug",
@@ -929,19 +936,6 @@ def set_tier(config, tasks):
             else:
                 task["tier"] = 2
 
-        yield task
-
-
-@transforms.add
-def set_expires_after(config, tasks):
-    """Try jobs expire after 2 weeks; everything else lasts 1 year.  This helps
-    keep storage costs low."""
-    for task in tasks:
-        if "expires-after" not in task:
-            if config.params.is_try():
-                task["expires-after"] = "14 days"
-            else:
-                task["expires-after"] = "1 year"
         yield task
 
 
@@ -1374,8 +1368,8 @@ def handle_fission_attributes(config, tasks):
             fission_attr = task.pop("fission-{}".format(attr), None)
 
             if (
-                task["attributes"].get("unittest_variant") != "fission-xorigin"
-                and task["attributes"].get("unittest_variant") != "fission"
+                task["attributes"].get("unittest_variant")
+                not in ("fission", "geckoview-fission", "fission-xorigin")
             ) or fission_attr is None:
                 continue
 
@@ -1871,7 +1865,9 @@ def make_job_description(config, tasks):
         if task["mozharness"]["requires-signed-builds"] is True:
             jobdesc["dependencies"]["build-signing"] = task["build-signing-label"]
 
-        jobdesc["expires-after"] = task["expires-after"]
+        if "expires-after" in task:
+            jobdesc["expires-after"] = task["expires-after"]
+
         jobdesc["routes"] = []
         jobdesc["run-on-projects"] = sorted(task["run-on-projects"])
         jobdesc["scopes"] = []

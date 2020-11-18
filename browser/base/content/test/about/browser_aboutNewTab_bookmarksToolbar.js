@@ -19,7 +19,10 @@ add_task(async function bookmarks_toolbar_shown_on_newtab() {
 
     // 1: Test that the toolbar is shown in a newly opened foreground about:newtab
     if (featureEnabled) {
-      await waitForBookmarksToolbarVisibility({ visible: true });
+      await waitForBookmarksToolbarVisibility({
+        visible: true,
+        message: "Toolbar should be visible on newtab if enabled",
+      });
     }
     is(
       isBookmarksToolbarVisible(),
@@ -28,10 +31,14 @@ add_task(async function bookmarks_toolbar_shown_on_newtab() {
     );
 
     // 2: Test that the toolbar is hidden when the browser is navigated away from newtab
-    await BrowserTestUtils.loadURI(newtab.linkedBrowser, "https://example.com");
+    BrowserTestUtils.loadURI(newtab.linkedBrowser, "https://example.com");
     await BrowserTestUtils.browserLoaded(newtab.linkedBrowser);
     if (featureEnabled) {
-      await waitForBookmarksToolbarVisibility({ visible: false });
+      await waitForBookmarksToolbarVisibility({
+        visible: false,
+        message:
+          "Toolbar should not be visible on newtab after example.com is loaded within",
+      });
     }
     ok(
       !isBookmarksToolbarVisible(),
@@ -39,10 +46,13 @@ add_task(async function bookmarks_toolbar_shown_on_newtab() {
     );
 
     // 3: Re-load about:newtab in the browser for the following tests and confirm toolbar reappears
-    await BrowserTestUtils.loadURI(newtab.linkedBrowser, "about:newtab");
+    BrowserTestUtils.loadURI(newtab.linkedBrowser, "about:newtab");
     await BrowserTestUtils.browserLoaded(newtab.linkedBrowser);
     if (featureEnabled) {
-      await waitForBookmarksToolbarVisibility({ visible: true });
+      await waitForBookmarksToolbarVisibility({
+        visible: true,
+        message: "Toolbar should be visible on newtab",
+      });
     }
     is(
       isBookmarksToolbarVisible(),
@@ -55,13 +65,18 @@ add_task(async function bookmarks_toolbar_shown_on_newtab() {
       gBrowser,
       opening: "https://example.com",
     });
-    await waitForBookmarksToolbarVisibility({ visible: false });
-    ok(!isBookmarksToolbarVisible(), "Toolbar should be hidden on example.com");
+    await waitForBookmarksToolbarVisibility({
+      visible: false,
+      message: "Toolbar should be hidden on example.com",
+    });
 
     // 5: Toolbar should become visible when switching tabs to newtab
     await BrowserTestUtils.switchTab(gBrowser, newtab);
     if (featureEnabled) {
-      await waitForBookmarksToolbarVisibility({ visible: true });
+      await waitForBookmarksToolbarVisibility({
+        visible: true,
+        message: "Toolbar is visible with switch to newtab if enabled",
+      });
     }
     is(
       isBookmarksToolbarVisible(),
@@ -71,17 +86,19 @@ add_task(async function bookmarks_toolbar_shown_on_newtab() {
 
     // 6: Toolbar should become hidden when switching tabs to example.com
     await BrowserTestUtils.switchTab(gBrowser, example);
-    await waitForBookmarksToolbarVisibility({ visible: false });
-    ok(
-      !isBookmarksToolbarVisible(),
-      "Toolbar is hidden with switch to example"
-    );
+    await waitForBookmarksToolbarVisibility({
+      visible: false,
+      message: "Toolbar is hidden with switch to example",
+    });
 
     // 7: Similar to #3 above, loading about:newtab in example should show toolbar
-    await BrowserTestUtils.loadURI(example.linkedBrowser, "about:newtab");
+    BrowserTestUtils.loadURI(example.linkedBrowser, "about:newtab");
     await BrowserTestUtils.browserLoaded(example.linkedBrowser);
     if (featureEnabled) {
-      await waitForBookmarksToolbarVisibility({ visible: true });
+      await waitForBookmarksToolbarVisibility({
+        visible: true,
+        message: "Toolbar is visible with newtab load if enabled",
+      });
     }
     is(
       isBookmarksToolbarVisible(),
@@ -109,10 +126,7 @@ add_task(async function bookmarks_toolbar_shown_on_newtab() {
     await BrowserTestUtils.switchTab(gBrowser, newtab);
     await waitForBookmarksToolbarVisibility({ visible: false });
     ok(!isBookmarksToolbarVisible(), "Toolbar should hide with custom newtab");
-    await BrowserTestUtils.loadURI(
-      example.linkedBrowser,
-      AboutNewTab.newTabURL
-    );
+    BrowserTestUtils.loadURI(example.linkedBrowser, AboutNewTab.newTabURL);
     await BrowserTestUtils.browserLoaded(example.linkedBrowser);
     await BrowserTestUtils.switchTab(gBrowser, example);
     if (featureEnabled) {
@@ -245,14 +259,20 @@ add_task(async function bookmarks_toolbar_open_persisted() {
   is(neverMenuItem.getAttribute("checked"), "false", "Menuitem isn't checked");
   is(newTabMenuItem.getAttribute("checked"), "false", "Menuitem isn't checked");
   EventUtils.synthesizeMouseAtCenter(newTabMenuItem, {});
-  await waitForBookmarksToolbarVisibility({ visible: false });
-  ok(!isBookmarksToolbarVisible(), "Toolbar is hidden");
+  await waitForBookmarksToolbarVisibility({
+    visible: false,
+    message: "Toolbar is hidden",
+  });
   await BrowserTestUtils.switchTab(gBrowser, newtab);
-  await waitForBookmarksToolbarVisibility({ visible: true });
-  ok(isBookmarksToolbarVisible(), "Toolbar is visible");
+  await waitForBookmarksToolbarVisibility({
+    visible: true,
+    message: "Toolbar is visible",
+  });
   await BrowserTestUtils.switchTab(gBrowser, example);
-  await waitForBookmarksToolbarVisibility({ visible: false });
-  ok(!isBookmarksToolbarVisible(), "Toolbar is hidden");
+  await waitForBookmarksToolbarVisibility({
+    visible: false,
+    message: "Toolbar is hidden",
+  });
 
   await BrowserTestUtils.removeTab(newtab);
   await BrowserTestUtils.removeTab(example);
@@ -260,46 +280,70 @@ add_task(async function bookmarks_toolbar_open_persisted() {
 
 add_task(async function test_with_newtabpage_disabled() {
   await SpecialPowers.pushPrefEnv({
-    set: [["browser.toolbars.bookmarks.2h2020", true]],
+    set: [
+      ["browser.toolbars.bookmarks.2h2020", true],
+      ["browser.newtabpage.enabled", true],
+    ],
   });
-  let newtab = await BrowserTestUtils.openNewForegroundTab({
-    gBrowser,
-    opening: "about:newtab",
-    waitForLoad: false,
-  });
-  await waitForBookmarksToolbarVisibility({ visible: true });
-  ok(isBookmarksToolbarVisible(), "Toolbar is visible");
 
-  let blank = await BrowserTestUtils.openNewForegroundTab({
-    gBrowser,
-    opening: "about:blank",
-    waitForLoad: false,
+  let tabCount = gBrowser.tabs.length;
+  document.getElementById("cmd_newNavigatorTab").doCommand();
+  // Can't use BrowserTestUtils.waitForNewTab since onLocationChange will not
+  // fire due to preloaded new tabs.
+  await TestUtils.waitForCondition(() => gBrowser.tabs.length == tabCount + 1);
+  let newtab = gBrowser.selectedTab;
+  is(newtab.linkedBrowser.currentURI.spec, "about:newtab", "newtab is loaded");
+  await waitForBookmarksToolbarVisibility({
+    visible: true,
+    message: "Toolbar is visible with NTP enabled",
   });
-  await waitForBookmarksToolbarVisibility({ visible: false });
-  ok(!isBookmarksToolbarVisible(), "Toolbar is hidden");
-
-  let example = await BrowserTestUtils.openNewForegroundTab({
-    gBrowser,
-    opening: "https://example.com",
-  });
-  ok(!isBookmarksToolbarVisible(), "Toolbar is hidden");
+  await BrowserTestUtils.removeTab(newtab);
 
   await SpecialPowers.pushPrefEnv({
     set: [["browser.newtabpage.enabled", false]],
   });
-  await BrowserTestUtils.switchTab(gBrowser, blank);
-  await waitForBookmarksToolbarVisibility({ visible: true });
-  ok(isBookmarksToolbarVisible(), "Toolbar is visible");
-  await BrowserTestUtils.switchTab(gBrowser, example);
-  await waitForBookmarksToolbarVisibility({ visible: false });
-  ok(!isBookmarksToolbarVisible(), "Toolbar is hidden");
-  await BrowserTestUtils.switchTab(gBrowser, newtab);
-  await waitForBookmarksToolbarVisibility({ visible: true });
-  ok(isBookmarksToolbarVisible(), "Toolbar is visible");
-  await BrowserTestUtils.switchTab(gBrowser, blank);
-  ok(isBookmarksToolbarVisible(), "Toolbar is visible");
 
+  document.getElementById("cmd_newNavigatorTab").doCommand();
+  await TestUtils.waitForCondition(() => gBrowser.tabs.length == tabCount + 1);
+  newtab = gBrowser.selectedTab;
+  is(newtab.linkedBrowser.currentURI.spec, "about:blank", "blank is loaded");
+  await waitForBookmarksToolbarVisibility({
+    visible: false,
+    message: "Toolbar is not visible with NTP disabled",
+  });
   await BrowserTestUtils.removeTab(newtab);
-  await BrowserTestUtils.removeTab(blank);
-  await BrowserTestUtils.removeTab(example);
+
+  await SpecialPowers.pushPrefEnv({
+    set: [["browser.newtabpage.enabled", true]],
+  });
+});
+
+add_task(async function test_history_pushstate() {
+  await SpecialPowers.pushPrefEnv({
+    set: [["browser.toolbars.bookmarks.2h2020", true]],
+  });
+  await BrowserTestUtils.withNewTab("https://example.com/", async browser => {
+    await waitForBookmarksToolbarVisibility({ visible: false });
+    ok(!isBookmarksToolbarVisible(), "Toolbar should be hidden");
+
+    // Temporarily show the toolbar:
+    setToolbarVisibility(
+      document.querySelector("#PersonalToolbar"),
+      true,
+      false,
+      false
+    );
+    ok(isBookmarksToolbarVisible(), "Toolbar should now be visible");
+
+    // Now "navigate"
+    await SpecialPowers.spawn(browser, [], () => {
+      content.location.href += "#foo";
+    });
+
+    await TestUtils.waitForCondition(
+      () => gURLBar.value.endsWith("#foo"),
+      "URL bar should update"
+    );
+    ok(isBookmarksToolbarVisible(), "Toolbar should still be visible");
+  });
 });

@@ -67,9 +67,6 @@ use peek_poke::PeekPoke;
 /// Width and height in device pixels of image tiles.
 pub type TileSize = u16;
 
-/// Documents are rendered in the ascending order of their associated layer values.
-pub type DocumentLayer = i8;
-
 /// Various settings that the caller can select based on desired tradeoffs
 /// between rendering quality and performance / power usage.
 #[derive(Copy, Clone, Deserialize, Serialize)]
@@ -202,7 +199,10 @@ pub trait RenderNotifier: Send {
     fn clone(&self) -> Box<dyn RenderNotifier>;
     /// Wake the thread containing the `Renderer` up (after updates have been put
     /// in the renderer's queue).
-    fn wake_up(&self);
+    fn wake_up(
+        &self,
+        composite_needed: bool,
+    );
     /// Notify the thread containing the `Renderer` that a new frame is ready.
     fn new_frame_ready(&self, _: DocumentId, scrolled: bool, composite_needed: bool, render_time_ns: Option<u64>);
     /// A Gecko-specific notification mechanism to get some code executed on the

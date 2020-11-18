@@ -39,9 +39,7 @@ class NullAction final : public Action {
 
 }  // namespace
 
-namespace mozilla {
-namespace dom {
-namespace cache {
+namespace mozilla::dom::cache {
 
 using mozilla::dom::quota::AssertIsOnIOThread;
 using mozilla::dom::quota::OpenDirectoryListener;
@@ -402,7 +400,7 @@ Context::QuotaInitRunnable::Run() {
       MOZ_DIAGNOSTIC_ASSERT(qm);
 
       auto directoryOrErr = qm->EnsureStorageAndOriginIsInitialized(
-          PERSISTENCE_TYPE_DEFAULT, mQuotaInfo, quota::Client::DOMCACHE);
+          PERSISTENCE_TYPE_DEFAULT, mQuotaInfo);
       if (directoryOrErr.isErr()) {
         resolver->Resolve(directoryOrErr.inspectErr());
         break;
@@ -1044,6 +1042,4 @@ void Context::DoomTargetData() {
   MOZ_DIAGNOSTIC_ASSERT(!mData);
 }
 
-}  // namespace cache
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom::cache

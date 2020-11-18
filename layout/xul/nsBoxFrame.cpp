@@ -470,7 +470,7 @@ void nsBoxFrame::Reflow(nsPresContext* aPresContext, ReflowOutput& aDesiredSize,
   WritingMode wm = aReflowInput.GetWritingMode();
   LogicalSize computedSize = aReflowInput.ComputedSize();
 
-  LogicalMargin m = aReflowInput.ComputedLogicalBorderPadding();
+  LogicalMargin m = aReflowInput.ComputedLogicalBorderPadding(wm);
   // GetXULBorderAndPadding(m);
 
   LogicalSize prefSize(wm);
@@ -494,7 +494,7 @@ void nsBoxFrame::Reflow(nsPresContext* aPresContext, ReflowOutput& aDesiredSize,
     computedSize.BSize(wm) = prefSize.BSize(wm);
     // prefSize is border-box but min/max constraints are content-box.
     nscoord blockDirBorderPadding =
-        aReflowInput.ComputedLogicalBorderPadding().BStartEnd(wm);
+        aReflowInput.ComputedLogicalBorderPadding(wm).BStartEnd(wm);
     nscoord contentBSize = computedSize.BSize(wm) - blockDirBorderPadding;
     // Note: contentHeight might be negative, but that's OK because min-height
     // is never negative.
@@ -829,9 +829,6 @@ nsresult nsBoxFrame::AttributeChanged(int32_t aNameSpaceID, nsAtom* aAttribute,
 
   if (aAttribute == nsGkAtoms::width || aAttribute == nsGkAtoms::height ||
       aAttribute == nsGkAtoms::align || aAttribute == nsGkAtoms::valign ||
-      aAttribute == nsGkAtoms::left || aAttribute == nsGkAtoms::top ||
-      aAttribute == nsGkAtoms::right || aAttribute == nsGkAtoms::bottom ||
-      aAttribute == nsGkAtoms::start || aAttribute == nsGkAtoms::end ||
       aAttribute == nsGkAtoms::minwidth || aAttribute == nsGkAtoms::maxwidth ||
       aAttribute == nsGkAtoms::minheight ||
       aAttribute == nsGkAtoms::maxheight || aAttribute == nsGkAtoms::flex ||
@@ -873,11 +870,6 @@ nsresult nsBoxFrame::AttributeChanged(int32_t aNameSpaceID, nsAtom* aAttribute,
         AddStateBits(NS_STATE_AUTO_STRETCH);
       else
         RemoveStateBits(NS_STATE_AUTO_STRETCH);
-    } else if (aAttribute == nsGkAtoms::left || aAttribute == nsGkAtoms::top ||
-               aAttribute == nsGkAtoms::right ||
-               aAttribute == nsGkAtoms::bottom ||
-               aAttribute == nsGkAtoms::start || aAttribute == nsGkAtoms::end) {
-      RemoveStateBits(NS_STATE_STACK_NOT_POSITIONED);
     }
 
     PresShell()->FrameNeedsReflow(this, IntrinsicDirty::StyleChange,

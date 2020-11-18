@@ -12,7 +12,6 @@
 #include "ActiveLayerTracker.h"
 #include "ClientLayerManager.h"
 #include "DisplayItemClip.h"
-#include "DisplayListChecker.h"
 #include "FrameLayerBuilder.h"
 #include "GeckoProfiler.h"
 #include "gfx2DGlue.h"
@@ -548,7 +547,7 @@ bool nsLayoutUtils::GPUImageScalingEnabled() {
 }
 
 void nsLayoutUtils::UnionChildOverflow(nsIFrame* aFrame,
-                                       nsOverflowAreas& aOverflowAreas,
+                                       OverflowAreas& aOverflowAreas,
                                        FrameChildListIDs aSkipChildLists) {
   // Iterate over all children except pop-ups.
   FrameChildListIDs skip(aSkipChildLists);
@@ -559,7 +558,7 @@ void nsLayoutUtils::UnionChildOverflow(nsIFrame* aFrame,
       continue;
     }
     for (nsIFrame* child : list) {
-      nsOverflowAreas childOverflow =
+      OverflowAreas childOverflow =
           child->GetOverflowAreas() + child->GetPosition();
       aOverflowAreas.UnionWith(childOverflow);
     }
@@ -910,6 +909,7 @@ nsIFrame* nsLayoutUtils::GetPageFrame(nsIFrame* aFrame) {
 
 /* static */
 nsIFrame* nsLayoutUtils::GetStyleFrame(nsIFrame* aPrimaryFrame) {
+  MOZ_ASSERT(aPrimaryFrame);
   if (aPrimaryFrame->IsTableWrapperFrame()) {
     nsIFrame* inner = aPrimaryFrame->PrincipalChildList().FirstChild();
     // inner may be null, if aPrimaryFrame is mid-destruction
@@ -3304,10 +3304,6 @@ nsresult nsLayoutUtils::PaintFrame(gfxContext* aRenderingContext,
           gfxPlatform::AsyncPanZoomEnabled() &&
           nsLayoutUtils::HasDocumentLevelListenersForApzAwareEvents(presShell));
 
-      DisplayListChecker beforeMergeChecker;
-      DisplayListChecker toBeMergedChecker;
-      DisplayListChecker afterMergeChecker;
-
       // If a pref is toggled that adds or removes display list items,
       // we need to rebuild the display list. The pref may be toggled
       // manually by the user, or during test setup.
@@ -3320,18 +3316,7 @@ nsresult nsLayoutUtils::PaintFrame(gfxContext* aRenderingContext,
       // This calls BuildDisplayListForStacking context on a subset of the
       // viewport.
       if (shouldAttemptPartialUpdate) {
-        if (StaticPrefs::layout_display_list_retain_verify()) {
-          beforeMergeChecker.Set(list, "BM");
-        }
-
-        updateState = retainedBuilder->AttemptPartialUpdate(
-            aBackstop, beforeMergeChecker ? &toBeMergedChecker : nullptr);
-
-        if ((updateState != PartialUpdateResult::Failed) &&
-            beforeMergeChecker) {
-          afterMergeChecker.Set(list, "AM");
-        }
-
+        updateState = retainedBuilder->AttemptPartialUpdate(aBackstop);
         metrics->EndPartialBuild(updateState);
       } else {
         // Partial updates are disabled.
@@ -3339,10 +3324,8 @@ nsresult nsLayoutUtils::PaintFrame(gfxContext* aRenderingContext,
         metrics->mPartialUpdateFailReason = PartialUpdateFailReason::Disabled;
       }
 
-      // Rebuild the full display list if the partial display list build failed,
-      // or if the merge checker is used.
-      bool doFullRebuild =
-          updateState == PartialUpdateResult::Failed || afterMergeChecker;
+      // Rebuild the full display list if the partial display list build failed.
+      bool doFullRebuild = updateState == PartialUpdateResult::Failed;
 
       if (StaticPrefs::layout_display_list_build_twice()) {
         // Build display list twice to compare partial and full display list
@@ -3368,28 +3351,6 @@ nsresult nsLayoutUtils::PaintFrame(gfxContext* aRenderingContext,
         metrics->EndFullBuild();
 
         updateState = PartialUpdateResult::Updated;
-
-        if (afterMergeChecker) {
-          DisplayListChecker nonRetainedChecker(list, "NR");
-          std::stringstream ss;
-          ss << "**** Differences between retained-after-merged (AM) and "
-             << "non-retained (NR) display lists:";
-          if (!nonRetainedChecker.CompareList(afterMergeChecker, ss)) {
-            ss << "\n\n*** non-retained display items:";
-            nonRetainedChecker.Dump(ss);
-            ss << "\n\n*** before-merge retained display items:";
-            beforeMergeChecker.Dump(ss);
-            ss << "\n\n*** to-be-merged retained display items:";
-            toBeMergedChecker.Dump(ss);
-            ss << "\n\n*** after-merge retained display items:";
-            afterMergeChecker.Dump(ss);
-            fprintf(stderr, "%s\n\n", ss.str().c_str());
-#ifdef DEBUG_FRAME_DUMP
-            fprintf(stderr, "*** Frame tree:\n");
-            aFrame->DumpFrameTree();
-#endif
-          }
-        }
       }
     }
 
@@ -8346,8 +8307,8 @@ ScrollMetadata nsLayoutUtils::ComputeScrollMetadata(
   nsIDocShell* docShell = presContext->GetDocShell();
   BrowsingContext* bc = docShell ? docShell->GetBrowsingContext() : nullptr;
   bool isTouchEventsEnabled =
-      docShell && docShell->GetTouchEventsOverride() ==
-                      nsIDocShell::TOUCHEVENTS_OVERRIDE_ENABLED;
+      bc &&
+      bc->TouchEventsOverride() == mozilla::dom::TouchEventsOverride::Enabled;
 
   if (bc && bc->InRDMPane() && isTouchEventsEnabled) {
     metadata.SetIsRDMTouchSimulationActive(true);
@@ -8613,6 +8574,11 @@ ScrollMetadata nsLayoutUtils::ComputeScrollMetadata(
       isRootScrollFrame && presContext->IsRootContentDocumentCrossProcess();
   if (isRootContentDocRootScrollFrame) {
     UpdateCompositionBoundsForRCDRSF(frameBounds, presContext);
+    if (RefPtr<MobileViewportManager> MVM =
+            presContext->PresShell()->GetMobileViewportManager()) {
+      metrics.SetCompositionSizeWithoutDynamicToolbar(
+          MVM->GetCompositionSizeWithoutDynamicToolbar());
+    }
   }
 
   nsMargin sizes = ScrollbarAreaToExcludeFromCompositionBoundsFor(aScrollFrame);

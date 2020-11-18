@@ -146,6 +146,8 @@ SI Bool if_then_else(I32 c, Bool t, Bool e) { return (c & t) | (~c & e); }
 
 SI Bool if_then_else(int32_t c, Bool t, Bool e) { return c ? t : e; }
 
+SI I16 if_then_else(I16 c, I16 t, I16 e) { return (c & t) | (~c & e); }
+
 template <typename T> SI void swap(T& a, T& b) {
   T t(a);
   a = b;
@@ -536,6 +538,10 @@ vec2 step(vec2 edge, vec2 x) {
   return vec2(step(edge.x, x.x), step(edge.y, x.y));
 }
 
+vec2_scalar step(vec2_scalar edge, vec2_scalar x) {
+  return vec2_scalar(step(edge.x, x.x), step(edge.y, x.y));
+}
+
 vec2 max(vec2 a, vec2 b) { return vec2(max(a.x, b.x), max(a.y, b.y)); }
 vec2 max(vec2 a, Float b) { return vec2(max(a.x, b), max(a.y, b)); }
 
@@ -687,6 +693,24 @@ Float exp(Float y) {
   float l2e = 1.4426950408889634074f;
   return approx_pow2(l2e * y);
 }
+
+#define exp2 __glsl_exp2
+
+SI float exp2(float x) { return exp2f(x); }
+
+Float exp2(Float x) { return approx_pow2(x); }
+
+#define log __glsl_log
+
+SI float log(float x) { return logf(x); }
+
+Float log(Float x) { return approx_log2(x) * 0.69314718f; }
+
+#define log2 __glsl_log2
+
+SI float log2(float x) { return log2f(x); }
+
+Float log2(Float x) { return approx_log2(x); }
 
 struct ivec4;
 
@@ -1532,6 +1556,14 @@ struct vec4_scalar {
     w /= a.w;
     return *this;
   }
+
+  friend bool operator==(const vec4_scalar& l, const vec4_scalar& r) {
+    return l.x == r.x && l.y == r.y && l.z == r.z && l.w == r.w;
+  }
+
+  friend bool operator!=(const vec4_scalar& l, const vec4_scalar& r) {
+    return l.x != r.x || l.y != r.y || l.z != r.z || l.w != r.w;
+  }
 };
 
 vec4_scalar vec2_scalar::sel(XYZW c1, XYZW c2, XYZW c3, XYZW c4) {
@@ -1743,6 +1775,10 @@ vec4_scalar make_vec4(float x, float y, const vec2_scalar& v) {
   return vec4_scalar{x, y, v.x, v.y};
 }
 
+ivec4_scalar make_ivec4(const vec4_scalar& v) {
+  return ivec4_scalar{int32_t(v.x), int32_t(v.y), int32_t(v.z), int32_t(v.w)};
+}
+
 template <typename N>
 vec4 make_vec4(const N& n) {
   return vec4(n);
@@ -1802,6 +1838,13 @@ SI vec4 clamp(vec4 a, vec4 minVal, vec4 maxVal) {
   return vec4(clamp(a.x, minVal.x, maxVal.x), clamp(a.y, minVal.y, maxVal.y),
               clamp(a.z, minVal.z, maxVal.z), clamp(a.w, minVal.w, maxVal.w));
 }
+
+SI vec4_scalar clamp(vec4_scalar a, vec4_scalar minVal, vec4_scalar maxVal) {
+  return vec4_scalar{
+      clamp(a.x, minVal.x, maxVal.x), clamp(a.y, minVal.y, maxVal.y),
+      clamp(a.z, minVal.z, maxVal.z), clamp(a.w, minVal.w, maxVal.w)};
+}
+
 template <typename T>
 auto lessThanEqual(T x, T y) -> decltype(x <= y) {
   return x <= y;

@@ -134,7 +134,7 @@ function TargetMixin(parentClass) {
      *
      * @return {TargetMixin} the parent target.
      */
-    getWatcher() {
+    getWatcherFront() {
       // Starting with FF77, all additional frame targets are spawn by the WatcherActor and are managed by it.
       if (this.parentFront.typeName == "watcher") {
         return this.parentFront;
@@ -161,13 +161,15 @@ function TargetMixin(parentClass) {
      */
     async getParentTarget() {
       // Starting with FF77, we support frames watching via watchTargets for Tab and Process descriptors.
-      const watcher = await this.getWatcher();
-      if (watcher) {
+      const watcherFront = await this.getWatcherFront();
+      if (watcherFront) {
         // Safety check, in theory all watcher should support frames.
-        if (watcher.traits.frame) {
+        if (watcherFront.traits.frame) {
           // Retrieve the Watcher, which manage all the targets and should already have a reference to
           // to the parent target.
-          return watcher.getParentBrowsingContextTarget(this.browsingContextID);
+          return watcherFront.getParentBrowsingContextTarget(
+            this.browsingContextID
+          );
         }
         return null;
       }
@@ -193,11 +195,11 @@ function TargetMixin(parentClass) {
     async getBrowsingContextTarget(browsingContextID) {
       // Tab and Process Descriptors expose a Watcher, which is creating the
       // targets and should be used to fetch any.
-      const watcher = await this.getWatcher();
-      if (watcher) {
+      const watcherFront = await this.getWatcherFront();
+      if (watcherFront) {
         // Safety check, in theory all watcher should support frames.
-        if (watcher.traits.frame) {
-          return watcher.getBrowsingContextTarget(browsingContextID);
+        if (watcherFront.traits.frame) {
+          return watcherFront.getBrowsingContextTarget(browsingContextID);
         }
         return null;
       }
@@ -212,54 +214,6 @@ function TargetMixin(parentClass) {
     }
 
     /**
-     * Returns a promise for the protocol description from the root actor. Used
-     * internally with `target.actorHasMethod`. Takes advantage of caching if
-     * definition was fetched previously with the corresponding actor information.
-     * Actors are lazily loaded, so not only must the tool using a specific actor
-     * be in use, the actors are only registered after invoking a method (for
-     * performance reasons, added in bug 988237), so to use these actor detection
-     * methods, one must already be communicating with a specific actor of that
-     * type.
-     *
-     * @return {Promise}
-     * {
-     *   "category": "actor",
-     *   "typeName": "longstractor",
-     *   "methods": [{
-     *     "name": "substring",
-     *     "request": {
-     *       "type": "substring",
-     *       "start": {
-     *         "_arg": 0,
-     *         "type": "primitive"
-     *       },
-     *       "end": {
-     *         "_arg": 1,
-     *         "type": "primitive"
-     *       }
-     *     },
-     *     "response": {
-     *       "substring": {
-     *         "_retval": "primitive"
-     *       }
-     *     }
-     *   }],
-     *  "events": {}
-     * }
-     */
-    async getActorDescription(actorName) {
-      if (
-        this._protocolDescription &&
-        this._protocolDescription.types[actorName]
-      ) {
-        return this._protocolDescription.types[actorName];
-      }
-      const description = await this.client.mainRoot.protocolDescription();
-      this._protocolDescription = description;
-      return description.types[actorName];
-    }
-
-    /**
      * Returns a boolean indicating whether or not the specific actor
      * type exists.
      *
@@ -271,33 +225,6 @@ function TargetMixin(parentClass) {
         return !!this.targetForm[actorName + "Actor"];
       }
       return false;
-    }
-
-    /**
-     * Queries the protocol description to see if an actor has
-     * an available method. The actor must already be lazily-loaded (read
-     * the restrictions in the `getActorDescription` comments),
-     * so this is for use inside of tool. Returns a promise that
-     * resolves to a boolean.
-     *
-     * @param {String} actorName
-     * @param {String} methodName
-     * @return {Promise}
-     */
-    actorHasMethod(actorName, methodName) {
-      return this.getActorDescription(actorName).then(desc => {
-        if (!desc) {
-          console.error(
-            `Actor "${actorName}" was not found in the protocol description.
-            Ensure you used the correct typename and that the actor is initialized.`
-          );
-        }
-
-        if (desc?.methods) {
-          return !!desc.methods.find(method => method.name === methodName);
-        }
-        return false;
-      });
     }
 
     /**

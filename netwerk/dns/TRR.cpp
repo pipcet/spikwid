@@ -1371,7 +1371,6 @@ void TRR::SaveAdditionalRecords(
     hostRecord->mEffectiveTRRMode = mRec->mEffectiveTRRMode;
     RefPtr<AddrHostRecord> addrRec = do_QueryObject(hostRecord);
     addrRec->mTrrStart = TimeStamp::Now();
-    addrRec->mTrrA = this;  // Hack!
     LOG(("Completing lookup for additional: %s", nsCString(iter.Key()).get()));
     (void)mHostResolver->CompleteLookup(hostRecord, NS_OK, ai, mPB,
                                         mOriginSuffix, AddrHostRecord::TRR_OK);
@@ -1400,8 +1399,20 @@ nsresult TRR::ParseSvcParam(unsigned int svcbIndex, uint16_t key,
       break;
     }
     case SvcParamKeyAlpn: {
-      field.mValue = AsVariant(SvcParamAlpn{
-          .mValue = nsCString((const char*)(&mResponse[svcbIndex]), length)});
+      field.mValue = AsVariant(SvcParamAlpn());
+      auto& alpnArray = field.mValue.as<SvcParamAlpn>().mValue;
+      while (length > 0) {
+        uint8_t alpnIdLength = mResponse[svcbIndex++];
+        length -= 1;
+        if (alpnIdLength > length) {
+          return NS_ERROR_UNEXPECTED;
+        }
+
+        alpnArray.AppendElement(
+            nsCString((const char*)&mResponse[svcbIndex], alpnIdLength));
+        length -= alpnIdLength;
+        svcbIndex += alpnIdLength;
+      }
       break;
     }
     case SvcParamKeyNoDefaultAlpn: {
@@ -1510,7 +1521,6 @@ void TRR::StoreIPHintAsDNSRecord(const struct SVCB& aSVCBRecord) {
   hostRecord->mEffectiveTRRMode = mRec->mEffectiveTRRMode;
   RefPtr<AddrHostRecord> addrRec = do_QueryObject(hostRecord);
   addrRec->mTrrStart = TimeStamp::Now();
-  addrRec->mTrrA = this;  // Hack!
 
   (void)mHostResolver->CompleteLookup(hostRecord, NS_OK, ai, mPB, mOriginSuffix,
                                       AddrHostRecord::TRR_OK);

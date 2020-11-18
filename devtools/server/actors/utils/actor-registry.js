@@ -179,7 +179,7 @@ const ActorRegistry = {
       constructor: "InspectorActor",
       type: { target: true },
     });
-    this.registerModule("devtools/server/actors/stylesheets", {
+    this.registerModule("devtools/server/actors/style-sheets", {
       prefix: "styleSheets",
       constructor: "StyleSheetsActor",
       type: { target: true },
@@ -276,10 +276,10 @@ const ActorRegistry = {
       type: { target: true },
     });
     this.registerModule(
-      "devtools/server/actors/network-monitor/stack-traces-actor",
+      "devtools/server/actors/network-monitor/network-content",
       {
-        prefix: "stacktraces",
-        constructor: "StackTracesActor",
+        prefix: "networkContent",
+        constructor: "NetworkContentActor",
         type: { target: true },
       }
     );

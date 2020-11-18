@@ -14,8 +14,7 @@
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_privacy.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 namespace {
 
@@ -153,6 +152,12 @@ void PerformanceMainThread::AddEntry(nsIHttpChannel* channel,
     return;
   }
   AddRawEntry(std::move(performanceTimingData), initiatorType, entryName);
+}
+
+void PerformanceMainThread::AddEntry(const nsString& entryName,
+                                     const nsString& initiatorType,
+                                     UniquePtr<PerformanceTimingData>&& aData) {
+  AddRawEntry(std::move(aData), initiatorType, entryName);
 }
 
 void PerformanceMainThread::AddRawEntry(UniquePtr<PerformanceTimingData> aData,
@@ -448,5 +453,4 @@ void PerformanceMainThread::GetEntriesByName(
   }
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

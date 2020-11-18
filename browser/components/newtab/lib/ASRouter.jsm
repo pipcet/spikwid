@@ -354,7 +354,10 @@ const MessageLoaderUtils = {
     for (const featureId of provider.messageGroups) {
       let experimentData;
       try {
-        experimentData = ExperimentAPI.getExperiment({ featureId });
+        experimentData = ExperimentAPI.getExperiment({
+          featureId,
+          sendExposurePing: false,
+        });
         // Not enrolled in any experiment for this feature, we can skip
         if (!experimentData) {
           continue;
@@ -367,8 +370,16 @@ const MessageLoaderUtils = {
       // If the feature is not enabled there is no message to send back.
       // Other branches might be enabled so we check those as well in case we
       // need to send a reach ping.
-      if (ExperimentAPI.isFeatureEnabled(featureId, false)) {
-        experiments.push(ExperimentAPI.getFeatureValue(featureId));
+      let featureData = experimentData.branch.feature;
+      if (featureData.enabled) {
+        experiments.push({
+          forExposureEvent: {
+            sent: experimentData.exposurePingSent,
+            experimentSlug: experimentData.slug,
+            branchSlug: experimentData.branch.slug,
+          },
+          ...featureData.value,
+        });
       }
 
       if (!REACH_EVENT_GROUPS.includes(featureId)) {
@@ -544,6 +555,7 @@ class _ASRouter {
   constructor(localProviders = LOCAL_MESSAGE_PROVIDERS) {
     this.initialized = false;
     this.clearChildMessages = null;
+    this.clearChildProviders = null;
     this.updateAdminState = null;
     this.sendTelemetry = null;
     this.dispatchCFRAction = null;
@@ -569,14 +581,13 @@ class _ASRouter {
     this._onLocaleChanged = this._onLocaleChanged.bind(this);
     this.isUnblockedMessage = this.isUnblockedMessage.bind(this);
     this.unblockAll = this.unblockAll.bind(this);
-    this.renderWNMessages = this.renderWNMessages.bind(this);
     this.forceWNPanel = this.forceWNPanel.bind(this);
     Services.telemetry.setEventRecordingEnabled(REACH_EVENT_CATEGORY, true);
   }
 
   async onPrefChange(prefName) {
-    let invalidMessages = [];
     if (TARGETING_PREFERENCES.includes(prefName)) {
+      let invalidMessages = [];
       // Notify all tabs of messages that have become invalid after pref change
       const context = this._getMessagesContext();
       const targetingContext = new TargetingContext(context);
@@ -590,17 +601,20 @@ class _ASRouter {
           invalidMessages.push(msg.id);
         }
       }
+      this.clearChildMessages(invalidMessages);
     } else {
       // Update message providers and fetch new messages on pref change
       this._loadLocalProviders();
-      invalidMessages = await this._updateMessageProviders();
+      let invalidProviders = await this._updateMessageProviders();
+      if (invalidProviders.length) {
+        this.clearChildProviders(invalidProviders);
+      }
       await this.loadMessagesFromAllProviders();
       // Any change in user prefs can disable or enable groups
       await this.setState(state => ({
         groups: state.groups.map(this._checkGroupEnabled),
       }));
     }
-    this.clearChildMessages(invalidMessages);
   }
 
   // Fetch and decode the message provider pref JSON, and update the message providers
@@ -641,12 +655,12 @@ class _ASRouter {
     );
 
     const providerIDs = providers.map(p => p.id);
-    let invalidMessages = [];
+    let invalidProviders = [];
 
     // Clear old messages for providers that are no longer enabled
     for (const prevProvider of previousProviders) {
       if (!providerIDs.includes(prevProvider.id)) {
-        invalidMessages.push(prevProvider.id);
+        invalidProviders.push(prevProvider.id);
       }
     }
 
@@ -658,7 +672,7 @@ class _ASRouter {
           providerIDs.includes(message.provider)
         ),
       ],
-    })).then(() => invalidMessages);
+    })).then(() => invalidProviders);
   }
 
   get state() {
@@ -881,12 +895,14 @@ class _ASRouter {
     storage,
     sendTelemetry,
     clearChildMessages,
+    clearChildProviders,
     updateAdminState,
     dispatchCFRAction,
   }) {
     this._storage = storage;
     this.ALLOWLIST_HOSTS = this._loadSnippetsAllowHosts();
     this.clearChildMessages = this.toWaitForInitFunc(clearChildMessages);
+    this.clearChildProviders = this.toWaitForInitFunc(clearChildProviders);
     // NOTE: This is only necessary to sync devtools and snippets when devtools is active.
     this.updateAdminState = this.toWaitForInitFunc(updateAdminState);
     this.sendTelemetry = sendTelemetry;
@@ -927,6 +943,7 @@ class _ASRouter {
       (await this._storage.get("groupImpressions")) || {};
     const previousSessionEnd =
       (await this._storage.get("previousSessionEnd")) || 0;
+
     await this.setState({
       messageBlockList,
       groupImpressions,
@@ -951,6 +968,7 @@ class _ASRouter {
     this._storage.set("previousSessionEnd", Date.now());
 
     this.clearChildMessages = null;
+    this.clearChildProviders = null;
     this.updateAdminState = null;
     this.sendTelemetry = null;
     this.dispatchCFRAction = null;
@@ -1003,7 +1021,7 @@ class _ASRouter {
       providerPrefs: ASRouterPreferences.providers,
       userPrefs: ASRouterPreferences.getAllUserPreferences(),
       targetingParameters,
-      trailhead: ASRouterPreferences.trailhead,
+      trailheadTriplet: ASRouterPreferences.trailheadTriplet,
       errors: this.errors,
     }));
   }
@@ -1321,8 +1339,7 @@ class _ASRouter {
       return {
         message: {
           ...message,
-          trailheadTriplet:
-            ASRouterPreferences.trailhead.trailheadTriplet || "",
+          trailheadTriplet: ASRouterPreferences.trailheadTriplet || "",
           bundle: bundledMessages && bundledMessages.bundle,
         },
       };
@@ -1657,13 +1674,15 @@ class _ASRouter {
     return state;
   }
 
-  addPreviewEndpoint(url) {
-    // When you view a preview snippet we want to hide all real content
+  addPreviewEndpoint(url, browser) {
     const providers = [...this.state.providers];
     if (
       this._validPreviewEndpoint(url) &&
       !providers.find(p => p.url === url)
     ) {
+      // When you view a preview snippet we want to hide all real content -
+      // sending EnterSnippetsPreviewMode puts this browser tab in that state.
+      browser.sendMessageToActor("EnterSnippetsPreviewMode", {}, "ASRouter");
       providers.push({
         id: "preview",
         type: "remote",
@@ -1727,7 +1746,7 @@ class _ASRouter {
 
     // Load preview endpoint for snippets if one is sent
     if (endpoint) {
-      await this.addPreviewEndpoint(endpoint.url);
+      await this.addPreviewEndpoint(endpoint.url, browser);
     }
 
     // Load all messages
@@ -1779,11 +1798,6 @@ class _ASRouter {
   async sendTriggerMessage({ tabId, browser, ...trigger }) {
     await this.loadMessagesFromAllProviders();
 
-    if (trigger.id === "firstRun") {
-      // On about welcome, set trailhead message seen on receiving firstrun trigger
-      await this.setTrailHeadMessageSeen();
-    }
-
     const telemetryObject = { tabId };
     TelemetryStopwatch.start("MS_MESSAGE_REQUEST_TIME_MS", telemetryObject);
     // Return all the messages so that it can record the Reach event
@@ -1809,6 +1823,18 @@ class _ASRouter {
         nonReachMessages.push(message);
       }
     }
+
+    // Exposure events only apply to messages that come from the
+    // messaging-experiments provider
+    if (nonReachMessages.length && nonReachMessages[0].forExposureEvent) {
+      ExperimentAPI.recordExposureEvent(
+        // Any message processed by ASRouter will report the exposure event
+        // as `cfr`
+        "cfr",
+        nonReachMessages[0].forExposureEvent
+      );
+    }
+
     return this.sendMessage(
       nonReachMessages[0] || null,
       trigger,
@@ -1817,14 +1843,27 @@ class _ASRouter {
     );
   }
 
-  renderWNMessages(browserWindow, messageIds) {
-    let messages = messageIds.map(msgId => this.getMessageById(msgId));
+  async forceWNPanel(browser) {
+    let win = browser.ownerGlobal;
+    await ToolbarPanelHub.enableToolbarButton();
 
-    ToolbarPanelHub.forceShowMessage(browserWindow, messages);
+    win.PanelUI.showSubView(
+      "PanelUI-whatsNew",
+      win.document.getElementById("whats-new-menu-button")
+    );
+
+    let panel = win.document.getElementById("customizationui-widget-panel");
+    // Set the attribute to keep the panel open
+    panel.setAttribute("noautohide", true);
   }
 
-  async forceWNPanel(browserWindow) {
-    await ToolbarPanelHub.enableToolbarButton();
+  async closeWNPanel(browser) {
+    let win = browser.ownerGlobal;
+    let panel = win.document.getElementById("customizationui-widget-panel");
+    // Set the attribute to allow the panel to close
+    panel.setAttribute("noautohide", false);
+    // Removing the button is enough to close the panel.
+    await ToolbarPanelHub._hideToolbarButton(win);
   }
 }
 this._ASRouter = _ASRouter;

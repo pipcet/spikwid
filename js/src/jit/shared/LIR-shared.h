@@ -3129,9 +3129,9 @@ class LValueToInt32 : public LInstructionHelper<1, BOX_PIECES, 2> {
   }
 
   const char* extraName() const {
-    return mode() == NORMAL
-               ? "Normal"
-               : mode() == TRUNCATE ? "Truncate" : "TruncateNoWrap";
+    return mode() == NORMAL     ? "Normal"
+           : mode() == TRUNCATE ? "Truncate"
+                                : "TruncateNoWrap";
   }
 
   static const size_t Input = 0;
@@ -6130,41 +6130,6 @@ class LInt64ToBigInt : public LInstructionHelper<1, INT64_PIECES, 1> {
 
   const MInt64ToBigInt* mir() const { return mir_->toInt64ToBigInt(); }
   const LInt64Allocation input() { return getInt64Operand(Input); }
-  const LDefinition* temp() { return getTemp(0); }
-};
-
-// Guard that a value is in a TypeSet.
-class LTypeBarrierV : public LInstructionHelper<BOX_PIECES, BOX_PIECES, 2> {
- public:
-  LIR_HEADER(TypeBarrierV)
-
-  LTypeBarrierV(const LBoxAllocation& input, const LDefinition& unboxTemp,
-                const LDefinition& objTemp)
-      : LInstructionHelper(classOpcode) {
-    setBoxOperand(Input, input);
-    setTemp(0, unboxTemp);
-    setTemp(1, objTemp);
-  }
-
-  static const size_t Input = 0;
-
-  const MTypeBarrier* mir() const { return mir_->toTypeBarrier(); }
-  const LDefinition* unboxTemp() { return getTemp(0); }
-  const LDefinition* objTemp() { return getTemp(1); }
-};
-
-// Guard that a object is in a TypeSet.
-class LTypeBarrierO : public LInstructionHelper<1, 1, 1> {
- public:
-  LIR_HEADER(TypeBarrierO)
-
-  LTypeBarrierO(const LAllocation& obj, const LDefinition& temp)
-      : LInstructionHelper(classOpcode) {
-    setOperand(0, obj);
-    setTemp(0, temp);
-  }
-  const MTypeBarrier* mir() const { return mir_->toTypeBarrier(); }
-  const LAllocation* object() { return getOperand(0); }
   const LDefinition* temp() { return getTemp(0); }
 };
 

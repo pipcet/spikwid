@@ -66,6 +66,7 @@
 #include "MediaEngineDefault.h"
 #if defined(MOZ_WEBRTC)
 #  include "MediaEngineWebRTC.h"
+#  include "MediaEngineWebRTCAudio.h"
 #  include "browser_logging/WebRtcLog.h"
 #  include "webrtc/modules/audio_processing/include/audio_processing.h"
 #endif
@@ -1123,7 +1124,7 @@ nsresult MediaDevice::Allocate(const MediaTrackConstraints& aConstraints,
   return mSource->Allocate(aConstraints, aPrefs, aWindowID, aOutBadConstraint);
 }
 
-void MediaDevice::SetTrack(const RefPtr<SourceMediaTrack>& aTrack,
+void MediaDevice::SetTrack(const RefPtr<MediaTrack>& aTrack,
                            const PrincipalHandle& aPrincipalHandle) {
   MOZ_ASSERT(MediaManager::IsInMediaThread());
   MOZ_ASSERT(mSource);
@@ -1181,10 +1182,6 @@ MediaSourceEnum MediaDevice::GetMediaSource() const {
   // requirements.
   MOZ_ASSERT(mSource);
   return mSource->GetMediaSource();
-}
-
-static bool IsOn(const OwningBooleanOrMediaTrackConstraints& aUnion) {
-  return !aUnion.IsBoolean() || aUnion.GetAsBoolean();
 }
 
 static const MediaTrackConstraints& GetInvariant(
@@ -1287,11 +1284,21 @@ class GetUserMediaStreamRunnable : public Runnable {
       } else {
         nsString audioDeviceName;
         mAudioDevice->GetName(audioDeviceName);
-        RefPtr<MediaTrack> track = mtg->CreateSourceTrack(MediaSegment::AUDIO);
+        RefPtr<MediaTrack> track;
+#ifdef MOZ_WEBRTC
+        if (mAudioDevice->mIsFake) {
+          track = mtg->CreateSourceTrack(MediaSegment::AUDIO);
+        } else {
+          track = AudioInputTrack::Create(mtg);
+          track->Suspend();  // Microphone source resumes in SetTrack
+        }
+#else
+        track = mtg->CreateSourceTrack(MediaSegment::AUDIO);
+#endif
         audioTrackSource = new LocalTrackSource(
             principal, audioDeviceName, mSourceListener,
             mAudioDevice->GetMediaSource(), track, mPeerIdentity);
-        MOZ_ASSERT(IsOn(mConstraints.mAudio));
+        MOZ_ASSERT(MediaManager::IsOn(mConstraints.mAudio));
         RefPtr<MediaStreamTrack> domTrack = new dom::AudioStreamTrack(
             window, track, audioTrackSource, dom::MediaStreamTrackState::Live,
             false, GetInvariant(mConstraints.mAudio));
@@ -1305,7 +1312,7 @@ class GetUserMediaStreamRunnable : public Runnable {
       videoTrackSource = new LocalTrackSource(
           principal, videoDeviceName, mSourceListener,
           mVideoDevice->GetMediaSource(), track, mPeerIdentity);
-      MOZ_ASSERT(IsOn(mConstraints.mVideo));
+      MOZ_ASSERT(MediaManager::IsOn(mConstraints.mVideo));
       RefPtr<MediaStreamTrack> domTrack = new dom::VideoStreamTrack(
           window, track, videoTrackSource, dom::MediaStreamTrackState::Live,
           false, GetInvariant(mConstraints.mVideo));
@@ -1329,7 +1336,7 @@ class GetUserMediaStreamRunnable : public Runnable {
 
       mHolder.Reject(MakeRefPtr<MediaMgrError>(
                          MediaMgrError::Name::AbortError,
-                         sHasShutdown ? u"In shutdown"_ns : u"No stream."_ns),
+                         sHasShutdown ? "In shutdown"_ns : "No stream."_ns),
                      __func__);
       return NS_OK;
     }
@@ -1368,7 +1375,7 @@ class GetUserMediaStreamRunnable : public Runnable {
                         return SourceListener::SourceListenerPromise::
                             CreateAndReject(MakeRefPtr<MediaMgrError>(
                                                 MediaMgrError::Name::AbortError,
-                                                u"In shutdown"_ns),
+                                                "In shutdown"),
                                             __func__);
                       });
               return resolvePromise;
@@ -1557,7 +1564,7 @@ class GetUserMediaTask : public Runnable {
     }
   }
 
-  void Fail(MediaMgrError::Name aName, const nsString& aMessage = u""_ns,
+  void Fail(MediaMgrError::Name aName, const nsCString& aMessage = ""_ns,
             const nsString& aConstraint = u""_ns) {
     NS_DispatchToMainThread(NS_NewRunnableFunction(
         "GetUserMediaTask::Fail",
@@ -1628,11 +1635,10 @@ class GetUserMediaTask : public Runnable {
     if (errorMsg) {
       LOG("%s %" PRIu32, errorMsg, static_cast<uint32_t>(rv));
       if (badConstraint) {
-        Fail(MediaMgrError::Name::OverconstrainedError, u""_ns,
+        Fail(MediaMgrError::Name::OverconstrainedError, ""_ns,
              NS_ConvertUTF8toUTF16(badConstraint));
       } else {
-        Fail(MediaMgrError::Name::NotReadableError,
-             NS_ConvertUTF8toUTF16(errorMsg));
+        Fail(MediaMgrError::Name::NotReadableError, nsCString(errorMsg));
       }
       NS_DispatchToMainThread(
           NS_NewRunnableFunction("MediaManager::SendPendingGUMRequest", []() {
@@ -1657,7 +1663,7 @@ class GetUserMediaTask : public Runnable {
   }
 
   nsresult Denied(MediaMgrError::Name aName,
-                  const nsString& aMessage = u""_ns) {
+                  const nsCString& aMessage = ""_ns) {
     // We add a disabled listener to the StreamListeners array until accepted
     // If this was the only active MediaStream, remove the window from the list.
     if (NS_IsMainThread()) {
@@ -1940,10 +1946,9 @@ RefPtr<MediaManager::MgrPromise> MediaManager::EnumerateRawDevices(
     // Need to ask permission to retrieve list of all devices;
     // notify frontend observer and wait for callback notification to post task.
     const char16_t* const type =
-        (aVideoInputType != MediaSourceEnum::Camera)
-            ? u"audio"
-            : (aAudioInputType != MediaSourceEnum::Microphone) ? u"video"
-                                                               : u"all";
+        (aVideoInputType != MediaSourceEnum::Camera)       ? u"audio"
+        : (aAudioInputType != MediaSourceEnum::Microphone) ? u"video"
+                                                           : u"all";
     nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
     obs->NotifyObservers(static_cast<nsIRunnable*>(task),
                          "getUserMedia:ask-device-permission", type);
@@ -2237,7 +2242,7 @@ void MediaManager::DeviceListChanged() {
             if (!MediaManager::GetIfExists()) {
               return MgrPromise::CreateAndReject(
                   MakeRefPtr<MediaMgrError>(MediaMgrError::Name::AbortError,
-                                            u"In shutdown"_ns),
+                                            "In shutdown"),
                   __func__);
             }
             return EnumerateRawDevices(
@@ -2326,7 +2331,7 @@ enum class GetUserMediaSecurityState {
 static void ReduceConstraint(
     OwningBooleanOrMediaTrackConstraints& aConstraint) {
   // Not requesting stream.
-  if (!IsOn(aConstraint)) {
+  if (!MediaManager::IsOn(aConstraint)) {
     return;
   }
 
@@ -2365,26 +2370,10 @@ RefPtr<MediaManager::StreamPromise> MediaManager::GetUserMedia(
 
   MediaStreamConstraints c(aConstraintsPassedIn);  // use a modifiable copy
 
-  // Do all the validation we can while we're sync (to return an
-  // already-rejected promise on failure).
-
-  if (!IsOn(c.mVideo) && !IsOn(c.mAudio)) {
-    return StreamPromise::CreateAndReject(
-        MakeRefPtr<MediaMgrError>(MediaMgrError::Name::TypeError,
-                                  u"audio and/or video is required"_ns),
-        __func__);
-  }
-
-  if (!aWindow->IsFullyActive()) {
-    return StreamPromise::CreateAndReject(
-        MakeRefPtr<MediaMgrError>(MediaMgrError::Name::InvalidStateError),
-        __func__);
-  }
-
   if (sHasShutdown) {
     return StreamPromise::CreateAndReject(
         MakeRefPtr<MediaMgrError>(MediaMgrError::Name::AbortError,
-                                  u"In shutdown"_ns),
+                                  "In shutdown"),
         __func__);
   }
 
@@ -2495,7 +2484,7 @@ RefPtr<MediaManager::StreamPromise> MediaManager::GetUserMedia(
       default: {
         return StreamPromise::CreateAndReject(
             MakeRefPtr<MediaMgrError>(MediaMgrError::Name::OverconstrainedError,
-                                      u""_ns, u"mediaSource"_ns),
+                                      "", u"mediaSource"_ns),
             __func__);
       }
     }
@@ -2573,7 +2562,7 @@ RefPtr<MediaManager::StreamPromise> MediaManager::GetUserMedia(
       default: {
         return StreamPromise::CreateAndReject(
             MakeRefPtr<MediaMgrError>(MediaMgrError::Name::OverconstrainedError,
-                                      u""_ns, u"mediaSource"_ns),
+                                      "", u"mediaSource"_ns),
             __func__);
       }
     }
@@ -2764,7 +2753,7 @@ RefPtr<MediaManager::StreamPromise> MediaManager::GetUserMedia(
               windowListener->Remove(sourceListener);
               return StreamPromise::CreateAndReject(
                   MakeRefPtr<MediaMgrError>(
-                      MediaMgrError::Name::OverconstrainedError, u""_ns,
+                      MediaMgrError::Name::OverconstrainedError, "",
                       constraint),
                   __func__);
             }
@@ -2854,107 +2843,6 @@ RefPtr<MediaManager::StreamPromise> MediaManager::GetUserMedia(
             return StreamPromise::CreateAndReject(std::move(aError), __func__);
           });
 };
-
-RefPtr<MediaManager::StreamPromise> MediaManager::GetDisplayMedia(
-    nsPIDOMWindowInner* aWindow,
-    const DisplayMediaStreamConstraints& aConstraintsPassedIn,
-    CallerType aCallerType) {
-  MOZ_ASSERT(NS_IsMainThread());
-  MOZ_ASSERT(aWindow);
-  Document* doc = aWindow->GetExtantDoc();
-  if (NS_WARN_IF(!doc)) {
-    return StreamPromise::CreateAndReject(
-        MakeRefPtr<MediaMgrError>(MediaMgrError::Name::SecurityError),
-        __func__);
-  }
-
-  if (!doc->HasBeenUserGestureActivated()) {
-    return StreamPromise::CreateAndReject(
-        MakeRefPtr<MediaMgrError>(MediaMgrError::Name::InvalidStateError,
-                                  u"getDisplayMedia must be called from a user "
-                                  u"gesture handler."_ns),
-        __func__);
-  }
-
-  if (!IsOn(aConstraintsPassedIn.mVideo)) {
-    return StreamPromise::CreateAndReject(
-        MakeRefPtr<MediaMgrError>(MediaMgrError::Name::TypeError,
-                                  u"video is required"_ns),
-        __func__);
-  }
-
-  MediaStreamConstraints c;
-  auto& vc = c.mVideo.SetAsMediaTrackConstraints();
-
-  if (aConstraintsPassedIn.mVideo.IsMediaTrackConstraints()) {
-    vc = aConstraintsPassedIn.mVideo.GetAsMediaTrackConstraints();
-    if (vc.mAdvanced.WasPassed()) {
-      return StreamPromise::CreateAndReject(
-          MakeRefPtr<MediaMgrError>(MediaMgrError::Name::TypeError,
-                                    u"advanced not allowed"_ns),
-          __func__);
-    }
-    auto getCLR = [](const auto& aCon) -> const ConstrainLongRange& {
-      static ConstrainLongRange empty;
-      return (aCon.WasPassed() && !aCon.Value().IsLong())
-                 ? aCon.Value().GetAsConstrainLongRange()
-                 : empty;
-    };
-    auto getCDR = [](auto&& aCon) -> const ConstrainDoubleRange& {
-      static ConstrainDoubleRange empty;
-      return (aCon.WasPassed() && !aCon.Value().IsDouble())
-                 ? aCon.Value().GetAsConstrainDoubleRange()
-                 : empty;
-    };
-    const auto& w = getCLR(vc.mWidth);
-    const auto& h = getCLR(vc.mHeight);
-    const auto& f = getCDR(vc.mFrameRate);
-    if (w.mMin.WasPassed() || h.mMin.WasPassed() || f.mMin.WasPassed()) {
-      return StreamPromise::CreateAndReject(
-          MakeRefPtr<MediaMgrError>(MediaMgrError::Name::TypeError,
-                                    u"min not allowed"_ns),
-          __func__);
-    }
-    if (w.mExact.WasPassed() || h.mExact.WasPassed() || f.mExact.WasPassed()) {
-      return StreamPromise::CreateAndReject(
-          MakeRefPtr<MediaMgrError>(MediaMgrError::Name::TypeError,
-                                    u"exact not allowed"_ns),
-          __func__);
-    }
-    // As a UA optimization, we fail early without incurring a prompt, on
-    // known-to-fail constraint values that don't reveal anything about the
-    // user's system.
-    const char* badConstraint = nullptr;
-    if (w.mMax.WasPassed() && w.mMax.Value() < 1) {
-      badConstraint = "width";
-    }
-    if (h.mMax.WasPassed() && h.mMax.Value() < 1) {
-      badConstraint = "height";
-    }
-    if (f.mMax.WasPassed() && f.mMax.Value() < 1) {
-      badConstraint = "frameRate";
-    }
-    if (badConstraint) {
-      return StreamPromise::CreateAndReject(
-          MakeRefPtr<MediaMgrError>(MediaMgrError::Name::OverconstrainedError,
-                                    u""_ns,
-                                    NS_ConvertASCIItoUTF16(badConstraint)),
-          __func__);
-    }
-  }
-  // We ask for "screen" sharing.
-  //
-  // If this is a privileged call or permission is disabled, this gives us full
-  // screen sharing by default, which is useful for internal testing.
-  //
-  // If this is a non-priviliged call, GetUserMedia() will change it to "window"
-  // for us.
-  vc.mMediaSource.Reset();
-  vc.mMediaSource.Construct().AssignASCII(
-      dom::MediaSourceEnumValues::GetString(MediaSourceEnum::Screen));
-
-  return MediaManager::GetUserMedia(aWindow, c, aCallerType);
-}
 
 /* static */
 void MediaManager::AnonymizeDevices(MediaDeviceSet& aDevices,
@@ -3173,7 +3061,7 @@ RefPtr<MediaManager::DevicesPromise> MediaManager::EnumerateDevices(
   if (sHasShutdown) {
     return DevicesPromise::CreateAndReject(
         MakeRefPtr<MediaMgrError>(MediaMgrError::Name::AbortError,
-                                  u"In shutdown"_ns),
+                                  "In shutdown"),
         __func__);
   }
   uint64_t windowId = aWindow->WindowID();
@@ -3877,7 +3765,7 @@ nsresult MediaManager::Observe(nsISupports* aSubject, const char* aTopic,
     }
 
     if (sHasShutdown) {
-      return task->Denied(MediaMgrError::Name::AbortError, u"In shutdown"_ns);
+      return task->Denied(MediaMgrError::Name::AbortError, "In shutdown"_ns);
     }
     // Reuse the same thread to save memory.
     MediaManager::Dispatch(task.forget());
@@ -4166,25 +4054,25 @@ SourceListener::InitializeAsync() {
              [principal = GetPrincipalHandle(),
               audioDevice =
                   mAudioDeviceState ? mAudioDeviceState->mDevice : nullptr,
-              audioStream = mAudioDeviceState
-                                ? mAudioDeviceState->mTrackSource->mTrack
-                                : nullptr,
+              audioTrack = mAudioDeviceState
+                               ? mAudioDeviceState->mTrackSource->mTrack
+                               : nullptr,
               audioDeviceMuted =
                   mAudioDeviceState ? mAudioDeviceState->mDeviceMuted : false,
               videoDevice =
                   mVideoDeviceState ? mVideoDeviceState->mDevice : nullptr,
-              videoStream = mVideoDeviceState
-                                ? mVideoDeviceState->mTrackSource->mTrack
-                                : nullptr,
+              videoTrack = mVideoDeviceState
+                               ? mVideoDeviceState->mTrackSource->mTrack
+                               : nullptr,
               videoDeviceMuted =
                   mVideoDeviceState ? mVideoDeviceState->mDeviceMuted : false](
                  MozPromiseHolder<SourceListenerPromise>& aHolder) {
                if (audioDevice) {
-                 audioDevice->SetTrack(audioStream->AsSourceTrack(), principal);
+                 audioDevice->SetTrack(audioTrack, principal);
                }
 
                if (videoDevice) {
-                 videoDevice->SetTrack(videoStream->AsSourceTrack(), principal);
+                 videoDevice->SetTrack(videoTrack, principal);
                }
 
                if (audioDevice) {
@@ -4194,7 +4082,7 @@ SourceListener::InitializeAsync() {
                    rv = audioDevice->Start();
                  }
                  if (NS_FAILED(rv)) {
-                   nsString log;
+                   nsCString log;
                    if (rv == NS_ERROR_NOT_AVAILABLE) {
                      log.AssignLiteral("Concurrent mic process limit.");
                      aHolder.Reject(
@@ -4219,10 +4107,9 @@ SourceListener::InitializeAsync() {
                        MOZ_ASSERT_UNREACHABLE("Stopping audio failed");
                      }
                    }
-                   nsString log;
-                   log.AssignLiteral("Starting video failed");
                    aHolder.Reject(MakeRefPtr<MediaMgrError>(
-                                      MediaMgrError::Name::AbortError, log),
+                                      MediaMgrError::Name::AbortError,
+                                      "Starting video failed"),
                                   __func__);
                    return;
                  }
@@ -4763,7 +4650,7 @@ SourceListener::ApplyConstraintsToTrack(
           }
 
           aHolder.Reject(MakeRefPtr<MediaMgrError>(
-                             MediaMgrError::Name::OverconstrainedError, u""_ns,
+                             MediaMgrError::Name::OverconstrainedError, "",
                              NS_ConvertASCIItoUTF16(badConstraint)),
                          __func__);
           return;

@@ -112,3 +112,23 @@ class RotorHeadingLevelRule : public RotorRoleRule {
  private:
   int32_t mLevel;
 };
+
+class RotorLiveRegionRule : public RotorRule {
+ public:
+  explicit RotorLiveRegionRule(AccessibleOrProxy& aDirectDescendantsFrom)
+      : RotorRule(aDirectDescendantsFrom) {}
+  explicit RotorLiveRegionRule() : RotorRule() {}
+
+  uint16_t Match(const AccessibleOrProxy& aAccOrProxy) override;
+};
+
+/**
+ * This rule matches all accessibles with roles::OUTLINEITEM. If
+ * outlines are nested, it ignores the nested subtree and returns
+ * only items which are descendants of the primary outline.
+ */
+class OutlineRule : public RotorRule {
+ public:
+  explicit OutlineRule();
+  uint16_t Match(const AccessibleOrProxy& aAccOrProxy) override;
+};

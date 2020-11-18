@@ -20,7 +20,7 @@ use crate::picture::{SliceId, SurfaceInfo, ResolvedSurfaceTexture, TileCacheInst
 use crate::prim_store::{PrimitiveStore, DeferredResolve, PrimitiveScratchBuffer};
 use crate::prim_store::gradient::GRADIENT_FP_STOPS;
 use crate::render_backend::DataStores;
-use crate::render_task::{RenderTaskKind, RenderTaskAddress, ClearMode, BlitSource};
+use crate::render_task::{RenderTaskKind, RenderTaskAddress, BlitSource};
 use crate::render_task::{RenderTask, ScalingTask, SvgFilterInfo};
 use crate::render_task_graph::{RenderTaskGraph, RenderTaskId};
 use crate::resource_cache::ResourceCache;
@@ -190,7 +190,7 @@ impl<T: RenderTarget> RenderTargetList<T> {
             max_dynamic_size: DeviceIntSize::new(0, 0),
             targets: Vec::new(),
             saved_index: None,
-            alloc_tracker: ArrayAllocationTracker::new(),
+            alloc_tracker: ArrayAllocationTracker::new(None),
             gpu_supports_fast_clears,
         }
     }
@@ -342,15 +342,6 @@ impl RenderTarget for ColorRenderTarget {
             profile_scope!("alpha_task");
             let task = &render_tasks[*task_id];
 
-            match task.clear_mode {
-                ClearMode::One |
-                ClearMode::Zero => {
-                    panic!("bug: invalid clear mode for color task");
-                }
-                ClearMode::DontCare |
-                ClearMode::Transparent => {}
-            }
-
             match task.kind {
                 RenderTaskKind::Picture(ref pic_task) => {
                     let pic = &ctx.prim_store.pictures[pic_task.pic_index.0];
@@ -396,7 +387,7 @@ impl RenderTarget for ColorRenderTarget {
                         ctx.break_advanced_blend_batches,
                         ctx.batch_lookback_count,
                         *task_id,
-                        render_tasks.get_task_address(*task_id),
+                        (*task_id).into(),
                         PrimitiveVisibilityMask::all(),
                         prealloc_batch_count,
                     );
@@ -459,16 +450,16 @@ impl RenderTarget for ColorRenderTarget {
                 add_blur_instances(
                     &mut self.vertical_blurs,
                     BlurDirection::Vertical,
-                    render_tasks.get_task_address(task_id),
-                    render_tasks.get_task_address(task.children[0]),
+                    task_id.into(),
+                    task.children[0].into(),
                 );
             }
             RenderTaskKind::HorizontalBlur(..) => {
                 add_blur_instances(
                     &mut self.horizontal_blurs,
                     BlurDirection::Horizontal,
-                    render_tasks.get_task_address(task_id),
-                    render_tasks.get_task_address(task.children[0]),
+                    task_id.into(),
+                    task.children[0].into(),
                 );
             }
             RenderTaskKind::Picture(..) => {
@@ -619,19 +610,6 @@ impl RenderTarget for AlphaRenderTarget {
         let task = &render_tasks[task_id];
         let (target_rect, _) = task.get_target_rect();
 
-        match task.clear_mode {
-            ClearMode::Zero => {
-                self.zero_clears.push(task_id);
-            }
-            ClearMode::One => {
-                self.one_clears.push(task_id);
-            }
-            ClearMode::DontCare => {}
-            ClearMode::Transparent => {
-                panic!("bug: invalid clear mode for alpha task");
-            }
-        }
-
         match task.kind {
             RenderTaskKind::Readback |
             RenderTaskKind::Picture(..) |
@@ -643,22 +621,27 @@ impl RenderTarget for AlphaRenderTarget {
                 panic!("BUG: should not be added to alpha target!");
             }
             RenderTaskKind::VerticalBlur(..) => {
+                self.zero_clears.push(task_id);
                 add_blur_instances(
                     &mut self.vertical_blurs,
                     BlurDirection::Vertical,
-                    render_tasks.get_task_address(task_id),
-                    render_tasks.get_task_address(task.children[0]),
+                    task_id.into(),
+                    task.children[0].into(),
                 );
             }
             RenderTaskKind::HorizontalBlur(..) => {
+                self.zero_clears.push(task_id);
                 add_blur_instances(
                     &mut self.horizontal_blurs,
                     BlurDirection::Horizontal,
-                    render_tasks.get_task_address(task_id),
-                    render_tasks.get_task_address(task.children[0]),
+                    task_id.into(),
+                    task.children[0].into(),
                 );
             }
             RenderTaskKind::CacheMask(ref task_info) => {
+                if task_info.clear_to_one {
+                    self.one_clears.push(task_id);
+                }
                 self.clip_batcher.add(
                     task_info.clip_node_range,
                     task_info.root_spatial_node_index,
@@ -676,6 +659,9 @@ impl RenderTarget for AlphaRenderTarget {
                 );
             }
             RenderTaskKind::ClipRegion(ref region_task) => {
+                if region_task.clear_to_one {
+                    self.one_clears.push(task_id);
+                }
                 let device_rect = DeviceRect::new(
                     DevicePoint::zero(),
                     target_rect.size.to_f32(),
@@ -761,9 +747,9 @@ impl TextureCacheRenderTarget {
         render_tasks: &mut RenderTaskGraph,
     ) {
         profile_scope!("add_task");
-        let task_address = render_tasks.get_task_address(task_id);
-        let src_task_address = render_tasks[task_id].children.get(0).map(|src_task_id| {
-            render_tasks.get_task_address(*src_task_id)
+        let task_address = task_id.into();
+        let src_task_address = render_tasks[task_id].children.get(0).map(|&src_task_id| {
+            src_task_id.into()
         });
 
         let task = &mut render_tasks[task_id];
@@ -1018,9 +1004,9 @@ fn add_svg_filter_instances(
     };
 
     let instance = SvgFilterInstance {
-        task_address: render_tasks.get_task_address(task_id),
-        input_1_task_address: input_1_task.map(|id| render_tasks.get_task_address(id)).unwrap_or(RenderTaskAddress(0)),
-        input_2_task_address: input_2_task.map(|id| render_tasks.get_task_address(id)).unwrap_or(RenderTaskAddress(0)),
+        task_address: task_id.into(),
+        input_1_task_address: input_1_task.map(|id| id.into()).unwrap_or(RenderTaskAddress(0)),
+        input_2_task_address: input_2_task.map(|id| id.into()).unwrap_or(RenderTaskAddress(0)),
         kind,
         input_count,
         generic_int,

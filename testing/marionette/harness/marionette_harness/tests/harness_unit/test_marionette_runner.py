@@ -7,6 +7,7 @@ from __future__ import absolute_import
 import os
 
 import manifestparser
+import mozinfo
 import mozunit
 import pytest
 
@@ -356,9 +357,7 @@ def get_kwargs_passed_to_manifest(mock_runner, manifest, monkeypatch, **kwargs):
     monkeypatch.setattr(
         "marionette_harness.runner.base.TestManifest", manifest.manifest_class
     )
-    monkeypatch.setattr(
-        "marionette_harness.runner.base.mozinfo.info", {"mozinfo_key": "mozinfo_val"}
-    )
+    monkeypatch.setitem(mozinfo.info, "mozinfo_key", "mozinfo_val")
     for attr in kwargs:
         setattr(mock_runner, attr, kwargs[attr])
     mock_runner.marionette = mock_runner.driverclass()
@@ -373,7 +372,15 @@ def test_manifest_basic_args(mock_runner, manifest, monkeypatch):
     assert kwargs["exists"] is False
     assert kwargs["disabled"] is True
     assert kwargs["appname"] == "fake_app"
+    assert kwargs["actors"] is True
     assert "mozinfo_key" in kwargs and kwargs["mozinfo_key"] == "mozinfo_val"
+
+
+def test_manifest_actors_disabled(mock_runner, manifest, monkeypatch):
+    kwargs = get_kwargs_passed_to_manifest(
+        mock_runner, manifest, monkeypatch, disable_actors=True
+    )
+    assert kwargs["actors"] is False
 
 
 @pytest.mark.parametrize("test_tags", (None, ["tag", "tag2"]))

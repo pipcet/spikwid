@@ -37,7 +37,7 @@
 #include "js/CallNonGenericMethod.h"
 #include "js/CompileOptions.h"
 #include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
-#include "js/friend/StackLimits.h"  // js::CheckRecursionLimit
+#include "js/friend/StackLimits.h"    // js::CheckRecursionLimit
 #include "js/PropertySpec.h"
 #include "js/Proxy.h"
 #include "js/SourceText.h"
@@ -550,7 +550,6 @@ XDRResult js::XDRInterpretedFunction(XDRState<mode>* xdr,
     IsGenerator = 1 << 1,
     IsAsync = 1 << 2,
     IsLazy = 1 << 3,
-    HasSingletonType = 1 << 4,
   };
 
   /* NB: Keep this in sync with CloneInnerInterpretedFunction. */
@@ -571,10 +570,6 @@ XDRResult js::XDRInterpretedFunction(XDRState<mode>* xdr,
     fun = objp;
     if (!fun->isInterpreted() || fun->isBoundFunction()) {
       return xdr->fail(JS::TranscodeResult_Failure_NotInterpretedFun);
-    }
-
-    if (fun->isSingleton()) {
-      xdrFlags |= HasSingletonType;
     }
 
     if (fun->isGenerator()) {
@@ -656,17 +651,7 @@ XDRResult js::XDRInterpretedFunction(XDRState<mode>* xdr,
     }
     objp.set(fun);
 
-    // If this function has an enclosing-scope, it is accesible by script and
-    // should use an updated ObjectGroup. Note that the singleton flag is not
-    // computed correctly until the enclosing-script has been compiled. The
-    // delazification of a script will apply types to inner functions at that
-    // time.
-    if (enclosingScope) {
-      bool singleton = (xdrFlags & HasSingletonType);
-      if (!JSFunction::setTypeForScriptedFunction(cx, fun, singleton)) {
-        return xdr->fail(JS::TranscodeResult_Throw);
-      }
-    }
+    MOZ_RELEASE_ASSERT(!IsTypeInferenceEnabled());
   }
 
   if (xdrFlags & IsLazy) {
@@ -1600,14 +1585,6 @@ bool DelazifyCanonicalScriptedFunctionImpl(JSContext* cx, HandleFunction fun,
       return false;
     }
 
-    if (!js::UseOffThreadParseGlobal()) {
-      if (ss->hasEncoder()) {
-        if (!ss->xdrEncodeFunctionStencil(cx, compilationInfo.get().stencil)) {
-          return false;
-        }
-      }
-    }
-
     if (!frontend::InstantiateStencilsForDelazify(cx, compilationInfo.get())) {
       // The frontend shouldn't fail after linking the function and the
       // non-lazy script together.
@@ -1615,15 +1592,22 @@ bool DelazifyCanonicalScriptedFunctionImpl(JSContext* cx, HandleFunction fun,
       MOZ_ASSERT(lazy->isReadyForDelazification());
       return false;
     }
-  }
 
-  if (js::UseOffThreadParseGlobal()) {
-    // XDR the newly delazified function.
     if (ss->hasEncoder()) {
-      RootedScriptSourceObject sourceObject(
-          cx, fun->nonLazyScript()->sourceObject());
-      if (!ss->xdrEncodeFunction(cx, fun, sourceObject)) {
-        return false;
+      // NOTE: Currently we rely on the UseOffThreadParseGlobal to decide which
+      //       format to use for incremental encoding.
+      bool useStencilXDR = !js::UseOffThreadParseGlobal();
+      if (useStencilXDR) {
+        if (!ss->xdrEncodeFunctionStencil(cx, compilationInfo.get().stencil)) {
+          return false;
+        }
+      } else {
+        // XDR the newly delazified function.
+        RootedScriptSourceObject sourceObject(
+            cx, fun->nonLazyScript()->sourceObject());
+        if (!ss->xdrEncodeFunction(cx, fun, sourceObject)) {
+          return false;
+        }
       }
     }
   }
@@ -2245,16 +2229,14 @@ JSFunction* js::CloneFunctionReuseScript(JSContext* cx, HandleFunction fun,
     clone->initEnvironment(enclosingEnv);
   }
 
+  MOZ_RELEASE_ASSERT(!IsTypeInferenceEnabled());
+
   /*
    * Clone the function, reusing its script. We can use the same group as
    * the original function provided that its prototype is correct.
    */
   if (fun->staticPrototype() == clone->staticPrototype()) {
     clone->setGroup(fun->group());
-  } else if (setTypeForFunction) {
-    if (!JSFunction::setTypeForScriptedFunction(cx, clone)) {
-      return nullptr;
-    }
   }
   return clone;
 }

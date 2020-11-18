@@ -576,9 +576,9 @@ NS_IMETHODIMP
 nsNavHistoryContainerResultNode::GetState(uint16_t* _state) {
   NS_ENSURE_ARG_POINTER(_state);
 
-  *_state = mExpanded ? (uint16_t)STATE_OPENED
-                      : mAsyncPendingStmt ? (uint16_t)STATE_LOADING
-                                          : (uint16_t)STATE_CLOSED;
+  *_state = mExpanded           ? (uint16_t)STATE_OPENED
+            : mAsyncPendingStmt ? (uint16_t)STATE_LOADING
+                                : (uint16_t)STATE_CLOSED;
 
   return NS_OK;
 }
@@ -3415,27 +3415,28 @@ nsNavHistoryFolderResultNode::OnItemMoved(
     // adjust position
     EnsureItemPosition(index);
     return NS_OK;
-  } else {
-    // moving between two different folders, just do a remove and an add
-    nsCOMPtr<nsIURI> itemURI;
-    if (aItemType == nsINavBookmarksService::TYPE_BOOKMARK) {
-      nsNavBookmarks* bookmarks = nsNavBookmarks::GetBookmarksService();
-      NS_ENSURE_TRUE(bookmarks, NS_ERROR_OUT_OF_MEMORY);
-      nsresult rv = bookmarks->GetBookmarkURI(aItemId, getter_AddRefs(itemURI));
-      NS_ENSURE_SUCCESS(rv, rv);
-      NS_ENSURE_SUCCESS(rv, rv);
-    }
-    if (aOldParent == mTargetFolderItemId) {
-      OnItemRemoved(aItemId, aOldParent, aOldIndex, aItemType, itemURI, aGUID,
-                    aOldParentGUID, aSource);
-    }
-    if (aNewParent == mTargetFolderItemId) {
-      OnItemAdded(
-          aItemId, aNewParent, aNewIndex, aItemType, itemURI,
-          RoundedPRNow(),  // This is a dummy dateAdded, not the real value.
-          aGUID, aNewParentGUID, aSource);
-    }
   }
+
+  // moving between two different folders, just do a remove and an add
+  nsCOMPtr<nsIURI> itemURI;
+  if (aItemType == nsINavBookmarksService::TYPE_BOOKMARK) {
+    nsNavBookmarks* bookmarks = nsNavBookmarks::GetBookmarksService();
+    NS_ENSURE_TRUE(bookmarks, NS_ERROR_OUT_OF_MEMORY);
+    nsresult rv = bookmarks->GetBookmarkURI(aItemId, getter_AddRefs(itemURI));
+    NS_ENSURE_SUCCESS(rv, rv);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+  if (aOldParent == mTargetFolderItemId) {
+    OnItemRemoved(aItemId, aOldParent, aOldIndex, aItemType, itemURI, aGUID,
+                  aOldParentGUID, aSource);
+  }
+  if (aNewParent == mTargetFolderItemId) {
+    OnItemAdded(
+        aItemId, aNewParent, aNewIndex, aItemType, itemURI,
+        RoundedPRNow(),  // This is a dummy dateAdded, not the real value.
+        aGUID, aNewParentGUID, aSource);
+  }
+
   return NS_OK;
 }
 

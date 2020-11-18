@@ -70,7 +70,6 @@
 #include "mozilla/dom/StorageActivityService.h"
 #include "mozilla/dom/StorageDBUpdater.h"
 #include "mozilla/dom/StorageTypeBinding.h"
-#include "mozilla/dom/URLSearchParams.h"
 #include "mozilla/dom/cache/QuotaClient.h"
 #include "mozilla/dom/indexedDB/ActorsParent.h"
 #include "mozilla/dom/ipc/IdType.h"
@@ -141,6 +140,7 @@
 #include "nsTPromiseFlatString.h"
 #include "nsTStringRepr.h"
 #include "nsThreadUtils.h"
+#include "nsURLHelper.h"
 #include "nsXPCOM.h"
 #include "nsXPCOMCID.h"
 #include "nsXULAppAPI.h"
@@ -189,9 +189,7 @@
 #define MB *1024ULL KB
 #define GB *1024ULL MB
 
-namespace mozilla {
-namespace dom {
-namespace quota {
+namespace mozilla::dom::quota {
 
 using namespace mozilla::ipc;
 using mozilla::net::MozURL;
@@ -1015,7 +1013,7 @@ class OriginInfo final {
 
   void LockedResetUsageForClient(Client::Type aClientType);
 
-  bool LockedGetUsageForClient(Client::Type aClientType, uint64_t& aUsage);
+  UsageInfo LockedGetUsageForClient(Client::Type aClientType);
 
   void LockedUpdateAccessTime(int64_t aAccessTime) {
     AssertCurrentThreadOwnsQuotaMutex();
@@ -1054,13 +1052,15 @@ class OriginInfo final {
 class OriginInfoLRUComparator {
  public:
   bool Equals(const OriginInfo* a, const OriginInfo* b) const {
-    return a && b ? a->LockedAccessTime() == b->LockedAccessTime()
-                  : !a && !b ? true : false;
+    return a && b     ? a->LockedAccessTime() == b->LockedAccessTime()
+           : !a && !b ? true
+                      : false;
   }
 
   bool LessThan(const OriginInfo* a, const OriginInfo* b) const {
     return a && b ? a->LockedAccessTime() < b->LockedAccessTime()
-                  : b ? true : false;
+           : b    ? true
+                  : false;
   }
 };
 
@@ -2541,13 +2541,9 @@ Result<nsCOMPtr<nsIOutputStream>, nsresult> GetOutputStream(
     nsIFile& aFile, FileFlag aFileFlag) {
   AssertIsOnIOThread();
 
-  nsCOMPtr<nsIOutputStream> outputStream;
   switch (aFileFlag) {
-    case kTruncateFileFlag: {
-      QM_TRY(NS_NewLocalFileOutputStream(getter_AddRefs(outputStream), &aFile));
-
-      break;
-    }
+    case kTruncateFileFlag:
+      QM_TRY_RETURN(NS_NewLocalFileOutputStream(&aFile));
 
     case kUpdateFileFlag: {
       QM_TRY_INSPECT(const bool& exists, MOZ_TO_RESULT_INVOKE(&aFile, Exists));
@@ -2556,28 +2552,21 @@ Result<nsCOMPtr<nsIOutputStream>, nsresult> GetOutputStream(
         return nsCOMPtr<nsIOutputStream>();
       }
 
-      nsCOMPtr<nsIFileStream> stream;
-      QM_TRY(NS_NewLocalFileStream(getter_AddRefs(stream), &aFile));
+      QM_TRY_INSPECT(const auto& stream, NS_NewLocalFileStream(&aFile));
 
-      outputStream = do_QueryInterface(stream);
+      nsCOMPtr<nsIOutputStream> outputStream = do_QueryInterface(stream);
       QM_TRY(OkIf(outputStream), Err(NS_ERROR_FAILURE));
 
-      break;
+      return outputStream;
     }
 
-    case kAppendFileFlag: {
-      QM_TRY(
-          NS_NewLocalFileOutputStream(getter_AddRefs(outputStream), &aFile,
-                                      PR_WRONLY | PR_CREATE_FILE | PR_APPEND));
-
-      break;
-    }
+    case kAppendFileFlag:
+      QM_TRY_RETURN(NS_NewLocalFileOutputStream(
+          &aFile, PR_WRONLY | PR_CREATE_FILE | PR_APPEND));
 
     default:
       MOZ_CRASH("Should never get here!");
   }
-
-  return outputStream;
 }
 
 Result<nsCOMPtr<nsIBinaryOutputStream>, nsresult> GetBinaryOutputStream(
@@ -2718,12 +2707,10 @@ Result<nsCOMPtr<nsIBinaryInputStream>, nsresult> GetBinaryInputStream(
 
   QM_TRY(file->Append(aFilename));
 
-  nsCOMPtr<nsIInputStream> stream;
-  QM_TRY(NS_NewLocalFileInputStream(getter_AddRefs(stream), file));
+  QM_TRY_UNWRAP(auto stream, NS_NewLocalFileInputStream(file));
 
-  nsCOMPtr<nsIInputStream> bufferedStream;
-  QM_TRY(NS_NewBufferedInputStream(getter_AddRefs(bufferedStream),
-                                   stream.forget(), 512));
+  QM_TRY_INSPECT(const auto& bufferedStream,
+                 NS_NewBufferedInputStream(stream.forget(), 512));
 
   QM_TRY(OkIf(bufferedStream), Err(NS_ERROR_FAILURE));
 
@@ -4249,10 +4236,9 @@ void QuotaManager::ResetUsageForClient(PersistenceType aPersistenceType,
   }
 }
 
-bool QuotaManager::GetUsageForClient(PersistenceType aPersistenceType,
-                                     const GroupAndOrigin& aGroupAndOrigin,
-                                     Client::Type aClientType,
-                                     uint64_t& aUsage) {
+UsageInfo QuotaManager::GetUsageForClient(PersistenceType aPersistenceType,
+                                          const GroupAndOrigin& aGroupAndOrigin,
+                                          Client::Type aClientType) {
   MOZ_ASSERT(!NS_IsMainThread());
   MOZ_ASSERT(aPersistenceType != PERSISTENCE_TYPE_PERSISTENT);
 
@@ -4260,21 +4246,21 @@ bool QuotaManager::GetUsageForClient(PersistenceType aPersistenceType,
 
   GroupInfoPair* pair;
   if (!mGroupInfoPairs.Get(aGroupAndOrigin.mGroup, &pair)) {
-    return false;
+    return UsageInfo{};
   }
 
   RefPtr<GroupInfo> groupInfo = pair->LockedGetGroupInfo(aPersistenceType);
   if (!groupInfo) {
-    return false;
+    return UsageInfo{};
   }
 
   RefPtr<OriginInfo> originInfo =
       groupInfo->LockedGetOriginInfo(aGroupAndOrigin.mOrigin);
   if (!originInfo) {
-    return false;
+    return UsageInfo{};
   }
 
-  return originInfo->LockedGetUsageForClient(aClientType, aUsage);
+  return originInfo->LockedGetUsageForClient(aClientType);
 }
 
 void QuotaManager::UpdateOriginAccessTime(
@@ -6748,24 +6734,18 @@ already_AddRefed<DirectoryLock> QuotaManager::OpenDirectoryInternal(
 
 Result<nsCOMPtr<nsIFile>, nsresult>
 QuotaManager::EnsureStorageAndOriginIsInitialized(
-    PersistenceType aPersistenceType, const QuotaInfo& aQuotaInfo,
-    Client::Type aClientType) {
+    PersistenceType aPersistenceType, const QuotaInfo& aQuotaInfo) {
   AssertIsOnIOThread();
 
   QM_TRY_RETURN(
-      EnsureStorageAndOriginIsInitializedInternal(
-          aPersistenceType, aQuotaInfo, Nullable<Client::Type>(aClientType))
+      EnsureStorageAndOriginIsInitializedInternal(aPersistenceType, aQuotaInfo)
           .map([](const auto& res) { return res.first; }));
 }
 
 Result<std::pair<nsCOMPtr<nsIFile>, bool>, nsresult>
 QuotaManager::EnsureStorageAndOriginIsInitializedInternal(
-    PersistenceType aPersistenceType, const QuotaInfo& aQuotaInfo,
-    const Nullable<Client::Type>& aClientType) {
+    PersistenceType aPersistenceType, const QuotaInfo& aQuotaInfo) {
   AssertIsOnIOThread();
-
-  // XXX Can't we just remove the argument if we don't need it?
-  Unused << aClientType;
 
   QM_TRY(EnsureStorageIsInitialized());
 
@@ -7972,18 +7952,16 @@ void OriginInfo::LockedResetUsageForClient(Client::Type aClientType) {
   quotaManager->mTemporaryStorageUsage -= size;
 }
 
-bool OriginInfo::LockedGetUsageForClient(Client::Type aClientType,
-                                         uint64_t& aUsage) {
+UsageInfo OriginInfo::LockedGetUsageForClient(Client::Type aClientType) {
   AssertCurrentThreadOwnsQuotaMutex();
 
-  Maybe<uint64_t>& clientUsage = mClientUsages[aClientType];
+  // The current implementation of this method only supports DOMCACHE and LS,
+  // which only use DatabaseUsage. If this assertion is lifted, the logic below
+  // must be adapted.
+  MOZ_ASSERT(aClientType == Client::Type::DOMCACHE ||
+             aClientType == Client::Type::LS);
 
-  if (clientUsage.isNothing()) {
-    return false;
-  }
-
-  aUsage = clientUsage.value();
-  return true;
+  return UsageInfo{DatabaseUsageType{mClientUsages[aClientType]}};
 }
 
 void OriginInfo::LockedPersist() {
@@ -8583,13 +8561,6 @@ bool Quota::VerifyRequestParams(const RequestParams& aParams) const {
       if (NS_WARN_IF(!IsValidPersistenceType(params.persistenceType()))) {
         ASSERT_UNLESS_FUZZING();
         return false;
-      }
-
-      if (params.clientTypeIsExplicit()) {
-        if (NS_WARN_IF(!Client::IsValidType(params.clientType()))) {
-          ASSERT_UNLESS_FUZZING();
-          return false;
-        }
       }
 
       break;
@@ -9605,10 +9576,6 @@ InitStorageAndOriginOp::InitStorageAndOriginOp(const RequestParams& aParams)
 
   mOriginScope.SetFromOrigin(quotaInfo.mOrigin);
 
-  if (params.clientTypeIsExplicit()) {
-    mClientType.SetValue(params.clientType());
-  }
-
   // Overwrite InitStorageAndOriginOp default values.
   mSuffix = std::move(quotaInfo.mSuffix);
   mGroup = std::move(quotaInfo.mGroup);
@@ -9627,8 +9594,7 @@ nsresult InitStorageAndOriginOp::DoDirectoryWork(QuotaManager& aQuotaManager) {
       (aQuotaManager
            .EnsureStorageAndOriginIsInitializedInternal(
                mPersistenceType.Value(),
-               QuotaInfo{mSuffix, mGroup, nsCString{mOriginScope.GetOrigin()}},
-               mClientType)
+               QuotaInfo{mSuffix, mGroup, nsCString{mOriginScope.GetOrigin()}})
            .map([](const auto& res) { return res.second; })));
 
   return NS_OK;
@@ -11574,27 +11540,19 @@ Result<bool, nsresult> UpgradeStorageFrom1_0To2_0Helper::MaybeRemoveAppsData(
   //         https+++developer.cdn.mozilla.net^inBrowser=1
   //       instead of just removing them.
 
-  class MOZ_STACK_CLASS ParamsIterator final
-      : public URLParams::ForEachIterator {
-   public:
-    bool URLParamsIterator(const nsAString& aName,
-                           const nsAString& aValue) override {
-      if (aName.EqualsLiteral("appId")) {
-        return false;
-      }
-
-      return true;
-    }
-  };
-
   const nsCString& originalSuffix = aOriginProps.mOriginalSuffix;
   if (!originalSuffix.IsEmpty()) {
     MOZ_ASSERT(originalSuffix[0] == '^');
 
-    ParamsIterator iterator;
     if (!URLParams::Parse(
             Substring(originalSuffix, 1, originalSuffix.Length() - 1),
-            iterator)) {
+            [](const nsAString& aName, const nsAString& aValue) {
+              if (aName.EqualsLiteral("appId")) {
+                return false;
+              }
+
+              return true;
+            })) {
       QM_TRY(RemoveObsoleteOrigin(aOriginProps));
 
       return true;
@@ -11881,6 +11839,4 @@ nsresult RestoreDirectoryMetadata2Helper::ProcessOriginDirectory(
   return NS_OK;
 }
 
-}  // namespace quota
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom::quota

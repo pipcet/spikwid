@@ -53,7 +53,7 @@ void TableCellReflowInput::FixUp(const LogicalSize& aAvailSpace) {
   if (NS_UNCONSTRAINEDSIZE != ComputedISize()) {
     nscoord computedISize =
         aAvailSpace.ISize(mWritingMode) -
-        ComputedLogicalBorderPadding().IStartEnd(mWritingMode);
+        ComputedLogicalBorderPadding(mWritingMode).IStartEnd(mWritingMode);
     computedISize = std::max(0, computedISize);
     SetComputedISize(computedISize);
   }
@@ -61,7 +61,7 @@ void TableCellReflowInput::FixUp(const LogicalSize& aAvailSpace) {
       NS_UNCONSTRAINEDSIZE != aAvailSpace.BSize(mWritingMode)) {
     nscoord computedBSize =
         aAvailSpace.BSize(mWritingMode) -
-        ComputedLogicalBorderPadding().BStartEnd(mWritingMode);
+        ComputedLogicalBorderPadding(mWritingMode).BStartEnd(mWritingMode);
     computedBSize = std::max(0, computedBSize);
     SetComputedBSize(computedBSize);
   }
@@ -71,18 +71,16 @@ void nsTableRowFrame::InitChildReflowInput(nsPresContext& aPresContext,
                                            const LogicalSize& aAvailSize,
                                            bool aBorderCollapse,
                                            TableCellReflowInput& aReflowInput) {
-  nsMargin collapseBorder;
-  nsMargin* pCollapseBorder = nullptr;
+  Maybe<LogicalMargin> collapseBorder;
   if (aBorderCollapse) {
     // we only reflow cells, so don't need to check frame type
     nsBCTableCellFrame* bcCellFrame = (nsBCTableCellFrame*)aReflowInput.mFrame;
     if (bcCellFrame) {
-      WritingMode wm = GetWritingMode();
-      collapseBorder = bcCellFrame->GetBorderWidth(wm).GetPhysicalMargin(wm);
-      pCollapseBorder = &collapseBorder;
+      collapseBorder.emplace(
+          bcCellFrame->GetBorderWidth(aReflowInput.GetWritingMode()));
     }
   }
-  aReflowInput.Init(&aPresContext, Nothing(), pCollapseBorder);
+  aReflowInput.Init(&aPresContext, Nothing(), collapseBorder);
   aReflowInput.FixUp(aAvailSize);
 }
 
@@ -1126,7 +1124,7 @@ nscoord nsTableRowFrame::CollapseRowIfNecessary(nscoord aRowOffset,
 
   rowRect.BStart(wm) -= aRowOffset;
   rowRect.ISize(wm) = aISize;
-  nsOverflowAreas overflow;
+  OverflowAreas overflow;
   nscoord shift = 0;
   nsSize containerSize = mRect.Size();
 
@@ -1243,7 +1241,7 @@ nscoord nsTableRowFrame::CollapseRowIfNecessary(nscoord aRowOffset,
         LogicalRect cellBounds(wm, 0, 0, cRect.ISize(wm), cRect.BSize(wm));
         nsRect cellPhysicalBounds =
             cellBounds.GetPhysicalRect(wm, containerSize);
-        nsOverflowAreas cellOverflow(cellPhysicalBounds, cellPhysicalBounds);
+        OverflowAreas cellOverflow(cellPhysicalBounds, cellPhysicalBounds);
         cellFrame->FinishAndStoreOverflow(cellOverflow,
                                           cRect.Size(wm).GetPhysicalSize(wm));
         nsTableFrame::RePositionViews(cellFrame);

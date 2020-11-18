@@ -47,6 +47,19 @@ class MOZ_RAII WarpCacheIRTranspiler : public WarpBuilderShared {
 
   CallInfo* callInfo_;
 
+  // Array mapping call arguments to OperandId.
+  using ArgumentKindArray =
+      mozilla::EnumeratedArray<ArgumentKind, ArgumentKind::NumKinds, OperandId>;
+  ArgumentKindArray argumentOperandIds_;
+
+  void setArgumentId(ArgumentKind kind, OperandId id) {
+    MOZ_ASSERT(kind != ArgumentKind::Callee);
+    MOZ_ASSERT(!argumentOperandIds_[kind].valid());
+    argumentOperandIds_[kind] = id;
+  }
+
+  void updateArgumentsFromOperands();
+
 #ifdef DEBUG
   // Used to assert that there is only one effectful instruction
   // per stub. And that this instruction has a resume point.
@@ -54,15 +67,27 @@ class MOZ_RAII WarpCacheIRTranspiler : public WarpBuilderShared {
   bool pushedResult_ = false;
 #endif
 
+  inline void addUnchecked(MInstruction* ins) {
+    current->add(ins);
+
+    // If we have not set a more specific bailout kind, mark this instruction
+    // as transpiled CacheIR. If one of these instructions bails out, we
+    // expect to hit the baseline fallback stub and invalidate the Warp script
+    // in tryAttach.
+    if (ins->bailoutKind() == BailoutKind::Unknown) {
+      ins->setBailoutKind(BailoutKind::TranspiledCacheIR);
+    }
+  }
+
   inline void add(MInstruction* ins) {
     MOZ_ASSERT(!ins->isEffectful());
-    current->add(ins);
+    addUnchecked(ins);
   }
 
   inline void addEffectful(MInstruction* ins) {
     MOZ_ASSERT(ins->isEffectful());
     MOZ_ASSERT(!effectful_, "Can only have one effectful instruction");
-    current->add(ins);
+    addUnchecked(ins);
 #ifdef DEBUG
     effectful_ = ins;
 #endif
@@ -71,7 +96,7 @@ class MOZ_RAII WarpCacheIRTranspiler : public WarpBuilderShared {
   // Bypasses all checks in addEffectful. Only used for testing functions.
   inline void addEffectfulUnsafe(MInstruction* ins) {
     MOZ_ASSERT(ins->isEffectful());
-    current->add(ins);
+    addUnchecked(ins);
   }
 
   MOZ_MUST_USE bool resumeAfterUnchecked(MInstruction* ins) {
@@ -356,8 +381,7 @@ bool WarpCacheIRTranspiler::emitGuardGroup(ObjOperandId objId,
   ObjectGroup* group = groupStubField(groupOffset);
 
   auto* ins = MGuardObjectGroup::New(alloc(), def, group,
-                                     /* bailOnEquality = */ false,
-                                     BailoutKind::ObjectIdentityOrTypeGuard);
+                                     /* bailOnEquality = */ false);
   add(ins);
 
   setOperand(objId, ins);
@@ -3165,7 +3189,7 @@ bool WarpCacheIRTranspiler::emitNewTypedArrayFromLengthResult(
   if (length->isConstant()) {
     int32_t len = length->toConstant()->toInt32();
     if (len > 0 &&
-        uint32_t(len) == templateObj->as<TypedArrayObject>().length()) {
+        uint32_t(len) == templateObj->as<TypedArrayObject>().length().get()) {
       auto* templateConst = constant(ObjectValue(*templateObj));
       auto* obj = MNewTypedArray::New(alloc(), /* constraints = */ nullptr,
                                       templateConst, heap);
@@ -3430,6 +3454,46 @@ bool WarpCacheIRTranspiler::emitLoadWrapperTarget(ObjOperandId objId,
   return defineOperand(resultId, ins);
 }
 
+// When we transpile a call, we may generate guards for some
+// arguments.  To make sure the call instruction depends on those
+// guards, when the transpiler creates an operand for an argument, we
+// register the OperandId of that argument in argumentIds_. (See
+// emitLoadArgumentSlot.) Before generating the call, we update the
+// CallInfo to use the appropriate value from operands_.
+// Note: The callee is an explicit argument to the call op, and is
+// tracked separately.
+void WarpCacheIRTranspiler::updateArgumentsFromOperands() {
+  for (uint32_t i = 0; i < uint32_t(ArgumentKind::NumKinds); i++) {
+    ArgumentKind kind = ArgumentKind(i);
+    OperandId id = argumentOperandIds_[kind];
+    if (id.valid()) {
+      switch (kind) {
+        case ArgumentKind::This:
+          callInfo_->setThis(getOperand(id));
+          break;
+        case ArgumentKind::NewTarget:
+          callInfo_->setNewTarget(getOperand(id));
+          break;
+        case ArgumentKind::Arg0:
+          callInfo_->setArg(0, getOperand(id));
+          break;
+        case ArgumentKind::Arg1:
+          callInfo_->setArg(1, getOperand(id));
+          break;
+        case ArgumentKind::Arg2:
+          callInfo_->setArg(2, getOperand(id));
+          break;
+        case ArgumentKind::Arg3:
+          callInfo_->setArg(3, getOperand(id));
+          break;
+        case ArgumentKind::Callee:
+        case ArgumentKind::NumKinds:
+          MOZ_CRASH("Unexpected argument kind");
+      }
+    }
+  }
+}
+
 bool WarpCacheIRTranspiler::emitLoadArgumentSlot(ValOperandId resultId,
                                                  uint32_t slotIndex) {
   // Reverse of GetIndexOfArgument.
@@ -3442,6 +3506,7 @@ bool WarpCacheIRTranspiler::emitLoadArgumentSlot(ValOperandId resultId,
   // NewTarget (optional)
   if (callInfo_->constructing()) {
     if (slotIndex == 0) {
+      setArgumentId(ArgumentKind::NewTarget, resultId);
       return defineOperand(resultId, callInfo_->getNewTarget());
     }
 
@@ -3451,11 +3516,15 @@ bool WarpCacheIRTranspiler::emitLoadArgumentSlot(ValOperandId resultId,
   // Args..
   if (slotIndex < callInfo_->argc()) {
     uint32_t arg = callInfo_->argc() - 1 - slotIndex;
+    ArgumentKind kind = ArgumentKind(uint32_t(ArgumentKind::Arg0) + arg);
+    MOZ_ASSERT(kind < ArgumentKind::NumKinds);
+    setArgumentId(kind, resultId);
     return defineOperand(resultId, callInfo_->getArg(arg));
   }
 
   // ThisValue
   if (slotIndex == callInfo_->argc()) {
+    setArgumentId(ArgumentKind::This, resultId);
     return defineOperand(resultId, callInfo_->thisArg());
   }
 
@@ -3544,6 +3613,10 @@ bool WarpCacheIRTranspiler::updateCallInfo(MDefinition* callee,
   // the resulting call instruction depends on these guards.
   callInfo_->setCallee(callee);
 
+  // The transpilation may also add guards to other arguments.
+  // We replace those arguments in the CallInfo here.
+  updateArgumentsFromOperands();
+
   switch (flags.getArgFormat()) {
     case CallFlags::Standard:
       MOZ_ASSERT(callInfo_->argFormat() == CallInfo::ArgFormat::Standard);
@@ -3552,7 +3625,7 @@ bool WarpCacheIRTranspiler::updateCallInfo(MDefinition* callee,
       MOZ_ASSERT(callInfo_->argFormat() == CallInfo::ArgFormat::Array);
       break;
     case CallFlags::FunCall:
-      // Note: setCallee above already changed the callee to the target
+      // Note: We already changed the callee to the target
       // function instead of the |call| function.
       MOZ_ASSERT(!callInfo_->constructing());
       MOZ_ASSERT(callInfo_->argFormat() == CallInfo::ArgFormat::Standard);
@@ -3726,7 +3799,7 @@ bool WarpCacheIRTranspiler::emitFunApplyArgs(WrappedFunction* wrappedTarget,
   MDefinition* argThis = callInfo_->getArg(0);
 
   MArgumentsLength* numArgs = MArgumentsLength::New(alloc());
-  current->add(numArgs);
+  add(numArgs);
 
   MApplyArgs* apply =
       MApplyArgs::New(alloc(), wrappedTarget, argFunc, numArgs, argThis);

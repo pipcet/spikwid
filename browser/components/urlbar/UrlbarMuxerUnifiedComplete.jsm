@@ -292,6 +292,16 @@ class MuxerUnifiedComplete extends UrlbarMuxer {
       return false;
     }
 
+    // HeuristicFallback may add non-heuristic results in some cases, but those
+    // should be retained only if the heuristic result comes from it.
+    if (
+      !result.heuristic &&
+      result.providerName == "HeuristicFallback" &&
+      state.context.heuristicResult?.providerName != "HeuristicFallback"
+    ) {
+      return false;
+    }
+
     if (result.providerName == "TabToSearch") {
       // Discard tab-to-search results if we're not autofilling a URL or
       // a tab-to-search result was added already.
@@ -390,6 +400,27 @@ class MuxerUnifiedComplete extends UrlbarMuxer {
           ) {
             return false;
           }
+        }
+      }
+    }
+
+    // When in an engine search mode, discard URL results whose hostnames don't
+    // include the root domain of the search mode engine.
+    if (state.context.searchMode?.engineName && result.payload.url) {
+      let engine = Services.search.getEngineByName(
+        state.context.searchMode.engineName
+      );
+      if (engine) {
+        let searchModeRootDomain = UrlbarSearchUtils.getRootDomainFromEngine(
+          engine
+        );
+        let resultUrl = new URL(result.payload.url);
+        // Add a trailing "." to increase the stringency of the check. This
+        // check covers most general cases. Some edge cases are not covered,
+        // like `resultUrl` being ebay.mydomain.com, which would escape this
+        // check if `searchModeRootDomain` was "ebay".
+        if (!resultUrl.hostname.includes(`${searchModeRootDomain}.`)) {
+          return false;
         }
       }
     }

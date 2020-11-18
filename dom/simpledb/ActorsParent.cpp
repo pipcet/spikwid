@@ -77,8 +77,7 @@
 #  define ASSERT_UNLESS_FUZZING(...) MOZ_ASSERT(false, __VA_ARGS__)
 #endif
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 using namespace mozilla::dom::quota;
 using namespace mozilla::ipc;
@@ -1204,8 +1203,7 @@ nsresult OpenOp::DatabaseWork() {
 
   SDB_TRY_INSPECT(const auto& dbDirectory,
                   quotaManager->EnsureStorageAndOriginIsInitialized(
-                      GetConnection()->GetPersistenceType(), mQuotaInfo,
-                      mozilla::dom::quota::Client::SDB));
+                      GetConnection()->GetPersistenceType(), mQuotaInfo));
 
   nsresult rv =
       dbDirectory->Append(NS_LITERAL_STRING_FROM_CSTRING(SDB_DIRECTORY_NAME));
@@ -1794,5 +1792,4 @@ void QuotaClient::ShutdownWorkThreads() {
   }
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

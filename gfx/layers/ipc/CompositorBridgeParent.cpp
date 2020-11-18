@@ -90,9 +90,6 @@
 #include "mozilla/HalTypes.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/Telemetry.h"
-#ifdef MOZ_GECKO_PROFILER
-#  include "ProfilerMarkerPayload.h"
-#endif
 #include "mozilla/VsyncDispatcher.h"
 #if defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
 #  include "VsyncSource.h"
@@ -704,13 +701,6 @@ void CompositorBridgeParent::ScheduleRenderOnCompositorThread() {
                         this, &CompositorBridgeParent::ScheduleComposition));
 }
 
-void CompositorBridgeParent::InvalidateOnCompositorThread() {
-  MOZ_ASSERT(CompositorThread());
-  CompositorThread()->Dispatch(
-      NewRunnableMethod("layers::CompositorBridgeParent::Invalidate", this,
-                        &CompositorBridgeParent::Invalidate));
-}
-
 void CompositorBridgeParent::PauseComposition() {
   MOZ_ASSERT(CompositorThreadHolder::IsInCompositorThread(),
              "PauseComposition() can only be called on the compositor thread");
@@ -795,53 +785,6 @@ void CompositorBridgeParent::ResumeCompositionAndResize(int x, int y, int width,
                                                         int height) {
   SetEGLSurfaceRect(x, y, width, height);
   ResumeComposition();
-}
-
-/*
- * This will execute a pause synchronously, waiting to make sure that the
- * compositor really is paused.
- */
-void CompositorBridgeParent::SchedulePauseOnCompositorThread() {
-  MonitorAutoLock lock(mPauseCompositionMonitor);
-
-  MOZ_ASSERT(CompositorThread());
-  CompositorThread()->Dispatch(
-      NewRunnableMethod("layers::CompositorBridgeParent::PauseComposition",
-                        this, &CompositorBridgeParent::PauseComposition));
-
-  // Wait until the pause has actually been processed by the compositor thread
-  lock.Wait();
-}
-
-bool CompositorBridgeParent::ScheduleResumeOnCompositorThread() {
-  MonitorAutoLock lock(mResumeCompositionMonitor);
-
-  MOZ_ASSERT(CompositorThread());
-  CompositorThread()->Dispatch(
-      NewRunnableMethod("layers::CompositorBridgeParent::ResumeComposition",
-                        this, &CompositorBridgeParent::ResumeComposition));
-
-  // Wait until the resume has actually been processed by the compositor thread
-  lock.Wait();
-
-  return !mPaused;
-}
-
-bool CompositorBridgeParent::ScheduleResumeOnCompositorThread(int x, int y,
-                                                              int width,
-                                                              int height) {
-  MonitorAutoLock lock(mResumeCompositionMonitor);
-
-  MOZ_ASSERT(CompositorThread());
-  CompositorThread()->Dispatch(NewRunnableMethod<int, int, int, int>(
-      "layers::CompositorBridgeParent::ResumeCompositionAndResize", this,
-      &CompositorBridgeParent::ResumeCompositionAndResize, x, y, width,
-      height));
-
-  // Wait until the resume has actually been processed by the compositor thread
-  lock.Wait();
-
-  return !mPaused;
 }
 
 void CompositorBridgeParent::UpdatePaintTime(LayerTransactionParent* aLayerTree,
@@ -2230,8 +2173,23 @@ already_AddRefed<IAPZCTreeManager> CompositorBridgeParent::GetAPZCTreeManager(
 static void InsertVsyncProfilerMarker(TimeStamp aVsyncTimestamp) {
   MOZ_ASSERT(CompositorThreadHolder::IsInCompositorThread());
   if (profiler_thread_is_being_profiled()) {
-    PROFILER_ADD_MARKER_WITH_PAYLOAD("VsyncTimestamp", GRAPHICS,
-                                     VsyncMarkerPayload, (aVsyncTimestamp));
+    // Tracks when a vsync occurs according to the HardwareComposer.
+    struct VsyncMarker {
+      static constexpr mozilla::Span<const char> MarkerTypeName() {
+        return mozilla::MakeStringSpan("VsyncTimestamp");
+      }
+      static void StreamJSONMarkerData(
+          baseprofiler::SpliceableJSONWriter& aWriter) {}
+      static MarkerSchema MarkerTypeDisplay() {
+        using MS = MarkerSchema;
+        MS schema{MS::Location::markerChart, MS::Location::markerTable};
+        // Nothing outside the defaults.
+        return schema;
+      }
+    };
+    profiler_add_marker("VsyncTimestamp", geckoprofiler::category::GRAPHICS,
+                        MarkerTiming::InstantAt(aVsyncTimestamp),
+                        VsyncMarker{});
   }
 }
 #endif
@@ -2796,42 +2754,23 @@ int32_t RecordContentFrameTime(
 
 #ifdef MOZ_GECKO_PROFILER
   if (profiler_can_accept_markers()) {
-    class ContentFramePayload : public ProfilerMarkerPayload {
-     public:
-      ContentFramePayload(const mozilla::TimeStamp& aStartTime,
-                          const mozilla::TimeStamp& aEndTime)
-          : ProfilerMarkerPayload(aStartTime, aEndTime) {}
-      mozilla::ProfileBufferEntryWriter::Length TagAndSerializationBytes()
-          const override {
-        return CommonPropsTagAndSerializationBytes();
+    struct ContentFrameMarker {
+      static constexpr Span<const char> MarkerTypeName() {
+        return MakeStringSpan("CONTENT_FRAME_TIME");
       }
-      void SerializeTagAndPayload(
-          mozilla::ProfileBufferEntryWriter& aEntryWriter) const override {
-        static const DeserializerTag tag = TagForDeserializer(Deserialize);
-        SerializeTagAndCommonProps(tag, aEntryWriter);
-      }
-      void StreamPayload(mozilla::baseprofiler::SpliceableJSONWriter& aWriter,
-                         const TimeStamp& aProcessStartTime,
-                         UniqueStacks& aUniqueStacks) const override {
-        StreamCommonProps("CONTENT_FRAME_TIME", aWriter, aProcessStartTime,
-                          aUniqueStacks);
-      }
-
-     private:
-      explicit ContentFramePayload(CommonProps&& aCommonProps)
-          : ProfilerMarkerPayload(std::move(aCommonProps)) {}
-      static mozilla::UniquePtr<ProfilerMarkerPayload> Deserialize(
-          mozilla::ProfileBufferEntryReader& aEntryReader) {
-        ProfilerMarkerPayload::CommonProps props =
-            DeserializeCommonProps(aEntryReader);
-        return UniquePtr<ProfilerMarkerPayload>(
-            new ContentFramePayload(std::move(props)));
+      static void StreamJSONMarkerData(
+          baseprofiler::SpliceableJSONWriter& aWriter) {}
+      static MarkerSchema MarkerTypeDisplay() {
+        using MS = MarkerSchema;
+        MS schema{MS::Location::markerChart, MS::Location::markerTable};
+        // Nothing outside the defaults.
+        return schema;
       }
     };
-    AUTO_PROFILER_STATS(add_marker_with_ContentFramePayload);
-    profiler_add_marker_for_thread(
-        profiler_current_thread_id(), JS::ProfilingCategoryPair::GRAPHICS,
-        "CONTENT_FRAME_TIME", ContentFramePayload(aTxnStart, aCompositeEnd));
+
+    profiler_add_marker("CONTENT_FRAME_TIME", geckoprofiler::category::GRAPHICS,
+                        MarkerTiming::Interval(aTxnStart, aCompositeEnd),
+                        ContentFrameMarker{});
   }
 #endif
 

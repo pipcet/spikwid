@@ -787,6 +787,8 @@ WebRenderMemoryReporter::CollectReports(nsIHandleReportCallback* aHandleReport,
         helper.ReportTexture(aReport.render_target_textures, "render-targets");
         helper.ReportTexture(aReport.texture_cache_textures, "texture-cache");
         helper.ReportTexture(aReport.depth_target_textures, "depth-targets");
+        helper.ReportTexture(aReport.texture_upload_pbos,
+                             "texture-upload-pbos");
         helper.ReportTexture(aReport.swap_chain, "swap-chains");
 
         FinishAsyncMemoryReport();
@@ -953,7 +955,7 @@ void gfxPlatform::Init() {
   // WebRender runs doesn't initialize gfxPlatform and performs explicit
   // initialization of the bits it needs.
   if (!UseWebRender()
-#if defined(XP_WIN) && defined(NIGHTLY_BUILD)
+#if defined(XP_WIN)
       || (UseWebRender() && XRE_IsParentProcess() &&
           !gfxConfig::IsEnabled(Feature::GPU_PROCESS) &&
           StaticPrefs::
@@ -1907,10 +1909,12 @@ bool gfxPlatform::IsFontFormatSupported(uint32_t aFormatFlags) {
 
 gfxFontGroup* gfxPlatform::CreateFontGroup(
     const FontFamilyList& aFontFamilyList, const gfxFontStyle* aStyle,
-    gfxTextPerfMetrics* aTextPerf, FontMatchingStats* aFontMatchingStats,
-    gfxUserFontSet* aUserFontSet, gfxFloat aDevToCssSize) const {
-  return new gfxFontGroup(aFontFamilyList, aStyle, aTextPerf,
-                          aFontMatchingStats, aUserFontSet, aDevToCssSize);
+    nsAtom* aLanguage, bool aExplicitLanguage, gfxTextPerfMetrics* aTextPerf,
+    FontMatchingStats* aFontMatchingStats, gfxUserFontSet* aUserFontSet,
+    gfxFloat aDevToCssSize) const {
+  return new gfxFontGroup(aFontFamilyList, aStyle, aLanguage, aExplicitLanguage,
+                          aTextPerf, aFontMatchingStats, aUserFontSet,
+                          aDevToCssSize);
 }
 
 gfxFontEntry* gfxPlatform::LookupLocalFont(const nsACString& aFontName,
@@ -2732,9 +2736,9 @@ void gfxPlatform::InitWebRenderConfig() {
         gfxConfig::IsEnabled(Feature::WEBRENDER));
   }
 
-  if (StaticPrefs::gfx_webrender_software_AtStartup()) {
-    gfxVars::SetUseSoftwareWebRender(gfxConfig::IsEnabled(Feature::WEBRENDER));
-  }
+  gfxVars::SetUseSoftwareWebRender(
+      gfxConfig::IsEnabled(Feature::WEBRENDER) &&
+      gfxConfig::IsEnabled(Feature::WEBRENDER_SOFTWARE));
 
   // gfxFeature is not usable in the GPU process, so we use gfxVars to transmit
   // this feature
@@ -2878,6 +2882,11 @@ void gfxPlatform::InitWebGPUConfig() {
                        "WebGPU can only be enabled in nightly",
                        "WEBGPU_DISABLE_NON_NIGHTLY"_ns);
 #endif
+  if (!UseWebRender()) {
+    feature.ForceDisable(FeatureStatus::UnavailableNoWebRender,
+                         "WebGPU can't present without WebRender",
+                         "FEATURE_FAILURE_WEBGPU_NEED_WEBRENDER"_ns);
+  }
 }
 
 void gfxPlatform::InitOMTPConfig() {
@@ -2919,13 +2928,6 @@ void gfxPlatform::InitOMTPConfig() {
                       "OMTP is not supported when using cairo",
                       "FEATURE_FAILURE_COMP_PREF"_ns);
   }
-
-#ifdef XP_MACOSX
-  if (!nsCocoaFeatures::OnYosemiteOrLater()) {
-    omtp.ForceDisable(FeatureStatus::Blocked, "OMTP blocked before OSX 10.10",
-                      "FEATURE_FAILURE_OMTP_OSX_MAVERICKS"_ns);
-  }
-#endif
 
   if (InSafeMode()) {
     omtp.ForceDisable(FeatureStatus::Blocked, "OMTP blocked by safe-mode",

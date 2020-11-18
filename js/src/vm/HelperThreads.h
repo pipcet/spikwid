@@ -183,7 +183,14 @@ bool HasOffThreadIonCompile(JS::Realm* realm);
  */
 void WaitForOffThreadParses(JSRuntime* runtime);
 
-/* Cancel all scheduled, in progress or finished parses for runtime. */
+/*
+ * Cancel all scheduled, in progress or finished parses for runtime.
+ *
+ * Parse tasks which have completed but for which JS::FinishOffThreadScript (or
+ * equivalent) has not been called are removed from the system. This is only
+ * safe to do during shutdown, or if you know that the main thread isn't waiting
+ * for tasks to complete.
+ */
 void CancelOffThreadParses(JSRuntime* runtime);
 
 /*
@@ -266,6 +273,11 @@ void SweepPendingCompressions(AutoLockHelperThreadState& lock);
 
 // Run all pending source compression tasks synchronously, for testing purposes
 void RunPendingSourceCompressions(JSRuntime* runtime);
+
+// False if the off-thread source compression mechanism isn't being used. This
+// happens on low core count machines where we are concerned about blocking
+// main-thread execution.
+bool IsOffThreadSourceCompressionEnabled();
 
 // Return whether, if a new parse task was started, it would need to wait for
 // an in-progress GC to complete before starting.

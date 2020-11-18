@@ -43,6 +43,7 @@
 #include "gl_defs.h"
 #include "glsl.h"
 #include "program.h"
+#include "texture.h"
 
 using namespace glsl;
 
@@ -175,19 +176,34 @@ struct Query {
 struct Buffer {
   char* buf = nullptr;
   size_t size = 0;
+  size_t capacity = 0;
 
   bool allocate(size_t new_size) {
-    if (new_size != size) {
-      char* new_buf = (char*)realloc(buf, new_size);
-      assert(new_buf);
-      if (new_buf) {
-        buf = new_buf;
-        size = new_size;
-        return true;
-      }
-      cleanup();
+    // If the size remains unchanged, don't allocate anything.
+    if (new_size == size) {
+      return false;
     }
-    return false;
+    // If the new size is within the existing capacity of the buffer, just
+    // reuse the existing buffer.
+    if (new_size <= capacity) {
+      size = new_size;
+      return true;
+    }
+    // Otherwise we need to reallocate the buffer to hold up to the requested
+    // larger size.
+    char* new_buf = (char*)realloc(buf, new_size);
+    assert(new_buf);
+    if (!new_buf) {
+      // If we fail, null out the buffer rather than leave around the old
+      // allocation state.
+      cleanup();
+      return false;
+    }
+    // The reallocation succeeded, so install the buffer.
+    buf = new_buf;
+    size = new_size;
+    capacity = new_size;
+    return true;
   }
 
   void cleanup() {
@@ -195,6 +211,7 @@ struct Buffer {
       free(buf);
       buf = nullptr;
       size = 0;
+      capacity = 0;
     }
   }
 
@@ -575,7 +592,17 @@ struct Texture {
       if (!buf || size > buf_size) {
         // Allocate with a SIMD register-sized tail of padding at the end so we
         // can safely read or write past the end of the texture with SIMD ops.
-        char* new_buf = (char*)realloc(buf, size + sizeof(Float));
+        // Currently only the flat Z-buffer texture needs this padding due to
+        // full-register loads and stores in check_depth and discard_depth. In
+        // case some code in the future accidentally uses a linear filter on a
+        // texture with less than 2 pixels per row, we also add this padding
+        // just to be safe. All other texture types and use-cases should be
+        // safe to omit padding.
+        size_t padding =
+            internal_format == GL_DEPTH_COMPONENT16 || max(width, min_width) < 2
+                ? sizeof(Float)
+                : 0;
+        char* new_buf = (char*)realloc(buf, size + padding);
         assert(new_buf);
         if (new_buf) {
           // Successfully reallocated the buffer, so go ahead and set it.
@@ -906,7 +933,11 @@ static inline void init_depth(S* s, Texture& t) {
 
 template <typename S>
 static inline void init_filter(S* s, Texture& t) {
-  s->filter = gl_filter_to_texture_filter(t.mag_filter);
+  // If the width is not at least 2 pixels, then we can't safely sample the end
+  // of the row with a linear filter. In that case, just punt to using nearest
+  // filtering instead.
+  s->filter = t.width >= 2 ? gl_filter_to_texture_filter(t.mag_filter)
+                           : TextureFilter::NEAREST;
 }
 
 template <typename S>
@@ -2608,83 +2639,6 @@ void CopyTexSubImage2D(GLenum target, UNUSED GLint level, GLint xoffset,
 
 }  // extern "C"
 
-using PackedRGBA8 = V16<uint8_t>;
-using WideRGBA8 = V16<uint16_t>;
-using HalfRGBA8 = V8<uint16_t>;
-
-static inline WideRGBA8 unpack(PackedRGBA8 p) { return CONVERT(p, WideRGBA8); }
-
-template <int N>
-UNUSED static ALWAYS_INLINE VectorType<uint8_t, N> genericPackWide(
-    VectorType<uint16_t, N> p) {
-  typedef VectorType<uint8_t, N> packed_type;
-  // Generic conversions only mask off the low byte without actually clamping
-  // like a real pack. First force the word to all 1s if it overflows, and then
-  // add on the sign bit to cause it to roll over to 0 if it was negative.
-  p = (p | (p > 255)) + (p >> 15);
-  return CONVERT(p, packed_type);
-}
-
-static inline PackedRGBA8 pack(WideRGBA8 p) {
-#if USE_SSE2
-  return _mm_packus_epi16(lowHalf(p), highHalf(p));
-#elif USE_NEON
-  return vcombine_u8(vqmovn_u16(lowHalf(p)), vqmovn_u16(highHalf(p)));
-#else
-  return genericPackWide(p);
-#endif
-}
-
-static inline HalfRGBA8 packRGBA8(I32 a, I32 b) {
-#if USE_SSE2
-  return _mm_packs_epi32(a, b);
-#elif USE_NEON
-  return vcombine_u16(vqmovun_s32(a), vqmovun_s32(b));
-#else
-  return CONVERT(combine(a, b), HalfRGBA8);
-#endif
-}
-
-using PackedR8 = V4<uint8_t>;
-using WideR8 = V4<uint16_t>;
-
-static inline WideR8 unpack(PackedR8 p) { return CONVERT(p, WideR8); }
-
-static inline WideR8 packR8(I32 a) {
-#if USE_SSE2
-  return lowHalf(bit_cast<V8<uint16_t>>(_mm_packs_epi32(a, a)));
-#elif USE_NEON
-  return vqmovun_s32(a);
-#else
-  return CONVERT(a, WideR8);
-#endif
-}
-
-static inline PackedR8 pack(WideR8 p) {
-#if USE_SSE2
-  auto m = expand(p);
-  auto r = bit_cast<V16<uint8_t>>(_mm_packus_epi16(m, m));
-  return SHUFFLE(r, r, 0, 1, 2, 3);
-#elif USE_NEON
-  return lowHalf(bit_cast<V8<uint8_t>>(vqmovn_u16(expand(p))));
-#else
-  return genericPackWide(p);
-#endif
-}
-
-using PackedRG8 = V8<uint8_t>;
-using WideRG8 = V8<uint16_t>;
-
-static inline PackedRG8 pack(WideRG8 p) {
-#if USE_SSE2
-  return lowHalf(bit_cast<V16<uint8_t>>(_mm_packus_epi16(p, p)));
-#elif USE_NEON
-  return bit_cast<V8<uint8_t>>(vqmovn_u16(p));
-#else
-  return genericPackWide(p);
-#endif
-}
-
 using ZMask = I32;
 
 static inline PackedRGBA8 convert_zmask(ZMask mask, uint32_t*) {
@@ -2748,9 +2702,19 @@ static ALWAYS_INLINE void discard_depth(Z z, DepthRun* zbuf, I32 mask) {
   if (ctx->depthmask) {
     I32 src = I32(z);
     I32 dest = unaligned_load<I32>(zbuf);
-    mask |= fragment_shader->isPixelDiscarded;
+    mask |= fragment_shader->swgl_IsPixelDiscarded;
     unaligned_store(zbuf, (mask & dest) | (~mask & src));
   }
+}
+
+static inline HalfRGBA8 packRGBA8(I32 a, I32 b) {
+#if USE_SSE2
+  return _mm_packs_epi32(a, b);
+#elif USE_NEON
+  return vcombine_u16(vqmovun_s32(a), vqmovun_s32(b));
+#else
+  return CONVERT(combine(a, b), HalfRGBA8);
+#endif
 }
 
 static inline WideRGBA8 pack_pixels_RGBA8(const vec4& v) {
@@ -2764,7 +2728,7 @@ static inline WideRGBA8 pack_pixels_RGBA8(const vec4& v) {
   return combine(lo, hi);
 }
 
-static inline WideRGBA8 pack_pixels_RGBA8(const vec4_scalar& v) {
+UNUSED static inline WideRGBA8 pack_pixels_RGBA8(const vec4_scalar& v) {
   I32 i = round_pixel((Float){v.z, v.y, v.x, v.w});
   HalfRGBA8 c = packRGBA8(i, i);
   return combine(c, c);
@@ -2772,15 +2736,6 @@ static inline WideRGBA8 pack_pixels_RGBA8(const vec4_scalar& v) {
 
 static inline WideRGBA8 pack_pixels_RGBA8() {
   return pack_pixels_RGBA8(fragment_shader->gl_FragColor);
-}
-
-template <typename V>
-static inline PackedRGBA8 pack_span(uint32_t*, const V& v) {
-  return pack(pack_pixels_RGBA8(v));
-}
-
-static inline PackedRGBA8 pack_span(uint32_t*) {
-  return pack(pack_pixels_RGBA8());
 }
 
 // (x*y + x) >> 8, cheap approximation of (x*y) / 255
@@ -2863,33 +2818,83 @@ static inline WideRGBA8 blend_pixels_RGBA8(PackedRGBA8 pdst, WideRGBA8 src) {
   }
 }
 
-template <bool DISCARD>
-static inline void discard_output(uint32_t* buf, PackedRGBA8 mask) {
-  PackedRGBA8 dst = unaligned_load<PackedRGBA8>(buf);
+// Load a partial span > 0 and < 4 pixels.
+template <typename V, typename P>
+static ALWAYS_INLINE V partial_load_span(const P* src, int span) {
+  return bit_cast<V>(
+      (span >= 2
+           ? combine(unaligned_load<V2<P>>(src),
+                     V2<P>{span > 2 ? unaligned_load<P>(src + 2) : P(0), 0})
+           : V4<P>{unaligned_load<P>(src), 0, 0, 0}));
+}
+
+// Store a partial span > 0 and < 4 pixels.
+template <typename V, typename P>
+static ALWAYS_INLINE void partial_store_span(P* dst, V src, int span) {
+  auto pixels = bit_cast<V4<P>>(src);
+  if (span >= 2) {
+    unaligned_store(dst, lowHalf(pixels));
+    if (span > 2) {
+      unaligned_store(dst + 2, pixels.z);
+    }
+  } else {
+    unaligned_store(dst, pixels.x);
+  }
+}
+
+// Dispatcher that chooses when to load a full or partial span
+template <int SPAN, typename V, typename P>
+static ALWAYS_INLINE V load_span(const P* src) {
+  if (SPAN >= 4) {
+    return unaligned_load<V, P>(src);
+  } else {
+    return partial_load_span<V, P>(src, SPAN);
+  }
+}
+
+// Dispatcher that chooses when to store a full or partial span
+template <int SPAN, typename V, typename P>
+static ALWAYS_INLINE void store_span(P* dst, V src) {
+  if (SPAN >= 4) {
+    unaligned_store<V, P>(dst, src);
+  } else {
+    partial_store_span<V, P>(dst, src, SPAN);
+  }
+}
+
+template <bool DISCARD, int SPAN>
+static ALWAYS_INLINE void discard_output(uint32_t* buf, PackedRGBA8 mask) {
   WideRGBA8 r = pack_pixels_RGBA8();
+  PackedRGBA8 dst = load_span<SPAN, PackedRGBA8>(buf);
   if (blend_key) r = blend_pixels_RGBA8(dst, r);
-  if (DISCARD) mask |= bit_cast<PackedRGBA8>(fragment_shader->isPixelDiscarded);
-  unaligned_store(buf, (mask & dst) | (~mask & pack(r)));
+  if (DISCARD)
+    mask |= bit_cast<PackedRGBA8>(fragment_shader->swgl_IsPixelDiscarded);
+  store_span<SPAN>(buf, (mask & dst) | (~mask & pack(r)));
 }
 
-template <bool DISCARD>
-static inline void discard_output(uint32_t* buf) {
-  discard_output<DISCARD>(buf, 0);
-}
-
-template <>
-inline void discard_output<false>(uint32_t* buf) {
+template <bool DISCARD, int SPAN>
+static ALWAYS_INLINE void discard_output(uint32_t* buf) {
   WideRGBA8 r = pack_pixels_RGBA8();
-  if (blend_key) r = blend_pixels_RGBA8(unaligned_load<PackedRGBA8>(buf), r);
-  unaligned_store(buf, pack(r));
+  if (DISCARD) {
+    PackedRGBA8 dst = load_span<SPAN, PackedRGBA8>(buf);
+    if (blend_key) r = blend_pixels_RGBA8(dst, r);
+    PackedRGBA8 mask =
+        bit_cast<PackedRGBA8>(fragment_shader->swgl_IsPixelDiscarded);
+    store_span<SPAN>(buf, (mask & dst) | (~mask & pack(r)));
+  } else {
+    if (blend_key) r = blend_pixels_RGBA8(load_span<SPAN, PackedRGBA8>(buf), r);
+    store_span<SPAN>(buf, pack(r));
+  }
 }
 
-static inline PackedRGBA8 span_mask_RGBA8(int span) {
-  return bit_cast<PackedRGBA8>(I32(span) < I32{1, 2, 3, 4});
-}
-
-static inline PackedRGBA8 span_mask(uint32_t*, int span) {
-  return span_mask_RGBA8(span);
+static inline WideR8 packR8(I32 a) {
+#if USE_SSE2
+  return lowHalf(bit_cast<V8<uint16_t>>(_mm_packs_epi32(a, a)));
+#elif USE_NEON
+  return vqmovun_s32(a);
+#else
+  return CONVERT(a, WideR8);
+#endif
 }
 
 static inline WideR8 pack_pixels_R8(Float c) { return packR8(round_pixel(c)); }
@@ -2897,13 +2902,6 @@ static inline WideR8 pack_pixels_R8(Float c) { return packR8(round_pixel(c)); }
 static inline WideR8 pack_pixels_R8() {
   return pack_pixels_R8(fragment_shader->gl_FragColor.x);
 }
-
-template <typename C>
-static inline PackedR8 pack_span(uint8_t*, C c) {
-  return pack(pack_pixels_R8(c));
-}
-
-static inline PackedR8 pack_span(uint8_t*) { return pack(pack_pixels_R8()); }
 
 static inline WideR8 blend_pixels_R8(WideR8 dst, WideR8 src) {
   switch (blend_key) {
@@ -2921,54 +2919,72 @@ static inline WideR8 blend_pixels_R8(WideR8 dst, WideR8 src) {
   }
 }
 
-template <bool DISCARD>
+template <bool DISCARD, int SPAN>
 static inline void discard_output(uint8_t* buf, WideR8 mask) {
-  WideR8 dst = unpack(unaligned_load<PackedR8>(buf));
   WideR8 r = pack_pixels_R8();
+  WideR8 dst = unpack(load_span<SPAN, PackedR8>(buf));
   if (blend_key) r = blend_pixels_R8(dst, r);
-  if (DISCARD) mask |= packR8(fragment_shader->isPixelDiscarded);
-  unaligned_store(buf, pack((mask & dst) | (~mask & r)));
+  if (DISCARD) mask |= packR8(fragment_shader->swgl_IsPixelDiscarded);
+  store_span<SPAN>(buf, pack((mask & dst) | (~mask & r)));
 }
 
-template <bool DISCARD>
+template <bool DISCARD, int SPAN>
 static inline void discard_output(uint8_t* buf) {
-  discard_output<DISCARD>(buf, 0);
-}
-
-template <>
-inline void discard_output<false>(uint8_t* buf) {
   WideR8 r = pack_pixels_R8();
-  if (blend_key) r = blend_pixels_R8(unpack(unaligned_load<PackedR8>(buf)), r);
-  unaligned_store(buf, pack(r));
-}
-
-static inline WideR8 span_mask_R8(int span) {
-  return bit_cast<WideR8>(WideR8(span) < WideR8{1, 2, 3, 4});
-}
-
-static inline WideR8 span_mask(uint8_t*, int span) {
-  return span_mask_R8(span);
-}
-
-UNUSED static inline PackedRG8 span_mask_RG8(int span) {
-  return bit_cast<PackedRG8>(I16(span) < I16{1, 2, 3, 4});
+  if (DISCARD) {
+    WideR8 dst = unpack(load_span<SPAN, PackedR8>(buf));
+    if (blend_key) r = blend_pixels_R8(dst, r);
+    WideR8 mask = packR8(fragment_shader->swgl_IsPixelDiscarded);
+    store_span<SPAN>(buf, pack((mask & dst) | (~mask & r)));
+  } else {
+    if (blend_key)
+      r = blend_pixels_R8(unpack(load_span<SPAN, PackedR8>(buf)), r);
+    store_span<SPAN>(buf, pack(r));
+  }
 }
 
 template <bool DISCARD, bool W, typename P, typename M>
 static inline void commit_output(P* buf, M mask) {
   fragment_shader->run<W>();
-  discard_output<DISCARD>(buf, mask);
+  discard_output<DISCARD, 4>(buf, mask);
+}
+
+template <bool DISCARD, bool W, typename P, typename M>
+static inline void commit_output(P* buf, M mask, int span) {
+  fragment_shader->run<W>();
+  switch (span) {
+    case 1:
+      discard_output<DISCARD, 1>(buf, mask);
+      break;
+    case 2:
+      discard_output<DISCARD, 2>(buf, mask);
+      break;
+    default:
+      discard_output<DISCARD, 3>(buf, mask);
+      break;
+  }
 }
 
 template <bool DISCARD, bool W, typename P>
 static inline void commit_output(P* buf) {
   fragment_shader->run<W>();
-  discard_output<DISCARD>(buf);
+  discard_output<DISCARD, 4>(buf);
 }
 
 template <bool DISCARD, bool W, typename P>
 static inline void commit_output(P* buf, int span) {
-  commit_output<DISCARD, W>(buf, span_mask(buf, span));
+  fragment_shader->run<W>();
+  switch (span) {
+    case 1:
+      discard_output<DISCARD, 1>(buf);
+      break;
+    case 2:
+      discard_output<DISCARD, 2>(buf);
+      break;
+    default:
+      discard_output<DISCARD, 3>(buf);
+      break;
+  }
 }
 
 template <bool DISCARD, bool W, typename P, typename Z>
@@ -2988,74 +3004,15 @@ template <bool DISCARD, bool W, typename P, typename Z>
 static inline void commit_output(P* buf, Z z, DepthRun* zbuf, int span) {
   ZMask zmask;
   if (check_depth<DISCARD>(z, zbuf, zmask, span)) {
-    commit_output<DISCARD, W>(buf, convert_zmask(zmask, buf));
+    commit_output<DISCARD, W>(buf, convert_zmask(zmask, buf), span);
     if (DISCARD) {
       discard_depth(z, zbuf, zmask);
     }
   }
 }
 
-static inline void commit_span(uint32_t* buf, PackedRGBA8 r) {
-  if (blend_key)
-    r = pack(blend_pixels_RGBA8(unaligned_load<PackedRGBA8>(buf), unpack(r)));
-  unaligned_store(buf, r);
-}
-
-UNUSED static inline void commit_solid_span(uint32_t* buf, PackedRGBA8 r,
-                                            int len) {
-  if (blend_key) {
-    auto src = unpack(r);
-    for (uint32_t* end = &buf[len]; buf < end; buf += 4) {
-      unaligned_store(
-          buf, pack(blend_pixels_RGBA8(unaligned_load<PackedRGBA8>(buf), src)));
-    }
-  } else {
-    fill_n(buf, len, bit_cast<U32>(r).x);
-  }
-}
-
-UNUSED static inline void commit_texture_span(uint32_t* buf, uint32_t* src,
-                                              int len) {
-  if (blend_key) {
-    for (uint32_t* end = &buf[len]; buf < end; buf += 4, src += 4) {
-      PackedRGBA8 r = unaligned_load<PackedRGBA8>(src);
-      unaligned_store(buf, pack(blend_pixels_RGBA8(
-                               unaligned_load<PackedRGBA8>(buf), unpack(r))));
-    }
-  } else {
-    memcpy(buf, src, len * sizeof(uint32_t));
-  }
-}
-
-static inline void commit_span(uint8_t* buf, PackedR8 r) {
-  if (blend_key)
-    r = pack(blend_pixels_R8(unpack(unaligned_load<PackedR8>(buf)), unpack(r)));
-  unaligned_store(buf, r);
-}
-
-UNUSED static inline void commit_solid_span(uint8_t* buf, PackedR8 r, int len) {
-  if (blend_key) {
-    auto src = unpack(r);
-    for (uint8_t* end = &buf[len]; buf < end; buf += 4) {
-      unaligned_store(buf, pack(blend_pixels_R8(
-                               unpack(unaligned_load<PackedR8>(buf)), src)));
-    }
-  } else {
-    fill_n((uint32_t*)buf, len / 4, bit_cast<uint32_t>(r));
-  }
-}
-
-#define DISPATCH_DRAW_SPAN(self, buf, len)                  \
-  do {                                                      \
-    int drawn = self->draw_span(buf, len);                  \
-    if (drawn) self->step_interp_inputs(drawn);             \
-    for (buf += drawn; drawn < len; drawn += 4, buf += 4) { \
-      run(self);                                            \
-      commit_span(buf, pack_span(buf));                     \
-    }                                                       \
-  } while (0)
-
-#include "texture.h"
+#include "composite.h"
+#include "swgl_ext.h"
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wuninitialized"
@@ -3148,7 +3105,7 @@ static ALWAYS_INLINE void draw_depth_span(uint16_t z, P* buf,
     // it were a full chunk. Mask off only the part of the chunk we want to
     // use.
     if (span > 0) {
-      commit_output<false, false>(buf, span_mask(buf, span));
+      commit_output<false, false>(buf, span);
       buf += span;
     }
     // Skip past any runs that fail the depth test.
@@ -3680,7 +3637,7 @@ static inline void draw_perspective_spans(int nump, Point3D* p,
         // cancel out the 1/w baked into the interpolants.
         fragment_shader->gl_FragCoord.z = init_interp(zw.x, stepZW.x);
         fragment_shader->gl_FragCoord.w = init_interp(zw.y, stepZW.y);
-        fragment_shader->stepZW = stepZW;
+        fragment_shader->swgl_StepZW = stepZW;
         // Change in interpolants is difference between current right and left
         // edges per the change in right and left X. The left and right
         // interpolant values were previously multipled by 1/w, so the step and
@@ -4169,4 +4126,3 @@ void DestroyContext(Context* c) {
 
 }  // extern "C"
 
-#include "composite.h"

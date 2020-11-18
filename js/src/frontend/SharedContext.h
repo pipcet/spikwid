@@ -279,7 +279,6 @@ class SharedContext {
 
   inline JSAtom* liftParserAtomToJSAtom(JSContext* cx,
                                         const ParserAtom* atomId);
-  inline const ParserAtom* lowerJSAtomToParserAtom(JSContext* cx, JSAtom* atom);
 
   void copyScriptFields(ScriptStencil& script);
 };
@@ -316,14 +315,9 @@ inline EvalSharedContext* SharedContext::asEvalContext() {
 }
 
 enum class HasHeritage { No, Yes };
-enum class TopLevelFunction { No, Yes };
 
 class FunctionBox : public SharedContext {
   friend struct GCThingList;
-
-  // The parser handles tracing the fields below via the FunctionBox linked
-  // list represented by |traceLink_|.
-  FunctionBox* traceLink_ = nullptr;
 
   // If this FunctionBox refers to a lazy child of the function being
   // compiled, this field holds the child's immediately enclosing scope's index.
@@ -377,24 +371,14 @@ class FunctionBox : public SharedContext {
   // Back pointer used by asm.js for error messages.
   FunctionNode* functionNode = nullptr;
 
-  TopLevelFunction isTopLevel_ = TopLevelFunction::No;
-
   // True if bytecode will be emitted for this function in the current
   // compilation.
   bool emitBytecode : 1;
-
-  // This function is a standalone function that is not syntactically part of
-  // another script. Eg. Created by `new Function("")`.
-  bool isStandalone_ : 1;
 
   // This is set by the BytecodeEmitter of the enclosing script when a reference
   // to this function is generated. This is also used to determine a hoisted
   // function already is referenced by the bytecode.
   bool wasEmitted_ : 1;
-
-  // This function should be marked as a singleton. It is expected to be defined
-  // at most once. This is a heuristic only and does not affect correctness.
-  bool isSingleton_ : 1;
 
   // Need to emit a synthesized Annex B assignment
   bool isAnnexB : 1;
@@ -411,11 +395,6 @@ class FunctionBox : public SharedContext {
   // Arrow function with expression body like: `() => 1`.
   bool hasExprBody_ : 1;
 
-  // Analysis for use in heuristics.
-  bool usesApply : 1;   // Contains an f.apply() call
-  bool usesThis : 1;    // Contains 'this'
-  bool usesReturn : 1;  // Contains a 'return' statement
-
   // Tracks if function-related fields are already copied to ScriptStencil.
   // If this field is true, modification to those fields should be synced with
   // ScriptStencil by copyUpdated* methods.
@@ -424,11 +403,9 @@ class FunctionBox : public SharedContext {
   // End of fields.
 
   FunctionBox(JSContext* cx, SourceExtent extent,
-              CompilationInfo& compilationInfo,
-              CompilationState& compilationState, Directives directives,
+              CompilationInfo& compilationInfo, Directives directives,
               GeneratorKind generatorKind, FunctionAsyncKind asyncKind,
-              const ParserAtom* atom, FunctionFlags flags, FunctionIndex index,
-              TopLevelFunction isTopLevel);
+              const ParserAtom* atom, FunctionFlags flags, FunctionIndex index);
 
   ScriptStencil& functionStencil() const;
 
@@ -460,25 +437,11 @@ class FunctionBox : public SharedContext {
 
   void setEnclosingScopeForInnerLazyFunction(ScopeIndex scopeIndex);
 
-  bool isStandalone() const { return isStandalone_; }
-  void setIsStandalone(bool isStandalone) {
-    MOZ_ASSERT(!isFunctionFieldCopiedToStencil);
-    isStandalone_ = isStandalone;
-  }
-
   bool wasEmitted() const { return wasEmitted_; }
   void setWasEmitted(bool wasEmitted) {
     wasEmitted_ = wasEmitted;
     if (isFunctionFieldCopiedToStencil) {
       copyUpdatedWasEmitted();
-    }
-  }
-
-  bool isSingleton() const { return isSingleton_; }
-  void setIsSingleton(bool isSingleton) {
-    isSingleton_ = isSingleton;
-    if (isFunctionFieldCopiedToStencil) {
-      copyUpdatedIsSingleton();
     }
   }
 
@@ -504,7 +467,6 @@ class FunctionBox : public SharedContext {
   IMMUTABLE_FLAG_GETTER_SETTER(argumentsHasVarBinding, ArgumentsHasVarBinding)
   // AlwaysNeedsArgsObj: custom logic below.
   // HasMappedArgsObj: custom logic below.
-  // IsLikelyConstructorWrapper: custom logic below.
 
   bool needsCallObjectRegardlessOfBindings() const {
     // Always create a CallObject if:
@@ -518,10 +480,6 @@ class FunctionBox : public SharedContext {
   bool needsExtraBodyVarEnvironmentRegardlessOfBindings() const {
     MOZ_ASSERT(hasParameterExprs);
     return funHasExtensibleScope();
-  }
-
-  bool isLikelyConstructorWrapper() const {
-    return argumentsHasVarBinding() && usesApply && usesThis && !usesReturn;
   }
 
   GeneratorKind generatorKind() const {
@@ -616,28 +574,12 @@ class FunctionBox : public SharedContext {
     setFlag(ImmutableFlags::IsFieldInitializer);
   }
 
-  void setTreatAsRunOnce(bool treatAsRunOnce) {
-    immutableFlags_.setFlag(ImmutableFlags::TreatAsRunOnce, treatAsRunOnce);
-    if (isScriptFieldCopiedToStencil) {
-      copyUpdatedImmutableFlags();
-    }
-  }
-
   bool hasSimpleParameterList() const {
     return !hasRest() && !hasParameterExprs && !hasDestructuringArgs;
   }
 
   bool hasMappedArgsObj() const {
     return !strict() && hasSimpleParameterList();
-  }
-
-  bool shouldSuppressRunOnce() const {
-    // These heuristics suppress the run-once optimization if we expect that
-    // script-cloning will have more impact than TI type-precision would gain.
-    //
-    // See also: Bug 864218
-    return explicitName() || argumentsHasVarBinding() || isGenerator() ||
-           isAsync();
   }
 
   // Return whether this or an enclosing function is being parsed and
@@ -701,14 +643,10 @@ class FunctionBox : public SharedContext {
 
   FunctionIndex index() { return funcDataIndex_; }
 
-  FunctionBox* traceLink() { return traceLink_; }
-
   void finishScriptFlags();
   void copyScriptFields(ScriptStencil& script);
   void copyFunctionFields(ScriptStencil& script);
 
-  // * setTreatAsRunOnce can be called to a lazy function, while emitting
-  //   enclosing script
   // * setCtorFunctionHasThisBinding can be called to a class constructor
   //   with a lazy function, while parsing enclosing class
   void copyUpdatedImmutableFlags();
@@ -734,10 +672,6 @@ class FunctionBox : public SharedContext {
   // * setWasEmitted can be called to a lazy function, while emitting
   //   enclosing script
   void copyUpdatedWasEmitted();
-
-  // * setIsSingleton can be called to a lazy function, while emitting
-  //   enclosing script
-  void copyUpdatedIsSingleton();
 };
 
 #undef FLAG_GETTER_SETTER

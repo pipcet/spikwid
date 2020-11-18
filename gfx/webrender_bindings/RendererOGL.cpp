@@ -71,7 +71,8 @@ wr::WrExternalImage wr_renderer_lock_external_image(
   if (auto* gl = renderer->gl()) {
     return texture->Lock(aChannelIndex, gl, aRendering);
   } else if (auto* swgl = renderer->swgl()) {
-    return texture->LockSWGL(aChannelIndex, swgl, aRendering);
+    return texture->LockSWGL(aChannelIndex, swgl, renderer->GetCompositor(),
+                             aRendering);
   } else {
     gfxCriticalNoteOnce
         << "No GL or SWGL context available to lock ExternalImage for extId:"
@@ -174,6 +175,7 @@ RenderedFrameId RendererOGL::UpdateAndRender(
   }
 
   auto size = mCompositor->GetBufferSize();
+  auto bufferAge = mCompositor->GetBufferAge();
 
   wr_renderer_update(mRenderer);
 
@@ -188,8 +190,8 @@ RenderedFrameId RendererOGL::UpdateAndRender(
   }
 
   nsTArray<DeviceIntRect> dirtyRects;
-  if (!wr_renderer_render(mRenderer, size.width, size.height, aOutStats,
-                          &dirtyRects)) {
+  if (!wr_renderer_render(mRenderer, size.width, size.height, bufferAge,
+                          aOutStats, &dirtyRects)) {
     mCompositor->CancelFrame();
     RenderThread::Get()->HandleWebRenderError(WebRenderError::RENDER);
     mCompositor->GetWidget()->PostRender(&widgetContext);

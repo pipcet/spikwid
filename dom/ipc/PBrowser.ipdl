@@ -22,6 +22,7 @@ include protocol PWindowGlobal;
 include protocol PBrowserBridge;
 
 include DOMTypes;
+include NeckoChannelParams;
 include WindowGlobalTypes;
 include IPCBlob;
 include IPCStream;
@@ -625,7 +626,7 @@ child:
     /**
      * Parent informs the child to release all pointer capture.
      */
-    async ReleaseAllPointerCapture();
+    prio(input) async ReleaseAllPointerCapture();
 
 parent:
 
@@ -673,7 +674,8 @@ parent:
                             Shmem? visualData,
                             uint32_t stride, SurfaceFormat format,
                             LayoutDeviceIntRect dragRect,
-                            nsIPrincipal principal, nsIContentSecurityPolicy csp);
+                            nsIPrincipal principal, nsIContentSecurityPolicy csp,
+                            CookieJarSettingsArgs cookieJarSettings);
 
     // After a compositor reset, it is necessary to reconnect each layers ID to
     // the compositor of the widget that will render those layers. Note that
@@ -716,9 +718,9 @@ child:
     /**
      * Sending an activate message moves focus to the child.
      */
-    async Activate();
+    async Activate(uint64_t aActionId);
 
-    async Deactivate();
+    async Deactivate(uint64_t aActionId);
 
     async ScrollbarPreferenceChanged(ScrollbarPreference pref);
 

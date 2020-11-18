@@ -1495,9 +1495,11 @@ var Policies = {
         "layout.",
         "media.",
         "network.",
+        "pdfjs.",
         "places.",
         "print.",
         "signon.",
+        "spellchecker.",
         "ui.",
         "widget.",
       ];
@@ -2262,6 +2264,7 @@ function replacePathVariables(path) {
 function installAddonFromURL(url, extensionID, addon) {
   if (
     addon &&
+    addon.sourceURI &&
     addon.sourceURI.spec == url &&
     !addon.sourceURI.schemeIs("file")
   ) {
@@ -2317,7 +2320,11 @@ function installAddonFromURL(url, extensionID, addon) {
           )} - {url}`
         );
       },
-      onInstallEnded: () => {
+      /* eslint-disable-next-line no-shadow */
+      onInstallEnded: (install, addon) => {
+        if (addon.type == "theme") {
+          addon.enable();
+        }
         install.removeListener(listener);
         log.debug(`Installation succeeded - ${url}`);
       },

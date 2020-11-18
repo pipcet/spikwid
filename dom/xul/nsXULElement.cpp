@@ -15,6 +15,7 @@
 #include "mozilla/dom/BindContext.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/CSSRuleBinding.h"
+#include "mozilla/dom/XULTextElement.h"
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/EventListenerManager.h"
 #include "mozilla/EventStateManager.h"
@@ -65,6 +66,10 @@
 #include "mozilla/EventDispatcher.h"
 #include "mozAutoDocUpdate.h"
 #include "nsCCUncollectableMarker.h"
+#include "nsContentCreatorFunctions.h"
+#include "nsMenuFrame.h"
+#include "nsMenuPopupFrame.h"
+#include "nsTextFrame.h"
 #include "nsICSSDeclaration.h"
 #include "nsLayoutUtils.h"
 #include "XULFrameElement.h"
@@ -76,6 +81,7 @@
 #include "mozilla/dom/nsCSPUtils.h"
 #include "mozilla/dom/XULElementBinding.h"
 #include "mozilla/dom/XULBroadcastManager.h"
+#include "mozilla/dom/XULTooltipElement.h"
 #include "mozilla/dom/MouseEventBinding.h"
 #include "mozilla/dom/MutationEventBinding.h"
 #include "mozilla/dom/XULCommandEvent.h"
@@ -973,14 +979,6 @@ nsChangeHint nsXULElement::GetAttributeChangeHint(const nsAtom* aAttribute,
       IsAnyOfXULElements(nsGkAtoms::toolbarbutton, nsGkAtoms::button)) {
     // type=menu switches from a button frame to a menu frame.
     return nsChangeHint_ReconstructFrame;
-  }
-
-  // if left or top changes we reflow. This will happen in xul
-  // containers that manage positioned children such as a stack.
-  if (nsGkAtoms::left == aAttribute || nsGkAtoms::top == aAttribute ||
-      nsGkAtoms::right == aAttribute || nsGkAtoms::bottom == aAttribute ||
-      nsGkAtoms::start == aAttribute || nsGkAtoms::end == aAttribute) {
-    return NS_STYLE_HINT_REFLOW;
   }
 
   return nsChangeHint(0);

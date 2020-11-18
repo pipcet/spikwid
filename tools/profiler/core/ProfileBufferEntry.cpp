@@ -10,7 +10,6 @@
 #include "platform.h"
 #include "ProfileBuffer.h"
 #include "ProfilerBacktrace.h"
-#include "ProfilerMarkerPayload.h"
 
 #include "jsapi.h"
 #include "jsfriendapi.h"
@@ -196,7 +195,7 @@ class MOZ_RAII AutoArraySchemaWithStringsWriter : public AutoArraySchemaWriter {
                                    UniqueJSONStrings& aStrings)
       : AutoArraySchemaWriter(aWriter), mStrings(aStrings) {}
 
-  void StringElement(uint32_t aIndex, const char* aValue) {
+  void StringElement(uint32_t aIndex, const Span<const char>& aValue) {
     FillUpTo(aIndex);
     mStrings.WriteElement(Writer(), aValue);
   }
@@ -204,37 +203,6 @@ class MOZ_RAII AutoArraySchemaWithStringsWriter : public AutoArraySchemaWriter {
  private:
   UniqueJSONStrings& mStrings;
 };
-
-UniqueJSONStrings::UniqueJSONStrings() { mStringTableWriter.StartBareList(); }
-
-UniqueJSONStrings::UniqueJSONStrings(const UniqueJSONStrings& aOther) {
-  mStringTableWriter.StartBareList();
-  uint32_t count = mStringHashToIndexMap.count();
-  if (count != 0) {
-    MOZ_RELEASE_ASSERT(mStringHashToIndexMap.reserve(count));
-    for (auto iter = aOther.mStringHashToIndexMap.iter(); !iter.done();
-         iter.next()) {
-      mStringHashToIndexMap.putNewInfallible(iter.get().key(),
-                                             iter.get().value());
-    }
-    mStringTableWriter.CopyAndSplice(
-        aOther.mStringTableWriter.ChunkedWriteFunc());
-  }
-}
-
-uint32_t UniqueJSONStrings::GetOrAddIndex(const char* aStr) {
-  uint32_t count = mStringHashToIndexMap.count();
-  HashNumber hash = HashString(aStr);
-  auto entry = mStringHashToIndexMap.lookupForAdd(hash);
-  if (entry) {
-    MOZ_ASSERT(entry->value() < count);
-    return entry->value();
-  }
-
-  MOZ_RELEASE_ASSERT(mStringHashToIndexMap.add(entry, hash, count));
-  mStringTableWriter.StringElement(MakeStringSpan(aStr));
-  return count;
-}
 
 UniqueStacks::StackKey UniqueStacks::BeginStack(const FrameKey& aFrame) {
   return StackKey(GetOrAddFrameIndex(aFrame));
@@ -415,7 +383,7 @@ void UniqueStacks::StreamNonJITFrame(const FrameKey& aFrame) {
   AutoArraySchemaWithStringsWriter writer(mFrameTableWriter, *mUniqueStrings);
 
   const NormalFrameData& data = aFrame.mData.as<NormalFrameData>();
-  writer.StringElement(LOCATION, data.mLocation.get());
+  writer.StringElement(LOCATION, data.mLocation);
   writer.BoolElement(RELEVANT_FOR_JS, data.mRelevantForJS);
 
   // It's okay to convert uint64_t to double here because DOM always creates IDs
@@ -425,7 +393,7 @@ void UniqueStacks::StreamNonJITFrame(const FrameKey& aFrame) {
   // The C++ interpreter is the default implementation so we only emit element
   // for Baseline Interpreter frames.
   if (data.mBaselineInterp) {
-    writer.StringElement(IMPLEMENTATION, "blinterp");
+    writer.StringElement(IMPLEMENTATION, MakeStringSpan("blinterp"));
   }
 
   if (data.mLine.isSome()) {
@@ -459,7 +427,7 @@ static void StreamJITFrame(JSContext* aContext, SpliceableJSONWriter& aWriter,
 
   AutoArraySchemaWithStringsWriter writer(aWriter, aUniqueStrings);
 
-  writer.StringElement(LOCATION, aJITFrame.label());
+  writer.StringElement(LOCATION, MakeStringSpan(aJITFrame.label()));
   writer.BoolElement(RELEVANT_FOR_JS, false);
 
   // It's okay to convert uint64_t to double here because DOM always creates IDs
@@ -470,9 +438,10 @@ static void StreamJITFrame(JSContext* aContext, SpliceableJSONWriter& aWriter,
   JS::ProfilingFrameIterator::FrameKind frameKind = aJITFrame.frameKind();
   MOZ_ASSERT(frameKind == JS::ProfilingFrameIterator::Frame_Ion ||
              frameKind == JS::ProfilingFrameIterator::Frame_Baseline);
-  writer.StringElement(
-      IMPLEMENTATION,
-      frameKind == JS::ProfilingFrameIterator::Frame_Ion ? "ion" : "baseline");
+  writer.StringElement(IMPLEMENTATION,
+                       frameKind == JS::ProfilingFrameIterator::Frame_Ion
+                           ? MakeStringSpan("ion")
+                           : MakeStringSpan("baseline"));
 
   const JS::ProfilingCategoryPairInfo& info = JS::GetProfilingCategoryPairInfo(
       frameKind == JS::ProfilingFrameIterator::Frame_Ion
@@ -666,7 +635,6 @@ class EntryGetter {
 //           )+
 //         */
 //   )
-//   | MarkerData
 //   | Marker
 //   | ( /* Counters */
 //       CounterId
@@ -1184,82 +1152,23 @@ void ProfileBuffer::StreamMarkersToJSON(SpliceableJSONWriter& aWriter,
     MOZ_ASSERT(static_cast<ProfileBufferEntry::KindUnderlyingType>(type) <
                static_cast<ProfileBufferEntry::KindUnderlyingType>(
                    ProfileBufferEntry::Kind::MODERN_LIMIT));
-    // Code should *return* from the switch if the entry was fully read.
-    // Code should *break* from the switch if the entry was not fully read (we
-    // then need to adjust the reader position to the end of the entry, as
-    // expected by the reader code.)
-    switch (type) {
-      case ProfileBufferEntry::Kind::MarkerData:
-        if (aER.ReadObject<int>() != aThreadId) {
-          break;  // Entry not fully read.
-        }
-        aWriter.StartArrayElement();
-        {
-          // Extract the information from the buffer:
-          // Each entry is made up of the following:
-          //
-          // [
-          //   ProfileBufferEntry::Kind::MarkerData, <- already read
-          //   threadId,                             <- already read
-          //   name,                                 <- next location in entries
-          //   startTime,
-          //   endTime,
-          //   phase,
-          //   categoryPair,
-          //   payload
-          // ]
-          auto name = aER.ReadObject<std::string>();
-          auto startTime = aER.ReadObject<double>();
-          auto endTime = aER.ReadObject<double>();
-          auto phase = aER.ReadObject<uint8_t>();
-          const JS::ProfilingCategoryPairInfo& info =
-              GetProfilingCategoryPairInfo(
-                  static_cast<JS::ProfilingCategoryPair>(
-                      aER.ReadObject<uint32_t>()));
-          auto payload = aER.ReadObject<UniquePtr<ProfilerMarkerPayload>>();
+    bool entryWasFullyRead = false;
 
-          MOZ_ASSERT(aER.RemainingBytes() == 0);
-
-          // Now write this information to JSON with the following schema:
-          // [name, startTime, endTime, phase, category, data]
-          aUniqueStacks.mUniqueStrings->WriteElement(aWriter, name.c_str());
-          aWriter.DoubleElement(startTime);
-          aWriter.DoubleElement(endTime);
-          aWriter.IntElement(phase);
-          aWriter.IntElement(unsigned(info.mCategory));
-          if (payload) {
-            aWriter.StartObjectElement(SpliceableJSONWriter::SingleLineStyle);
-            {
-              payload->StreamPayload(aWriter, aProcessStartTime, aUniqueStacks);
-            }
-            aWriter.EndObject();
-          }
-        }
-        aWriter.EndArray();
-        return;  // Entry fully read.
-
-      case ProfileBufferEntry::Kind::Marker:
-        if (mozilla::base_profiler_markers_detail::
-                DeserializeAfterKindAndStream(
-                    aER, aWriter, aThreadId,
-                    [&](const mozilla::ProfilerString8View& aName) {
-                      aUniqueStacks.mUniqueStrings->WriteElement(
-                          aWriter, aName.String().c_str());
-                    },
-                    [&](ProfileChunkedBuffer& aChunkedBuffer) {
-                      ProfilerBacktrace backtrace("", &aChunkedBuffer);
-                      backtrace.StreamJSON(aWriter, aProcessStartTime,
-                                           aUniqueStacks);
-                    })) {
-          return;  // Entry fully read.
-        }
-        break;  // Entry not fully read.
-
-      default:
-        break;  // Entry not fully read.
+    if (type == ProfileBufferEntry::Kind::Marker) {
+      entryWasFullyRead =
+          mozilla::base_profiler_markers_detail::DeserializeAfterKindAndStream(
+              aER, aWriter, aThreadId,
+              [&](ProfileChunkedBuffer& aChunkedBuffer) {
+                ProfilerBacktrace backtrace("", &aChunkedBuffer);
+                backtrace.StreamJSON(aWriter, aProcessStartTime, aUniqueStacks);
+              });
     }
 
-    aER.SetRemainingBytes(0);
+    if (!entryWasFullyRead) {
+      // The entry was not a marker, or it was a marker for another thread.
+      // We probably didn't read the whole entry, so we need to skip to the end.
+      aER.SetRemainingBytes(0);
+    }
   });
 }
 

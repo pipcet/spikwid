@@ -168,26 +168,18 @@ extern "C" const char* __tsan_default_suppressions() {
          // up due to "volatile" being too weak for this.
          "race:third_party/sqlite3/*\n"
          "deadlock:third_party/sqlite3/*\n"
-
-
-
-
-
-         // Lack of proper instrumentation for the Rust stdlib (fix this!).
+         // Bug 1674770 - permanent
+         // Upstream Bug: https://github.com/Amanieu/parking_lot/issues/257
          //
-         // All of these can potentially be removed if we fix Bug 1671691.
-
-         // Bug 1587513 - permanent
-         "race:std::sync::mutex::Mutex\n"
-         // Bug 1590423 - permanent
-         "race:sync..Arc\n"
-         "race:alloc::sync::Arc\n"
+         // parking_lot using incorrect atomic orderings in RwLock, upstream
+         // fix already up for review.
+         "race:StrongRuleNode::ensure_child\n"
          // No Bug - permanent
-         "race:third_party/rust/parking_lot_core/*\n"
-         // No Bug - permanent
-         "race:/rustc/*.rs\n"
-         "deadlock:/rustc/*.rs\n"
-         "thread:std::sys::unix::thread::Thread::new\n"
+         // Upstream Bug: https://github.com/rayon-rs/rayon/issues/812
+         //
+         // Probably a false-positive from crossbeam's deque not being
+         // understood by tsan.
+         "race:crossbeam_deque::Worker$LT$T$GT$::resize\n"
 
 
 
@@ -217,18 +209,6 @@ extern "C" const char* __tsan_default_suppressions() {
 
          // The rest of these suppressions are miscellaneous issues in gecko
          // that should be investigated and ideally fixed.
-
-         // Bug 1506812
-         "race:BeginBackgroundRead\n"
-
-         // Bug 1601286
-         "race:setFlagBit\n"
-         "race:isFatInline\n"
-         "race:AtomizeAndCopyCharsFromLookup\n"
-         "race:inlinedMarkAtomInternal\n"
-         "race:XDRInnerObject<js::XDR_DECODE>\n"
-         "race:ScriptStencil::finishGCThings\n"
-         "race:XDRScriptGCThing<js::XDR_DECODE>\n"
 
          // Bug 1619162
          "race:currentNameHasEscapes\n"
@@ -263,13 +243,8 @@ extern "C" const char* __tsan_default_suppressions() {
          "race:nsJARChannel::Suspend\n"
          "race:nsJARChannel::Resume\n"
 
-         // Bug 1607449
-         "race:fill_CERTCertificateFields\n"
-         "race:CERT_DestroyCertificate\n"
-
-         // Bug 1608068
-         "race:makeOwnBaseShape\n"
-         "race:numDynamicSlots\n"
+         // Bug 1608462
+         "deadlock:ScriptPreloader::OffThreadDecodeCallback\n"
 
          // Bug 1615017
          "race:CacheFileMetadata::SetHash\n"
@@ -278,9 +253,6 @@ extern "C" const char* __tsan_default_suppressions() {
          // Bug 1615123
          "race:_dl_deallocate_tls\n"
          "race:__libc_memalign\n"
-
-         // Bug 1615265
-         "race:ScriptPreloader::OffThreadDecodeCallback\n"
 
          // Bug 1664535
          "race:setNeedsIncrementalBarrier\n"
@@ -322,6 +294,17 @@ extern "C" const char* __tsan_default_suppressions() {
          // Bug 1672230
          "race:ScriptPreloader::Trace\n"
          "race:ScriptPreloader::WriteCache\n"
+
+         // Bug 1623541
+         "race:VRShMem::PullSystemState\n"
+         "race:VRShMem::PushSystemState\n"
+
+         // Bug 1674776
+         "race:DocumentTimeline::GetCurrentTimeAsDuration\n"
+
+         // Bug 1674835
+         "race:nsHttpTransaction::ReadSegments\n"
+         "race:nsHttpTransaction::SecurityInfo\n"
 
       // End of suppressions.
       ;  // Please keep this semicolon.

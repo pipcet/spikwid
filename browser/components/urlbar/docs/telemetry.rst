@@ -102,6 +102,10 @@ urlbar.tips
     Incremented when the user picks the update_web search intervention.
   - ``intervention_update_web-shown``
     Incremented when the update_web search intervention is shown.
+  - ``tabtosearch_onboard-shown``
+    Incremented when a tab-to-search onboarding result is shown. Please note
+    that the number of times tab-to-search onboarding results are picked is
+    the sum of all keys in ``urlbar.searchmode.tabtosearch_onboard``.
   - ``searchTip_onboard-picked``
     Incremented when the user picks the onboarding search tip.
   - ``searchTip_onboard-shown``
@@ -210,6 +214,26 @@ urlbar.picked.*
     An unknown result type, a bug should be filed to figure out what it is.
   - ``visiturl``
     The user typed string can be directly visited.
+
+urlbar.picked.searchmode.*
+  This is a set of keyed scalars whose values are uints incremented each time a
+  result is picked from the Urlbar while the Urlbar is in search mode. The
+  suffix on the scalar name is the search mode entry point. The keys for the
+  scalars are the 0-based index of the result in the urlbar panel when it was
+  picked.
+
+  .. note::
+    These scalars share elements of both ``urlbar.picked.*`` and
+    ``urlbar.searchmode.*``. Scalar name suffixes are search mode entry points,
+    like ``urlbar.searchmode.*``. The keys for these scalars are result indices,
+    like ``urlbar.picked.*``.
+
+  .. note::
+    These data are a subset of the data recorded by ``urlbar.picked.*``. For
+    example, if the user enters search mode by clicking a one-off then selects
+    a Google search suggestion at index 2, we would record in **both**
+    ``urlbar.picked.searchsuggestion`` and ``urlbar.picked.searchmode.oneoff``.
+
 
 Event Telemetry
 ---------------
@@ -323,7 +347,7 @@ SEARCH_COUNTS
       Note there is often confusion between the terms alias and keyword, and
       they may be used inappropriately: aliases refer to search engines, while
       keywords refer to bookmarks. We expect no results for this SAP in Firefox
-      82+, since urlbar-searchmode replaces it.
+      83+, since urlbar-searchmode replaces it.
     - ``abouthome``
     - ``contextmenu``
     - ``newtab``

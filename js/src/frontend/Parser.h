@@ -267,11 +267,10 @@ class MOZ_STACK_CLASS ParserSharedBase {
  public:
   CompilationInfo& getCompilationInfo() { return compilationInfo_; }
 
+  LifoAlloc& stencilAlloc() { return compilationInfo_.stencil.alloc; }
+
   JSAtom* liftParserAtomToJSAtom(const ParserAtom* parserAtom) {
     return parserAtom->toJSAtom(cx_, compilationInfo_.input.atomCache);
-  }
-  const ParserAtom* lowerJSAtomToParserAtom(JSAtom* atom) {
-    return compilationInfo_.lowerJSAtomToParserAtom(cx_, atom);
   }
 };
 
@@ -578,8 +577,7 @@ class MOZ_STACK_CLASS PerHandlerParser : public ParserBase {
                               FunctionFlags flags, uint32_t toStringStart,
                               Directives directives,
                               GeneratorKind generatorKind,
-                              FunctionAsyncKind asyncKind,
-                              TopLevelFunction isTopLevel);
+                              FunctionAsyncKind asyncKind);
 
  public:
   // ErrorReportMixin.

@@ -140,6 +140,10 @@ class PrintHelper {
   assertDialogHidden() {
     is(this._dialogs.length, 1, "There is one print dialog");
     ok(BrowserTestUtils.is_hidden(this.dialog._box), "The dialog is hidden");
+    ok(
+      this.dialog._box.getBoundingClientRect().width > 0,
+      "The dialog should still have boxes"
+    );
   }
 
   async assertPrintToFile(file, testFn) {
@@ -179,28 +183,26 @@ class PrintHelper {
     };
   }
 
-  addMockPrinter(name = "Mock Printer") {
+  addMockPrinter(name = "Mock Printer", paperList = []) {
     let PSSVC = Cc["@mozilla.org/gfx/printsettings-service;1"].getService(
       Ci.nsIPrintSettingsService
     );
-    let defaultSettings = {
-      printerName: name,
-      toFileName: "",
-      outputFormat: Ci.nsIPrintSettings.kOutputFormatNative,
-      printToFile: false,
-    };
+
+    let defaultSettings = PSSVC.newPrintSettings;
+    defaultSettings.printerName = name;
+    defaultSettings.toFileName = "";
+    defaultSettings.outputFormat = Ci.nsIPrintSettings.kOutputFormatNative;
+    defaultSettings.printToFile = false;
+
     let printer = {
       name,
       supportsColor: Promise.resolve(true),
       supportsMonochrome: Promise.resolve(true),
-      paperList: Promise.resolve([]),
-      createDefaultSettings: () => {
-        let settings = PSSVC.newPrintSettings;
-        for (let [key, value] of Object.entries(defaultSettings)) {
-          settings[key] = value;
-        }
-        return settings;
-      },
+      printerInfo: Promise.resolve({
+        paperList,
+        defaultSettings,
+        QueryInterface: ChromeUtils.generateQI([Ci.nsIPrinterInfo]),
+      }),
       QueryInterface: ChromeUtils.generateQI([Ci.nsIPrinter]),
     };
 
@@ -300,17 +302,28 @@ class PrintHelper {
     return this.win.PrintEventHandler.viewSettings;
   }
 
+  _assertMatches(a, b, msg) {
+    if (Array.isArray(a)) {
+      is(a.length, b.length, msg);
+      for (let i = 0; i < a.length; ++i) {
+        this._assertMatches(a[i], b[i], msg);
+      }
+      return;
+    }
+    is(a, b, msg);
+  }
+
   assertSettingsMatch(expected) {
     let { settings } = this;
     for (let [setting, value] of Object.entries(expected)) {
-      is(settings[setting], value, `${setting} matches`);
+      this._assertMatches(settings[setting], value, `${setting} matches`);
     }
   }
 
   assertPrintedWithSettings(expected) {
     ok(this._printedSettings, "Printed settings have been recorded");
     for (let [setting, value] of Object.entries(expected)) {
-      is(
+      this._assertMatches(
         this._printedSettings[setting],
         value,
         `${setting} matches printed setting`

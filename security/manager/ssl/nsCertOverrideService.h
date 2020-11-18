@@ -130,11 +130,13 @@ class nsCertOverrideService final : public nsICertOverrideService,
     MOZ_ASSERT(mWriterTaskQueue->IsOnCurrentThread());
   }
 
+  void RemoveShutdownBlocker();
+
  private:
   ~nsCertOverrideService();
 
-  bool mDisableAllSecurityCheck;
   mozilla::Mutex mMutex;
+  bool mDisableAllSecurityCheck;
   nsCOMPtr<nsIFile> mSettingsFile;
   nsTHashtable<nsCertOverrideEntry> mSettingsTable;
 
@@ -151,7 +153,10 @@ class nsCertOverrideService final : public nsICertOverrideService,
                           const nsACString& dbKey,
                           const mozilla::MutexAutoLock& aProofOfLock);
 
-  RefPtr<TaskQueue> mWriterTaskQueue;
+  RefPtr<mozilla::TaskQueue> mWriterTaskQueue;
+
+  // Only accessed on the main thread
+  uint64_t mPendingWriteCount;
 };
 
 #define NS_CERTOVERRIDE_CID                          \

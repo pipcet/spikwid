@@ -52,6 +52,9 @@ void ProfiledThreadData::StreamJSON(
   UniqueStacks uniqueStacks(std::move(jitFrameInfo));
   uniqueStacks.mCodeAddressService = aService;
 
+  MOZ_ASSERT(uniqueStacks.mUniqueStrings);
+  aWriter.SetUniqueStrings(*uniqueStacks.mUniqueStrings);
+
   aWriter.Start();
   {
     StreamSamplesAndMarkers(mThreadInfo->Name(), mThreadInfo->ThreadId(),
@@ -95,7 +98,10 @@ void ProfiledThreadData::StreamJSON(
     aWriter.EndObject();
 
     aWriter.StartArrayProperty("stringTable");
-    { uniqueStacks.mUniqueStrings->SpliceStringTableElements(aWriter); }
+    {
+      std::move(*uniqueStacks.mUniqueStrings)
+          .SpliceStringTableElements(aWriter);
+    }
     aWriter.EndArray();
   }
 
@@ -104,6 +110,8 @@ void ProfiledThreadData::StreamJSON(
   }
 
   aWriter.End();
+
+  aWriter.ResetUniqueStrings();
 }
 
 void ProfiledThreadData::StreamTraceLoggerJSON(

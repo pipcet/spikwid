@@ -12,6 +12,7 @@
 #include "nsString.h"
 
 #include "mozilla/DataMutex.h"
+#include "mozilla/FunctionRef.h"
 #include "mozilla/RecursiveMutex.h"
 
 /**
@@ -21,12 +22,11 @@ class nsPrinterCUPS final : public nsPrinterBase {
  public:
   NS_IMETHOD GetName(nsAString& aName) override;
   NS_IMETHOD GetSystemName(nsAString& aName) override;
-  PrintSettingsInitializer DefaultSettings() const final;
   bool SupportsDuplex() const final;
   bool SupportsColor() const final;
   bool SupportsMonochrome() const final;
   bool SupportsCollation() const final;
-  nsTArray<mozilla::PaperInfo> PaperList() const final;
+  PrinterInfo CreatePrinterInfo() const final;
   MarginDouble GetMarginsForPaper(nsString aPaperId) const final {
     MOZ_ASSERT_UNREACHABLE(
         "The CUPS API requires us to always get the margin when fetching the "
@@ -44,6 +44,9 @@ class nsPrinterCUPS final : public nsPrinterBase {
         mDisplayName(std::move(aDisplayName)),
         mPrinter(aPrinter),
         mPrinterInfoMutex("nsPrinterCUPS::mPrinterInfoMutex") {}
+
+  static void ForEachExtraMonochromeSetting(
+      mozilla::FunctionRef<void(const nsACString&, const nsACString&)>);
 
  private:
   struct CUPSPrinterInfo {
@@ -64,6 +67,8 @@ class nsPrinterCUPS final : public nsPrinterBase {
   using PrinterInfoMutex =
       mozilla::DataMutexBase<CUPSPrinterInfo, mozilla::RecursiveMutex>;
 
+  using PrinterInfoLock = PrinterInfoMutex::AutoLock;
+
   ~nsPrinterCUPS();
 
   /**
@@ -82,14 +87,29 @@ class nsPrinterCUPS final : public nsPrinterBase {
   bool IsCUPSVersionAtLeast(uint64_t aCUPSMajor, uint64_t aCUPSMinor,
                             uint64_t aCUPSPatch) const;
 
+  class Connection {
+   public:
+    http_t* GetConnection(cups_dest_t* aDest);
+
+    inline explicit Connection(const nsCUPSShim& aShim) : mShim(aShim) {}
+    Connection() = delete;
+    ~Connection();
+
+   protected:
+    const nsCUPSShim& mShim;
+    http_t* mConnection = CUPS_HTTP_DEFAULT;
+    bool mWasInited = false;
+  };
+
+  PrintSettingsInitializer DefaultSettings(Connection& aConnection) const;
+  nsTArray<mozilla::PaperInfo> PaperList(Connection& aConnection) const;
   /**
    * Attempts to populate the CUPSPrinterInfo object.
    * This usually works with the CUPS default connection,
    * but has been known to require an established connection
    * on older versions of Ubuntu (18 and below).
    */
-  void TryEnsurePrinterInfo(
-      CUPSPrinterInfo& aInOutPrinterInfo,
+  PrinterInfoLock TryEnsurePrinterInfo(
       http_t* const aConnection = CUPS_HTTP_DEFAULT) const;
 
   const nsCUPSShim& mShim;
@@ -114,6 +134,7 @@ class nsPrinterCUPS final : public nsPrinterBase {
   macro_("ColorModel", "Gray")                /* Generic */  \
       macro_("BRMonoColor", "Mono")           /* Brother */  \
       macro_("BRPrintQuality", "Black")       /* Brother */  \
+      macro_("CNIJGrayScale", "1")            /* Canon */    \
       macro_("INK", "MONO")                   /* Epson */    \
       macro_("HPColorMode", "GrayscalePrint") /* HP */       \
       macro_("ColorMode", "Mono")             /* Samsung */  \

@@ -677,12 +677,12 @@ void BufferTextureHost::CreateRenderTexture(
     const wr::ExternalImageId& aExternalImageId) {
   RefPtr<wr::RenderTextureHost> texture;
 
-  if (UseExternalTextures()) {
-    texture =
-        new wr::RenderExternalTextureHost(GetBuffer(), GetBufferDescriptor());
-  } else if (gfx::gfxVars::UseSoftwareWebRender()) {
+  if (gfx::gfxVars::UseSoftwareWebRender()) {
     texture =
         new wr::RenderBufferTextureHostSWGL(GetBuffer(), GetBufferDescriptor());
+  } else if (UseExternalTextures()) {
+    texture =
+        new wr::RenderExternalTextureHost(GetBuffer(), GetBufferDescriptor());
   } else {
     texture =
         new wr::RenderBufferTextureHost(GetBuffer(), GetBufferDescriptor());
@@ -707,10 +707,10 @@ void BufferTextureHost::PushResourceUpdates(
                     ? &wr::TransactionBuilder::AddExternalImage
                     : &wr::TransactionBuilder::UpdateExternalImage;
 
-  auto imageType =
-      UseExternalTextures() || gfx::gfxVars::UseSoftwareWebRender()
-          ? wr::ExternalImageType::TextureHandle(wr::TextureTarget::Rect)
-          : wr::ExternalImageType::Buffer();
+  auto imageType = UseExternalTextures() || gfx::gfxVars::UseSoftwareWebRender()
+                       ? wr::ExternalImageType::TextureHandle(
+                             wr::ImageBufferKind::TextureRect)
+                       : wr::ExternalImageType::Buffer();
 
   if (GetFormat() != gfx::SurfaceFormat::YUV) {
     MOZ_ASSERT(aImageKeys.length() == 1);

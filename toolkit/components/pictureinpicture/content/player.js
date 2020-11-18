@@ -135,6 +135,8 @@ let Player = {
       videoRef,
     });
 
+    PictureInPicture.weakPipToWin.set(this.actor, window);
+
     for (let eventType of this.WINDOW_EVENTS) {
       addEventListener(eventType, this);
     }
@@ -160,16 +162,6 @@ let Player = {
       });
     }, RESIZE_DEBOUNCE_RATE_MS);
 
-    this.lastScreenX = window.screenX;
-    this.lastScreenY = window.screenY;
-
-    this.recordEvent("create", {
-      width: window.outerWidth.toString(),
-      height: window.outerHeight.toString(),
-      screenX: window.screenX.toString(),
-      screenY: window.screenY.toString(),
-    });
-
     this.computeAndSetMinimumSize(window.outerWidth, window.outerHeight);
 
     // alwaysontop windows are not focused by default, so we have to do it
@@ -177,12 +169,23 @@ let Player = {
     // window is visible before it can focus.
     window.requestAnimationFrame(() => {
       window.focus();
+      // wait until the video is focused before recording the telemetry becuase
+      // the window will sometimes give the wrong X and Y before being focused
+      this.recordEvent("create", {
+        width: window.outerWidth.toString(),
+        height: window.outerHeight.toString(),
+        screenX: window.screenX.toString(),
+        screenY: window.screenY.toString(),
+      });
+
+      this.lastScreenX = window.screenX;
+      this.lastScreenY = window.screenY;
     });
   },
 
   uninit() {
     this.resizeDebouncer.disarm();
-    PictureInPicture.unload(window);
+    PictureInPicture.unload(window, this.actor);
   },
 
   handleEvent(event) {
@@ -256,7 +259,7 @@ let Player = {
       }
 
       case "oop-browser-crashed": {
-        PictureInPicture.closePipWindow({ reason: "browser-crash" });
+        this.closePipWindow({ reason: "browser-crash" });
         break;
       }
 
@@ -269,6 +272,16 @@ let Player = {
         this.uninit();
         break;
       }
+    }
+  },
+
+  closePipWindow(closeData) {
+    const { reason } = closeData;
+
+    if (PictureInPicture.isMultiPipEnabled) {
+      PictureInPicture.closeSinglePipWindow({ reason, actorRef: this.actor });
+    } else {
+      PictureInPicture.closeAllPipWindows({ reason });
     }
   },
 
@@ -296,7 +309,7 @@ let Player = {
 
       case "close": {
         this.actor.sendAsyncMessage("PictureInPicture:Pause");
-        PictureInPicture.closePipWindow({ reason: "close-button" });
+        this.closePipWindow({ reason: "close-button" });
         break;
       }
 
@@ -313,7 +326,7 @@ let Player = {
       }
 
       case "unpip": {
-        PictureInPicture.focusTabAndClosePip();
+        PictureInPicture.focusTabAndClosePip(window, this.actor);
         break;
       }
     }
@@ -350,7 +363,7 @@ let Player = {
   },
 
   onCommand(event) {
-    PictureInPicture.closePipWindow({ reason: "player-shortcut" });
+    this.closePipWindow({ reason: "player-shortcut" });
   },
 
   get controls() {

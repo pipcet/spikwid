@@ -195,11 +195,9 @@ class MozbuildObject(ProcessExecutionMixin):
         if detect_virtualenv_mozinfo and os.path.isfile(mozinfo_path):
             topsrcdir, topobjdir, mozconfig = load_mozinfo(mozinfo_path)
 
-        # If we were successful, we're only guaranteed to find a topsrcdir. If
-        # we couldn't find that, there's nothing we can do.
         if not topsrcdir:
-            raise BuildEnvironmentNotFoundException(
-                "Could not find Mozilla source tree or build environment."
+            topsrcdir = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), "..", "..", "..")
             )
 
         topsrcdir = mozpath.normsep(topsrcdir)
@@ -601,8 +599,7 @@ class MozbuildObject(ProcessExecutionMixin):
         On Linux and Mac, this will show a desktop notification with the message,
         but on Windows we can only flash the screen.
         """
-        moz_nospam = os.environ.get("MOZ_NOSPAM")
-        if moz_nospam:
+        if "MOZ_NOSPAM" in os.environ or "MOZ_AUTOMATION" in os.environ:
             return
 
         try:

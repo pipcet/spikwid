@@ -894,10 +894,10 @@ nsresult EventDispatcher::Dispatch(nsISupports* aTarget,
 
   // Create visitor object and start event dispatching.
   // GetEventTargetParent for the original target.
-  nsEventStatus status =
-      aDOMEvent && aDOMEvent->DefaultPrevented()
-          ? nsEventStatus_eConsumeNoDefault
-          : aEventStatus ? *aEventStatus : nsEventStatus_eIgnore;
+  nsEventStatus status = aDOMEvent && aDOMEvent->DefaultPrevented()
+                             ? nsEventStatus_eConsumeNoDefault
+                         : aEventStatus ? *aEventStatus
+                                        : nsEventStatus_eIgnore;
   nsCOMPtr<EventTarget> targetForPreVisitor = aEvent->mTarget;
   EventChainPreVisitor preVisitor(aPresContext, aEvent, aDOMEvent, status,
                                   isInAnon, targetForPreVisitor);
@@ -1039,14 +1039,11 @@ nsresult EventDispatcher::Dispatch(nsISupports* aTarget,
 
           struct DOMEventMarker {
             static constexpr Span<const char> MarkerTypeName() {
-              // Note: DOMEventMarkerPayload was originally a sub-class of
-              // TracingMarkerPayload, so it uses the same payload type.
-              // TODO: Change to its own distinct type, but this will require
-              // front-end changes.
               return MakeStringSpan("DOMEvent");
             }
             static void StreamJSONMarkerData(
-                JSONWriter& aWriter, const ProfilerString16View& aEventType,
+                baseprofiler::SpliceableJSONWriter& aWriter,
+                const ProfilerString16View& aEventType,
                 const TimeStamp& aStartTime, const TimeStamp& aEventTimeStamp) {
               aWriter.StringProperty(
                   "eventType", NS_ConvertUTF16toUTF8(aEventType.Data(),

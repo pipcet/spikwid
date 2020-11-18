@@ -37,10 +37,6 @@
 using namespace mozilla::tasktracer;
 #endif
 
-#ifdef MOZ_GECKO_PROFILER
-#  include "ProfilerMarkerPayload.h"
-#endif
-
 // Undo the damage done by mozzconf.h
 #undef compress
 
@@ -157,9 +153,9 @@ class MessageChannel::InterruptFrame {
   InterruptFrame(Direction direction, const Message* msg)
       : mMessageName(msg->name()),
         mMessageRoutingId(msg->routing_id()),
-        mMesageSemantics(msg->is_interrupt()
-                             ? INTR_SEMS
-                             : msg->is_sync() ? SYNC_SEMS : ASYNC_SEMS),
+        mMesageSemantics(msg->is_interrupt() ? INTR_SEMS
+                         : msg->is_sync()    ? SYNC_SEMS
+                                             : ASYNC_SEMS),
         mDirection(direction),
         mMoved(false) {
     MOZ_RELEASE_ASSERT(mMessageName);
@@ -203,9 +199,9 @@ class MessageChannel::InterruptFrame {
                 const char** name) const {
     *id = mMessageRoutingId;
     *dir = (IN_MESSAGE == mDirection) ? "in" : "out";
-    *sems = (INTR_SEMS == mMesageSemantics)
-                ? "intr"
-                : (SYNC_SEMS == mMesageSemantics) ? "sync" : "async";
+    *sems = (INTR_SEMS == mMesageSemantics)   ? "intr"
+            : (SYNC_SEMS == mMesageSemantics) ? "sync"
+                                              : "async";
     *name = mMessageName;
   }
 
@@ -2787,11 +2783,14 @@ void MessageChannel::AddProfilerMarker(const IPC::Message& aMessage,
   mMonitor->AssertCurrentThreadOwns();
 #ifdef MOZ_GECKO_PROFILER
   if (profiler_feature_active(ProfilerFeature::IPCMessages)) {
-    int32_t pid = mListener->OtherPid();
-    PROFILER_ADD_MARKER_WITH_PAYLOAD(
-        "IPC", IPC, IPCMarkerPayload,
-        (pid, aMessage.seqno(), aMessage.type(), mSide, aDirection,
-         MessagePhase::Endpoint, aMessage.is_sync(), TimeStamp::NowUnfuzzed()));
+    int32_t pid = mListener->OtherPidMaybeInvalid();
+    if (pid != kInvalidProcessId) {
+      // The current timestamp must be given to the `IPCMarker` payload.
+      const TimeStamp now = TimeStamp::NowUnfuzzed();
+      PROFILER_MARKER("IPC", IPC, MarkerTiming::InstantAt(now), IPCMarker, now,
+                      now, pid, aMessage.seqno(), aMessage.type(), mSide,
+                      aDirection, MessagePhase::Endpoint, aMessage.is_sync());
+    }
   }
 #endif
 }

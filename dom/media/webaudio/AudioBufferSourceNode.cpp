@@ -19,8 +19,7 @@
 #include <limits>
 #include <algorithm>
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 NS_IMPL_CYCLE_COLLECTION_INHERITED(AudioBufferSourceNode,
                                    AudioScheduledSourceNode, mBuffer,
@@ -350,7 +349,7 @@ class AudioBufferSourceNodeEngine final : public AudioNodeEngine {
     uint32_t numFrames = std::min<TrackTime>(
         WEBAUDIO_BLOCK_SIZE - *aOffsetWithinBlock, aMaxPos - *aCurrentPosition);
     if (numFrames == WEBAUDIO_BLOCK_SIZE || !aChannels) {
-      aOutput->SetNull(numFrames);
+      aOutput->SetNull(WEBAUDIO_BLOCK_SIZE);
     } else {
       if (*aOffsetWithinBlock == 0) {
         aOutput->AllocateChannels(aChannels);
@@ -841,5 +840,4 @@ void AudioBufferSourceNode::SendLoopParametersToTrack() {
   }
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

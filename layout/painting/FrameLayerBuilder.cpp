@@ -1643,7 +1643,6 @@ class ContainerState {
     CachedScrollMetadata() : mASR(nullptr), mClip(nullptr) {}
   };
   CachedScrollMetadata mCachedScrollMetadata;
-  std::unordered_set<nsIScrollableFrame*> mScrollFramesToNotify;
 };
 
 class FLBDisplayListIterator : public FlattenedDisplayListIterator {
@@ -5045,8 +5044,8 @@ void ContainerState::ProcessDisplayItems(nsDisplayList* aList) {
         nsDisplayScrollInfoLayer* scrollItem =
             static_cast<nsDisplayScrollInfoLayer*>(item);
         newLayerEntry->mOpaqueForAnimatedGeometryRootParent = false;
-        newLayerEntry->mBaseScrollMetadata =
-            scrollItem->ComputeScrollMetadata(ownLayer->Manager(), mParameters);
+        newLayerEntry->mBaseScrollMetadata = scrollItem->ComputeScrollMetadata(
+            mBuilder, ownLayer->Manager(), mParameters);
       }
 
       /**
@@ -5776,7 +5775,7 @@ void ContainerState::SetupScrollingMetadata(NewLayerEntry* aEntry) {
       metadata = scrollFrame->ComputeScrollMetadata(aEntry->mLayer->Manager(),
                                                     mContainerReferenceFrame,
                                                     Some(mParameters), clip);
-      mScrollFramesToNotify.insert(scrollFrame);
+      mBuilder->AddScrollFrameToNotify(scrollFrame);
       mCachedScrollMetadata.mASR = asr;
       mCachedScrollMetadata.mClip = clip;
       mCachedScrollMetadata.mMetadata = metadata;
@@ -5908,11 +5907,6 @@ void ContainerState::PostprocessRetainedLayers(
         *aOpaqueRegionForContainer,
         opaqueRegions[opaqueRegionForContainer].mOpaqueRegion);
   }
-
-  for (const auto& it : mScrollFramesToNotify) {
-    it->NotifyApzTransaction();
-  }
-  mScrollFramesToNotify.clear();
 }
 
 void ContainerState::Finish(uint32_t* aTextContentFlags,

@@ -175,7 +175,7 @@ parent:
 
   async PBackgroundSessionStorageManager(uint64_t aTopContextId);
 
-  async PBackgroundStorage(nsString profilePath);
+  async PBackgroundStorage(nsString profilePath, uint32_t privateBrowsingId);
 
   async PVsync();
 
@@ -263,8 +263,7 @@ parent:
                              uint32_t aProviderFlags,
                              uint32_t aCertVerifierFlags);
 
-  // See Bug 1518344 - Investigate using async for PBackground::EnsureRDDProcessAndCreateBridge
-  sync EnsureRDDProcessAndCreateBridge()
+  async EnsureRDDProcessAndCreateBridge()
       returns (nsresult rv, Endpoint<PRemoteDecoderManagerChild> aEndpoint);
 
 child:

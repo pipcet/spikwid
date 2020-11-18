@@ -35,7 +35,7 @@ impl RenderNotifier for Notifier {
         })
     }
 
-    fn wake_up(&self) {
+    fn wake_up(&self, _composite_needed: bool) {
         #[cfg(not(target_os = "android"))]
         let _ = self.events_proxy.wakeup();
     }
@@ -43,9 +43,9 @@ impl RenderNotifier for Notifier {
     fn new_frame_ready(&self,
                        _: DocumentId,
                        _scrolled: bool,
-                       _composite_needed: bool,
+                       composite_needed: bool,
                        _render_time: Option<u64>) {
-        self.wake_up();
+        self.wake_up(composite_needed);
     }
 }
 
@@ -107,7 +107,7 @@ impl Window {
         let notifier = Box::new(Notifier::new(events_loop.create_proxy()));
         let (renderer, sender) = webrender::Renderer::new(gl.clone(), notifier, opts, None).unwrap();
         let mut api = sender.create_api();
-        let document_id = api.add_document(device_size, 0);
+        let document_id = api.add_document(device_size);
 
         let epoch = Epoch(0);
         let pipeline_id = PipelineId(0, 0);
@@ -289,7 +289,7 @@ impl Window {
         api.send_transaction(self.document_id, txn);
 
         renderer.update();
-        renderer.render(device_size).unwrap();
+        renderer.render(device_size, 0).unwrap();
         context.swap_buffers().ok();
 
         self.context = Some(unsafe { context.make_not_current().unwrap() });

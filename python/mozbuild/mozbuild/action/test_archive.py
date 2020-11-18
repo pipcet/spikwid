@@ -139,7 +139,6 @@ ARCHIVE_FILES = {
             "base": "",
             "manifests": [
                 "testing/marionette/harness/marionette_harness/tests/unit-tests.ini",
-                "gfx/tests/marionette/manifest.ini",
             ],
             # We also need the manifests and harness_unit tests
             "pattern": "testing/marionette/harness/marionette_harness/tests/**",
@@ -773,9 +772,8 @@ if buildconfig.substs.get("commtopsrcdir"):
     commtopsrcdir = buildconfig.substs.get("commtopsrcdir")
     mozharness_comm = {
         "source": commtopsrcdir,
-        "base": "mozharness",
+        "base": "testing/mozharness",
         "pattern": "**",
-        "dest": "configs",
     }
     ARCHIVE_FILES["mozharness"].append(mozharness_comm)
     marionette_comm = {

@@ -252,7 +252,7 @@
       info("Test writing a file at a relative destination");
       await Assert.rejects(
         IOUtils.writeAtomic(tmpFileName, bytes),
-        /Refusing to work with path\(.*\) because only absolute file paths are permitted/,
+        /Could not parse path/,
         "IOUtils::writeAtomic only works with absolute paths"
       );
     });
@@ -263,7 +263,7 @@
       info("Test reading a file at a relative destination");
       await Assert.rejects(
         IOUtils.read(tmpFileName),
-        /Refusing to work with path\(.*\) because only absolute file paths are permitted/,
+        /Could not parse path/,
         "IOUtils::writeAtomic only works with absolute paths"
       );
     });
@@ -356,7 +356,17 @@
 
       await Assert.rejects(
         IOUtils.read(tmpFileName, { decompress: true }),
-        /Could not decompress file because it has an invalid LZ4 header \(wrong magic number: .*\)/,
+        (actual) => {
+          is(actual.constructor, DOMException,
+             "rejection reason constructor for decompress with bad header");
+          is(actual.name, "NotReadableError",
+             "rejection error name for decompress with bad header");
+          ok(/Could not decompress file because it has an invalid LZ4 header \(wrong magic number: .*\)/
+             .test(actual.message),
+             "rejection error message for decompress with bad header. Got "
+             + actual.message);
+          return true;
+        },
         "IOUtils::read fails to decompress LZ4 data with a bad header"
       );
 

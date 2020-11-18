@@ -63,6 +63,10 @@ pane-experimental-subtitle = Proceed with Caution
 pane-experimental-search-results-header = { -brand-short-name } Experiments: Proceed with Caution
 pane-experimental-description = Changing advanced configuration preferences can impact { -brand-short-name } performance or security.
 
+pane-experimental-reset =
+  .label = Restore Defaults
+  .accesskey = R
+
 help-button-label = { -brand-short-name } Support
 addons-button-label = Extensions & Themes
 
@@ -1116,6 +1120,8 @@ content-blocking-enhanced-tracking-protection = Enhanced Tracking Protection
 content-blocking-section-top-level-description = Trackers follow you around online to collect information about your browsing habits and interests. { -brand-short-name } blocks many of these trackers and other malicious scripts.
 
 content-blocking-learn-more = Learn more
+
+content-blocking-fpi-incompatibility-warning = You are using First Party Isolation (FPI), which overrides some of { -brand-short-name }’s cookie settings.
 
 ## These strings are used to define the different levels of
 ## Enhanced Tracking Protection.

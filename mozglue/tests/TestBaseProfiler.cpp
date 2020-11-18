@@ -3014,126 +3014,152 @@ void TestLiteralEmptyStringView() {
   printf("TestLiteralEmptyStringView done\n");
 }
 
+template <typename CHAR>
 void TestProfilerStringView() {
-  printf("TestProfilerStringView...\n");
+  if constexpr (std::is_same_v<CHAR, char>) {
+    printf("TestProfilerStringView<char>...\n");
+  } else if constexpr (std::is_same_v<CHAR, char16_t>) {
+    printf("TestProfilerStringView<char16_t>...\n");
+  } else {
+    MOZ_RELEASE_ASSERT(false,
+                       "TestProfilerStringView only handles char and char16_t");
+  }
 
   // Used to verify implicit constructions, as this will normally be used in
   // function parameters.
-  auto BS8V = [](mozilla::ProfilerString8View&& aBS8V) {
-    return std::move(aBS8V);
+  auto BSV = [](mozilla::ProfilerStringView<CHAR>&& aBSV) {
+    return std::move(aBSV);
+  };
+
+  // These look like string literals, as expected by some string constructors.
+  const CHAR empty[0 + 1] = {CHAR('\0')};
+  const CHAR hi[2 + 1] = {
+      CHAR('h'),
+      CHAR('i'),
+      CHAR('\0'),
   };
 
   // Literal empty string.
-  MOZ_RELEASE_ASSERT(BS8V("").Data());
-  MOZ_RELEASE_ASSERT(BS8V("").Data()[0] == '\0');
-  MOZ_RELEASE_ASSERT(BS8V("").Length() == 0);
-  MOZ_RELEASE_ASSERT(BS8V("").IsLiteral());
-  MOZ_RELEASE_ASSERT(!BS8V("").IsReference());
+  MOZ_RELEASE_ASSERT(BSV(empty).Data());
+  MOZ_RELEASE_ASSERT(BSV(empty).Data()[0] == CHAR('\0'));
+  MOZ_RELEASE_ASSERT(BSV(empty).Length() == 0);
+  MOZ_RELEASE_ASSERT(BSV(empty).IsLiteral());
+  MOZ_RELEASE_ASSERT(!BSV(empty).IsReference());
 
   // Literal non-empty string.
-  MOZ_RELEASE_ASSERT(BS8V("hi").Data());
-  MOZ_RELEASE_ASSERT(BS8V("hi").Data()[0] == 'h');
-  MOZ_RELEASE_ASSERT(BS8V("hi").Data()[1] == 'i');
-  MOZ_RELEASE_ASSERT(BS8V("hi").Data()[2] == '\0');
-  MOZ_RELEASE_ASSERT(BS8V("hi").Length() == 2);
-  MOZ_RELEASE_ASSERT(BS8V("hi").IsLiteral());
-  MOZ_RELEASE_ASSERT(!BS8V("hi").IsReference());
+  MOZ_RELEASE_ASSERT(BSV(hi).Data());
+  MOZ_RELEASE_ASSERT(BSV(hi).Data()[0] == CHAR('h'));
+  MOZ_RELEASE_ASSERT(BSV(hi).Data()[1] == CHAR('i'));
+  MOZ_RELEASE_ASSERT(BSV(hi).Data()[2] == CHAR('\0'));
+  MOZ_RELEASE_ASSERT(BSV(hi).Length() == 2);
+  MOZ_RELEASE_ASSERT(BSV(hi).IsLiteral());
+  MOZ_RELEASE_ASSERT(!BSV(hi).IsReference());
 
   // std::string_view to a literal empty string.
-  MOZ_RELEASE_ASSERT(BS8V(std::string_view("")).Data());
-  MOZ_RELEASE_ASSERT(BS8V(std::string_view("")).Data()[0] == '\0');
-  MOZ_RELEASE_ASSERT(BS8V(std::string_view("")).Length() == 0);
-  MOZ_RELEASE_ASSERT(!BS8V(std::string_view("")).IsLiteral());
-  MOZ_RELEASE_ASSERT(BS8V(std::string_view("")).IsReference());
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string_view<CHAR>(empty)).Data());
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string_view<CHAR>(empty)).Data()[0] ==
+                     CHAR('\0'));
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string_view<CHAR>(empty)).Length() == 0);
+  MOZ_RELEASE_ASSERT(!BSV(std::basic_string_view<CHAR>(empty)).IsLiteral());
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string_view<CHAR>(empty)).IsReference());
 
   // std::string_view to a literal non-empty string.
-  MOZ_RELEASE_ASSERT(BS8V(std::string_view("hi")).Data());
-  MOZ_RELEASE_ASSERT(BS8V(std::string_view("hi")).Data()[0] == 'h');
-  MOZ_RELEASE_ASSERT(BS8V(std::string_view("hi")).Data()[1] == 'i');
-  MOZ_RELEASE_ASSERT(BS8V(std::string_view("hi")).Data()[2] == '\0');
-  MOZ_RELEASE_ASSERT(BS8V(std::string_view("hi")).Length() == 2);
-  MOZ_RELEASE_ASSERT(!BS8V(std::string_view("hi")).IsLiteral());
-  MOZ_RELEASE_ASSERT(BS8V(std::string_view("hi")).IsReference());
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string_view<CHAR>(hi)).Data());
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string_view<CHAR>(hi)).Data()[0] ==
+                     CHAR('h'));
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string_view<CHAR>(hi)).Data()[1] ==
+                     CHAR('i'));
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string_view<CHAR>(hi)).Data()[2] ==
+                     CHAR('\0'));
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string_view<CHAR>(hi)).Length() == 2);
+  MOZ_RELEASE_ASSERT(!BSV(std::basic_string_view<CHAR>(hi)).IsLiteral());
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string_view<CHAR>(hi)).IsReference());
 
   // Default std::string_view points at nullptr, ProfilerStringView converts it
   // to the literal empty string.
-  MOZ_RELEASE_ASSERT(!std::string_view().data());
-  MOZ_RELEASE_ASSERT(BS8V(std::string_view()).Data());
-  MOZ_RELEASE_ASSERT(BS8V(std::string_view()).Data()[0] == '\0');
-  MOZ_RELEASE_ASSERT(BS8V(std::string_view()).Length() == 0);
-  MOZ_RELEASE_ASSERT(BS8V(std::string_view()).IsLiteral());
-  MOZ_RELEASE_ASSERT(!BS8V(std::string_view()).IsReference());
+  MOZ_RELEASE_ASSERT(!std::basic_string_view<CHAR>().data());
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string_view<CHAR>()).Data());
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string_view<CHAR>()).Data()[0] ==
+                     CHAR('\0'));
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string_view<CHAR>()).Length() == 0);
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string_view<CHAR>()).IsLiteral());
+  MOZ_RELEASE_ASSERT(!BSV(std::basic_string_view<CHAR>()).IsReference());
 
   // std::string to a literal empty string.
-  MOZ_RELEASE_ASSERT(BS8V(std::string("")).Data());
-  MOZ_RELEASE_ASSERT(BS8V(std::string("")).Data()[0] == '\0');
-  MOZ_RELEASE_ASSERT(BS8V(std::string("")).Length() == 0);
-  MOZ_RELEASE_ASSERT(!BS8V(std::string("")).IsLiteral());
-  MOZ_RELEASE_ASSERT(BS8V(std::string("")).IsReference());
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>(empty)).Data());
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>(empty)).Data()[0] ==
+                     CHAR('\0'));
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>(empty)).Length() == 0);
+  MOZ_RELEASE_ASSERT(!BSV(std::basic_string<CHAR>(empty)).IsLiteral());
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>(empty)).IsReference());
 
   // std::string to a literal non-empty string.
-  MOZ_RELEASE_ASSERT(BS8V(std::string("hi")).Data());
-  MOZ_RELEASE_ASSERT(BS8V(std::string("hi")).Data()[0] == 'h');
-  MOZ_RELEASE_ASSERT(BS8V(std::string("hi")).Data()[1] == 'i');
-  MOZ_RELEASE_ASSERT(BS8V(std::string("hi")).Data()[2] == '\0');
-  MOZ_RELEASE_ASSERT(BS8V(std::string("hi")).Length() == 2);
-  MOZ_RELEASE_ASSERT(!BS8V(std::string("hi")).IsLiteral());
-  MOZ_RELEASE_ASSERT(BS8V(std::string("hi")).IsReference());
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>(hi)).Data());
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>(hi)).Data()[0] == CHAR('h'));
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>(hi)).Data()[1] == CHAR('i'));
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>(hi)).Data()[2] == CHAR('\0'));
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>(hi)).Length() == 2);
+  MOZ_RELEASE_ASSERT(!BSV(std::basic_string<CHAR>(hi)).IsLiteral());
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>(hi)).IsReference());
 
-  // Default std::string_view contains an empty null-terminated string.
-  MOZ_RELEASE_ASSERT(std::string().data());
-  MOZ_RELEASE_ASSERT(BS8V(std::string()).Data());
-  MOZ_RELEASE_ASSERT(BS8V(std::string()).Data()[0] == '\0');
-  MOZ_RELEASE_ASSERT(BS8V(std::string()).Length() == 0);
-  MOZ_RELEASE_ASSERT(!BS8V(std::string()).IsLiteral());
-  MOZ_RELEASE_ASSERT(BS8V(std::string()).IsReference());
+  // Default std::string contains an empty null-terminated string.
+  MOZ_RELEASE_ASSERT(std::basic_string<CHAR>().data());
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>()).Data());
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>()).Data()[0] == CHAR('\0'));
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>()).Length() == 0);
+  MOZ_RELEASE_ASSERT(!BSV(std::basic_string<CHAR>()).IsLiteral());
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>()).IsReference());
 
-  class FakeNsCString {
+  // Class that quacks like nsTString (with Data(), Length(), IsLiteral()), to
+  // check that ProfilerStringView can read from them.
+  class FakeNsTString {
    public:
-    FakeNsCString(const char* aData, size_t aLength, bool aIsLiteral)
+    FakeNsTString(const CHAR* aData, size_t aLength, bool aIsLiteral)
         : mData(aData), mLength(aLength), mIsLiteral(aIsLiteral) {}
 
-    const char* Data() const { return mData; }
+    const CHAR* Data() const { return mData; }
     size_t Length() const { return mLength; }
     bool IsLiteral() const { return mIsLiteral; }
 
    private:
-    const char* mData;
+    const CHAR* mData;
     size_t mLength;
     bool mIsLiteral;
   };
 
-  // FakeNsCString to nullptr.
-  MOZ_RELEASE_ASSERT(BS8V(FakeNsCString(nullptr, 0, true)).Data());
-  MOZ_RELEASE_ASSERT(BS8V(FakeNsCString(nullptr, 0, true)).Data()[0] == '\0');
-  MOZ_RELEASE_ASSERT(BS8V(FakeNsCString(nullptr, 0, true)).Length() == 0);
-  MOZ_RELEASE_ASSERT(BS8V(FakeNsCString(nullptr, 0, true)).IsLiteral());
-  MOZ_RELEASE_ASSERT(!BS8V(FakeNsCString(nullptr, 0, true)).IsReference());
+  // FakeNsTString to nullptr.
+  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(nullptr, 0, true)).Data());
+  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(nullptr, 0, true)).Data()[0] ==
+                     CHAR('\0'));
+  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(nullptr, 0, true)).Length() == 0);
+  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(nullptr, 0, true)).IsLiteral());
+  MOZ_RELEASE_ASSERT(!BSV(FakeNsTString(nullptr, 0, true)).IsReference());
 
-  // FakeNsCString to a literal empty string.
-  MOZ_RELEASE_ASSERT(BS8V(FakeNsCString("", 0, true)).Data());
-  MOZ_RELEASE_ASSERT(BS8V(FakeNsCString("", 0, true)).Data()[0] == '\0');
-  MOZ_RELEASE_ASSERT(BS8V(FakeNsCString("", 0, true)).Length() == 0);
-  MOZ_RELEASE_ASSERT(BS8V(FakeNsCString("", 0, true)).IsLiteral());
-  MOZ_RELEASE_ASSERT(!BS8V(FakeNsCString("", 0, true)).IsReference());
+  // FakeNsTString to a literal empty string.
+  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(empty, 0, true)).Data());
+  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(empty, 0, true)).Data()[0] ==
+                     CHAR('\0'));
+  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(empty, 0, true)).Length() == 0);
+  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(empty, 0, true)).IsLiteral());
+  MOZ_RELEASE_ASSERT(!BSV(FakeNsTString(empty, 0, true)).IsReference());
 
-  // FakeNsCString to a literal non-empty string.
-  MOZ_RELEASE_ASSERT(BS8V(FakeNsCString("hi", 2, true)).Data());
-  MOZ_RELEASE_ASSERT(BS8V(FakeNsCString("hi", 2, true)).Data()[0] == 'h');
-  MOZ_RELEASE_ASSERT(BS8V(FakeNsCString("hi", 2, true)).Data()[1] == 'i');
-  MOZ_RELEASE_ASSERT(BS8V(FakeNsCString("hi", 2, true)).Data()[2] == '\0');
-  MOZ_RELEASE_ASSERT(BS8V(FakeNsCString("hi", 2, true)).Length() == 2);
-  MOZ_RELEASE_ASSERT(BS8V(FakeNsCString("hi", 2, true)).IsLiteral());
-  MOZ_RELEASE_ASSERT(!BS8V(FakeNsCString("hi", 2, true)).IsReference());
+  // FakeNsTString to a literal non-empty string.
+  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(hi, 2, true)).Data());
+  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(hi, 2, true)).Data()[0] == CHAR('h'));
+  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(hi, 2, true)).Data()[1] == CHAR('i'));
+  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(hi, 2, true)).Data()[2] == CHAR('\0'));
+  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(hi, 2, true)).Length() == 2);
+  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(hi, 2, true)).IsLiteral());
+  MOZ_RELEASE_ASSERT(!BSV(FakeNsTString(hi, 2, true)).IsReference());
 
-  // FakeNsCString to a non-literal non-empty string.
-  MOZ_RELEASE_ASSERT(BS8V(FakeNsCString("hi", 2, false)).Data());
-  MOZ_RELEASE_ASSERT(BS8V(FakeNsCString("hi", 2, false)).Data()[0] == 'h');
-  MOZ_RELEASE_ASSERT(BS8V(FakeNsCString("hi", 2, false)).Data()[1] == 'i');
-  MOZ_RELEASE_ASSERT(BS8V(FakeNsCString("hi", 2, false)).Data()[2] == '\0');
-  MOZ_RELEASE_ASSERT(BS8V(FakeNsCString("hi", 2, false)).Length() == 2);
-  MOZ_RELEASE_ASSERT(!BS8V(FakeNsCString("hi", 2, false)).IsLiteral());
-  MOZ_RELEASE_ASSERT(BS8V(FakeNsCString("hi", 2, false)).IsReference());
+  // FakeNsTString to a non-literal non-empty string.
+  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(hi, 2, false)).Data());
+  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(hi, 2, false)).Data()[0] == CHAR('h'));
+  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(hi, 2, false)).Data()[1] == CHAR('i'));
+  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(hi, 2, false)).Data()[2] == CHAR('\0'));
+  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(hi, 2, false)).Length() == 2);
+  MOZ_RELEASE_ASSERT(!BSV(FakeNsTString(hi, 2, false)).IsLiteral());
+  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(hi, 2, false)).IsReference());
 
   // Serialization and deserialization (with ownership).
   constexpr size_t bufferMaxSize = 1024;
@@ -3142,69 +3168,73 @@ void TestProfilerStringView() {
   ProfileChunkedBuffer cb(ProfileChunkedBuffer::ThreadSafety::WithMutex, cm);
 
   // Literal string, serialized as raw pointer.
-  MOZ_RELEASE_ASSERT(cb.PutObject(BS8V("hi")));
+  MOZ_RELEASE_ASSERT(cb.PutObject(BSV(hi)));
   {
     unsigned read = 0;
-    ProfilerString8View outerBS8V;
+    ProfilerStringView<CHAR> outerBSV;
     cb.ReadEach([&](ProfileBufferEntryReader& aER) {
       ++read;
-      auto bs8v = aER.ReadObject<ProfilerString8View>();
-      MOZ_RELEASE_ASSERT(bs8v.Data());
-      MOZ_RELEASE_ASSERT(bs8v.Data()[0] == 'h');
-      MOZ_RELEASE_ASSERT(bs8v.Data()[1] == 'i');
-      MOZ_RELEASE_ASSERT(bs8v.Data()[2] == '\0');
-      MOZ_RELEASE_ASSERT(bs8v.Length() == 2);
-      MOZ_RELEASE_ASSERT(bs8v.IsLiteral());
-      MOZ_RELEASE_ASSERT(!bs8v.IsReference());
-      outerBS8V = std::move(bs8v);
+      auto bsv = aER.ReadObject<ProfilerStringView<CHAR>>();
+      MOZ_RELEASE_ASSERT(bsv.Data());
+      MOZ_RELEASE_ASSERT(bsv.Data()[0] == CHAR('h'));
+      MOZ_RELEASE_ASSERT(bsv.Data()[1] == CHAR('i'));
+      MOZ_RELEASE_ASSERT(bsv.Data()[2] == CHAR('\0'));
+      MOZ_RELEASE_ASSERT(bsv.Length() == 2);
+      MOZ_RELEASE_ASSERT(bsv.IsLiteral());
+      MOZ_RELEASE_ASSERT(!bsv.IsReference());
+      outerBSV = std::move(bsv);
     });
     MOZ_RELEASE_ASSERT(read == 1);
-    MOZ_RELEASE_ASSERT(outerBS8V.Data());
-    MOZ_RELEASE_ASSERT(outerBS8V.Data()[0] == 'h');
-    MOZ_RELEASE_ASSERT(outerBS8V.Data()[1] == 'i');
-    MOZ_RELEASE_ASSERT(outerBS8V.Data()[2] == '\0');
-    MOZ_RELEASE_ASSERT(outerBS8V.Length() == 2);
-    MOZ_RELEASE_ASSERT(outerBS8V.IsLiteral());
-    MOZ_RELEASE_ASSERT(!outerBS8V.IsReference());
+    MOZ_RELEASE_ASSERT(outerBSV.Data());
+    MOZ_RELEASE_ASSERT(outerBSV.Data()[0] == CHAR('h'));
+    MOZ_RELEASE_ASSERT(outerBSV.Data()[1] == CHAR('i'));
+    MOZ_RELEASE_ASSERT(outerBSV.Data()[2] == CHAR('\0'));
+    MOZ_RELEASE_ASSERT(outerBSV.Length() == 2);
+    MOZ_RELEASE_ASSERT(outerBSV.IsLiteral());
+    MOZ_RELEASE_ASSERT(!outerBSV.IsReference());
   }
 
   cb.Clear();
 
   // Non-literal string, content is serialized.
-  std::string hiString("hi");
-  MOZ_RELEASE_ASSERT(cb.PutObject(BS8V(hiString)));
+  std::basic_string<CHAR> hiString(hi);
+  MOZ_RELEASE_ASSERT(cb.PutObject(BSV(hiString)));
   {
     unsigned read = 0;
-    ProfilerString8View outerBS8V;
+    ProfilerStringView<CHAR> outerBSV;
     cb.ReadEach([&](ProfileBufferEntryReader& aER) {
       ++read;
-      auto bs8v = aER.ReadObject<ProfilerString8View>();
-      MOZ_RELEASE_ASSERT(bs8v.Data());
-      MOZ_RELEASE_ASSERT(bs8v.Data() != hiString.data());
-      MOZ_RELEASE_ASSERT(bs8v.Data()[0] == 'h');
-      MOZ_RELEASE_ASSERT(bs8v.Data()[1] == 'i');
-      MOZ_RELEASE_ASSERT(bs8v.Data()[2] == '\0');
-      MOZ_RELEASE_ASSERT(bs8v.Length() == 2);
+      auto bsv = aER.ReadObject<ProfilerStringView<CHAR>>();
+      MOZ_RELEASE_ASSERT(bsv.Data());
+      MOZ_RELEASE_ASSERT(bsv.Data() != hiString.data());
+      MOZ_RELEASE_ASSERT(bsv.Data()[0] == CHAR('h'));
+      MOZ_RELEASE_ASSERT(bsv.Data()[1] == CHAR('i'));
+      MOZ_RELEASE_ASSERT(bsv.Data()[2] == CHAR('\0'));
+      MOZ_RELEASE_ASSERT(bsv.Length() == 2);
       // Special ownership case, neither a literal nor a reference!
-      MOZ_RELEASE_ASSERT(!bs8v.IsLiteral());
-      MOZ_RELEASE_ASSERT(!bs8v.IsReference());
+      MOZ_RELEASE_ASSERT(!bsv.IsLiteral());
+      MOZ_RELEASE_ASSERT(!bsv.IsReference());
       // Test move of ownership.
-      outerBS8V = std::move(bs8v);
+      outerBSV = std::move(bsv);
       // NOLINTNEXTLINE(bugprone-use-after-move, clang-analyzer-cplusplus.Move)
-      MOZ_RELEASE_ASSERT(bs8v.Length() == 0);
+      MOZ_RELEASE_ASSERT(bsv.Length() == 0);
     });
     MOZ_RELEASE_ASSERT(read == 1);
-    MOZ_RELEASE_ASSERT(outerBS8V.Data());
-    MOZ_RELEASE_ASSERT(outerBS8V.Data() != hiString.data());
-    MOZ_RELEASE_ASSERT(outerBS8V.Data()[0] == 'h');
-    MOZ_RELEASE_ASSERT(outerBS8V.Data()[1] == 'i');
-    MOZ_RELEASE_ASSERT(outerBS8V.Data()[2] == '\0');
-    MOZ_RELEASE_ASSERT(outerBS8V.Length() == 2);
-    MOZ_RELEASE_ASSERT(!outerBS8V.IsLiteral());
-    MOZ_RELEASE_ASSERT(!outerBS8V.IsReference());
+    MOZ_RELEASE_ASSERT(outerBSV.Data());
+    MOZ_RELEASE_ASSERT(outerBSV.Data() != hiString.data());
+    MOZ_RELEASE_ASSERT(outerBSV.Data()[0] == CHAR('h'));
+    MOZ_RELEASE_ASSERT(outerBSV.Data()[1] == CHAR('i'));
+    MOZ_RELEASE_ASSERT(outerBSV.Data()[2] == CHAR('\0'));
+    MOZ_RELEASE_ASSERT(outerBSV.Length() == 2);
+    MOZ_RELEASE_ASSERT(!outerBSV.IsLiteral());
+    MOZ_RELEASE_ASSERT(!outerBSV.IsReference());
   }
 
-  printf("TestProfilerStringView done\n");
+  if constexpr (std::is_same_v<CHAR, char>) {
+    printf("TestProfilerStringView<char> done\n");
+  } else if constexpr (std::is_same_v<CHAR, char16_t>) {
+    printf("TestProfilerStringView<char16_t> done\n");
+  }
 }
 
 void TestProfilerDependencies() {
@@ -3224,7 +3254,8 @@ void TestProfilerDependencies() {
   TestBlocksRingBufferThreading();
   TestBlocksRingBufferSerialization();
   TestLiteralEmptyStringView();
-  TestProfilerStringView();
+  TestProfilerStringView<char>();
+  TestProfilerStringView<char16_t>();
 }
 
 // Increase the depth, to a maximum (to avoid too-deep recursion).
@@ -3440,33 +3471,12 @@ void TestProfiler() {
         mozilla::baseprofiler::markers::Tracing{}, "category"));
 
     MOZ_RELEASE_ASSERT(baseprofiler::AddMarker(
-        "mark", mozilla::baseprofiler::category::OTHER, {},
-        mozilla::baseprofiler::markers::UserTimingMark{}, "mark name"));
-
-    MOZ_RELEASE_ASSERT(baseprofiler::AddMarker(
-        "measure", mozilla::baseprofiler::category::OTHER, {},
-        mozilla::baseprofiler::markers::UserTimingMeasure{}, "measure name",
-        Some(ProfilerString8View("start")), Some(ProfilerString8View("end"))));
-
-    MOZ_RELEASE_ASSERT(
-        baseprofiler::AddMarker("hang", mozilla::baseprofiler::category::OTHER,
-                                {}, mozilla::baseprofiler::markers::Hang{}));
-
-    MOZ_RELEASE_ASSERT(baseprofiler::AddMarker(
-        "longtask", mozilla::baseprofiler::category::OTHER, {},
-        mozilla::baseprofiler::markers::LongTask{}));
-
-    MOZ_RELEASE_ASSERT(baseprofiler::AddMarker(
         "text", mozilla::baseprofiler::category::OTHER, {},
         mozilla::baseprofiler::markers::Text{}, "text text"));
 
     MOZ_RELEASE_ASSERT(baseprofiler::AddMarker(
-        "log", mozilla::baseprofiler::category::OTHER, {},
-        mozilla::baseprofiler::markers::Log{}, "module", "text"));
-
-    MOZ_RELEASE_ASSERT(baseprofiler::AddMarker(
         "media sample", mozilla::baseprofiler::category::OTHER, {},
-        mozilla::baseprofiler::markers::MediaSample{}, 123, 456));
+        mozilla::baseprofiler::markers::MediaSampleMarker{}, 123, 456));
 
     printf("Sleep 1s...\n");
     {
@@ -3522,16 +3532,7 @@ void TestProfiler() {
     MOZ_RELEASE_ASSERT(profileSV.find("\"markerSchema\": [") != svnpos);
     MOZ_RELEASE_ASSERT(profileSV.find("\"name\": \"Text\",") != svnpos);
     MOZ_RELEASE_ASSERT(profileSV.find("\"name\": \"tracing\",") != svnpos);
-    MOZ_RELEASE_ASSERT(profileSV.find("\"name\": \"UserTimingMark\",") !=
-                       svnpos);
-    MOZ_RELEASE_ASSERT(profileSV.find("\"name\": \"UserTimingMeasure\",") !=
-                       svnpos);
-    MOZ_RELEASE_ASSERT(profileSV.find("\"name\": \"BHR-detected hang\",") !=
-                       svnpos);
-    MOZ_RELEASE_ASSERT(profileSV.find("\"name\": \"Log\",") != svnpos);
     MOZ_RELEASE_ASSERT(profileSV.find("\"name\": \"MediaSample\",") != svnpos);
-    MOZ_RELEASE_ASSERT(profileSV.find("\"name\": \"MainThreadLongTask\",") !=
-                       svnpos);
     MOZ_RELEASE_ASSERT(profileSV.find("\"display\": [") != svnpos);
     MOZ_RELEASE_ASSERT(profileSV.find("\"marker-chart\"") != svnpos);
     MOZ_RELEASE_ASSERT(profileSV.find("\"marker-table\"") != svnpos);
@@ -3555,40 +3556,248 @@ void TestProfiler() {
   printf("TestProfiler done\n");
 }
 
-void StreamMarkers(const mozilla::ProfileChunkedBuffer& aBuffer,
-                   mozilla::JSONWriter& aWriter) {
-  aWriter.Start();
-  {
-    aWriter.StartArrayProperty("data");
-    {
-      aBuffer.ReadEach([&](mozilla::ProfileBufferEntryReader& aEntryReader) {
-        mozilla::ProfileBufferEntryKind entryKind =
-            aEntryReader.ReadObject<mozilla::ProfileBufferEntryKind>();
-        MOZ_RELEASE_ASSERT(entryKind ==
-                           mozilla::ProfileBufferEntryKind::Marker);
-
-        const bool success = mozilla::base_profiler_markers_detail::
-            DeserializeAfterKindAndStream(
-                aEntryReader, aWriter, 0,
-                [&](const mozilla::ProfilerString8View& aName) {
-                  aWriter.StringElement(aName);
-                },
-                [&](mozilla::ProfileChunkedBuffer&) {
-                  aWriter.StringElement("Real backtrace would be here");
-                });
-        MOZ_RELEASE_ASSERT(success);
-      });
+// Minimal string escaping, similar to how C++ stringliterals should be entered,
+// to help update comparison strings in tests below.
+void printEscaped(std::string_view aString) {
+  for (const char c : aString) {
+    switch (c) {
+      case '\n':
+        fprintf(stderr, "\\n\n");
+        break;
+      case '"':
+        fprintf(stderr, "\\\"");
+        break;
+      case '\\':
+        fprintf(stderr, "\\\\");
+        break;
+      default:
+        if (c >= ' ' && c <= '~') {
+          fprintf(stderr, "%c", c);
+        } else {
+          fprintf(stderr, "\\x%02x", unsigned(c));
+        }
+        break;
     }
-    aWriter.EndArray();
   }
-  aWriter.End();
+}
+
+// Run aF(SpliceableChunkedJSONWriter&, UniqueJSONStrings&) from inside a JSON
+// array, then output the string table, and compare the full output to
+// aExpected.
+template <typename F>
+static void VerifyUniqueStringContents(
+    F&& aF, std::string_view aExpectedData,
+    std::string_view aExpectedUniqueStrings,
+    mozilla::baseprofiler::UniqueJSONStrings* aUniqueStringsOrNull = nullptr) {
+  mozilla::baseprofiler::SpliceableChunkedJSONWriter writer;
+
+  // By default use a local UniqueJSONStrings, otherwise use the one provided.
+  mozilla::baseprofiler::UniqueJSONStrings localUniqueStrings(
+      mozilla::JSONWriter::SingleLineStyle);
+  mozilla::baseprofiler::UniqueJSONStrings& uniqueStrings =
+      aUniqueStringsOrNull ? *aUniqueStringsOrNull : localUniqueStrings;
+
+  writer.Start(mozilla::JSONWriter::SingleLineStyle);
+  {
+    writer.StartArrayProperty("data", mozilla::JSONWriter::SingleLineStyle);
+    { std::forward<F>(aF)(writer, uniqueStrings); }
+    writer.EndArray();
+
+    writer.StartArrayProperty("stringTable",
+                              mozilla::JSONWriter::SingleLineStyle);
+    { uniqueStrings.SpliceStringTableElements(writer); }
+    writer.EndArray();
+  }
+  writer.End();
+
+  UniquePtr<char[]> jsonString = writer.ChunkedWriteFunc().CopyData();
+  MOZ_RELEASE_ASSERT(jsonString);
+  std::string_view jsonStringView(jsonString.get());
+  std::string expected = "{\"data\": [";
+  expected += aExpectedData;
+  expected += "], \"stringTable\": [";
+  expected += aExpectedUniqueStrings;
+  expected += "]}\n";
+  if (jsonStringView != expected) {
+    fprintf(stderr,
+            "Expected:\n"
+            "------\n");
+    printEscaped(expected);
+    fprintf(stderr,
+            "\n"
+            "------\n"
+            "Actual:\n"
+            "------\n");
+    printEscaped(jsonStringView);
+    fprintf(stderr,
+            "\n"
+            "------\n");
+  }
+  MOZ_RELEASE_ASSERT(jsonStringView == expected);
+}
+
+void TestUniqueJSONStrings() {
+  printf("TestUniqueJSONStrings...\n");
+
+  using SCJW = mozilla::baseprofiler::SpliceableChunkedJSONWriter;
+  using UJS = mozilla::baseprofiler::UniqueJSONStrings;
+
+  // Empty everything.
+  VerifyUniqueStringContents([](SCJW& aWriter, UJS& aUniqueStrings) {}, "", "");
+
+  // Empty unique strings.
+  VerifyUniqueStringContents(
+      [](SCJW& aWriter, UJS& aUniqueStrings) {
+        aWriter.StringElement("string");
+      },
+      R"("string")", "");
+
+  // One unique string.
+  VerifyUniqueStringContents(
+      [](SCJW& aWriter, UJS& aUniqueStrings) {
+        aUniqueStrings.WriteElement(aWriter, "string");
+      },
+      "0", R"("string")");
+
+  // One unique string twice.
+  VerifyUniqueStringContents(
+      [](SCJW& aWriter, UJS& aUniqueStrings) {
+        aUniqueStrings.WriteElement(aWriter, "string");
+        aUniqueStrings.WriteElement(aWriter, "string");
+      },
+      "0, 0", R"("string")");
+
+  // Two single unique strings.
+  VerifyUniqueStringContents(
+      [](SCJW& aWriter, UJS& aUniqueStrings) {
+        aUniqueStrings.WriteElement(aWriter, "string0");
+        aUniqueStrings.WriteElement(aWriter, "string1");
+      },
+      "0, 1", R"("string0", "string1")");
+
+  // Two unique strings with repetition.
+  VerifyUniqueStringContents(
+      [](SCJW& aWriter, UJS& aUniqueStrings) {
+        aUniqueStrings.WriteElement(aWriter, "string0");
+        aUniqueStrings.WriteElement(aWriter, "string1");
+        aUniqueStrings.WriteElement(aWriter, "string0");
+      },
+      "0, 1, 0", R"("string0", "string1")");
+
+  // Mix some object properties, for coverage.
+  VerifyUniqueStringContents(
+      [](SCJW& aWriter, UJS& aUniqueStrings) {
+        aUniqueStrings.WriteElement(aWriter, "string0");
+        aWriter.StartObjectElement(mozilla::JSONWriter::SingleLineStyle);
+        {
+          aUniqueStrings.WriteProperty(aWriter, "p0", "prop");
+          aUniqueStrings.WriteProperty(aWriter, "p1", "string0");
+          aUniqueStrings.WriteProperty(aWriter, "p2", "prop");
+        }
+        aWriter.EndObject();
+        aUniqueStrings.WriteElement(aWriter, "string1");
+        aUniqueStrings.WriteElement(aWriter, "string0");
+        aUniqueStrings.WriteElement(aWriter, "prop");
+      },
+      R"(0, {"p0": 1, "p1": 0, "p2": 1}, 2, 0, 1)",
+      R"("string0", "prop", "string1")");
+
+  // Unique string table with pre-existing data.
+  {
+    UJS ujs(mozilla::JSONWriter::SingleLineStyle);
+    {
+      SCJW writer;
+      ujs.WriteElement(writer, "external0");
+      ujs.WriteElement(writer, "external1");
+      ujs.WriteElement(writer, "external0");
+    }
+    VerifyUniqueStringContents(
+        [](SCJW& aWriter, UJS& aUniqueStrings) {
+          aUniqueStrings.WriteElement(aWriter, "string0");
+          aUniqueStrings.WriteElement(aWriter, "string1");
+          aUniqueStrings.WriteElement(aWriter, "string0");
+        },
+        "2, 3, 2", R"("external0", "external1", "string0", "string1")", &ujs);
+  }
+
+  // Unique string table with pre-existing data from another table.
+  {
+    UJS ujs(mozilla::JSONWriter::SingleLineStyle);
+    {
+      SCJW writer;
+      ujs.WriteElement(writer, "external0");
+      ujs.WriteElement(writer, "external1");
+      ujs.WriteElement(writer, "external0");
+    }
+    UJS ujsCopy(ujs, mozilla::JSONWriter::SingleLineStyle);
+    VerifyUniqueStringContents(
+        [](SCJW& aWriter, UJS& aUniqueStrings) {
+          aUniqueStrings.WriteElement(aWriter, "string0");
+          aUniqueStrings.WriteElement(aWriter, "string1");
+          aUniqueStrings.WriteElement(aWriter, "string0");
+        },
+        "2, 3, 2", R"("external0", "external1", "string0", "string1")", &ujs);
+  }
+
+  // Unique string table through SpliceableJSONWriter.
+  VerifyUniqueStringContents(
+      [](SCJW& aWriter, UJS& aUniqueStrings) {
+        aWriter.SetUniqueStrings(aUniqueStrings);
+        aWriter.UniqueStringElement("string0");
+        aWriter.StartObjectElement(mozilla::JSONWriter::SingleLineStyle);
+        {
+          aWriter.UniqueStringProperty("p0", "prop");
+          aWriter.UniqueStringProperty("p1", "string0");
+          aWriter.UniqueStringProperty("p2", "prop");
+        }
+        aWriter.EndObject();
+        aWriter.UniqueStringElement("string1");
+        aWriter.UniqueStringElement("string0");
+        aWriter.UniqueStringElement("prop");
+        aWriter.ResetUniqueStrings();
+      },
+      R"(0, {"p0": 1, "p1": 0, "p2": 1}, 2, 0, 1)",
+      R"("string0", "prop", "string1")");
+
+  printf("TestUniqueJSONStrings done\n");
+}
+
+void StreamMarkers(const mozilla::ProfileChunkedBuffer& aBuffer,
+                   mozilla::baseprofiler::SpliceableJSONWriter& aWriter) {
+  aWriter.StartArrayProperty("data");
+  {
+    aBuffer.ReadEach([&](mozilla::ProfileBufferEntryReader& aEntryReader) {
+      mozilla::ProfileBufferEntryKind entryKind =
+          aEntryReader.ReadObject<mozilla::ProfileBufferEntryKind>();
+      MOZ_RELEASE_ASSERT(entryKind == mozilla::ProfileBufferEntryKind::Marker);
+
+      const bool success =
+          mozilla::base_profiler_markers_detail::DeserializeAfterKindAndStream(
+              aEntryReader, aWriter, 0, [&](mozilla::ProfileChunkedBuffer&) {
+                aWriter.StringElement("Real backtrace would be here");
+              });
+      MOZ_RELEASE_ASSERT(success);
+    });
+  }
+  aWriter.EndArray();
 }
 
 void PrintMarkers(const mozilla::ProfileChunkedBuffer& aBuffer) {
   mozilla::baseprofiler::SpliceableJSONWriter writer(
       mozilla::MakeUnique<mozilla::baseprofiler::OStreamJSONWriteFunc>(
           std::cout));
-  StreamMarkers(aBuffer, writer);
+  mozilla::baseprofiler::UniqueJSONStrings uniqueStrings;
+  writer.SetUniqueStrings(uniqueStrings);
+  writer.Start();
+  {
+    StreamMarkers(aBuffer, writer);
+
+    writer.StartArrayProperty("stringTable");
+    { uniqueStrings.SpliceStringTableElements(writer); }
+    writer.EndArray();
+  }
+  writer.End();
+  writer.ResetUniqueStrings();
 }
 
 static void SubTestMarkerCategory(
@@ -3736,8 +3945,9 @@ void TestUserMarker() {
     static constexpr Span<const char> MarkerTypeName() {
       return MakeStringSpan("test-minimal");
     }
-    static void StreamJSONMarkerData(mozilla::JSONWriter& aWriter,
-                                     const std::string& aText) {
+    static void StreamJSONMarkerData(
+        mozilla::baseprofiler::SpliceableJSONWriter& aWriter,
+        const std::string& aText) {
       aWriter.StringProperty("text", aText);
     }
     static mozilla::MarkerSchema MarkerTypeDisplay() {
@@ -3826,36 +4036,12 @@ void TestPredefinedMarkers() {
       mozilla::baseprofiler::markers::Tracing{}, "category"));
 
   MOZ_RELEASE_ASSERT(mozilla::baseprofiler::AddMarkerToBuffer(
-      buffer, std::string_view("mark"), mozilla::baseprofiler::category::OTHER,
-      {}, mozilla::baseprofiler::markers::UserTimingMark{}, "mark name"));
-
-  MOZ_RELEASE_ASSERT(mozilla::baseprofiler::AddMarkerToBuffer(
-      buffer, std::string_view("measure"),
-      mozilla::baseprofiler::category::OTHER, {},
-      mozilla::baseprofiler::markers::UserTimingMeasure{}, "measure name ",
-      mozilla::Some(mozilla::ProfilerString8View(" start ")),
-      mozilla::Some(mozilla::ProfilerString8View("end"))));
-
-  MOZ_RELEASE_ASSERT(mozilla::baseprofiler::AddMarkerToBuffer(
-      buffer, std::string_view("hang"), mozilla::baseprofiler::category::OTHER,
-      {}, mozilla::baseprofiler::markers::Hang{}));
-
-  MOZ_RELEASE_ASSERT(mozilla::baseprofiler::AddMarkerToBuffer(
-      buffer, std::string_view("long task"),
-      mozilla::baseprofiler::category::OTHER, {},
-      mozilla::baseprofiler::markers::LongTask{}));
-
-  MOZ_RELEASE_ASSERT(mozilla::baseprofiler::AddMarkerToBuffer(
       buffer, std::string_view("text"), mozilla::baseprofiler::category::OTHER,
       {}, mozilla::baseprofiler::markers::Text{}, "text text"));
 
   MOZ_RELEASE_ASSERT(mozilla::baseprofiler::AddMarkerToBuffer(
-      buffer, std::string_view("log"), mozilla::baseprofiler::category::OTHER,
-      {}, mozilla::baseprofiler::markers::Log{}, "module", "text"));
-
-  MOZ_RELEASE_ASSERT(mozilla::baseprofiler::AddMarkerToBuffer(
       buffer, std::string_view("media"), mozilla::baseprofiler::category::OTHER,
-      {}, mozilla::baseprofiler::markers::MediaSample{}, 123, 456));
+      {}, mozilla::baseprofiler::markers::MediaSampleMarker{}, 123, 456));
 
 #  ifdef DEBUG
   buffer.Dump();
@@ -3872,6 +4058,7 @@ void TestProfilerMarkers() {
          mozilla::baseprofiler::profiler_current_thread_id());
   // ::SleepMilli(10000);
 
+  TestUniqueJSONStrings();
   TestMarkerCategory();
   TestMarkerThreadId();
   TestMarkerNoPayload();

@@ -323,9 +323,6 @@ registerCleanupFunction(async function cleanup() {
       conn.close();
     }
   }
-
-  // Clear the cached value for the fission content toolbox preference.
-  gDevTools.clearIsFissionContentToolboxEnabledReferenceForTest();
 });
 
 async function safeCloseBrowserConsole({ clearOutput = false } = {}) {
@@ -485,7 +482,7 @@ async function navigateTo(uri, { isErrorPage = false } = {}) {
     null,
     isErrorPage
   );
-  await BrowserTestUtils.loadURI(browser, uri);
+  BrowserTestUtils.loadURI(browser, uri);
 
   info(`Waiting for page to be loaded…`);
   await onBrowserLoaded;

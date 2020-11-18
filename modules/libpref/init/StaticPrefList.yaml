@@ -230,6 +230,12 @@
     type: bool
     value: true
     mirror: always
+
+-   name: android.touch_resampling.enabled
+    type: RelaxedAtomicBool
+    value: true
+    mirror: always
+
 #endif
 
 #---------------------------------------------------------------------------
@@ -255,11 +261,6 @@
 - name: apz.allow_zooming_out
   type: RelaxedAtomicBool
   value: false
-  mirror: always
-
-- name: apz.android.chrome_fling_physics.enabled
-  type: RelaxedAtomicBool
-  value: true
   mirror: always
 
 - name: apz.android.chrome_fling_physics.friction
@@ -382,19 +383,24 @@
   value: 1.0f
   mirror: always
 
-- name: apz.fling_accel_interval_ms
-  type: RelaxedAtomicInt32
-  value: 500
-  mirror: always
-
 - name: apz.fling_accel_supplemental_mult
   type: AtomicFloat
   value: 1.0f
   mirror: always
 
-- name: apz.fling_accel_min_velocity
+- name: apz.fling_accel_min_fling_velocity
   type: AtomicFloat
   value: 1.5f
+  mirror: always
+
+- name: apz.fling_accel_min_pan_velocity
+  type: AtomicFloat
+  value: 0.8f
+  mirror: always
+
+- name: apz.fling_accel_max_pause_interval_ms
+  type: RelaxedAtomicInt32
+  value: 50
   mirror: always
 
 - name: apz.fling_curve_function_x1
@@ -609,7 +615,7 @@
 
 - name: apz.velocity_relevance_time_ms
   type: RelaxedAtomicUint32
-  value: 150
+  value: 100
   mirror: always
 
 - name: apz.windows.force_disable_direct_manipulation
@@ -967,6 +973,18 @@
 #else
   value: true
 #endif
+  mirror: always
+
+# Whether we should always enable focus rings after focus was moved by keyboard.
+#
+# This behavior matches both historical and GTK / Windows focus behavior.
+#
+# :focus-visible is intended to provide better heuristics than this, so for now
+# we make this false whenever layout.css.focus-visible.enabled is enabled by
+# default.
+- name: browser.display.always_show_rings_after_key_focus
+  type: bool
+  value: @IS_NOT_NIGHTLY_BUILD@
   mirror: always
 
 # In theory: 0 = never, 1 = quick, 2 = always, though we always just use it as
@@ -1665,6 +1683,33 @@
   value: true
   mirror: always
 
+# Whether WheelEvent should return pixels instead of lines for
+# WheelEvent.deltaX/Y/Z, when deltaMode hasn't been checked.
+#
+# Other browsers don't use line deltas and websites forget to check for it, see
+# bug 1392460.
+- name: dom.event.wheel-deltaMode-lines.disabled
+  type: bool
+  value: @IS_NIGHTLY_BUILD@
+  mirror: always
+
+# Mostly for debugging. Whether we should do the same as
+# dom.event.wheel-deltaMode-lines.disabled, but unconditionally rather than
+# only when deltaMode hasn't been checked.
+- name: dom.event.wheel-deltaMode-lines.always-disabled
+  type: bool
+  value: false
+  mirror: always
+
+# When dom.event.wheel-deltaMode-lines.disabled is true, this is the lines to
+# pixels multiplier that gets used.
+#
+# The value here is taken from PIXELS_PER_LINE_SCALE from pdf.js.
+- name: dom.event.wheel-deltaMode-lines-to-pixel-scale
+  type: uint32_t
+  value: 30
+  mirror: always
+
 #if defined(XP_MACOSX)
 # Whether to disable treating ctrl click as right click
 - name: dom.event.treat_ctrl_click_as_right_click.disabled
@@ -1872,6 +1917,19 @@
 - name: dom.input_events.beforeinput.enabled
   type: bool
   value: @IS_EARLY_BETA_OR_EARLIER@
+  mirror: always
+
+# Whether innerWidth / innerHeight return rounded or fractional sizes.
+#
+# NOTE(emilio): Fractional sizes are not web-compatible, see the regressions
+# from bug 1676843, but we want to expose the fractional sizes (probably in
+# another API) one way or another, see [1], so we're keeping the code for the
+# time being.
+#
+# [1]: https://github.com/w3c/csswg-drafts/issues/5260
+- name: dom.innerSize.rounded
+  type: bool
+  value: true
   mirror: always
 
 # Whether we conform to Input Events Level 1 or Input Events Level 2.
@@ -2086,6 +2144,16 @@
 - name: dom.keyboardevent.keypress.set_keycode_and_charcode_to_same_value
   type: bool
   value: true
+  mirror: always
+
+# Whether the LinkStyle.sheet and DocumentOrShadowRoot.styleSheets accessor
+# exposes in-progress-loading stylesheets.
+#
+# Historical behavior is `true`, but other browsers (and also a bit of common
+# sense) match `false`.
+- name: dom.expose-incomplete-stylesheets
+  type: bool
+  value: false
   mirror: always
 
 # Whether the Large-Allocation header is enabled.
@@ -4015,7 +4083,7 @@
 
 - name: gfx.canvas.remote
   type: RelaxedAtomicBool
-#if defined(XP_WIN) && defined(EARLY_BETA_OR_EARLIER)
+#if defined(XP_WIN)
   value: true
 #else
   value: false
@@ -4417,10 +4485,10 @@
 # WebRender is not enabled when there is no GPU process on window when
 # WebRender uses ANGLE. It is for avoiding that WebGL and WebRender use ANGLE
 # at once. But there is a case that we want to enable WebRender for testing.
-#if defined(NIGHTLY_BUILD) && defined(XP_WIN)
+#ifdef XP_WIN
 - name: gfx.webrender.enabled-no-gpu-process-with-angle-win
   type: bool
-  value: false
+  value: @IS_EARLY_BETA_OR_EARLIER@
   mirror: once
 #endif
 
@@ -4519,6 +4587,8 @@
   value: 25
   mirror: once
 
+# Number of damage rects we can give to the compositor for a new frame with
+# partial present. This controls whether partial present is used or not.
 - name: gfx.webrender.max-partial-present-rects
   type: uint32_t
 #if defined(XP_WIN) || defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GTK)
@@ -4526,6 +4596,14 @@
 #else
   value: 0
 #endif
+  mirror: once
+
+# Whether or not we can reuse the buffer contents using the GL buffer age
+# extension, if supported by the platform. This requires partial present
+# to be used.
+- name: gfx.webrender.allow-partial-present-buffer-age
+  type: bool
+  value: true
   mirror: once
 
 - name: gfx.webrender.enable-gpu-markers
@@ -4640,6 +4718,12 @@
 - name: gfx.webrender.software
   type: bool
   value: false
+  mirror: once
+
+# Whether to use the D3D11 RenderCompositor when using WebRender software backend
+- name: gfx.webrender.software.d3d11
+  type: bool
+  value: true 
   mirror: once
 
 # Use vsync events generated by hardware
@@ -5123,6 +5207,26 @@
   type: bool
   value: true
   mirror: once
+
+- name: javascript.options.wasm_optimizingjit
+  type: bool
+#if defined(MOZ_AARCH64) && !defined(ENABLE_WASM_CRANELIFT)
+  value: false
+#else
+  value: true
+#endif
+  mirror: always
+
+#if defined(ENABLE_WASM_SIMD)
+- name: javascript.options.wasm_simd
+  type: bool
+  #if defined(NIGHTLY_BUILD)
+  value: true
+  #else
+  value: false
+  #endif
+#endif
+  mirror: always
 
 #---------------------------------------------------------------------------
 # Prefs starting with "layers."
@@ -5756,6 +5860,11 @@
   value: -18.5f
   mirror: always
 
+- name: layout.accessiblecaret.transition-duration
+  type: float
+  value: 250.0f
+  mirror: always
+
 # Simulate long tap events to select words. Mainly used in manual testing
 # with mouse.
 - name: layout.accessiblecaret.use_long_tap_injector
@@ -5862,8 +5971,9 @@
 
 # Whether the `:focus-visible` pseudo-class is enabled.
 #
-# TODO: There are various ambiguities in the spec about this, so we shouldn't
-# ship this until those are sorted out.
+# NOTE: You probably want to change the default value of
+# browser.display.always_show_rings_after_key_focus whenever you change the
+# default value of this pref.
 - name: layout.css.focus-visible.enabled
   type: RelaxedAtomicBool
   value: @IS_NIGHTLY_BUILD@
@@ -6359,16 +6469,6 @@
   value: true
   mirror: always
 
-- name: layout.display-list.retain.verify
-  type: RelaxedAtomicBool
-  value: false
-  mirror: always
-
-- name: layout.display-list.retain.verify.order
-  type: RelaxedAtomicBool
-  value: false
-  mirror: always
-
 # Set the maximum number of modified frames allowed before doing a full
 # display list rebuild.
 - name: layout.display-list.rebuild-frame-limit
@@ -6723,12 +6823,6 @@
   value: true
   mirror: always
 
-# Whether to disable the mfenced element.
-- name: mathml.mfenced_element.disabled
-  type: bool
-  value: true
-  mirror: always
-
 # Whether to disable legacy names "thin", "thick" and "medium" for the
 # linethickness attribute of the mfrac element.
 - name: mathml.mfrac_linethickness_names.disabled
@@ -7036,6 +7130,27 @@
     mirror: always
 #endif
 
+#ifdef XP_MACOSX
+  # These prefs control whether or not a universal build running on
+  # an Apple Silicon machine will attempt to use an x64 Widevine or
+  # OpenH264 plugin. This requires launching the GMP child process
+  # executable in x64 mode. We expect to allow this for Widevine until
+  # an arm64 version of Widevine is made available. We don't expect
+  # to need to allow this for OpenH264.
+  #
+  # Allow a Widevine GMP x64 process to be executed on ARM builds.
+- name: media.gmp-widevinecdm.allow-x64-plugin-on-arm64
+  type: RelaxedAtomicBool
+  value: true
+  mirror: always
+
+  # Don't allow an OpenH264 GMP x64 process to be executed on ARM builds.
+- name: media.gmp-gmpopenh264.allow-x64-plugin-on-arm64
+  type: RelaxedAtomicBool
+  value: false
+  mirror: always
+#endif
+
 # Specifies whether the PDMFactory can create a test decoder that just outputs
 # blank frames/audio instead of actually decoding. The blank decoder works on
 # all platforms.
@@ -7221,8 +7336,8 @@
     mirror: always
 
 #ifdef MOZ_WAYLAND
-# Use DMABuf for ffmpeg video textures on Linux
-- name: media.ffmpeg.dmabuf-textures.enabled
+# Disable DMABuf for ffmpeg video textures on Linux
+- name: media.ffmpeg.dmabuf-textures.disabled
   type: RelaxedAtomicBool
   value: false
   mirror: always
@@ -7241,17 +7356,23 @@
 #endif # MOZ_WAYLAND
 #endif  # MOZ_FFMPEG
 
-#ifdef MOZ_FFVPX
 -   name: media.ffvpx.enabled
     type: RelaxedAtomicBool
+#ifdef MOZ_FFVPX
     value: true
+#else
+    value: false
+#endif
     mirror: always
 
 -   name: media.ffvpx.mp3.enabled
     type: RelaxedAtomicBool
+#ifdef MOZ_FFVPX
     value: true
-    mirror: always
+#else
+    value: false
 #endif
+    mirror: always
 
 # Set to true in marionette tests to disable the sanity test
 # which would lead to unnecessary start of the RDD process.
@@ -8028,7 +8149,7 @@
 # See the full list of values in nsICookieService.idl.
 - name: network.cookie.rejectForeignWithExceptions.enabled
   type: bool
-  value: @IS_NIGHTLY_BUILD@
+  value: false
   mirror: always
 
 # Stale threshold for cookies in seconds.
@@ -8573,7 +8694,15 @@
 # After this many failed TRR requests in a row, consider TRR borked
 - name: network.trr.max-fails
   type: RelaxedAtomicUint32
-  value: 5
+  value: 15
+  mirror: always
+
+# When the TRR confirmation is set to CONFIRM_FAILED due to many failures in
+# a row, we set a timer to retry. This has an exponential backoff up to
+# 64 seconds.
+- name: network.trr.retry-timeout-ms
+  type: RelaxedAtomicUint32
+  value: 125
   mirror: always
 
 # Retry with no TRR when the response contained only 0.0.0.0 or ::
@@ -8684,6 +8813,15 @@
   type: bool
   value: true
   mirror: always
+
+# Manually enter the NAT64 prefix that will be used if IPv4 is unavailable.
+# The value is formatted as IPv6 with the least significant bits to be dropped.
+# For example, 64:ff9b:: is a common prefix. This will not disable
+# the NAT64 check, although the value of this pref will be prioritized.
+- name: network.connectivity-service.nat64-prefix
+  type: String
+  value: ""
+  mirror: never
 
 # Whether to enable echconfig.
 - name: network.dns.echconfig.enabled
@@ -9153,6 +9291,14 @@
   value: 1800   # 30 minutes (in seconds)
   mirror: always
 
+# Enable Anti-tracking testing. When it enables, it will notify the observers
+# when user-interaction permission or storage access permission is added. This
+# is for testing only.
+- name: privacy.antitracking.testing
+  type: bool
+  value: false
+  mirror: always
+
 # Enable the heuristic to allow storage access for recent visited pages
 - name: privacy.restrict3rdpartystorage.heuristic.recently_visited
   type: bool
@@ -9353,7 +9499,7 @@
 # Pref for mixed display content upgrading (images, audio, video).
 - name: security.mixed_content.upgrade_display_content
   type: bool
-  value: false
+  value: @IS_NIGHTLY_BUILD@
   mirror: always
 
 # Whether strict file origin policy is in effect. "False" is traditional.

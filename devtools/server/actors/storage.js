@@ -27,8 +27,6 @@ loader.lazyGetter(
   () => Cu.getGlobalForObject(ExtensionProcessScript).WebExtensionPolicy
 );
 
-const CHROME_ENABLED_PREF = "devtools.chrome.enabled";
-const REMOTE_ENABLED_PREF = "devtools.debugger.remote-enabled";
 const EXTENSION_STORAGE_ENABLED_PREF =
   "devtools.storage.extensionStorage.enabled";
 
@@ -234,6 +232,10 @@ StorageActors.defaults = function(typeName, observationTopics) {
     },
 
     destroy() {
+      if (!this.storageActor) {
+        return;
+      }
+
       if (observationTopics) {
         observationTopics.forEach(observationTopic => {
           Services.obs.removeObserver(this, observationTopic);
@@ -1752,7 +1754,6 @@ if (Services.prefs.getBoolPref(EXTENSION_STORAGE_ENABLED_PREF, false)) {
         this.storageActor.off("window-destroyed", this.onWindowDestroyed);
 
         this.hostVsStores.clear();
-
         protocol.Actor.prototype.destroy.call(this);
 
         this.storageActor = null;
@@ -2416,7 +2417,12 @@ StorageActors.createActor(
       // the this.hosts getter. Because this.hosts is a property on the default
       // storage actor and inherited by all storage actors we have to do it this
       // way.
-      this._internalHosts = await this.getInternalHosts();
+      // Only look up internal hosts if we are in the browser toolbox
+      const isBrowserToolbox = this.storageActor.parentActor.isRootActor;
+
+      this._internalHosts = isBrowserToolbox
+        ? await this.getInternalHosts()
+        : [];
 
       return this.hosts;
     },
@@ -2812,14 +2818,6 @@ var indexedDBHelpers = {
    * the browser.
    */
   async getInternalHosts() {
-    // Return an empty array if the browser toolbox is not enabled.
-    if (
-      !Services.prefs.getBoolPref(CHROME_ENABLED_PREF) ||
-      !Services.prefs.getBoolPref(REMOTE_ENABLED_PREF)
-    ) {
-      return this.backToChild("getInternalHosts", []);
-    }
-
     const profileDir = OS.Constants.Path.profileDir;
     const storagePath = OS.Path.join(profileDir, "storage", "permanent");
     const iterator = new OS.File.DirectoryIterator(storagePath);
@@ -3405,13 +3403,31 @@ const StorageActor = protocol.ActorClassWithSpec(specs.storageSpec, {
     // Fetch all the inner iframe windows in this tab.
     this.fetchChildWindows(this.parentActor.docShell);
 
+    // Skip initializing storage actors already instanced as Resources
+    // by the watcher. This happens when the target is a tab.
+    const isAddonTarget = !!this.parentActor.addonId;
+    const isWatcherEnabled = !isAddonTarget && !this.parentActor.isRootActor;
+    const shallUseLegacyActors = Services.prefs.getBoolPref(
+      "devtools.storage.test.forceLegacyActors",
+      false
+    );
+    const resourcesInWatcher = {
+      localStorage: isWatcherEnabled,
+      sessionStorage: isWatcherEnabled,
+    };
+
     // Initialize the registered store types
     for (const [store, ActorConstructor] of storageTypePool) {
       // Only create the extensionStorage actor when the debugging target
       // is an extension.
-      if (store === "extensionStorage" && !this.parentActor.addonId) {
+      if (store === "extensionStorage" && !isAddonTarget) {
         continue;
       }
+      // Skip resource actors
+      if (resourcesInWatcher[store] && !shallUseLegacyActors) {
+        continue;
+      }
+
       this.childActorPool.set(store, new ActorConstructor(this));
     }
 

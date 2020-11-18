@@ -129,6 +129,10 @@
 #include "nsTextNode.h"
 #include "ActiveLayerTracker.h"
 
+#ifdef MOZ_GECKO_PROFILER
+#  include "mozilla/ProfilerMarkerTypes.h"
+#endif
+
 using namespace mozilla;
 using namespace mozilla::dom;
 
@@ -229,8 +233,6 @@ nsIFrame* NS_NewRangeFrame(PresShell* aPresShell, ComputedStyle* aStyle);
 nsIFrame* NS_NewImageBoxFrame(PresShell* aPresShell, ComputedStyle* aStyle);
 
 nsIFrame* NS_NewTextBoxFrame(PresShell* aPresShell, ComputedStyle* aStyle);
-
-nsIFrame* NS_NewGroupBoxFrame(PresShell* aPresShell, ComputedStyle* aStyle);
 
 nsIFrame* NS_NewButtonBoxFrame(PresShell* aPresShell, ComputedStyle* aStyle);
 
@@ -682,11 +684,14 @@ class MOZ_STACK_CLASS nsFrameConstructorState {
   // using this state.
   nsFrameState mAdditionalStateBits;
 
-  // When working with the transform and filter properties, we want to hook
-  // the abs-pos and fixed-pos lists together, since such
-  // elements are fixed-pos containing blocks.  This flag determines
-  // whether or not we want to wire the fixed-pos and abs-pos lists
-  // together.
+  // When working with transform / filter properties, we want to hook the
+  // abs-pos and fixed-pos lists together, since such elements are fixed-pos
+  // containing blocks.
+  //
+  // Similarly when restricting absolute positioning (for e.g. mathml).
+  //
+  // This flag determines whether or not we want to wire the fixed-pos and
+  // abs-pos lists together.
   bool mFixedPosIsAbsPos;
 
   // A boolean to indicate whether we have a "pending" popupgroup.  That is, we
@@ -894,6 +899,8 @@ void nsFrameConstructorState::ProcessFrameInsertionsForAllLists() {
 void nsFrameConstructorState::PushAbsoluteContainingBlock(
     nsContainerFrame* aNewAbsoluteContainingBlock, nsIFrame* aPositionedFrame,
     nsFrameConstructorSaveState& aSaveState) {
+  MOZ_ASSERT(!!aNewAbsoluteContainingBlock == !!aPositionedFrame,
+             "We should have both or none");
   aSaveState.mList = &mAbsoluteList;
   aSaveState.mSavedList = mAbsoluteList;
   aSaveState.mChildListID = nsIFrame::kAbsoluteList;
@@ -910,10 +917,11 @@ void nsFrameConstructorState::PushAbsoluteContainingBlock(
   mAbsoluteList = AbsoluteFrameList(aNewAbsoluteContainingBlock);
 
   /* See if we're wiring the fixed-pos and abs-pos lists together.  This happens
-   * iff we're a transformed element.
+   * if we're a transformed/filtered/etc element, or if we force a null abspos
+   * containing block (for mathml for example).
    */
   mFixedPosIsAbsPos =
-      aPositionedFrame && aPositionedFrame->IsFixedPosContainingBlock();
+      !aPositionedFrame || aPositionedFrame->IsFixedPosContainingBlock();
 
   if (aNewAbsoluteContainingBlock) {
     aNewAbsoluteContainingBlock->MarkAsAbsoluteContainingBlock();
@@ -4019,7 +4027,6 @@ nsCSSFrameConstructor::FindXULTagData(const Element& aElement,
       SIMPLE_TAG_CHAIN(description,
                        nsCSSFrameConstructor::FindXULDescriptionData),
       SIMPLE_XUL_CREATE(menu, NS_NewMenuFrame),
-      SIMPLE_XUL_CREATE(menubutton, NS_NewMenuFrame),
       SIMPLE_XUL_CREATE(menulist, NS_NewMenuFrame),
       SIMPLE_XUL_CREATE(menuitem, NS_NewMenuItemFrame),
 #  ifdef XP_MACOSX
@@ -4716,16 +4723,6 @@ nsCSSFrameConstructor::FindMathMLData(const Element& aElement,
                         FCDATA_IS_LINE_PARTICIPANT | FCDATA_WRAP_KIDS_IN_BLOCKS,
                     NS_NewMathMLmathInlineFrame);
     return &sInlineMathData;
-  }
-
-  if (!StaticPrefs::mathml_mfenced_element_disabled() &&
-      tag == nsGkAtoms::mfenced_) {
-    // These flags are the same as those of SIMPLE_MATHML_CREATE.
-    static const FrameConstructionData sMathFencedData = FCDATA_DECL(
-        FCDATA_DISALLOW_OUT_OF_FLOW | FCDATA_FORCE_NULL_ABSPOS_CONTAINER |
-            FCDATA_WRAP_KIDS_IN_BLOCKS,
-        NS_NewMathMLmfencedFrame);
-    return &sMathFencedData;
   }
 
   static const FrameConstructionDataByTag sMathMLData[] = {
@@ -8201,9 +8198,8 @@ static nsIFrame* FindPreviousNonWhitespaceSibling(nsIFrame* aFrame) {
 bool nsCSSFrameConstructor::MaybeRecreateContainerForFrameRemoval(
     nsIFrame* aFrame) {
 #define TRACE(reason)                                                       \
-  PROFILER_TRACING_MARKER("Layout",                                         \
-                          "MaybeRecreateContainerForFrameRemoval: " reason, \
-                          LAYOUT, TRACING_EVENT)
+  PROFILER_MARKER("MaybeRecreateContainerForFrameRemoval: " reason, LAYOUT, \
+                  {}, Tracing, "Layout")
   MOZ_ASSERT(aFrame, "Must have a frame");
   MOZ_ASSERT(aFrame->GetParent(), "Frame shouldn't be root");
   MOZ_ASSERT(aFrame == aFrame->FirstContinuation(),
@@ -10726,9 +10722,8 @@ bool nsCSSFrameConstructor::MaybeRecreateForColumnSpan(
     // some of them have column-span:all descendants. Sadly, there's no way to
     // detect this by checking FrameConstructionItems in WipeContainingBlock().
     // Otherwise, we would have already wiped the multi-column containing block.
-    PROFILER_TRACING_MARKER(
-        "Layout", "Reframe multi-column after constructing frame list", LAYOUT,
-        TRACING_EVENT);
+    PROFILER_MARKER("Reframe multi-column after constructing frame list",
+                    LAYOUT, {}, Tracing, "Layout");
 
     // aFrameList can contain placeholder frames. In order to destroy their
     // associated out-of-flow frames properly, we need to manually flush all the
@@ -11053,9 +11048,9 @@ static bool IsSafeToAppendToIBSplitInline(nsIFrame* aParentFrame,
 }
 
 bool nsCSSFrameConstructor::WipeInsertionParent(nsContainerFrame* aFrame) {
-#define TRACE(reason)                                                       \
-  PROFILER_TRACING_MARKER("Layout", "WipeInsertionParent: " reason, LAYOUT, \
-                          TRACING_EVENT)
+#define TRACE(reason)                                                  \
+  PROFILER_MARKER("WipeInsertionParent: " reason, LAYOUT, {}, Tracing, \
+                  "Layout");
 
   const LayoutFrameType frameType = aFrame->Type();
 
@@ -11115,9 +11110,9 @@ bool nsCSSFrameConstructor::WipeContainingBlock(
     nsFrameConstructorState& aState, nsIFrame* aContainingBlock,
     nsIFrame* aFrame, FrameConstructionItemList& aItems, bool aIsAppend,
     nsIFrame* aPrevSibling) {
-#define TRACE(reason)                                                       \
-  PROFILER_TRACING_MARKER("Layout", "WipeContainingBlock: " reason, LAYOUT, \
-                          TRACING_EVENT)
+#define TRACE(reason)                                                  \
+  PROFILER_MARKER("WipeContainingBlock: " reason, LAYOUT, {}, Tracing, \
+                  "Layout");
 
   if (aItems.IsEmpty()) {
     return false;

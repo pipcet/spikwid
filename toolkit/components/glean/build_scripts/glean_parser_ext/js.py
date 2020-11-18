@@ -17,7 +17,7 @@ import jinja2
 from perfecthash import PerfectHash
 from string_table import StringTable
 
-from util import generate_metric_ids
+from util import generate_metric_ids, is_implemented_metric_type
 from glean_parser import util
 
 """
@@ -78,6 +78,8 @@ def output_js(objs, output_fd, options={}):
     :param options: options dictionary.
     """
 
+    # Monkeypatch a util.snake_case function for the templates to use
+    util.snake_case = lambda value: value.replace(".", "_").replace("-", "_")
     # Monkeypatch util.get_jinja2_template to find templates nearby
 
     def get_local_template(template_name, filters=()):
@@ -95,7 +97,11 @@ def output_js(objs, output_fd, options={}):
     template_filename = "js.jinja2"
 
     template = util.get_jinja2_template(
-        template_filename, filters=(("type_name", type_name),)
+        template_filename,
+        filters=(
+            ("type_name", type_name),
+            ("is_implemented_type", is_implemented_metric_type),
+        ),
     )
 
     assert (
@@ -113,6 +119,7 @@ def output_js(objs, output_fd, options={}):
     metric_type_ids = {}
 
     for category_name, objs in objs.items():
+        category_name = util.snake_case(category_name)
         id = category_string_table.stringIndex(category_name)
         categories.append((category_name, id))
 

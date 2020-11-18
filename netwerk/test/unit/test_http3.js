@@ -13,7 +13,9 @@ function generateContent(size) {
 
 let post = generateContent(10);
 
-let number_of_parallel_requests = 10;
+// Max concurent stream number in neqo is 100.
+// Openning 120 streams will test queuing of streams.
+let number_of_parallel_requests = 120;
 let h1Server = null;
 let h3Route;
 let httpsOrigin;
@@ -202,18 +204,21 @@ WaitForHttp3Listener.prototype.onStopRequest = function testOnStopRequest(
   } catch (e) {}
   dump("routed is " + routed + "\n");
 
+  let httpVersion = "";
+  try {
+    httpVersion = request.protocolVersion;
+  } catch (e) {}
+
   if (routed == this.expectedRoute) {
     Assert.equal(routed, this.expectedRoute); // always true, but a useful log
-
-    let httpVersion = "";
-    try {
-      httpVersion = request.protocolVersion;
-    } catch (e) {}
     Assert.equal(httpVersion, "h3");
     run_next_test();
   } else {
     dump("poll later for alt svc mapping\n");
-    Assert.ok(request.supportsHTTP3);
+    if (httpVersion == "h2") {
+      request.QueryInterface(Ci.nsIHttpChannelInternal);
+      Assert.ok(request.supportsHTTP3);
+    }
     do_test_pending();
     do_timeout(500, () => {
       doTest(this.uri, this.expectedRoute, this.h3AltSvc);

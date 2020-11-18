@@ -20,6 +20,10 @@
   white-space: normal !important;
 }
 
+.videocontrols[flipped="true"] {
+  transform: scaleX(-1);
+}
+
 .controlsContainer {
   --clickToPlay-size: 48px;
   --button-size: 30px;
@@ -404,6 +408,7 @@
   font: message-box;
   font-size: var(--label-font-size);
   font-size-adjust: 0.55;
+  font-variant-numeric: tabular-nums;
 }
 
 %ifdef XP_MACOSX
@@ -506,8 +511,8 @@
   min-width: max-content;
 }
 
-.statusIcon[type="pictureInPicture"]:dir(rtl),
-.pictureInPictureToggleIcon:dir(rtl) {
+.videocontrols[localedir="rtl"] .statusIcon[type="pictureInPicture"],
+.videocontrols[localedir="rtl"] .pictureInPictureToggleIcon {
   transform: scaleX(-1);
 }
 
@@ -673,6 +678,10 @@
   background-position: center, center;
 }
 
+.videocontrols[localedir="rtl"] .pip-icon {
+  transform: scaleX(-1);
+}
+
 .pip-wrapper[position="left"] > .pip-expanded > .pip-icon-label > .pip-label {
   margin-left: var(--pip-icon-width-with-margins);
   margin-right: var(--pip-toggle-margin);
@@ -814,6 +823,10 @@
   width: calc(100% - 24px);
   word-break: break-word;
   pointer-events: none;
+}
+
+.videocontrols[localedir="rtl"] .pip-explainer {
+  text-align: right;
 }
 
 .pip-wrapper.hovering > .pip-expanded > .pip-explainer {

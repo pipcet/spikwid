@@ -117,9 +117,12 @@ asserts(3) load 1534394.html # assertion in WSRunScanner::GetEditableBlockParent
 load 1547897.html
 load 1547898.html
 load 1556799.html
+load 1579934.html
 load 1574544.html
+load 1578916.html
 load 1581246.html
 load 1596516.html
+load 1605741.html
 load 1613521.html
 load 1618906.html
 load 1623913.html

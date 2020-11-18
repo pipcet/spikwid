@@ -4,7 +4,6 @@
 
 "use strict";
 
-const { gDevTools } = require("devtools/client/framework/devtools");
 const EventEmitter = require("devtools/shared/event-emitter");
 const Services = require("Services");
 const {
@@ -424,32 +423,13 @@ class WebConsoleUI {
   }
 
   _onResourceUpdated(updates) {
-    const messages = [];
-    for (const { resource } of updates) {
-      if (
-        resource.resourceType == this.hud.resourceWatcher.TYPES.NETWORK_EVENT
-      ) {
-        // network-message-updated will emit when all the update message arrives.
-        // Since we can't ensure the order of the network update, we check
-        // that message.updates has all we need.
-        // Note that 'requestPostData' is sent only for POST requests, so we need
-        // to count with that.
-        const NUMBER_OF_NETWORK_UPDATE = 8;
-
-        let expectedLength = NUMBER_OF_NETWORK_UPDATE;
-        if (resource.updates.includes("responseCache")) {
-          expectedLength++;
-        }
-        if (resource.updates.includes("requestPostData")) {
-          expectedLength++;
-        }
-
-        if (resource.updates.length === expectedLength) {
-          messages.push(resource);
-        }
-      }
-    }
-    this.wrapper.dispatchMessagesUpdate(messages);
+    const messageUpdates = updates
+      .filter(
+        ({ resource }) =>
+          resource.resourceType == this.hud.resourceWatcher.TYPES.NETWORK_EVENT
+      )
+      .map(({ resource }) => resource);
+    this.wrapper.dispatchMessagesUpdate(messageUpdates);
   }
 
   /**
@@ -490,20 +470,31 @@ class WebConsoleUI {
       return;
     }
 
-    // Allow frame, but only in content toolbox, when the fission/content toolbox pref is
-    // set. i.e. still ignore them in the content of the browser toolbox as we inspect
-    // messages via the process targets
-    // Also ignore workers as they are not supported yet. (see bug 1592584)
-    const isContentToolbox = this.hud.targetList.targetFront.isLocalTab;
-    const listenForFrames =
-      isContentToolbox && gDevTools.isFissionContentToolboxEnabled();
-    if (
-      targetFront.targetType != this.hud.targetList.TYPES.PROCESS &&
-      (targetFront.targetType != this.hud.targetList.TYPES.FRAME ||
-        !listenForFrames)
-    ) {
+    // Allow frame, but only in content toolbox, i.e. still ignore them in
+    // the context of the browser toolbox as we inspect messages via the process targets
+    const listenForFrames = this.hud.targetList.targetFront.isLocalTab;
+
+    const { TYPES } = this.hud.targetList;
+    const isWorkerTarget =
+      targetFront.targetType == TYPES.WORKER ||
+      targetFront.targetType == TYPES.SHARED_WORKER ||
+      targetFront.targetType == TYPES.SERVICE_WORKER;
+
+    const acceptTarget =
+      // Unconditionally accept all process targets, this should only happens in the
+      // multiprocess browser toolbox/console
+      targetFront.targetType == TYPES.PROCESS ||
+      (targetFront.targetType == TYPES.FRAME && listenForFrames) ||
+      // Accept worker targets if the platform dispatching of worker messages to the main
+      // thread is disabled (e.g. we get them directly from the worker target).
+      (isWorkerTarget &&
+        !this.hud.targetList.rootFront.traits
+          .workerConsoleApiMessagesDispatchedToMainThread);
+
+    if (!acceptTarget) {
       return;
     }
+
     const proxy = new WebConsoleConnectionProxy(this, targetFront);
     this.additionalProxies.set(targetFront, proxy);
     await proxy.connect();

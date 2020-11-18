@@ -70,7 +70,7 @@ loader.lazyImporter(this, "ExtensionContent", EXTENSION_CONTENT_JSM);
 loader.lazyRequireGetter(
   this,
   ["StyleSheetActor", "getSheetText"],
-  "devtools/server/actors/stylesheets",
+  "devtools/server/actors/style-sheet",
   true
 );
 
@@ -264,7 +264,7 @@ const browsingContextTargetPrototype = {
     // A map of actor names to actor instances provided by extensions.
     this._extraActors = {};
     this._exited = false;
-    this._sources = null;
+    this._sourcesManager = null;
 
     // Map of DOM stylesheets to StyleSheetActors
     this._styleSheetActors = new Map();
@@ -492,11 +492,14 @@ const browsingContextTargetPrototype = {
     return null;
   },
 
-  get sources() {
-    if (!this._sources) {
-      this._sources = new SourcesManager(this.threadActor, this._allowSource);
+  get sourcesManager() {
+    if (!this._sourcesManager) {
+      this._sourcesManager = new SourcesManager(
+        this.threadActor,
+        this._allowSource
+      );
     }
-    return this._sources;
+    return this._sourcesManager;
   },
 
   _createExtraActors() {
@@ -977,9 +980,9 @@ const browsingContextTargetPrototype = {
     this.threadActor.destroy();
     this.threadActor = null;
 
-    if (this._sources) {
-      this._sources.destroy();
-      this._sources = null;
+    if (this._sourcesManager) {
+      this._sourcesManager.destroy();
+      this._sourcesManager = null;
     }
   },
 
@@ -1737,6 +1740,12 @@ DebuggerProgressListener.prototype = {
     }
 
     const window = evt.target.defaultView;
+    if (!window) {
+      // Some old UIs might emit unrelated events called pageshow/pagehide on
+      // elements which are not documents. Bail in this case. See Bug 1669666.
+      return;
+    }
+
     const innerID = getWindowID(window);
 
     // This handler is called for two events: "DOMWindowCreated" and "pageshow".
@@ -1777,6 +1786,12 @@ DebuggerProgressListener.prototype = {
     }
 
     const window = evt.target.defaultView;
+    if (!window) {
+      // Some old UIs might emit unrelated events called pageshow/pagehide on
+      // elements which are not documents. Bail in this case. See Bug 1669666.
+      return;
+    }
+
     this._targetActor._windowDestroyed(window, null, true);
     this._knownWindowIDs.delete(getWindowID(window));
   }, "DebuggerProgressListener.prototype.onWindowHidden"),

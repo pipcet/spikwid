@@ -14,6 +14,7 @@
 #include "AccessibleOrProxy.h"
 #include "DocAccessibleParent.h"
 #include "mozTableAccessible.h"
+#include "MOXWebAreaAccessible.h"
 
 #include "nsAppShell.h"
 
@@ -54,6 +55,8 @@ void ProxyCreated(ProxyAccessible* aProxy, uint32_t) {
     type = [mozTableRowAccessible class];
   } else if (aProxy->IsTableCell()) {
     type = [mozTableCellAccessible class];
+  } else if (aProxy->IsDoc()) {
+    type = [MOXWebAreaAccessible class];
   } else {
     type = GetTypeFromRole(aProxy->Role());
   }
@@ -74,14 +77,16 @@ void ProxyDestroyed(ProxyAccessible* aProxy) {
 }
 
 void ProxyEvent(ProxyAccessible* aProxy, uint32_t aEventType) {
-  // ignore everything but focus-changed, value-changed, caret,
-  // selection, and document load complete events for now.
+  // Ignore event that we don't escape below, they aren't yet supported.
   if (aEventType != nsIAccessibleEvent::EVENT_FOCUS &&
       aEventType != nsIAccessibleEvent::EVENT_VALUE_CHANGE &&
       aEventType != nsIAccessibleEvent::EVENT_TEXT_VALUE_CHANGE &&
       aEventType != nsIAccessibleEvent::EVENT_TEXT_CARET_MOVED &&
       aEventType != nsIAccessibleEvent::EVENT_DOCUMENT_LOAD_COMPLETE &&
-      aEventType != nsIAccessibleEvent::EVENT_REORDER)
+      aEventType != nsIAccessibleEvent::EVENT_REORDER &&
+      aEventType != nsIAccessibleEvent::EVENT_LIVE_REGION_ADDED &&
+      aEventType != nsIAccessibleEvent::EVENT_LIVE_REGION_REMOVED &&
+      aEventType != nsIAccessibleEvent::EVENT_NAME_CHANGE)
     return;
 
   mozAccessible* wrapper = GetNativeFromGeckoAccessible(aProxy);

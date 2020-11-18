@@ -355,6 +355,10 @@ toolbar[customizing] #whats-new-menu-button {
   position: relative;
 }
 
+#personal-toolbar-empty-description {
+  -moz-window-dragging: no-drag;
+}
+
 #personal-bookmarks {
   -moz-window-dragging: inherit;
 }
@@ -1031,6 +1035,10 @@ toolbarpaletteitem[place="palette"] > #downloads-button[indicator] > .toolbarbut
   direction: ltr;
 }
 
+#ContentSelectDropdown > menupopup::part(arrowscrollbox-scrollbox) {
+  scrollbar-width: var(--content-select-scrollbar-width, auto);
+}
+
 /* Indent options in optgroups */
 .contentSelectDropdown-ingroup .menu-iconic-text {
   padding-inline-start: 2em;
@@ -1448,6 +1456,12 @@ toolbar[keyNav=true]:not([collapsed=true]):not([customizing=true]) toolbartabsto
   /* Should outrank the z-index values of other UI elements, particularly the devtools
      splitter element. */
   z-index: 2;
+}
+
+.dialogStack.temporarilyHidden {
+  /* For some printing use cases we need to visually hide the dialog before
+   * actually closing it / make it disappear from the frame tree. */
+  visibility: hidden;
 }
 
 .dialogOverlay {

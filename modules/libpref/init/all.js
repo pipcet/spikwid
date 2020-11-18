@@ -183,7 +183,11 @@ pref("security.pki.distrust_ca_policy", 2);
 // 0: Disable CRLite entirely
 // 1: Enable and check revocations via CRLite, but only collect telemetry
 // 2: Enable and enforce revocations via CRLite
+#if defined(NIGHTLY_BUILD)
+pref("security.pki.crlite_mode", 2);
+#else
 pref("security.pki.crlite_mode", 1);
+#endif
 
 // Represents the expected certificate transparency log merge delay (including
 // the time to generate a CRLite filter). Currently 28 hours in seconds.
@@ -219,7 +223,7 @@ pref("security.intermediate_preloading_healer.timer_interval_ms", 300000);
 pref("security.remote_settings.intermediates.bucket", "security-state");
 pref("security.remote_settings.intermediates.collection", "intermediates");
 pref("security.remote_settings.intermediates.checked", 0);
-pref("security.remote_settings.intermediates.downloads_per_poll", 100);
+pref("security.remote_settings.intermediates.downloads_per_poll", 5000);
 pref("security.remote_settings.intermediates.parallel_downloads", 8);
 pref("security.remote_settings.intermediates.signer", "onecrl.content-signature.mozilla.org");
 
@@ -413,6 +417,7 @@ pref("media.decoder-doctor.verbose", false);
 pref("media.decoder-doctor.new-issue-endpoint", "https://webcompat.com/issues/new");
 
 pref("media.videocontrols.picture-in-picture.enabled", false);
+pref("media.videocontrols.picture-in-picture.allow-multiple", false);
 pref("media.videocontrols.picture-in-picture.video-toggle.enabled", false);
 pref("media.videocontrols.picture-in-picture.video-toggle.always-show", false);
 pref("media.videocontrols.picture-in-picture.video-toggle.min-video-secs", 45);
@@ -882,6 +887,10 @@ pref("devtools.performance.popup.intro-displayed", false);
 // Stringified array of target browsers that users investigate.
 pref("devtools.inspector.compatibility.target-browsers", "");
 
+// Storage preferencex
+// Force instancing legacy storage actors
+pref("devtools.storage.test.forceLegacyActors", false);
+
 // view source
 pref("view_source.editor.path", "");
 // allows to add further arguments to the editor; use the %LINE% placeholder
@@ -931,6 +940,14 @@ pref("print.print_headerright", "&U");
 pref("print.print_footerleft", "&PT");
 pref("print.print_footercenter", "");
 pref("print.print_footerright", "&D");
+
+// A list of comma separated key:value pairs, so:
+//
+//   key1:value1,key2:value2
+//
+// Which allows testing extra CUPS-related printer settings for monochrome
+// printing.
+pref("print.cups.monochrome.extra_settings", "");
 
 // xxxbsmedberg: more toolkit prefs
 
@@ -1053,11 +1070,10 @@ pref("privacy.restrict3rdpartystorage.url_decorations", "");
 pref("privacy.popups.maxReported", 100);
 
 // Purging first-party tracking cookies.
-#ifdef EARLY_BETA_OR_EARLIER
-  pref("privacy.purge_trackers.enabled", true);
+pref("privacy.purge_trackers.enabled", true);
+#ifdef NIGHTLY_BUILD
   pref("privacy.purge_trackers.logging.level", "Warn");
 #else
-  pref("privacy.purge_trackers.enabled", false);
   pref("privacy.purge_trackers.logging.level", "Error");
 #endif
 
@@ -1081,7 +1097,6 @@ pref("javascript.options.baselinejit",      true);
 // Duplicated in JitOptions - ensure both match.
 pref("javascript.options.baselinejit.threshold", 100);
 pref("javascript.options.ion",              true);
-pref("javascript.options.warp",             true);
 // Duplicated in JitOptions - ensure both match.
 pref("javascript.options.ion.threshold",    1500);
 pref("javascript.options.ion.full.threshold", 100000);
@@ -1093,39 +1108,12 @@ pref("javascript.options.wasm_trustedprincipals", true);
 pref("javascript.options.wasm_verbose",           false);
 pref("javascript.options.wasm_baselinejit",       true);
 
-// On Nightly on aarch64, Cranelift is the optimizing tier used by default for
-// wasm compilation, and Ion is not available.
-//
-// On non-Nightly aarch64, Cranelift is disabled (and only baseline is
-// available).
-//
-// On every other tier-1 platform, Ion is the default, and Cranelift is
-// disabled.
-#ifdef MOZ_AARCH64
-  #ifdef ENABLE_WASM_CRANELIFT
-    pref("javascript.options.wasm_cranelift",     true);
-  #endif
-  pref("javascript.options.wasm_ionjit",          false);
-#else
-  #ifdef ENABLE_WASM_CRANELIFT
-    pref("javascript.options.wasm_cranelift",     false);
-  #endif
-  pref("javascript.options.wasm_ionjit",          true);
-#endif
-
 #ifdef ENABLE_WASM_REFTYPES
   pref("javascript.options.wasm_reftypes",        true);
   pref("javascript.options.wasm_gc",              false);
 #endif
 #ifdef ENABLE_WASM_MULTI_VALUE
   pref("javascript.options.wasm_multi_value",     true);
-#endif
-#ifdef ENABLE_WASM_SIMD
-  #ifdef NIGHTLY_BUILD
-    pref("javascript.options.wasm_simd",            true);
-  #else
-    pref("javascript.options.wasm_simd",            false);
-  #endif
 #endif
 pref("javascript.options.native_regexp",    true);
 pref("javascript.options.parallel_parsing", true);
@@ -1530,6 +1518,11 @@ pref("network.http.send_window_size", 1024);
 #else
   pref("network.http.active_tab_priority", true);
 #endif
+
+// By default the Accept header sent for documents loaded over HTTP(S) is derived
+// by DocumentAcceptHeader() in nsHttpHandler.cpp. If set, this pref overrides it.
+// There is also image.http.accept which works in scope of image.
+pref("network.http.accept", "");
 
 // default values for FTP
 // in a DSCP environment this should be 40 (0x28, or AF11), per RFC-4594,
@@ -3766,6 +3759,7 @@ pref("toolkit.zoomManager.zoomValues", ".3,.5,.67,.8,.9,1,1.1,1.2,1.33,1.5,1.7,2
 
 // By default the Accept header sent for images loaded over HTTP(S) is derived
 // by ImageAcceptHeader() in nsHttpHandler.cpp. If set, this pref overrides it.
+// There is also network.http.accept which works in scope of document.
 pref("image.http.accept", "");
 
 //

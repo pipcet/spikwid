@@ -36,6 +36,7 @@ job-defaults:
                     - raptor/linux_config.py
         extra-options:
             - --browsertime
+            - --no-conditioned-profile
     fission-run-on-projects: []
 
 browsertime-tp6:
@@ -99,17 +100,22 @@ browsertime-tp6:
             firefox:
                 by-test-platform:
                     (linux|windows|macos)(?!.*shippable).*: []
-                    linux.*shippable.*: ["autoland", "mozilla-central"]
-                    macos.*shippable.*: ["autoland", "mozilla-central"]
+                    linux.*shippable.*: ["trunk", "mozilla-beta"]
+                    macos.*shippable.*: ["trunk", "mozilla-beta"]
                     default: []
             default: []
     limit-platforms:
         by-app:
             chrome:
                 - linux.*shippable[^-qr].*
-                - mac.*shippable[^-qr].*
+                - macosx1014-64-shippable-qr/opt
             chromium:
+                # Run on non-QR shippable, but test-platforms.yml doesn't have
+                # any more non-QR macosx shippable things. So for macosx we want
+                # to run it on shippable-qr, otherwise there's nothing running
+                # this on macosx at all.
                 - .*shippable[^-qr].*
+                - macosx1014-64-shippable-qr/opt
             default: []
     treeherder-symbol: Btime(tp6)
     max-run-time: 4000

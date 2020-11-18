@@ -1266,6 +1266,11 @@ var PlacesUIUtils = {
 
   placesContextShowing(event) {
     let menupopup = event.target;
+    if (menupopup.id != "placesContext") {
+      // Ignore any popupshowing events from submenus
+      return true;
+    }
+
     let isManaged = !!menupopup.triggerNode.closest("#managed-bookmarks");
     if (isManaged) {
       this.managedPlacesContextShowing(event);
@@ -1403,6 +1408,9 @@ var PlacesUIUtils = {
   },
 
   async maybeAddImportButton() {
+    if (!Services.policies.isAllowed("profileImport")) {
+      return;
+    }
     let numberOfBookmarks = await PlacesUtils.withConnectionWrapper(
       "PlacesUIUtils: maybeAddImportButton",
       async db => {
@@ -1452,6 +1460,20 @@ var PlacesUIUtils = {
     Services.obs.addObserver(obs, "Migration:ItemAfterMigrate");
     Services.obs.addObserver(obs, "Migration:ItemError");
   },
+
+  get _nonPrefDefaultParentGuid() {
+    let { unfiledGuid, toolbarGuid } = PlacesUtils.bookmarks;
+    return this._2020h2bookmarks ? toolbarGuid : unfiledGuid;
+  },
+
+  get defaultParentGuid() {
+    if (!PlacesUIUtils._2020h2bookmarks) {
+      return PlacesUtils.bookmarks.unfiledGuid;
+    }
+    // Defined via a lazy pref getter below, see the comment there about the
+    // reason for this (temporary) setup.
+    return this._defaultParentGuid;
+  },
 };
 
 // These are lazy getters to avoid importing PlacesUtils immediately.
@@ -1499,6 +1521,41 @@ XPCOMUtils.defineLazyPreferenceGetter(
   "maxRecentFolders",
   "browser.bookmarks.editDialog.maxRecentFolders",
   7
+);
+
+XPCOMUtils.defineLazyPreferenceGetter(
+  PlacesUIUtils,
+  "_2020h2bookmarks",
+  "browser.toolbars.bookmarks.2h2020",
+  false
+);
+
+/**
+ * This value should be accessed through the defaultParentGuid getter,
+ * which will only access this pref if the browser.toolbars.bookmarks.2h2020
+ * pref is true. We can't put that check directly in the pref transformation
+ * callback below, because then the resulting value doesn't update if the
+ * 2h2020 pref updates, breaking tests and potentially real-world behaviour
+ * if the 2h2020 pref is flipped at runtime.
+ */
+XPCOMUtils.defineLazyPreferenceGetter(
+  PlacesUIUtils,
+  "_defaultParentGuid",
+  "browser.bookmarks.defaultLocation",
+  "", // Avoid eagerly loading PlacesUtils.
+  null,
+  prefValue => {
+    if (!prefValue) {
+      return PlacesUIUtils._nonPrefDefaultParentGuid;
+    }
+    if (["toolbar", "menu", "unfiled"].includes(prefValue)) {
+      return PlacesUtils.bookmarks[prefValue + "Guid"];
+    }
+    return PlacesUtils.bookmarks
+      .fetch({ guid: prefValue })
+      .then(bm => bm.guid)
+      .catch(() => PlacesUIUtils._nonPrefDefaultParentGuid);
+  }
 );
 
 /**

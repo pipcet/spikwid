@@ -67,10 +67,6 @@
 #  include "GeckoTaskTracer.h"
 #endif
 
-#ifdef MOZ_GECKO_PROFILER
-#  include "ProfilerMarkerPayload.h"
-#endif
-
 #include <functional>
 
 using namespace mozilla::dom;
@@ -483,6 +479,21 @@ void HttpChannelChild::OnStartRequest(
           self->DoOnStartRequest(self, nullptr);
         }));
     return;
+  }
+
+  // Remember whether HTTP3 is supported
+  if (mResponseHead && (mResponseHead->Version() == HttpVersion::v2_0) &&
+      (mResponseHead->Status() < 500) && (mResponseHead->Status() != 421)) {
+    nsAutoCString altSvc;
+    Unused << mResponseHead->GetHeader(nsHttp::Alternate_Service, altSvc);
+    if (!altSvc.IsEmpty() || nsHttp::IsReasonableHeaderValue(altSvc)) {
+      for (uint32_t i = 0; i < kHttp3VersionCount; i++) {
+        if (PL_strstr(altSvc.get(), kHttp3Versions[i].get())) {
+          mSupportsHTTP3 = true;
+          break;
+        }
+      }
+    }
   }
 
   DoOnStartRequest(this, nullptr);
@@ -2163,6 +2174,7 @@ nsresult HttpChannelChild::ContinueAsyncOpen() {
   openArgs.chooseApplicationCache() = mChooseApplicationCache;
   openArgs.appCacheClientID() = appCacheClientId;
   openArgs.allowSpdy() = mAllowSpdy;
+  openArgs.allowHttp3() = mAllowHttp3;
   openArgs.allowAltSvc() = mAllowAltSvc;
   openArgs.beConservative() = mBeConservative;
   openArgs.tlsFlags() = mTlsFlags;

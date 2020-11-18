@@ -13,6 +13,9 @@ const { ExperimentAPI } = ChromeUtils.import(
 const { ExperimentFakes } = ChromeUtils.import(
   "resource://testing-common/MSTestUtils.jsm"
 );
+const { TelemetryFeed } = ChromeUtils.import(
+  "resource://activity-stream/lib/TelemetryFeed.jsm"
+);
 
 const EXPERIMENT_PAYLOAD = ExperimentFakes.recipe("test_xman_cfr", {
   id: "xman_test_message",
@@ -135,6 +138,7 @@ add_task(async function test_loading_experimentsAPI() {
   // Force the WNPanel provider cache to 0 by modifying updateCycleInMs
   await SpecialPowers.pushPrefEnv({
     set: [
+      ["app.shield.optoutstudies.enabled", true],
       [
         "browser.newtabpage.activity-stream.asrouter.providers.messaging-experiments",
         `{"id":"messaging-experiments","enabled":true,"type":"remote-experiments","messageGroups":["cfr","whats-new-panel","moments-page","snippets","cfr-fxa"],"updateCycleInMs":0}`,
@@ -158,12 +162,21 @@ add_task(async function test_loading_experimentsAPI() {
     "ExperimentAPI should return an experiment"
   );
 
+  const telemetryFeedInstance = new TelemetryFeed();
+  Assert.ok(
+    telemetryFeedInstance.isInCFRCohort,
+    "Telemetry should return true"
+  );
+
   // Reload the provider
   await ASRouter._updateMessageProviders();
   // Wait to load the messages from the messaging-experiments provider
   await ASRouter.loadMessagesFromAllProviders();
 
-  Assert.ok(ASRouter.state.messages.find(m => m.id === "xman_test_message"));
+  Assert.ok(
+    ASRouter.state.messages.find(m => m.id === "xman_test_message"),
+    "Experiment message found in ASRouter state"
+  );
 
   await client.db.clear();
   await SpecialPowers.popPrefEnv();

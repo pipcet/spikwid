@@ -132,10 +132,6 @@ class AboutLoginsChild extends JSWindowActorChild {
         this.sendAsyncMessage("AboutLogins:GetHelp");
         break;
       }
-      case "AboutLoginsHideFooter": {
-        this.sendAsyncMessage("AboutLogins:HideFooter");
-        break;
-      }
       case "AboutLoginsImportFromBrowser": {
         this.sendAsyncMessage("AboutLogins:Import");
         recordTelemetryEvent({
@@ -149,18 +145,6 @@ class AboutLoginsChild extends JSWindowActorChild {
         recordTelemetryEvent({
           object: "import_from_csv",
           method: "mgmt_menu_item_used",
-        });
-        break;
-      }
-      case "AboutLoginsOpenMobileAndroid": {
-        this.sendAsyncMessage("AboutLogins:OpenMobileAndroid", {
-          source: event.detail,
-        });
-        break;
-      }
-      case "AboutLoginsOpenMobileIos": {
-        this.sendAsyncMessage("AboutLogins:OpenMobileIos", {
-          source: event.detail,
         });
         break;
       }
@@ -194,6 +178,10 @@ class AboutLoginsChild extends JSWindowActorChild {
           lastOpenManagementOuterWindowID = docShell.outerWindowID;
         }
         recordTelemetryEvent(event.detail);
+        break;
+      }
+      case "AboutLoginsRemoveAllLogins": {
+        this.sendAsyncMessage("AboutLogins:RemoveAllLogins");
         break;
       }
       case "AboutLoginsSortChanged": {

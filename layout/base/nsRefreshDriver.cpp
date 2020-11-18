@@ -639,6 +639,8 @@ class VsyncRefreshDriverTimer : public RefreshDriverTimer {
                 NS_DispatchToCurrentThreadQueue(vsyncEvent.forget(), slowRate,
                                                 EventQueuePriority::Idle);
               }
+              // Pretend that RefreshDriver did run on time.
+              mVsyncRefreshDriverTimer->mLastFireTime = TimeStamp::Now();
               return;
             }
           }
@@ -2064,9 +2066,8 @@ void nsRefreshDriver::Tick(VsyncId aId, TimeStamp aNowTime) {
     // On top level content pages keep the timer running initially so that we
     // paint the page soon enough.
     if (ShouldKeepTimerRunningWhileWaitingForFirstContentfulPaint()) {
-      PROFILER_TRACING_MARKER(
-          "Paint", "RefreshDriver waiting for first contentful paint", GRAPHICS,
-          TRACING_EVENT);
+      PROFILER_MARKER("RefreshDriver waiting for first contentful paint",
+                      GRAPHICS, {}, Tracing, "Paint");
     } else {
       StopTimer();
     }

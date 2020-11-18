@@ -512,9 +512,9 @@ class BrowserParent final : public PBrowserParent,
   void DynamicToolbarOffsetChanged(ScreenIntCoord aOffset);
 #endif
 
-  void Activate();
+  void Activate(uint64_t aActionId);
 
-  void Deactivate(bool aWindowLowering);
+  void Deactivate(bool aWindowLowering, uint64_t aActionId);
 
   void MouseEnterIntoWidget();
 
@@ -682,7 +682,8 @@ class BrowserParent final : public PBrowserParent,
       nsTArray<IPCDataTransfer>&& aTransfers, const uint32_t& aAction,
       Maybe<Shmem>&& aVisualDnDData, const uint32_t& aStride,
       const gfx::SurfaceFormat& aFormat, const LayoutDeviceIntRect& aDragRect,
-      nsIPrincipal* aPrincipal, nsIContentSecurityPolicy* aCsp);
+      nsIPrincipal* aPrincipal, nsIContentSecurityPolicy* aCsp,
+      const CookieJarSettingsArgs& aCookieJarSettingsArgs);
 
   void AddInitialDnDDataTo(DataTransfer* aDataTransfer,
                            nsIPrincipal** aPrincipal);

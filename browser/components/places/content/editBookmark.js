@@ -16,6 +16,7 @@ var gEditItemOverlay = {
   transactionPromises: null,
   _observersAdded: false,
   _staticFoldersListBuilt: false,
+  _didChangeFolder: false,
 
   _paneInfo: null,
   _setPaneInfo(aInitInfo) {
@@ -151,6 +152,10 @@ var gEditItemOverlay = {
     );
   },
 
+  get didChangeFolder() {
+    return this._didChangeFolder;
+  },
+
   // the first field which was edited after this panel was initialized for
   // a certain item
   _firstEditedField: "",
@@ -248,6 +253,7 @@ var gEditItemOverlay = {
       this.uninitPanel(false);
     }
 
+    this._didChangeFolder = false;
     this.transactionPromises = [];
 
     let {
@@ -261,6 +267,14 @@ var gEditItemOverlay = {
       focusedElement,
       onPanelReady,
     } = this._setPaneInfo(aInfo);
+
+    // If we're creating a new item on the toolbar, show it:
+    if (
+      aInfo.isNewBookmark &&
+      parentGuid == PlacesUtils.bookmarks.toolbarGuid
+    ) {
+      this._autoshowBookmarksToolbar();
+    }
 
     let showOrCollapse = (
       rowId,
@@ -549,6 +563,7 @@ var gEditItemOverlay = {
 
     this._setPaneInfo(null);
     this._firstEditedField = "";
+    this._didChangeFolder = false;
     this.transactionPromises = [];
   },
 
@@ -886,6 +901,10 @@ var gEditItemOverlay = {
       if (containerGuid == PlacesUtils.bookmarks.toolbarGuid) {
         this._autoshowBookmarksToolbar();
       }
+
+      // Unless the user cancels the panel, we'll use the chosen folder as
+      // the default for new bookmarks.
+      this._didChangeFolder = true;
     }
 
     // Update folder-tree selection

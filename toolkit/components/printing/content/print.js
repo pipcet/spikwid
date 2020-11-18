@@ -130,6 +130,7 @@ var PrintEventHandler = {
     printInColor: Ci.nsIPrintSettings.kInitSaveInColor,
     scaling: Ci.nsIPrintSettings.kInitSaveScaling,
     shrinkToFit: Ci.nsIPrintSettings.kInitSaveShrinkToFit,
+    printDuplex: Ci.nsIPrintSettings.kInitSaveDuplex,
     printFootersHeaders:
       Ci.nsIPrintSettings.kInitSaveHeaderLeft |
       Ci.nsIPrintSettings.kInitSaveHeaderCenter |
@@ -147,11 +148,7 @@ var PrintEventHandler = {
 
   // These settings do not have an associated pref value or flag, but
   // changing them requires us to update the print preview.
-  _nonFlaggedUpdatePreviewSettings: new Set([
-    "printAllOrCustomRange",
-    "startPageRange",
-    "endPageRange",
-  ]),
+  _nonFlaggedUpdatePreviewSettings: new Set(["pageRanges"]),
 
   async init() {
     Services.telemetry.scalarAdd("printing.preview_opened_tm", 1);
@@ -404,6 +401,7 @@ var PrintEventHandler = {
     } else if (!this.viewSettings.supportsMonochrome) {
       settingsToUpdate.printInColor = true;
     }
+
     if (
       settingsToUpdate.printInColor != this._userChangedSettings.printInColor
     ) {
@@ -460,35 +458,6 @@ var PrintEventHandler = {
     // Always write paper details back to settings
     settingsToUpdate.paperId = matchedPaper.id;
 
-    // See if we need to change the custom margin values
-
-    let paperHeightInInches = matchedPaper.paper.height * INCHES_PER_POINT;
-    let paperWidthInInches = matchedPaper.paper.width * INCHES_PER_POINT;
-
-    if (
-      parseFloat(this.viewSettings.customMargins.marginTop) +
-        parseFloat(this.viewSettings.customMargins.marginBottom) >
-        paperHeightInInches ||
-      this.viewSettings.customMargins.marginTop < 0 ||
-      this.viewSettings.customMargins.marginBottom < 0
-    ) {
-      let { marginTop, marginBottom } = this.viewSettings.defaultMargins;
-      settingsToUpdate.marginTop = settingsToUpdate.customMarginTop = marginTop;
-      settingsToUpdate.marginBottom = settingsToUpdate.customMarginTop = marginBottom;
-    }
-
-    if (
-      parseFloat(this.viewSettings.customMargins.marginRight) +
-        parseFloat(this.viewSettings.customMargins.marginLeft) >
-        paperWidthInInches ||
-      this.viewSettings.customMargins.marginLeft < 0 ||
-      this.viewSettings.customMargins.marginRight < 0
-    ) {
-      let { marginLeft, marginRight } = this.viewSettings.defaultMargins;
-      settingsToUpdate.marginLeft = settingsToUpdate.customMarginLeft = marginLeft;
-      settingsToUpdate.marginRight = settingsToUpdate.customMarginRight = marginRight;
-    }
-
     return settingsToUpdate;
   },
 
@@ -541,9 +510,50 @@ var PrintEventHandler = {
       // The paper's margin properties are async,
       // so resolve those now before we update the settings
       try {
-        await PrintSettingsViewProxy.fetchPaperMargins(
+        let paperWrapper = await PrintSettingsViewProxy.fetchPaperMargins(
           changedSettings.paperId || this.viewSettings.paperId
         );
+
+        // See if we also need to change the custom margin values
+
+        let paperHeightInInches = paperWrapper.paper.height * INCHES_PER_POINT;
+        let paperWidthInInches = paperWrapper.paper.width * INCHES_PER_POINT;
+        let height =
+          (changedSettings.orientation || this.viewSettings.orientation) == 0
+            ? paperHeightInInches
+            : paperWidthInInches;
+        let width =
+          (changedSettings.orientation || this.viewSettings.orientation) == 0
+            ? paperWidthInInches
+            : paperHeightInInches;
+
+        if (
+          parseFloat(this.viewSettings.customMargins.marginTop) +
+            parseFloat(this.viewSettings.customMargins.marginBottom) >
+            height -
+              paperWrapper.unwriteableMarginTop -
+              paperWrapper.unwriteableMarginBottom ||
+          this.viewSettings.customMargins.marginTop < 0 ||
+          this.viewSettings.customMargins.marginBottom < 0
+        ) {
+          let { marginTop, marginBottom } = this.viewSettings.defaultMargins;
+          changedSettings.marginTop = changedSettings.customMarginTop = marginTop;
+          changedSettings.marginBottom = changedSettings.customMarginBottom = marginBottom;
+        }
+
+        if (
+          parseFloat(this.viewSettings.customMargins.marginRight) +
+            parseFloat(this.viewSettings.customMargins.marginLeft) >
+            width -
+              paperWrapper.unwriteableMarginRight -
+              paperWrapper.unwriteableMarginLeft ||
+          this.viewSettings.customMargins.marginLeft < 0 ||
+          this.viewSettings.customMargins.marginRight < 0
+        ) {
+          let { marginLeft, marginRight } = this.viewSettings.defaultMargins;
+          changedSettings.marginLeft = changedSettings.customMarginLeft = marginLeft;
+          changedSettings.marginRight = changedSettings.customMarginRight = marginRight;
+        }
       } catch (e) {
         this.reportPrintingError("PAPER_MARGINS");
         throw e;
@@ -635,12 +645,12 @@ var PrintEventHandler = {
         .add(elapsed);
     }
 
-    // This resolves with a PrintPreviewSuccessInfo dictionary.  That also has
-    // a `sheetCount` property available which we should use (bug 1662331).
-    let totalPageCount, hasSelection;
+    let totalPageCount, sheetCount, hasSelection;
     try {
+      // This resolves with a PrintPreviewSuccessInfo dictionary.
       ({
         totalPageCount,
+        sheetCount,
         hasSelection,
       } = await previewBrowser.frameLoader.printPreview(settings, sourceWinId));
     } catch (e) {
@@ -648,18 +658,12 @@ var PrintEventHandler = {
       throw e;
     }
 
-    // Send the page count and show the preview.
-    let numPages = totalPageCount;
-    // Adjust number of pages if the user specifies the pages they want printed
-    if (settings.printRange == Ci.nsIPrintSettings.kRangeSpecifiedPageRange) {
-      numPages = settings.endPageRange - settings.startPageRange + 1;
-    }
     // Update the settings print options on whether there is a selection.
     settings.isPrintSelectionRBEnabled = hasSelection;
 
     document.dispatchEvent(
       new CustomEvent("page-count", {
-        detail: { numPages, totalPages: totalPageCount },
+        detail: { sheetCount, totalPages: totalPageCount },
       })
     );
 
@@ -950,7 +954,7 @@ var PrintSettingsViewProxy = {
     }
     if (paperWrapper._resolved) {
       // We've already resolved and calculated these values
-      return;
+      return paperWrapper;
     }
     let margins;
     try {
@@ -968,6 +972,7 @@ var PrintSettingsViewProxy = {
     paperWrapper.unwriteableMarginLeft = margins.left * INCHES_PER_POINT;
     // No need to re-resolve static properties
     paperWrapper._resolved = true;
+    return paperWrapper;
   },
 
   async resolvePropertiesForPrinter(printerName) {
@@ -981,24 +986,28 @@ var PrintSettingsViewProxy = {
 
     // Await the async printer data.
     if (printerInfo.printer) {
+      let basePrinterInfo;
       try {
         [
+          printerInfo.supportsDuplex,
           printerInfo.supportsColor,
           printerInfo.supportsMonochrome,
-          printerInfo.paperList,
-          printerInfo.defaultSettings,
+          basePrinterInfo,
         ] = await Promise.all([
+          printerInfo.printer.supportsDuplex,
           printerInfo.printer.supportsColor,
           printerInfo.printer.supportsMonochrome,
-          printerInfo.printer.paperList,
-          // get a set of default settings for this printer
-          printerInfo.printer.createDefaultSettings(),
+          printerInfo.printer.printerInfo,
         ]);
       } catch (e) {
         this.reportPrintingError("PRINTER_SETTINGS");
         throw e;
       }
-      printerInfo.defaultSettings.QueryInterface(Ci.nsIPrintSettings);
+      basePrinterInfo.QueryInterface(Ci.nsIPrinterInfo);
+      basePrinterInfo.defaultSettings.QueryInterface(Ci.nsIPrintSettings);
+
+      printerInfo.paperList = basePrinterInfo.paperList;
+      printerInfo.defaultSettings = basePrinterInfo.defaultSettings;
     } else if (printerName == PrintUtils.SAVE_TO_PDF_PRINTER) {
       // The Mozilla PDF pseudo-printer has no actual nsIPrinter implementation
       printerInfo.defaultSettings = PSSVC.newPrintSettings;
@@ -1149,6 +1158,12 @@ var PrintSettingsViewProxy = {
             };
           });
 
+      case "supportsDuplex":
+        return this.availablePrinters[target.printerName].supportsDuplex;
+
+      case "printDuplex":
+        return target.duplex;
+
       case "printBackgrounds":
         return target.printBGImages || target.printBGColors;
 
@@ -1158,11 +1173,6 @@ var PrintSettingsViewProxy = {
         return Object.keys(this.headerFooterSettingsPrefs).some(
           name => !!target[name]
         );
-
-      case "printAllOrCustomRange":
-        return target.printRange == Ci.nsIPrintSettings.kRangeAllPages
-          ? "all"
-          : "custom";
 
       case "supportsColor":
         return this.availablePrinters[target.printerName].supportsColor;
@@ -1236,6 +1246,12 @@ var PrintSettingsViewProxy = {
         target.printBGColors = value;
         break;
 
+      case "printDuplex":
+        target.duplex = value
+          ? Ci.nsIPrintSettings.kDuplexHorizontal
+          : Ci.nsIPrintSettings.kSimplex;
+        break;
+
       case "printFootersHeaders":
         // To disable header & footers, set them all to empty.
         // To enable, restore default values for each of the header & footer settings.
@@ -1244,13 +1260,6 @@ var PrintSettingsViewProxy = {
         )) {
           target[settingName] = value ? defaultValue : "";
         }
-        break;
-
-      case "printAllOrCustomRange":
-        target.printRange =
-          value == "all"
-            ? Ci.nsIPrintSettings.kRangeAllPages
-            : Ci.nsIPrintSettings.kRangeSpecifiedPageRange;
         break;
 
       case "customMargins":
@@ -1526,6 +1535,8 @@ class PrintUIForm extends PrintUIControlMixin(HTMLFormElement) {
     this.addEventListener("input", this);
     this.addEventListener("revalidate", this);
 
+    this._printerDestination = this.querySelector("#destination");
+
     this.printButton = this.querySelector("#print-button");
     if (AppConstants.platform != "win") {
       // Move the Print button to the end if this isn't Windows.
@@ -1546,6 +1557,8 @@ class PrintUIForm extends PrintUIControlMixin(HTMLFormElement) {
       AppConstants.platform === "win" && !settings.defaultSystemPrinter;
 
     this.querySelector("#copies").hidden = settings.willSaveToFile;
+
+    this.querySelector("#two-sided-printing").hidden = !settings.supportsDuplex;
   }
 
   enable() {
@@ -1558,7 +1571,7 @@ class PrintUIForm extends PrintUIControlMixin(HTMLFormElement) {
 
   disable() {
     for (let element of this.elements) {
-      element.disabled = true;
+      element.disabled = element.name != "cancel";
     }
   }
 
@@ -1607,6 +1620,7 @@ class PrintUIForm extends PrintUIControlMixin(HTMLFormElement) {
           (!isValid &&
             element.validity.valid &&
             element.name != "cancel" &&
+            element.closest(".section-block") != this._printerDestination &&
             element.closest(".section-block") != section);
       }
     }
@@ -1645,20 +1659,30 @@ class ScaleInput extends PrintUIControlMixin(HTMLElement) {
   }
 
   update(settings) {
-    let { scaling, shrinkToFit } = settings;
+    let { scaling, shrinkToFit, printerName } = settings;
     this._shrinkToFitChoice.checked = shrinkToFit;
     this._scaleChoice.checked = !shrinkToFit;
     this._percentScale.disabled = shrinkToFit;
     this._percentScale.toggleAttribute("disallowed", shrinkToFit);
+    if (!this.printerName) {
+      this.printerName = printerName;
+    }
 
     // If the user had an invalid input and switches back to "fit to page",
     // we repopulate the scale field with the stored, valid scaling value.
+    let isValid = this._percentScale.checkValidity();
     if (
       !this._percentScale.value ||
-      (this._shrinkToFitChoice.checked && !this._percentScale.checkValidity())
+      (this._shrinkToFitChoice.checked && !isValid) ||
+      (this.printerName != printerName && !isValid)
     ) {
       // Only allow whole numbers. 0.14 * 100 would have decimal places, etc.
       this._percentScale.value = parseInt(scaling * 100, 10);
+      this.printerName = printerName;
+      if (!isValid) {
+        this.dispatchEvent(new Event("revalidate", { bubbles: true }));
+        this._scaleError.hidden = true;
+      }
     }
   }
 
@@ -1739,14 +1763,14 @@ class PageRangeInput extends PrintUIControlMixin(HTMLElement) {
 
   updatePageRange() {
     this.dispatchSettingsChange({
-      printAllOrCustomRange: this._rangePicker.value,
-      startPageRange: this._startRange.value,
-      endPageRange: this._endRange.value,
+      pageRanges: this._rangePicker.value
+        ? [this._startRange.value, this._endRange.value]
+        : [],
     });
   }
 
   update(settings) {
-    this.toggleAttribute("all-pages", settings.printRange == 0);
+    this.toggleAttribute("all-pages", !settings.pageRanges.length);
   }
 
   handleEvent(e) {
@@ -1768,7 +1792,7 @@ class PageRangeInput extends PrintUIControlMixin(HTMLElement) {
 
     if (e.type == "page-count") {
       let { totalPages } = e.detail;
-      this._startRange.max = this._endRange.max = this._numPages = totalPages;
+      this._startRange.max = this._endRange.max = this._totalPages = totalPages;
       this._startRange.disabled = this._endRange.disabled = false;
       let isChanged = false;
 
@@ -1776,11 +1800,11 @@ class PageRangeInput extends PrintUIControlMixin(HTMLElement) {
       // change the number of pages. We need to update the start and end rages
       // if their values are no longer valid.
       if (!this._startRange.checkValidity()) {
-        this._startRange.value = this._numPages;
+        this._startRange.value = this._totalPages;
         isChanged = true;
       }
       if (!this._endRange.checkValidity()) {
-        this._endRange.value = this._numPages;
+        this._endRange.value = this._totalPages;
         isChanged = true;
       }
       if (isChanged) {
@@ -1792,8 +1816,7 @@ class PageRangeInput extends PrintUIControlMixin(HTMLElement) {
 
         if (this._startRange.validity.valid && this._endRange.validity.valid) {
           this.dispatchSettingsChange({
-            startPageRange: this._startRange.value,
-            endPageRange: this._endRange.value,
+            pageRanges: [this._startRange.value, this._endRange.value],
           });
           this._rangeError.hidden = true;
           this._startRangeOverflowError.hidden = true;
@@ -1807,7 +1830,7 @@ class PageRangeInput extends PrintUIControlMixin(HTMLElement) {
       this._startRange.required = this._endRange.required = !printAll;
       this.querySelector(".range-group").hidden = printAll;
       this._startRange.value = 1;
-      this._endRange.value = this._numPages || 1;
+      this._endRange.value = this._totalPages || 1;
 
       this.updatePageRange();
 
@@ -1837,7 +1860,7 @@ class PageRangeInput extends PrintUIControlMixin(HTMLElement) {
       this._rangeError,
       "printui-error-invalid-range",
       {
-        numPages: this._numPages,
+        numPages: this._totalPages,
       }
     );
 
@@ -1954,7 +1977,8 @@ class MarginsPicker extends PrintUIControlMixin(HTMLElement) {
     // Re-evaluate which margin options should be enabled whenever the printer or paper changes
     if (
       settings.paperId !== this._paperId ||
-      settings.printerName !== this._printerName
+      settings.printerName !== this._printerName ||
+      settings.orientation !== this._orientation
     ) {
       let enabledMargins = settings.marginOptions;
       for (let option of this._marginPicker.options) {
@@ -1962,13 +1986,19 @@ class MarginsPicker extends PrintUIControlMixin(HTMLElement) {
       }
       this._paperId = settings.paperId;
       this._printerName = settings.printerName;
+      this._orientation = settings.orientation;
+
+      let height =
+        this._orientation == 0 ? settings.paperHeight : settings.paperWidth;
+      let width =
+        this._orientation == 0 ? settings.paperWidth : settings.paperHeight;
 
       this._maxHeight =
-        settings.paperHeight -
+        height -
         settings.unwriteableMarginTop -
         settings.unwriteableMarginBottom;
       this._maxWidth =
-        settings.paperWidth -
+        width -
         settings.unwriteableMarginLeft -
         settings.unwriteableMarginRight;
 
@@ -1976,6 +2006,9 @@ class MarginsPicker extends PrintUIControlMixin(HTMLElement) {
       // The values in custom fields should be initialized to custom margin values
       // and must be overriden if they are no longer valid.
       this.setAllMarginValues(settings);
+
+      this.dispatchEvent(new Event("revalidate", { bubbles: true }));
+      this._marginError.hidden = true;
     }
 
     // We need to ensure we don't override the value if the value should be custom.
@@ -2165,12 +2198,18 @@ class PageCount extends PrintUIControlMixin(HTMLElement) {
   }
 
   render() {
-    if (!this.numCopies || !this.numPages) {
+    if (!this.numCopies || !this.sheetCount) {
       return;
     }
     document.l10n.setAttributes(this, "printui-sheets-count", {
-      sheetCount: this.numPages * this.numCopies,
+      sheetCount: this.sheetCount * this.numCopies,
     });
+
+    // The loading attribute must be removed on first render
+    if (this.hasAttribute("loading")) {
+      this.removeAttribute("loading");
+    }
+
     if (this.id) {
       // We're showing the sheet count, so let it describe the dialog.
       document.body.setAttribute("aria-describedby", this.id);
@@ -2178,8 +2217,7 @@ class PageCount extends PrintUIControlMixin(HTMLElement) {
   }
 
   handleEvent(e) {
-    let { numPages } = e.detail;
-    this.numPages = numPages;
+    this.sheetCount = e.detail.sheetCount;
     this.render();
   }
 }

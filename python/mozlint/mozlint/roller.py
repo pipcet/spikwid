@@ -169,6 +169,10 @@ class LintRoller(object):
         else:
             logger.setLevel(logging.WARNING)
 
+        self.log = logging.LoggerAdapter(
+            logger, {"lintname": "mozlint", "pid": os.getpid()}
+        )
+
     def read(self, paths):
         """Parse one or more linters and add them to the registry.
 
@@ -182,7 +186,7 @@ class LintRoller(object):
             linter.setdefault("exclude", []).extend(self.exclude)
             self.linters.append(linter)
 
-    def setup(self):
+    def setup(self, virtualenv_manager=None):
         """Run setup for applicable linters"""
         if not self.linters:
             raise LintersNotConfigured
@@ -194,7 +198,14 @@ class LintRoller(object):
             try:
                 setupargs = copy.deepcopy(self.lintargs)
                 setupargs["name"] = linter["name"]
+                if virtualenv_manager is not None:
+                    setupargs["virtualenv_manager"] = virtualenv_manager
+                start_time = time.time()
                 res = findobject(linter["setup"])(**setupargs)
+                self.log.debug(
+                    f"setup for {linter['name']} finished in "
+                    f"{round(time.time() - start_time, 2)} seconds"
+                )
             except Exception:
                 traceback.print_exc()
                 res = 1

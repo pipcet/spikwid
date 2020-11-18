@@ -41,7 +41,7 @@ class RemoteVideoDecoderChild : public RemoteDecoderChild {
   MOZ_IS_CLASS_INIT MediaResult
   InitIPDL(const VideoInfo& aVideoInfo, float aFramerate,
            const CreateDecoderParams::OptionSet& aOptions,
-           const layers::TextureFactoryIdentifier* aIdentifier);
+           mozilla::Maybe<layers::TextureFactoryIdentifier> aIdentifier);
 
   MediaResult ProcessOutput(DecodedOutputIPDL&& aDecodedData) override;
 
@@ -58,10 +58,11 @@ class RemoteVideoDecoderParent final : public RemoteDecoderParent {
       RemoteDecoderManagerParent* aParent, const VideoInfo& aVideoInfo,
       float aFramerate, const CreateDecoderParams::OptionSet& aOptions,
       const Maybe<layers::TextureFactoryIdentifier>& aIdentifier,
-      nsISerialEventTarget* aManagerThread, TaskQueue* aDecodeTaskQueue,
-      bool* aSuccess, nsCString* aErrorDescription);
+      nsISerialEventTarget* aManagerThread, TaskQueue* aDecodeTaskQueue);
 
  protected:
+  IPCResult RecvConstruct(ConstructResolver&& aResolver) override;
+
   MediaResult ProcessDecodedData(MediaDataDecoder::DecodedData&& aData,
                                  DecodedOutputIPDL& aDecodedData) override;
 
@@ -72,7 +73,7 @@ class RemoteVideoDecoderParent final : public RemoteDecoderParent {
   // passed a deserialized VideoInfo from RecvPRemoteDecoderConstructor
   // which is destroyed when RecvPRemoteDecoderConstructor returns.
   const VideoInfo mVideoInfo;
-
+  const float mFramerate;
   RefPtr<KnowsCompositorVideo> mKnowsCompositor;
 };
 

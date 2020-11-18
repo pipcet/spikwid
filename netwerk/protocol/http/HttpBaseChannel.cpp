@@ -88,6 +88,7 @@
 #include "mozilla/RemoteLazyInputStreamChild.h"
 #include "mozilla/RemoteLazyInputStreamUtils.h"
 #include "mozilla/net/SFVService.h"
+#include "mozilla/dom/ContentChild.h"
 
 namespace mozilla {
 namespace net {
@@ -206,6 +207,7 @@ HttpBaseChannel::HttpBaseChannel()
       mTimingEnabled(false),
       mReportTiming(true),
       mAllowSpdy(true),
+      mAllowHttp3(true),
       mAllowAltSvc(true),
       mBeConservative(false),
       mIsTRRServiceChannel(false),
@@ -3033,6 +3035,20 @@ HttpBaseChannel::SetAllowSpdy(bool aAllowSpdy) {
 }
 
 NS_IMETHODIMP
+HttpBaseChannel::GetAllowHttp3(bool* aAllowHttp3) {
+  NS_ENSURE_ARG_POINTER(aAllowHttp3);
+
+  *aAllowHttp3 = mAllowHttp3;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+HttpBaseChannel::SetAllowHttp3(bool aAllowHttp3) {
+  mAllowHttp3 = aAllowHttp3;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 HttpBaseChannel::GetAllowAltSvc(bool* aAllowAltSvc) {
   NS_ENSURE_ARG_POINTER(aAllowAltSvc);
 
@@ -4261,6 +4277,8 @@ nsresult HttpBaseChannel::SetupReplacementChannel(nsIURI* newURI,
     MOZ_ASSERT(NS_SUCCEEDED(rv));
     rv = httpInternal->SetAllowSpdy(mAllowSpdy);
     MOZ_ASSERT(NS_SUCCEEDED(rv));
+    rv = httpInternal->SetAllowHttp3(mAllowHttp3);
+    MOZ_ASSERT(NS_SUCCEEDED(rv));
     rv = httpInternal->SetAllowAltSvc(mAllowAltSvc);
     MOZ_ASSERT(NS_SUCCEEDED(rv));
     rv = httpInternal->SetBeConservative(mBeConservative);
@@ -4814,10 +4832,37 @@ mozilla::dom::PerformanceStorage* HttpBaseChannel::GetPerformanceStorage() {
 }
 
 void HttpBaseChannel::MaybeReportTimingData() {
+  if (XRE_IsE10sParentProcess()) {
+    return;
+  }
+
   mozilla::dom::PerformanceStorage* documentPerformance =
       GetPerformanceStorage();
   if (documentPerformance) {
     documentPerformance->AddEntry(this, this);
+    return;
+  }
+
+  if (!nsGlobalWindowInner::GetInnerWindowWithId(
+          mLoadInfo->GetInnerWindowID())) {
+    // The inner window is in a different process.
+    dom::ContentChild* child = dom::ContentChild::GetSingleton();
+
+    if (!child) {
+      return;
+    }
+    nsAutoString initiatorType;
+    nsAutoString entryName;
+
+    UniquePtr<dom::PerformanceTimingData> performanceTimingData(
+        dom::PerformanceTimingData::Create(this, this, 0, initiatorType,
+                                           entryName));
+    if (!performanceTimingData) {
+      return;
+    }
+    child->SendReportFrameTimingData(mLoadInfo->GetInnerWindowID(), entryName,
+                                     initiatorType,
+                                     std::move(performanceTimingData));
   }
 }
 

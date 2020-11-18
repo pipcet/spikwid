@@ -135,9 +135,6 @@ struct MOZ_STACK_CLASS BytecodeEmitter {
   // Script contains finally block.
   bool hasTryFinally = false;
 
-  // True while emitting a lambda which is only expected to run once.
-  bool emittingRunOnceLambda = false;
-
   enum EmitterMode {
     Normal,
 
@@ -273,10 +270,6 @@ struct MOZ_STACK_CLASS BytecodeEmitter {
   bool isInLoop();
   MOZ_MUST_USE bool checkSingletonContext();
 
-  // Check whether our function is in a run-once context (a toplevel
-  // run-one script or a run-once lambda).
-  MOZ_MUST_USE bool checkRunOnceContext();
-
   bool needsImplicitThis();
 
   MOZ_MUST_USE bool emitThisEnvironmentCallee();
@@ -371,8 +364,7 @@ struct MOZ_STACK_CLASS BytecodeEmitter {
   MOZ_MUST_USE bool getNslots(uint32_t* nslots);
 
   // Emit function code for the tree rooted at body.
-  MOZ_MUST_USE bool emitFunctionScript(FunctionNode* funNode,
-                                       TopLevelFunction isTopLevel);
+  MOZ_MUST_USE bool emitFunctionScript(FunctionNode* funNode);
 
   MOZ_MUST_USE bool markStepBreakpoint();
   MOZ_MUST_USE bool markSimpleBreakpoint();

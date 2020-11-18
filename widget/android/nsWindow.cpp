@@ -34,6 +34,7 @@
 #include "mozilla/gfx/DataSurfaceHelpers.h"
 #include "mozilla/gfx/Types.h"
 #include "mozilla/layers/RenderTrace.h"
+#include "mozilla/widget/AndroidVsync.h"
 #include <algorithm>
 
 using mozilla::Unused;
@@ -100,6 +101,7 @@ using mozilla::gfx::SurfaceFormat;
 #include "mozilla/java/PanZoomControllerNatives.h"
 #include "mozilla/java/SessionAccessibilityWrappers.h"
 #include "ScreenHelperAndroid.h"
+#include "TouchResampler.h"
 
 #include "GeckoProfiler.h"  // For AUTO_PROFILER_LABEL
 #include "nsPrintfCString.h"
@@ -133,6 +135,8 @@ static bool sFailedToCreateGLContext = false;
 // Multitouch swipe thresholds in inches
 static const double SWIPE_MAX_PINCH_DELTA_INCHES = 0.4;
 static const double SWIPE_MIN_DISTANCE_INCHES = 0.6;
+
+static const double kTouchResampleVsyncAdjustMs = 5.0;
 
 static const int32_t INPUT_RESULT_UNHANDLED =
     java::PanZoomController::INPUT_RESULT_UNHANDLED;
@@ -178,10 +182,23 @@ using WindowPtr = jni::NativeWeakPtr<GeckoViewSupport>;
  * it separate from GeckoViewSupport.
  */
 class NPZCSupport final
-    : public java::PanZoomController::NativeProvider::Natives<NPZCSupport> {
+    : public java::PanZoomController::NativeProvider::Natives<NPZCSupport>,
+      public AndroidVsync::Observer {
   WindowPtr mWindow;
   java::PanZoomController::NativeProvider::WeakRef mNPZC;
-  int mPreviousButtons;
+
+  // Stores the returnResult of each pending motion event between
+  // HandleMotionEvent and FinishHandlingMotionEvent.
+  std::queue<std::pair<uint64_t, java::GeckoResult::GlobalRef>>
+      mPendingMotionEventReturnResults;
+
+  RefPtr<AndroidVsync> mAndroidVsync;
+  TouchResampler mTouchResampler;
+  int mPreviousButtons = 0;
+  bool mListeningToVsync = false;
+
+  // Only true if mAndroidVsync is non-null and the resampling pref is set.
+  bool mTouchResamplingEnabled = false;
 
   template <typename Lambda>
   class InputEvent final : public nsAppShell::Event {
@@ -244,14 +261,27 @@ class NPZCSupport final
 
   NPZCSupport(WindowPtr aWindow,
               const java::PanZoomController::NativeProvider::LocalRef& aNPZC)
-      : mWindow(aWindow), mNPZC(aNPZC), mPreviousButtons(0) {
+      : mWindow(aWindow), mNPZC(aNPZC) {
 #if defined(DEBUG)
     auto win(mWindow.Access());
     MOZ_ASSERT(!!win);
 #endif  // defined(DEBUG)
+
+    // Use vsync for touch resampling on API level 19 and above.
+    // See gfxAndroidPlatform::CreateHardwareVsyncSource() for comparison.
+    if (AndroidBridge::Bridge() &&
+        AndroidBridge::Bridge()->GetAPIVersion() >= 19) {
+      mAndroidVsync = AndroidVsync::GetInstance();
+    }
   }
 
-  ~NPZCSupport() {}
+  ~NPZCSupport() {
+    if (mListeningToVsync) {
+      MOZ_RELEASE_ASSERT(mAndroidVsync);
+      mAndroidVsync->UnregisterObserver(this, AndroidVsync::INPUT);
+      mListeningToVsync = false;
+    }
+  }
 
   using Base::AttachNative;
   using Base::DisposeNative;
@@ -360,9 +390,10 @@ class NPZCSupport final
         WheelDeltaAdjustmentStrategy::eNone);
 
     APZEventResult result = controller->InputBridge()->ReceiveInputEvent(input);
-    int32_t ret = (result.mHandledByRootApzc == Some(true))
-                      ? INPUT_RESULT_HANDLED
-                      : INPUT_RESULT_HANDLED_CONTENT;
+    int32_t ret =
+        (result.mHandledResult == Some(APZHandledResult::HandledByRoot))
+            ? INPUT_RESULT_HANDLED
+            : INPUT_RESULT_HANDLED_CONTENT;
 
     if (result.mStatus == nsEventStatus_eConsumeNoDefault) {
       return ret;
@@ -427,6 +458,22 @@ class NPZCSupport final
     return result;
   }
 
+  static int32_t ConvertAPZHandledResult(APZHandledResult aHandledResult) {
+    switch (aHandledResult) {
+      case APZHandledResult::Unhandled:
+        return INPUT_RESULT_UNHANDLED;
+      case APZHandledResult::HandledByRoot:
+        return INPUT_RESULT_HANDLED;
+      case APZHandledResult::HandledByContent:
+        return INPUT_RESULT_HANDLED_CONTENT;
+      case APZHandledResult::Invalid:
+        MOZ_ASSERT_UNREACHABLE("The handled result should NOT be Invalid");
+        return INPUT_RESULT_UNHANDLED;
+    }
+    MOZ_ASSERT_UNREACHABLE("Unknown handled result");
+    return INPUT_RESULT_UNHANDLED;
+  }
+
  public:
   int32_t HandleMouseEvent(int32_t aAction, int64_t aTime, int32_t aMetaState,
                            float aX, float aY, int buttons) {
@@ -486,9 +533,10 @@ class NPZCSupport final
         nsWindow::GetEventTimeStamp(aTime), nsWindow::GetModifiers(aMetaState));
 
     APZEventResult result = controller->InputBridge()->ReceiveInputEvent(input);
-    int32_t ret = (result.mHandledByRootApzc == Some(true))
-                      ? INPUT_RESULT_HANDLED
-                      : INPUT_RESULT_HANDLED_CONTENT;
+    int32_t ret =
+        (result.mHandledResult == Some(APZHandledResult::HandledByRoot))
+            ? INPUT_RESULT_HANDLED
+            : INPUT_RESULT_HANDLED_CONTENT;
 
     if (result.mStatus == nsEventStatus_eConsumeNoDefault) {
       return ret;
@@ -510,40 +558,55 @@ class NPZCSupport final
     }
   }
 
+  // Convert MotionEvent touch radius and orientation into the format required
+  // by w3c touchevents.
+  // toolMajor and toolMinor span a rectangle that's oriented as per
+  // aOrientation, centered around the touch point.
+  static std::pair<float, ScreenSize> ConvertOrientationAndRadius(
+      float aOrientation, float aToolMajor, float aToolMinor) {
+    float angle = aOrientation * 180.0f / M_PI;
+    // w3c touchevents spec does not allow orientations == 90
+    // this shifts it to -90, which will be shifted to zero below
+    if (angle >= 90.0) {
+      angle -= 180.0f;
+    }
+
+    // w3c touchevent radii are given with an orientation between 0 and
+    // 90. The radii are found by removing the orientation and
+    // measuring the x and y radii of the resulting ellipse. For
+    // Android orientations >= 0 and < 90, use the y radius as the
+    // major radius, and x as the minor radius. However, for an
+    // orientation < 0, we have to shift the orientation by adding 90,
+    // and reverse which radius is major and minor.
+    ScreenSize radius;
+    if (angle < 0.0f) {
+      angle += 90.0f;
+      radius =
+          ScreenSize(int32_t(aToolMajor / 2.0f), int32_t(aToolMinor / 2.0f));
+    } else {
+      radius =
+          ScreenSize(int32_t(aToolMinor / 2.0f), int32_t(aToolMajor / 2.0f));
+    }
+
+    return std::make_pair(angle, radius);
+  }
+
   void HandleMotionEvent(
       const java::PanZoomController::NativeProvider::LocalRef& aInstance,
-      int32_t aAction, int32_t aActionIndex, int64_t aTime, int32_t aMetaState,
-      float aScreenX, float aScreenY, jni::IntArray::Param aPointerId,
-      jni::FloatArray::Param aX, jni::FloatArray::Param aY,
-      jni::FloatArray::Param aOrientation, jni::FloatArray::Param aPressure,
-      jni::FloatArray::Param aToolMajor, jni::FloatArray::Param aToolMinor,
+      jni::Object::Param aEventData, float aScreenX, float aScreenY,
       jni::Object::Param aResult) {
     MOZ_ASSERT(AndroidBridge::IsJavaUiThread());
 
     auto returnResult = java::GeckoResult::Ref::From(aResult);
-    RefPtr<IAPZCTreeManager> controller;
-
-    if (auto window = mWindow.Access()) {
-      nsWindow* gkWindow = window->GetNsWindow();
-      if (gkWindow) {
-        controller = gkWindow->mAPZC;
-      }
-    }
-
-    if (!controller) {
-      if (returnResult) {
-        returnResult->Complete(
-            java::sdk::Integer::ValueOf(INPUT_RESULT_UNHANDLED));
-      }
-      return;
-    }
-
-    nsTArray<int32_t> pointerId(aPointerId->GetElements());
+    auto eventData =
+        java::PanZoomController::MotionEventData::Ref::From(aEventData);
+    nsTArray<int32_t> pointerId(eventData->PointerId()->GetElements());
+    size_t pointerCount = pointerId.Length();
     MultiTouchInput::MultiTouchType type;
     size_t startIndex = 0;
-    size_t endIndex = pointerId.Length();
+    size_t endIndex = pointerCount;
 
-    switch (aAction) {
+    switch (eventData->Action()) {
       case java::sdk::MotionEvent::ACTION_DOWN:
       case java::sdk::MotionEvent::ACTION_POINTER_DOWN:
         type = MultiTouchInput::MULTITOUCH_START;
@@ -556,8 +619,8 @@ class NPZCSupport final
         // for pointer-up events we only want the data from
         // the one pointer that went up
         type = MultiTouchInput::MULTITOUCH_END;
-        startIndex = aActionIndex;
-        endIndex = aActionIndex + 1;
+        startIndex = eventData->ActionIndex();
+        endIndex = startIndex + 1;
         break;
       case java::sdk::MotionEvent::ACTION_OUTSIDE:
       case java::sdk::MotionEvent::ACTION_CANCEL:
@@ -571,97 +634,204 @@ class NPZCSupport final
         return;
     }
 
-    MultiTouchInput input(type, aTime, nsWindow::GetEventTimeStamp(aTime), 0);
-    input.modifiers = nsWindow::GetModifiers(aMetaState);
+    MultiTouchInput input(type, eventData->Time(),
+                          nsWindow::GetEventTimeStamp(eventData->Time()), 0);
+    input.modifiers = nsWindow::GetModifiers(eventData->MetaState());
     input.mTouches.SetCapacity(endIndex - startIndex);
     input.mScreenOffset =
         ExternalIntPoint(int32_t(floorf(aScreenX)), int32_t(floorf(aScreenY)));
 
-    nsTArray<float> x(aX->GetElements());
-    nsTArray<float> y(aY->GetElements());
-    nsTArray<float> orientation(aOrientation->GetElements());
-    nsTArray<float> pressure(aPressure->GetElements());
-    nsTArray<float> toolMajor(aToolMajor->GetElements());
-    nsTArray<float> toolMinor(aToolMinor->GetElements());
+    size_t historySize = eventData->HistorySize();
+    nsTArray<int64_t> historicalTime(
+        eventData->HistoricalTime()->GetElements());
+    MOZ_RELEASE_ASSERT(historicalTime.Length() == historySize);
 
-    MOZ_ASSERT(pointerId.Length() == x.Length());
-    MOZ_ASSERT(pointerId.Length() == y.Length());
-    MOZ_ASSERT(pointerId.Length() == orientation.Length());
-    MOZ_ASSERT(pointerId.Length() == pressure.Length());
-    MOZ_ASSERT(pointerId.Length() == toolMajor.Length());
-    MOZ_ASSERT(pointerId.Length() == toolMinor.Length());
+    // Each of these is |historySize| sets of |pointerCount| values.
+    size_t historicalDataCount = historySize * pointerCount;
+    nsTArray<float> historicalX(eventData->HistoricalX()->GetElements());
+    nsTArray<float> historicalY(eventData->HistoricalY()->GetElements());
+    nsTArray<float> historicalOrientation(
+        eventData->HistoricalOrientation()->GetElements());
+    nsTArray<float> historicalPressure(
+        eventData->HistoricalPressure()->GetElements());
+    nsTArray<float> historicalToolMajor(
+        eventData->HistoricalToolMajor()->GetElements());
+    nsTArray<float> historicalToolMinor(
+        eventData->HistoricalToolMinor()->GetElements());
+
+    MOZ_RELEASE_ASSERT(historicalX.Length() == historicalDataCount);
+    MOZ_RELEASE_ASSERT(historicalY.Length() == historicalDataCount);
+    MOZ_RELEASE_ASSERT(historicalOrientation.Length() == historicalDataCount);
+    MOZ_RELEASE_ASSERT(historicalPressure.Length() == historicalDataCount);
+    MOZ_RELEASE_ASSERT(historicalToolMajor.Length() == historicalDataCount);
+    MOZ_RELEASE_ASSERT(historicalToolMinor.Length() == historicalDataCount);
+
+    // Each of these is |pointerCount| values.
+    nsTArray<float> x(eventData->X()->GetElements());
+    nsTArray<float> y(eventData->Y()->GetElements());
+    nsTArray<float> orientation(eventData->Orientation()->GetElements());
+    nsTArray<float> pressure(eventData->Pressure()->GetElements());
+    nsTArray<float> toolMajor(eventData->ToolMajor()->GetElements());
+    nsTArray<float> toolMinor(eventData->ToolMinor()->GetElements());
+
+    MOZ_ASSERT(x.Length() == pointerCount);
+    MOZ_ASSERT(y.Length() == pointerCount);
+    MOZ_ASSERT(orientation.Length() == pointerCount);
+    MOZ_ASSERT(pressure.Length() == pointerCount);
+    MOZ_ASSERT(toolMajor.Length() == pointerCount);
+    MOZ_ASSERT(toolMinor.Length() == pointerCount);
 
     for (size_t i = startIndex; i < endIndex; i++) {
-      float orien = orientation[i] * 180.0f / M_PI;
-      // w3c touchevents spec does not allow orientations == 90
-      // this shifts it to -90, which will be shifted to zero below
-      if (orien >= 90.0) {
-        orien -= 180.0f;
+      float orien;
+      ScreenSize radius;
+      std::tie(orien, radius) = ConvertOrientationAndRadius(
+          orientation[i], toolMajor[i], toolMinor[i]);
+
+      ScreenIntPoint point(int32_t(floorf(x[i])), int32_t(floorf(y[i])));
+      SingleTouchData singleTouchData(pointerId[i], point, radius, orien,
+                                      pressure[i]);
+
+      for (size_t historyIndex = 0; historyIndex < historySize;
+           historyIndex++) {
+        size_t historicalI = historyIndex * pointerCount + i;
+        float historicalAngle;
+        ScreenSize historicalRadius;
+        std::tie(historicalAngle, historicalRadius) =
+            ConvertOrientationAndRadius(historicalOrientation[historicalI],
+                                        historicalToolMajor[historicalI],
+                                        historicalToolMinor[historicalI]);
+        ScreenIntPoint historicalPoint(
+            int32_t(floorf(historicalX[historicalI])),
+            int32_t(floorf(historicalY[historicalI])));
+        singleTouchData.mHistoricalData.AppendElement(
+            SingleTouchData::HistoricalTouchData{
+                nsWindow::GetEventTimeStamp(historicalTime[historyIndex]),
+                historicalPoint,
+                {},  // mLocalScreenPoint will be computed later by APZ
+                historicalRadius,
+                historicalAngle,
+                historicalPressure[historicalI]});
       }
 
-      nsIntPoint point =
-          nsIntPoint(int32_t(floorf(x[i])), int32_t(floorf(y[i])));
-
-      // w3c touchevent radii are given with an orientation between 0 and
-      // 90. The radii are found by removing the orientation and
-      // measuring the x and y radii of the resulting ellipse. For
-      // Android orientations >= 0 and < 90, use the y radius as the
-      // major radius, and x as the minor radius. However, for an
-      // orientation < 0, we have to shift the orientation by adding 90,
-      // and reverse which radius is major and minor.
-      gfx::Size radius;
-      if (orien < 0.0f) {
-        orien += 90.0f;
-        radius = gfx::Size(int32_t(toolMajor[i] / 2.0f),
-                           int32_t(toolMinor[i] / 2.0f));
-      } else {
-        radius = gfx::Size(int32_t(toolMinor[i] / 2.0f),
-                           int32_t(toolMajor[i] / 2.0f));
-      }
-
-      input.mTouches.AppendElement(SingleTouchData(
-          pointerId[i], ScreenIntPoint::FromUnknownPoint(point),
-          ScreenSize::FromUnknownSize(radius), orien, pressure[i]));
+      input.mTouches.AppendElement(singleTouchData);
     }
 
-    APZEventResult result = controller->InputBridge()->ReceiveInputEvent(input);
-    int32_t handled = (result.mHandledByRootApzc == Some(true))
-                          ? INPUT_RESULT_HANDLED
-                          : INPUT_RESULT_HANDLED_CONTENT;
+    if (mAndroidVsync &&
+        eventData->Action() == java::sdk::MotionEvent::ACTION_DOWN) {
+      // Query pref value at the beginning of a touch gesture so that we don't
+      // leave events stuck in the resampler after a pref flip.
+      mTouchResamplingEnabled = StaticPrefs::android_touch_resampling_enabled();
+    }
 
+    if (!mTouchResamplingEnabled) {
+      FinishHandlingMotionEvent(std::move(input),
+                                java::GeckoResult::LocalRef(returnResult));
+      return;
+    }
+
+    uint64_t eventId = mTouchResampler.ProcessEvent(std::move(input));
+    mPendingMotionEventReturnResults.push(
+        {eventId, java::GeckoResult::GlobalRef(returnResult)});
+
+    RegisterOrUnregisterForVsync(mTouchResampler.InTouchingState());
+    ConsumeMotionEventsFromResampler();
+  }
+
+  void RegisterOrUnregisterForVsync(bool aNeedVsync) {
+    MOZ_RELEASE_ASSERT(mAndroidVsync);
+    if (aNeedVsync && !mListeningToVsync) {
+      mAndroidVsync->RegisterObserver(this, AndroidVsync::INPUT);
+    } else if (!aNeedVsync && mListeningToVsync) {
+      mAndroidVsync->UnregisterObserver(this, AndroidVsync::INPUT);
+    }
+    mListeningToVsync = aNeedVsync;
+  }
+
+  void OnVsync(const TimeStamp& aTimeStamp) override {
+    mTouchResampler.NotifyFrame(aTimeStamp - TimeDuration::FromMilliseconds(
+                                                 kTouchResampleVsyncAdjustMs));
+    ConsumeMotionEventsFromResampler();
+  }
+
+  void ConsumeMotionEventsFromResampler() {
+    auto outgoing = mTouchResampler.ConsumeOutgoingEvents();
+    while (!outgoing.empty()) {
+      auto outgoingEvent = std::move(outgoing.front());
+      outgoing.pop();
+      java::GeckoResult::GlobalRef returnResult;
+      if (outgoingEvent.mEventId) {
+        // Look up the GeckoResult for this event.
+        // The outgoing events from the resampler are in the same order as the
+        // original events, and no event IDs are skipped.
+        MOZ_RELEASE_ASSERT(!mPendingMotionEventReturnResults.empty());
+        auto pair = mPendingMotionEventReturnResults.front();
+        mPendingMotionEventReturnResults.pop();
+        MOZ_RELEASE_ASSERT(pair.first == *outgoingEvent.mEventId);
+        returnResult = pair.second;
+      }
+      FinishHandlingMotionEvent(std::move(outgoingEvent.mEvent),
+                                java::GeckoResult::LocalRef(returnResult));
+    }
+  }
+
+  void FinishHandlingMotionEvent(MultiTouchInput&& aInput,
+                                 java::GeckoResult::LocalRef&& aReturnResult) {
+    RefPtr<IAPZCTreeManager> controller;
+
+    if (auto window = mWindow.Access()) {
+      nsWindow* gkWindow = window->GetNsWindow();
+      if (gkWindow) {
+        controller = gkWindow->mAPZC;
+      }
+    }
+
+    if (!controller) {
+      if (aReturnResult) {
+        aReturnResult->Complete(
+            java::sdk::Integer::ValueOf(INPUT_RESULT_UNHANDLED));
+      }
+      return;
+    }
+
+    APZEventResult result =
+        controller->InputBridge()->ReceiveInputEvent(aInput);
     if (result.mStatus == nsEventStatus_eConsumeNoDefault) {
-      if (returnResult) {
-        returnResult->Complete(java::sdk::Integer::ValueOf(handled));
+      if (aReturnResult) {
+        aReturnResult->Complete(java::sdk::Integer::ValueOf(
+            (result.mHandledResult == Some(APZHandledResult::HandledByRoot))
+                ? INPUT_RESULT_HANDLED
+                : INPUT_RESULT_HANDLED_CONTENT));
       }
       return;
     }
 
     // Dispatch APZ input event on Gecko thread.
-    PostInputEvent([input, result](nsWindow* window) {
-      WidgetTouchEvent touchEvent = input.ToWidgetTouchEvent(window);
+    PostInputEvent([aInput, result](nsWindow* window) {
+      WidgetTouchEvent touchEvent = aInput.ToWidgetTouchEvent(window);
       window->ProcessUntransformedAPZEvent(&touchEvent, result);
       window->DispatchHitTest(touchEvent);
     });
 
-    if (!returnResult) {
+    if (!aReturnResult) {
       // We don't care how APZ handled the event so we're done here.
       return;
     }
 
-    if (result.mHandledByRootApzc != Nothing()) {
+    if (result.mHandledResult != Nothing()) {
       // We know conclusively that the root APZ handled this or not and
       // don't need to do any more work.
       switch (result.mStatus) {
         case nsEventStatus_eIgnore:
-          returnResult->Complete(
+          aReturnResult->Complete(
               java::sdk::Integer::ValueOf(INPUT_RESULT_UNHANDLED));
           break;
         case nsEventStatus_eConsumeDoDefault:
-          returnResult->Complete(java::sdk::Integer::ValueOf(handled));
+          aReturnResult->Complete(java::sdk::Integer::ValueOf(
+              ConvertAPZHandledResult(result.mHandledResult.value())));
           break;
         default:
           MOZ_ASSERT_UNREACHABLE("Unexpected nsEventStatus");
-          returnResult->Complete(
+          aReturnResult->Complete(
               java::sdk::Integer::ValueOf(INPUT_RESULT_UNHANDLED));
           break;
       }
@@ -671,11 +841,10 @@ class NPZCSupport final
     // Wait to see if APZ handled the event or not...
     controller->AddInputBlockCallback(
         result.mInputBlockId,
-        [returnResult = java::GeckoResult::GlobalRef(returnResult)](
-            uint64_t aInputBlockId, bool aHandledByRootApzc) {
-          returnResult->Complete(java::sdk::Integer::ValueOf(
-              aHandledByRootApzc ? INPUT_RESULT_HANDLED
-                                 : INPUT_RESULT_HANDLED_CONTENT));
+        [aReturnResult = java::GeckoResult::GlobalRef(aReturnResult)](
+            uint64_t aInputBlockId, APZHandledResult aHandledResult) {
+          aReturnResult->Complete(java::sdk::Integer::ValueOf(
+              ConvertAPZHandledResult(aHandledResult)));
         });
   }
 };
@@ -827,12 +996,12 @@ class LayerViewSupport final
   already_AddRefed<DataSourceSurface> FlipScreenPixels(
       Shmem& aMem, const ScreenIntSize& aInSize, const ScreenRect& aInRegion,
       const IntSize& aOutSize) {
-    RefPtr<DataSourceSurface> image =
+    RefPtr<gfx::DataSourceSurface> image =
         gfx::Factory::CreateWrappingDataSourceSurface(
             aMem.get<uint8_t>(),
             StrideForFormatAndWidth(SurfaceFormat::B8G8R8A8, aInSize.width),
             IntSize(aInSize.width, aInSize.height), SurfaceFormat::B8G8R8A8);
-    RefPtr<DrawTarget> drawTarget =
+    RefPtr<gfx::DrawTarget> drawTarget =
         gfxPlatform::GetPlatform()->CreateOffscreenContentDrawTarget(
             aOutSize, SurfaceFormat::B8G8R8A8);
     if (!drawTarget) {
@@ -848,8 +1017,8 @@ class LayerViewSupport final
     gfx::Rect destRect(0, 0, aOutSize.width, aOutSize.height);
     drawTarget->DrawSurface(image, destRect, srcRect);
 
-    RefPtr<SourceSurface> snapshot = drawTarget->Snapshot();
-    RefPtr<DataSourceSurface> data = snapshot->GetDataSurface();
+    RefPtr<gfx::SourceSurface> snapshot = drawTarget->Snapshot();
+    RefPtr<gfx::DataSourceSurface> data = snapshot->GetDataSurface();
     return data.forget();
   }
 

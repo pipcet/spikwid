@@ -107,6 +107,8 @@ global.document.nodePrincipal = {
 const requireHacker = require("require-hacker");
 requireHacker.global_hook("default", (path, module) => {
   const paths = {
+    "acorn/acorn": () => getModule("devtools/shared/acorn/acorn"),
+
     // For Enzyme
     "react-dom": () => getModule("devtools/client/shared/vendor/react-dom"),
     "react-dom/server": () =>
@@ -150,9 +152,7 @@ requireHacker.global_hook("default", (path, module) => {
     "devtools/shared/layout/utils": () => "{getCurrentZoom = () => {}}",
     "resource://gre/modules/AppConstants.jsm": () => "module.exports = {};",
     "devtools/client/framework/devtools": () => `module.exports = {
-      gDevTools: {
-        isFissionContentToolboxEnabled: () => false,
-      }
+      gDevTools: {}
     };`,
     "devtools/shared/async-storage": () =>
       getModule("devtools/client/webconsole/test/node/fixtures/async-storage"),

@@ -122,19 +122,8 @@ class DebianBootstrapper(LinuxBootstrapper, BaseBootstrapper):
         self.apt_install(*self.MOBILE_ANDROID_COMMON_PACKAGES)
 
         # 2. Android pieces.
-        from mozboot import android
-
-        android.ensure_android(
-            "linux", artifact_mode=artifact_mode, no_interactive=self.no_interactive
-        )
-
-    def generate_mobile_android_mozconfig(self, artifact_mode=False):
-        from mozboot import android
-
-        return android.generate_mozconfig("linux", artifact_mode=artifact_mode)
-
-    def generate_mobile_android_artifact_mode_mozconfig(self):
-        return self.generate_mobile_android_mozconfig(artifact_mode=True)
+        self.ensure_java(mozconfig_builder)
+        super().ensure_mobile_android_packages(artifact_mode=artifact_mode)
 
     def _update_package_manager(self):
         self.apt_update()

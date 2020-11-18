@@ -7,9 +7,6 @@
 const Services = require("Services");
 const EventEmitter = require("devtools/shared/event-emitter");
 
-// eslint-disable-next-line mozilla/reject-some-requires
-const { gDevTools } = require("devtools/client/framework/devtools");
-
 const BROWSERTOOLBOX_FISSION_ENABLED = "devtools.browsertoolbox.fission";
 
 const {
@@ -130,7 +127,9 @@ class TargetList extends EventEmitter {
     // Public flag to allow listening for workers even if the fission pref is off
     // This allows listening for workers in the content toolbox outside of fission contexts
     // For now, this is only toggled by tests.
-    this.listenForWorkers = false;
+    this.listenForWorkers =
+      this.rootFront.traits.workerConsoleApiMessagesDispatchedToMainThread ===
+      false;
     this.listenForServiceWorkers = false;
     this.destroyServiceWorkersOnNavigation = false;
   }
@@ -230,6 +229,10 @@ class TargetList extends EventEmitter {
     return this._listenersStarted.has(type);
   }
 
+  hasTargetWatcherSupport(type) {
+    return !!this.watcherFront?.traits[type];
+  }
+
   /**
    * Start listening for targets from the server
    *
@@ -246,6 +249,16 @@ class TargetList extends EventEmitter {
    *        but still register listeners set via Legacy Listeners.
    */
   async startListening({ onlyLegacy = false } = {}) {
+    // Cache the Watcher once for all, the first time we call `startListening()`.
+    // This `watcherFront` attribute may be then used in any function in TargetList or ResourceWatcher after this.
+    if (!this.watcherFront) {
+      // Bug 1675763: Watcher actor is not available in all situations yet.
+      const supportsWatcher = this.descriptorFront?.traits?.watcher;
+      if (supportsWatcher) {
+        this.watcherFront = await this.descriptorFront.getWatcher();
+      }
+    }
+
     let types = [];
     if (this.targetFront.isParentProcess) {
       const fissionBrowserToolboxEnabled = Services.prefs.getBoolPref(
@@ -255,9 +268,7 @@ class TargetList extends EventEmitter {
         types = TargetList.ALL_TYPES;
       }
     } else if (this.targetFront.isLocalTab) {
-      if (gDevTools.isFissionContentToolboxEnabled()) {
-        types = [TargetList.TYPES.FRAME];
-      }
+      types = [TargetList.TYPES.FRAME];
     }
     if (this.listenForWorkers && !types.includes(TargetList.TYPES.WORKER)) {
       types.push(TargetList.TYPES.WORKER);
@@ -286,24 +297,20 @@ class TargetList extends EventEmitter {
       this._setListening(type, true);
 
       // Starting with FF77, we support frames watching via watchTargets for Tab and Process descriptors
-      const supportsWatcher = this.descriptorFront?.traits?.watcher;
-      if (supportsWatcher) {
-        const watcher = await this.descriptorFront.getWatcher();
-        if (watcher.traits[type]) {
-          // When we switch to a new top level target, we don't have to stop and restart
-          // Watcher listener as it is independant from the top level target.
-          // This isn't the case for some Legacy Listeners, which fetch targets from the top level target
-          if (onlyLegacy) {
-            continue;
-          }
-          if (!this._startedListeningToWatcher) {
-            this._startedListeningToWatcher = true;
-            watcher.on("target-available", this._onTargetAvailable);
-            watcher.on("target-destroyed", this._onTargetDestroyed);
-          }
-          await watcher.watchTargets(type);
+      if (this.hasTargetWatcherSupport(type)) {
+        // When we switch to a new top level target, we don't have to stop and restart
+        // Watcher listener as it is independant from the top level target.
+        // This isn't the case for some Legacy Listeners, which fetch targets from the top level target
+        if (onlyLegacy) {
           continue;
         }
+        if (!this._startedListeningToWatcher) {
+          this._startedListeningToWatcher = true;
+          this.watcherFront.on("target-available", this._onTargetAvailable);
+          this.watcherFront.on("target-destroyed", this._onTargetDestroyed);
+        }
+        await this.watcherFront.watchTargets(type);
+        continue;
       }
       if (this.legacyImplementation[type]) {
         await this.legacyImplementation[type].listen();
@@ -329,18 +336,14 @@ class TargetList extends EventEmitter {
       this._setListening(type, false);
 
       // Starting with FF77, we support frames watching via watchTargets for Tab and Process descriptors
-      const supportsWatcher = this.descriptorFront?.traits?.watcher;
-      if (supportsWatcher) {
-        const watcher = this.descriptorFront.getCachedWatcher();
-        if (watcher && watcher.traits[type]) {
-          // When we switch to a new top level target, we don't have to stop and restart
-          // Watcher listener as it is independant from the top level target.
-          // This isn't the case for some Legacy Listeners, which fetch targets from the top level target
-          if (!onlyLegacy) {
-            watcher.unwatchTargets(type);
-          }
-          continue;
+      if (this.hasTargetWatcherSupport(type)) {
+        // When we switch to a new top level target, we don't have to stop and restart
+        // Watcher listener as it is independant from the top level target.
+        // This isn't the case for some Legacy Listeners, which fetch targets from the top level target
+        if (!onlyLegacy) {
+          this.watcherFront.unwatchTargets(type);
         }
+        continue;
       }
       if (this.legacyImplementation[type]) {
         this.legacyImplementation[type].unlisten();

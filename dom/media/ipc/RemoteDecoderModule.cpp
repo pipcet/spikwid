@@ -5,11 +5,6 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "RemoteDecoderModule.h"
 
-#include "mozilla/StaticPrefs_media.h"
-#include "mozilla/SyncRunnable.h"
-#include "mozilla/dom/ContentChild.h"  // for launching RDD w/ ContentChild
-#include "mozilla/layers/SynchronousTask.h"
-
 #ifdef MOZ_AV1
 #  include "AOMDecoder.h"
 #endif
@@ -22,7 +17,6 @@
 #include "VorbisDecoder.h"
 #include "WAVDecoder.h"
 #include "gfxConfig.h"
-#include "nsIXULRuntime.h"  // for BrowserTabsRemoteAutostart
 
 namespace mozilla {
 
@@ -52,8 +46,6 @@ bool RemoteDecoderModule::SupportsMimeType(
 bool RemoteDecoderModule::Supports(
     const SupportDecoderParams& aParams,
     DecoderDoctorDiagnostics* aDiagnostics) const {
-  RemoteDecoderManagerChild::LaunchRDDProcessIfNeeded(mLocation);
-
   bool supports =
       RemoteDecoderManagerChild::Supports(mLocation, aParams, aDiagnostics);
   MOZ_LOG(sPDMLog, LogLevel::Debug,
@@ -63,27 +55,21 @@ bool RemoteDecoderModule::Supports(
   return supports;
 }
 
-already_AddRefed<MediaDataDecoder> RemoteDecoderModule::CreateAudioDecoder(
-    const CreateDecoderParams& aParams) {
-  RemoteDecoderManagerChild::LaunchRDDProcessIfNeeded(mLocation);
-
-  // OpusDataDecoder will check this option to provide the same info
-  // that IsDefaultPlaybackDeviceMono provides.  We want to avoid calls
-  // to IsDefaultPlaybackDeviceMono on RDD because initializing audio
-  // backends on RDD will be blocked by the sandbox.
-  if (OpusDataDecoder::IsOpus(aParams.mConfig.mMimeType) &&
-      IsDefaultPlaybackDeviceMono()) {
-    CreateDecoderParams params = aParams;
-    params.mOptions += CreateDecoderParams::Option::DefaultPlaybackDeviceMono;
-    return RemoteDecoderManagerChild::CreateAudioDecoder(params);
+RefPtr<RemoteDecoderModule::CreateDecoderPromise>
+RemoteDecoderModule::AsyncCreateDecoder(const CreateDecoderParams& aParams) {
+  if (aParams.mConfig.IsAudio()) {
+    // OpusDataDecoder will check this option to provide the same info
+    // that IsDefaultPlaybackDeviceMono provides.  We want to avoid calls
+    // to IsDefaultPlaybackDeviceMono on RDD because initializing audio
+    // backends on RDD will be blocked by the sandbox.
+    if (OpusDataDecoder::IsOpus(aParams.mConfig.mMimeType) &&
+        IsDefaultPlaybackDeviceMono()) {
+      CreateDecoderParams params = aParams;
+      params.mOptions += CreateDecoderParams::Option::DefaultPlaybackDeviceMono;
+      return RemoteDecoderManagerChild::CreateAudioDecoder(params);
+    }
+    return RemoteDecoderManagerChild::CreateAudioDecoder(aParams);
   }
-
-  return RemoteDecoderManagerChild::CreateAudioDecoder(aParams);
-}
-
-already_AddRefed<MediaDataDecoder> RemoteDecoderModule::CreateVideoDecoder(
-    const CreateDecoderParams& aParams) {
-  RemoteDecoderManagerChild::LaunchRDDProcessIfNeeded(mLocation);
   return RemoteDecoderManagerChild::CreateVideoDecoder(aParams, mLocation);
 }
 

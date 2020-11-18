@@ -20,7 +20,7 @@
 #include "jit/BaselineIC.h"
 #include "js/CharacterEncoding.h"
 #include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
-#include "js/friend/StackLimits.h"  // js::CheckRecursionLimit{,DontReport}
+#include "js/friend/StackLimits.h"    // js::CheckRecursionLimit{,DontReport}
 #include "js/Result.h"
 #include "js/Value.h"
 #include "util/Memory.h"
@@ -2134,7 +2134,7 @@ static bool DefineNonexistentProperty(JSContext* cx, HandleNativeObject obj,
     if (index) {
       // This method is only called for non-existent properties, which
       // means any absent indexed property must be out of range.
-      MOZ_ASSERT(index.value() >= obj->as<TypedArrayObject>().length());
+      MOZ_ASSERT(index.value() >= obj->as<TypedArrayObject>().length().get());
 
       // Steps 1-2 are enforced by the caller.
 
@@ -2409,23 +2409,6 @@ static MOZ_ALWAYS_INLINE bool GetExistingProperty(
 
   if (shape->hasDefaultGetter()) {
     return true;
-  }
-
-  if (!jit::JitOptions.warpBuilder) {
-    // Set the accessed-getter flag for IonBuilder.
-    jsbytecode* pc;
-    JSScript* script = cx->currentScript(&pc);
-    if (script && script->hasJitScript()) {
-      switch (JSOp(*pc)) {
-        case JSOp::GetProp:
-        case JSOp::CallProp:
-        case JSOp::Length:
-          script->jitScript()->noteAccessedGetter(script->pcToOffset(pc));
-          break;
-        default:
-          break;
-      }
-    }
   }
 
   if constexpr (!allowGC) {

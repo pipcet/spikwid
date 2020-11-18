@@ -157,7 +157,7 @@ CompositorBridgeChild* WebRenderLayerManager::GetCompositorBridgeChild() {
 }
 
 void WebRenderLayerManager::GetBackendName(nsAString& name) {
-  if (WrBridge()->GetTextureFactoryIdentifier().mUsingSoftwareWebRender) {
+  if (WrBridge()->UsingSoftwareWebRender()) {
     name.AssignLiteral("WebRender (Software)");
   } else {
     name.AssignLiteral("WebRender");
@@ -319,8 +319,16 @@ void WebRenderLayerManager::EndTransactionWithoutLayer(
 
   LayoutDeviceIntSize size = mWidget->GetClientSize();
 
-  wr::DisplayListBuilder builder(WrBridge()->GetPipeline(),
-                                 mLastDisplayListSize, &mDisplayItemCache);
+  // While the first display list after tab-switch can be large, the
+  // following ones are always smaller thanks to interning (rarely above 0.3MB).
+  // So don't let the spike of the first allocation make us allocate a large
+  // contiguous buffer (with some likelihood of OOM, see bug 1531819).
+  static const size_t kMaxPrealloc = 300000;
+  size_t preallocate =
+      mLastDisplayListSize < kMaxPrealloc ? mLastDisplayListSize : kMaxPrealloc;
+
+  wr::DisplayListBuilder builder(WrBridge()->GetPipeline(), preallocate,
+                                 &mDisplayItemCache);
 
   wr::IpcResourceUpdateQueue resourceUpdates(WrBridge());
   wr::usize builderDumpIndex = 0;
@@ -350,6 +358,8 @@ void WebRenderLayerManager::EndTransactionWithoutLayer(
         builder, resourceUpdates, aDisplayList, aDisplayListBuilder,
         mScrollData, std::move(aFilters));
 
+    aDisplayListBuilder->NotifyAndClearScrollFrames();
+
     builderDumpIndex = mWebRenderCommandBuilder.GetBuilderDumpIndex();
     containsSVGGroup = mWebRenderCommandBuilder.GetContainsSVGGroup();
   } else {
@@ -377,7 +387,9 @@ void WebRenderLayerManager::EndTransactionWithoutLayer(
     }
     mScrollData.SetPaintSequenceNumber(mPaintSequenceNumber);
     if (dumpEnabled) {
-      mScrollData.Dump();
+      std::stringstream str;
+      str << mScrollData;
+      print_stderr(str);
     }
   }
 
@@ -707,10 +719,6 @@ void WebRenderLayerManager::SendInvalidRegion(const nsIntRegion& aRegion) {
 
 void WebRenderLayerManager::ScheduleComposite() {
   WrBridge()->SendScheduleComposite();
-}
-
-void WebRenderLayerManager::ForceComposite() {
-  WrBridge()->SendForceComposite();
 }
 
 void WebRenderLayerManager::SetRoot(Layer* aLayer) {

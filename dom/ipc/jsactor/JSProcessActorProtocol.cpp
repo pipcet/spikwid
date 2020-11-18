@@ -14,8 +14,7 @@
 #include "mozilla/dom/PContent.h"
 #include "nsContentUtils.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 NS_IMPL_CYCLE_COLLECTING_ADDREF(JSProcessActorProtocol)
 NS_IMPL_CYCLE_COLLECTING_RELEASE(JSProcessActorProtocol)
@@ -148,18 +147,23 @@ bool JSProcessActorProtocol::RemoteTypePrefixMatches(
   return false;
 }
 
-bool JSProcessActorProtocol::Matches(const nsACString& aRemoteType) {
+bool JSProcessActorProtocol::Matches(const nsACString& aRemoteType,
+                                     ErrorResult& aRv) {
   if (!mIncludeParent && aRemoteType.IsEmpty()) {
+    aRv.ThrowNotSupportedError(nsPrintfCString(
+        "Process protocol '%s' doesn't match the parent process", mName.get()));
     return false;
   }
 
   if (!mRemoteTypes.IsEmpty() &&
       !RemoteTypePrefixMatches(RemoteTypePrefix(aRemoteType))) {
+    aRv.ThrowNotSupportedError(nsPrintfCString(
+        "Process protocol '%s' doesn't support remote type '%s'", mName.get(),
+        PromiseFlatCString(aRemoteType).get()));
     return false;
   }
 
   return true;
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

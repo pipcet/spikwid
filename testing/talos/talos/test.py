@@ -1,3 +1,7 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
 from __future__ import absolute_import
 
 import os
@@ -476,6 +480,9 @@ class tabswitch(PageloaderTest):
         "addon.test.tabswitch.urlfile": os.path.join("${talos}", "tests", "tp5o.html"),
         "addon.test.tabswitch.webserver": "${webserver}",
         "addon.test.tabswitch.maxurls": -1,
+        # Avoid the bookmarks toolbar interfering with our measurements.
+        # See bug 1674053 and bug 1675809 for context.
+        "browser.toolbars.bookmarks.visibility": "never",
     }
     unit = "ms"
 

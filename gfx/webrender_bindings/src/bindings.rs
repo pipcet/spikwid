@@ -202,10 +202,9 @@ impl DocumentHandle {
         api: RenderApi,
         hit_tester: Option<Arc<dyn ApiHitTester>>,
         size: DeviceIntSize,
-        layer: i8,
         id: u32,
     ) -> DocumentHandle {
-        let doc = api.add_document_with_id(size, layer, id);
+        let doc = api.add_document_with_id(size, id);
         let hit_tester_request = if hit_tester.is_none() {
             // Request the hit tester early to reduce the likelihood of blocking on the
             // first hit testing query.
@@ -215,7 +214,7 @@ impl DocumentHandle {
         };
 
         DocumentHandle {
-            api: api,
+            api,
             document_id: doc,
             hit_tester_request,
             hit_tester,
@@ -332,7 +331,7 @@ impl<'a> MutByteSlice<'a> {
         let len = slice.len();
         MutByteSlice {
             buffer: slice.as_mut_ptr(),
-            len: len,
+            len,
             _phantom: PhantomData,
         }
     }
@@ -559,7 +558,7 @@ impl RenderNotifier for CppNotifier {
         })
     }
 
-    fn wake_up(&self) {
+    fn wake_up(&self, _composite_needed: bool) {
         unsafe {
             wr_notifier_wake_up(self.window_id);
         }
@@ -595,7 +594,7 @@ pub extern "C" fn wr_renderer_set_external_image_handler(
     renderer: &mut Renderer,
     external_image_handler: &mut WrExternalImageHandler,
 ) {
-    renderer.set_external_image_handler(Box::new(external_image_handler.clone()));
+    renderer.set_external_image_handler(Box::new(*external_image_handler));
 }
 
 #[no_mangle]
@@ -608,10 +607,11 @@ pub extern "C" fn wr_renderer_render(
     renderer: &mut Renderer,
     width: i32,
     height: i32,
+    buffer_age: usize,
     out_stats: &mut RendererStats,
     out_dirty_rects: &mut ThinVec<DeviceIntRect>,
 ) -> bool {
-    match renderer.render(DeviceIntSize::new(width, height)) {
+    match renderer.render(DeviceIntSize::new(width, height), buffer_age) {
         Ok(results) => {
             *out_stats = results.stats;
             out_dirty_rects.extend(results.dirty_rects);
@@ -1086,7 +1086,8 @@ pub extern "C" fn wr_thread_pool_new(low_priority: bool) -> *mut WrThreadPool {
             wr_register_thread_local_arena();
             let name = format!("WRWorker{}#{}", priority_tag, idx);
             register_thread_with_profiler(name.clone());
-            gecko_profiler_register_thread(CString::new(name).unwrap().as_ptr());
+            let name = CString::new(name).unwrap();
+            gecko_profiler_register_thread(name.as_ptr());
         })
         .exit_handler(|_idx| unsafe {
             gecko_profiler_unregister_thread();
@@ -1249,7 +1250,6 @@ extern "C" {
     );
     fn wr_compositor_unmap_tile(compositor: *mut c_void);
 
-    fn wr_partial_present_compositor_get_buffer_age(compositor: *const c_void) -> usize;
     fn wr_partial_present_compositor_set_buffer_damage_region(
         compositor: *mut c_void,
         rects: *const DeviceIntRect,
@@ -1372,10 +1372,6 @@ impl Compositor for WrCompositor {
 pub struct WrPartialPresentCompositor(*mut c_void);
 
 impl PartialPresentCompositor for WrPartialPresentCompositor {
-    fn get_buffer_age(&self) -> usize {
-        unsafe { wr_partial_present_compositor_get_buffer_age(self.0) }
-    }
-
     fn set_buffer_damage_region(&mut self, rects: &[DeviceIntRect]) {
         unsafe {
             wr_partial_present_compositor_set_buffer_damage_region(self.0, rects.as_ptr(), rects.len());
@@ -1484,7 +1480,7 @@ pub extern "C" fn wr_window_new(
     let (gl, sw_gl) = if software {
         let ctx = swgl::Context::from(swgl_context);
         ctx.make_current();
-        (Rc::new(ctx.clone()) as Rc<dyn gl::Gl>, Some(ctx))
+        (Rc::new(ctx) as Rc<dyn gl::Gl>, Some(ctx))
     } else {
         (
             native_gl
@@ -1573,9 +1569,9 @@ pub extern "C" fn wr_window_new(
         allow_texture_swizzling,
         blob_image_handler: Some(Box::new(Moz2dBlobImageHandler::new(
             workers.clone(),
-            workers_low_priority.clone(),
+            workers_low_priority,
         ))),
-        workers: Some(workers.clone()),
+        workers: Some(workers),
         thread_listener: Some(Box::new(GeckoProfilerThreadListener::new())),
         size_of_op: Some(size_of_op),
         enclosing_size_of_op: Some(enclosing_size_of_op),
@@ -1605,7 +1601,7 @@ pub extern "C" fn wr_window_new(
         // `clear_caches_with_quads`, but scissored clears work well.
         clear_caches_with_quads: !software && !allow_scissored_cache_clears,
         start_debug_server,
-        surface_origin_is_top_left: surface_origin_is_top_left,
+        surface_origin_is_top_left,
         compositor_config,
         enable_gpu_markers,
         panic_on_gl_error,
@@ -1617,7 +1613,7 @@ pub extern "C" fn wr_window_new(
     set_profiler_hooks(Some(&PROFILER_HOOKS));
 
     let window_size = DeviceIntSize::new(window_width, window_height);
-    let notifier = Box::new(CppNotifier { window_id: window_id });
+    let notifier = Box::new(CppNotifier { window_id });
     let (renderer, sender) = match Renderer::new(gl, notifier, opts, shaders) {
         Ok((renderer, sender)) => (renderer, sender),
         Err(e) => {
@@ -1634,17 +1630,15 @@ pub extern "C" fn wr_window_new(
     unsafe {
         *out_max_texture_size = renderer.get_max_texture_size();
     }
-    let layer = 0;
     *out_handle = Box::into_raw(Box::new(DocumentHandle::new(
         sender.create_api_by_client(next_namespace_id()),
         None,
         window_size,
-        layer,
         document_id,
     )));
     *out_renderer = Box::into_raw(Box::new(renderer));
 
-    return true;
+    true
 }
 
 #[no_mangle]
@@ -1988,7 +1982,7 @@ pub extern "C" fn wr_resource_updates_add_external_image(
         descriptor.into(),
         ImageData::External(ExternalImageData {
             id: external_image_id,
-            channel_index: channel_index,
+            channel_index,
             image_type: *image_type,
         }),
         None,
@@ -2153,7 +2147,7 @@ fn generate_capture_path(path: *const c_char) -> Option<PathBuf> {
     } else if let Ok(storage_path) = env::var("MOZ_UPLOAD_DIR") {
         PathBuf::from(storage_path).join(local_dir)
     } else if let Some(storage_path) = dirs::home_dir() {
-        PathBuf::from(storage_path).join(local_dir)
+        storage_path.join(local_dir)
     } else {
         local_dir
     };
@@ -2328,13 +2322,13 @@ pub struct WebRenderFrameBuilder {
 impl WebRenderFrameBuilder {
     pub fn new(root_pipeline_id: WrPipelineId) -> WebRenderFrameBuilder {
         WebRenderFrameBuilder {
-            root_pipeline_id: root_pipeline_id,
+            root_pipeline_id,
             dl_builder: DisplayListBuilder::new(root_pipeline_id),
         }
     }
     pub fn with_capacity(root_pipeline_id: WrPipelineId, capacity: usize) -> WebRenderFrameBuilder {
         WebRenderFrameBuilder {
-            root_pipeline_id: root_pipeline_id,
+            root_pipeline_id,
             dl_builder: DisplayListBuilder::with_capacity(root_pipeline_id, capacity),
         }
     }
@@ -2350,7 +2344,7 @@ pub extern "C" fn wr_state_new(pipeline_id: WrPipelineId, capacity: usize) -> *m
     assert!(unsafe { !is_in_render_thread() });
 
     let state = Box::new(WrState {
-        pipeline_id: pipeline_id,
+        pipeline_id,
         frame_builder: WebRenderFrameBuilder::with_capacity(pipeline_id, capacity),
     });
 
@@ -2430,7 +2424,7 @@ pub extern "C" fn wr_dp_push_stacking_context(
     debug_assert!(unsafe { !is_in_render_thread() });
 
     let c_filters = unsafe { make_slice(filters, filter_count) };
-    let mut filters: Vec<FilterOp> = c_filters.iter().map(|c_filter| c_filter.clone()).collect();
+    let mut filters: Vec<FilterOp> = c_filters.iter().copied().collect();
 
     let c_filter_datas = unsafe { make_slice(filter_datas, filter_datas_count) };
     let r_filter_datas: Vec<FilterData> = c_filter_datas
@@ -2449,7 +2443,7 @@ pub extern "C" fn wr_dp_push_stacking_context(
 
     let transform_ref = unsafe { transform.as_ref() };
     let mut transform_binding = match transform_ref {
-        Some(t) => Some(PropertyBinding::Value(t.clone())),
+        Some(t) => Some(PropertyBinding::Value(*t)),
         None => None,
     };
 
@@ -2887,7 +2881,7 @@ pub extern "C" fn wr_dp_push_backdrop_filter_with_parent_clip(
     debug_assert!(unsafe { !is_in_render_thread() });
 
     let c_filters = unsafe { make_slice(filters, filter_count) };
-    let filters: Vec<FilterOp> = c_filters.iter().map(|c_filter| c_filter.clone()).collect();
+    let filters: Vec<FilterOp> = c_filters.iter().copied().collect();
 
     let c_filter_datas = unsafe { make_slice(filter_datas, filter_datas_count) };
     let filter_datas: Vec<FilterData> = c_filter_datas
@@ -3258,7 +3252,7 @@ pub extern "C" fn wr_dp_push_shadow(
     state
         .frame_builder
         .dl_builder
-        .push_shadow(&parent.to_webrender(state.pipeline_id), shadow.into(), should_inflate);
+        .push_shadow(&parent.to_webrender(state.pipeline_id), shadow, should_inflate);
 }
 
 #[no_mangle]
@@ -3315,11 +3309,11 @@ pub extern "C" fn wr_dp_push_border(
     debug_assert!(unsafe { is_in_main_thread() });
 
     let border_details = BorderDetails::Normal(NormalBorder {
-        left: left.into(),
-        right: right.into(),
-        top: top.into(),
-        bottom: bottom.into(),
-        radius: radius.into(),
+        left,
+        right,
+        top,
+        bottom,
+        radius,
         do_aa: do_aa == AntialiasBorder::Yes,
     });
 
@@ -3410,12 +3404,10 @@ pub extern "C" fn wr_dp_push_border_gradient(
     let stops_slice = unsafe { make_slice(stops, stops_count) };
     let stops_vector = stops_slice.to_owned();
 
-    let gradient = state.frame_builder.dl_builder.create_gradient(
-        start_point.into(),
-        end_point.into(),
-        stops_vector,
-        extend_mode.into(),
-    );
+    let gradient = state
+        .frame_builder
+        .dl_builder
+        .create_gradient(start_point, end_point, stops_vector, extend_mode);
 
     let border_details = BorderDetails::NinePatch(NinePatchBorder {
         source: NinePatchBorderSource::Gradient(gradient),
@@ -3423,7 +3415,7 @@ pub extern "C" fn wr_dp_push_border_gradient(
         height,
         slice,
         fill,
-        outset: outset.into(),
+        outset,
         repeat_horizontal: RepeatMode::Stretch,
         repeat_vertical: RepeatMode::Stretch,
     });
@@ -3440,7 +3432,7 @@ pub extern "C" fn wr_dp_push_border_gradient(
     state
         .frame_builder
         .dl_builder
-        .push_border(&prim_info, rect, widths.into(), border_details);
+        .push_border(&prim_info, rect, widths, border_details);
 }
 
 #[no_mangle]
@@ -3471,12 +3463,10 @@ pub extern "C" fn wr_dp_push_border_radial_gradient(
         widths.left as i32,
     );
 
-    let gradient = state.frame_builder.dl_builder.create_radial_gradient(
-        center.into(),
-        radius.into(),
-        stops_vector,
-        extend_mode.into(),
-    );
+    let gradient = state
+        .frame_builder
+        .dl_builder
+        .create_radial_gradient(center, radius, stops_vector, extend_mode);
 
     let border_details = BorderDetails::NinePatch(NinePatchBorder {
         source: NinePatchBorderSource::RadialGradient(gradient),
@@ -3484,7 +3474,7 @@ pub extern "C" fn wr_dp_push_border_radial_gradient(
         height: rect.size.height as i32,
         slice,
         fill,
-        outset: outset.into(),
+        outset,
         repeat_horizontal: RepeatMode::Stretch,
         repeat_vertical: RepeatMode::Stretch,
     });
@@ -3501,7 +3491,7 @@ pub extern "C" fn wr_dp_push_border_radial_gradient(
     state
         .frame_builder
         .dl_builder
-        .push_border(&prim_info, rect, widths.into(), border_details);
+        .push_border(&prim_info, rect, widths, border_details);
 }
 
 #[no_mangle]
@@ -3532,11 +3522,10 @@ pub extern "C" fn wr_dp_push_border_conic_gradient(
         widths.left as i32,
     );
 
-    let gradient =
-        state
-            .frame_builder
-            .dl_builder
-            .create_conic_gradient(center.into(), angle, stops_vector, extend_mode.into());
+    let gradient = state
+        .frame_builder
+        .dl_builder
+        .create_conic_gradient(center, angle, stops_vector, extend_mode);
 
     let border_details = BorderDetails::NinePatch(NinePatchBorder {
         source: NinePatchBorderSource::ConicGradient(gradient),
@@ -3544,7 +3533,7 @@ pub extern "C" fn wr_dp_push_border_conic_gradient(
         height: rect.size.height as i32,
         slice,
         fill,
-        outset: outset.into(),
+        outset,
         repeat_horizontal: RepeatMode::Stretch,
         repeat_vertical: RepeatMode::Stretch,
     });
@@ -3561,7 +3550,7 @@ pub extern "C" fn wr_dp_push_border_conic_gradient(
     state
         .frame_builder
         .dl_builder
-        .push_border(&prim_info, rect, widths.into(), border_details);
+        .push_border(&prim_info, rect, widths, border_details);
 }
 
 #[no_mangle]
@@ -3584,12 +3573,10 @@ pub extern "C" fn wr_dp_push_linear_gradient(
     let stops_slice = unsafe { make_slice(stops, stops_count) };
     let stops_vector = stops_slice.to_owned();
 
-    let gradient = state.frame_builder.dl_builder.create_gradient(
-        start_point.into(),
-        end_point.into(),
-        stops_vector,
-        extend_mode.into(),
-    );
+    let gradient = state
+        .frame_builder
+        .dl_builder
+        .create_gradient(start_point, end_point, stops_vector, extend_mode);
 
     let space_and_clip = parent.to_webrender(state.pipeline_id);
 
@@ -3603,7 +3590,7 @@ pub extern "C" fn wr_dp_push_linear_gradient(
     state
         .frame_builder
         .dl_builder
-        .push_gradient(&prim_info, rect, gradient, tile_size.into(), tile_spacing.into());
+        .push_gradient(&prim_info, rect, gradient, tile_size, tile_spacing);
 }
 
 #[no_mangle]
@@ -3626,12 +3613,10 @@ pub extern "C" fn wr_dp_push_radial_gradient(
     let stops_slice = unsafe { make_slice(stops, stops_count) };
     let stops_vector = stops_slice.to_owned();
 
-    let gradient = state.frame_builder.dl_builder.create_radial_gradient(
-        center.into(),
-        radius.into(),
-        stops_vector,
-        extend_mode.into(),
-    );
+    let gradient = state
+        .frame_builder
+        .dl_builder
+        .create_radial_gradient(center, radius, stops_vector, extend_mode);
 
     let space_and_clip = parent.to_webrender(state.pipeline_id);
 
@@ -3668,11 +3653,10 @@ pub extern "C" fn wr_dp_push_conic_gradient(
     let stops_slice = unsafe { make_slice(stops, stops_count) };
     let stops_vector = stops_slice.to_owned();
 
-    let gradient =
-        state
-            .frame_builder
-            .dl_builder
-            .create_conic_gradient(center.into(), angle, stops_vector, extend_mode.into());
+    let gradient = state
+        .frame_builder
+        .dl_builder
+        .create_conic_gradient(center, angle, stops_vector, extend_mode);
 
     let space_and_clip = parent.to_webrender(state.pipeline_id);
 
@@ -3773,11 +3757,9 @@ pub extern "C" fn wr_dump_display_list(
 
     #[cfg(target_os = "android")]
     unsafe {
-        __android_log_write(
-            4, /* info */
-            CString::new("Gecko").unwrap().as_ptr(),
-            CString::new(sink.into_inner()).unwrap().as_ptr(),
-        );
+        let gecko = CString::new("Gecko").unwrap();
+        let sink = CString::new(sink.into_inner()).unwrap();
+        __android_log_write(4 /* info */, gecko.as_ptr(), sink.as_ptr());
     }
 
     #[cfg(not(target_os = "android"))]

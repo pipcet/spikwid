@@ -100,7 +100,6 @@ interface GPUAdapter {
 GPUAdapter includes GPUObjectBase;
 
 dictionary GPUExtensions {
-    boolean anisotropicFiltering = false;
 };
 
 dictionary GPULimits {
@@ -214,7 +213,7 @@ interface GPUBufferUsage {
     const GPUBufferUsageFlags QUERY_RESOLVE = 0x0200;
 };
 
-dictionary GPUBufferDescriptor {
+dictionary GPUBufferDescriptor : GPUObjectDescriptorBase {
     required GPUSize64 size;
     required GPUBufferUsageFlags usage;
     boolean mappedAtCreation = false;
@@ -317,7 +316,7 @@ interface GPUTextureUsage {
     const GPUTextureUsageFlags OUTPUT_ATTACHMENT = 0x10;
 };
 
-dictionary GPUTextureDescriptor {
+dictionary GPUTextureDescriptor : GPUObjectDescriptorBase {
     required GPUExtent3D size;
     GPUIntegerCoordinate mipLevelCount = 1;
     GPUSize32 sampleCount = 1;
@@ -412,7 +411,8 @@ GPUSampler includes GPUObjectBase;
 enum GPUTextureComponentType {
     "float",
     "sint",
-    "uint"
+    "uint",
+    "depth-comparison"
 };
 
 // ****************************************************************************
@@ -455,8 +455,8 @@ dictionary GPUBindGroupLayoutEntry {
     required GPUIndex32 binding;
     required GPUShaderStageFlags visibility;
     required GPUBindingType type;
-    GPUTextureViewDimension viewDimension = "2d";
-    GPUTextureComponentType textureComponentType = "float";
+    GPUTextureViewDimension viewDimension;
+    GPUTextureComponentType textureComponentType;
     boolean multisampled = false;
     boolean hasDynamicOffset = false;
     GPUTextureFormat storageTextureFormat;
@@ -659,7 +659,11 @@ GPUShaderModule includes GPUObjectBase;
 
 // Common stuff for ComputePipeline and RenderPipeline
 dictionary GPUPipelineDescriptorBase : GPUObjectDescriptorBase {
-    required GPUPipelineLayout layout;
+    GPUPipelineLayout layout;
+};
+
+interface mixin GPUPipelineBase {
+    GPUBindGroupLayout getBindGroupLayout(unsigned long index);
 };
 
 dictionary GPUProgrammableStageDescriptor {
@@ -677,6 +681,7 @@ dictionary GPUComputePipelineDescriptor : GPUPipelineDescriptorBase {
 interface GPUComputePipeline {
 };
 GPUComputePipeline includes GPUObjectBase;
+GPUComputePipeline includes GPUPipelineBase;
 
 // GPURenderPipeline
 enum GPUPrimitiveTopology {
@@ -727,6 +732,7 @@ dictionary GPURenderPipelineDescriptor : GPUPipelineDescriptorBase {
 interface GPURenderPipeline {
 };
 GPURenderPipeline includes GPUObjectBase;
+GPURenderPipeline includes GPUPipelineBase;
 
 // ****************************************************************************
 // COMMAND RECORDING (Command buffer and all relevant structures)

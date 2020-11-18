@@ -23,15 +23,30 @@ NS_IMPL_ISUPPORTS(OSPreferences, mozIOSPreferences)
 
 mozilla::StaticRefPtr<OSPreferences> OSPreferences::sInstance;
 
-OSPreferences* OSPreferences::GetInstance() {
-  if (!sInstance) {
+// Return a new strong reference to the instance, creating it if necessary.
+already_AddRefed<OSPreferences> OSPreferences::GetInstanceAddRefed() {
+  RefPtr<OSPreferences> result = sInstance;
+  if (!result) {
     sInstance = new OSPreferences();
+    result = sInstance;
 
     DebugOnly<nsresult> rv = Preferences::RegisterPrefixCallback(
         PreferenceChanged, "intl.date_time.pattern_override");
     MOZ_ASSERT(NS_SUCCEEDED(rv), "Adding observers failed.");
 
     ClearOnShutdown(&sInstance);
+  }
+  return result.forget();
+}
+
+// Return a raw pointer to the instance: not for off-main-thread use,
+// because ClearOnShutdown means it could go away unexpectedly.
+OSPreferences* OSPreferences::GetInstance() {
+  MOZ_ASSERT(NS_IsMainThread());
+  if (!sInstance) {
+    // This will create the static instance; then we just drop the extra
+    // reference.
+    RefPtr<OSPreferences> result = GetInstanceAddRefed();
   }
   return sInstance;
 }
@@ -366,6 +381,17 @@ bool OSPreferences::GetPatternForSkeleton(const nsACString& aSkeleton,
 bool OSPreferences::GetDateTimeConnectorPattern(const nsACString& aLocale,
                                                 nsACString& aRetVal) {
   bool result = false;
+
+  // Check for a valid override pref and use that if present.
+  nsAutoCString value;
+  nsresult nr = Preferences::GetCString(
+      "intl.date_time.pattern_override.date_time_short", value);
+  if (NS_SUCCEEDED(nr) && value.Find("{0}") != kNotFound &&
+      value.Find("{1}") != kNotFound) {
+    aRetVal = std::move(value);
+    return true;
+  }
+
   UErrorCode status = U_ZERO_ERROR;
   UDateTimePatternGenerator* pg =
       udatpg_open(PromiseFlatCString(aLocale).get(), &status);

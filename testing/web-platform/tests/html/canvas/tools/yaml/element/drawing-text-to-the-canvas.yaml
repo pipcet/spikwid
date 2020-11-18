@@ -842,4 +842,96 @@
     ctx.fontKerning = "NONE";
     @assert ctx.fontKerning === "None";
 
+- name: 2d.text.drawing.style.fontVariant.settings
+  desc: Testing basic functionalities of fontKerning for canvas
+  testing:
+  - 2d.text.drawing.style.fontVariantCaps
+  code: |
+    // Setting fontVariantCaps with lower cases
+    @assert ctx.fontVariantCaps === "Normal";
+
+    ctx.fontVariantCaps = "normal";
+    @assert ctx.fontVariantCaps === "Normal";
+
+    ctx.fontVariantCaps = "small-caps";
+    @assert ctx.fontVariantCaps === "SmallCaps";
+
+    ctx.fontVariantCaps = "all-small-caps";
+    @assert ctx.fontVariantCaps === "AllSmallCaps";
+
+    ctx.fontVariantCaps = "petite-caps";
+    @assert ctx.fontVariantCaps === "PetiteCaps";
+
+    ctx.fontVariantCaps = "all-petite-caps";
+    @assert ctx.fontVariantCaps === "AllPetiteCaps";
+
+    ctx.fontVariantCaps = "unicase";
+    @assert ctx.fontVariantCaps === "Unicase";
+
+    ctx.fontVariantCaps = "titling-caps";
+    @assert ctx.fontVariantCaps === "TitlingCaps";
+
+    // Setting fontVariantCaps with lower cases and upper cases word.
+    ctx.fontVariantCaps = "nORmal";
+    @assert ctx.fontVariantCaps === "Normal";
+
+    ctx.fontVariantCaps = "smaLL-caps";
+    @assert ctx.fontVariantCaps === "SmallCaps";
+
+    ctx.fontVariantCaps = "all-small-CAPS";
+    @assert ctx.fontVariantCaps === "AllSmallCaps";
+
+    ctx.fontVariantCaps = "pEtitE-caps";
+    @assert ctx.fontVariantCaps === "PetiteCaps";
+
+    ctx.fontVariantCaps = "All-Petite-Caps";
+    @assert ctx.fontVariantCaps === "AllPetiteCaps";
+
+    ctx.fontVariantCaps = "uNIcase";
+    @assert ctx.fontVariantCaps === "Unicase";
+
+    ctx.fontVariantCaps = "titling-CAPS";
+    @assert ctx.fontVariantCaps === "TitlingCaps";
+
+    // Setting fontVariantCaps with non-existing font variant.
+    ctx.fontVariantCaps = "abcd";
+    @assert ctx.fontVariantCaps === "TitlingCaps";
+
+- name: 2d.text.drawing.style.textRendering.settings
+  desc: Testing basic functionalities of textRendering in Canvas
+  testing:
+  - 2d.text.drawing.style.textRendering
+  code: |
+    // Setting textRendering with lower cases
+    @assert ctx.textRendering === "Auto";
+
+    ctx.textRendering = "auto";
+    @assert ctx.textRendering === "Auto";
+
+    ctx.textRendering = "optimizespeed";
+    @assert ctx.textRendering === "OptimizeSpeed";
+
+    ctx.textRendering = "optimizelegibility";
+    @assert ctx.textRendering === "OptimizeLegibility";
+
+    ctx.textRendering = "geometricprecision";
+    @assert ctx.textRendering === "GeometricPrecision";
+
+    // Setting textRendering with lower cases and upper cases word.
+    ctx.textRendering = "aUto";
+    @assert ctx.textRendering === "Auto";
+
+    ctx.textRendering = "OPtimizeSpeed";
+    @assert ctx.textRendering === "OptimizeSpeed";
+
+    ctx.textRendering = "OPtimizELEgibility";
+    @assert ctx.textRendering === "OptimizeLegibility";
+
+    ctx.textRendering = "GeometricPrecision";
+    @assert ctx.textRendering === "GeometricPrecision";
+
+    // Setting textRendering with non-existing font variant.
+    ctx.textRendering = "abcd";
+    @assert ctx.textRendering === "GeometricPrecision";
+
 # TODO: shadows, alpha, composite, clip

@@ -87,7 +87,7 @@ class MediaDevice : public nsIMediaDevice {
   nsresult Allocate(const dom::MediaTrackConstraints& aConstraints,
                     const MediaEnginePrefs& aPrefs, uint64_t aWindowId,
                     const char** aOutBadConstraint);
-  void SetTrack(const RefPtr<SourceMediaTrack>& aTrack,
+  void SetTrack(const RefPtr<MediaTrack>& aTrack,
                 const PrincipalHandle& aPrincipal);
   nsresult Start();
   nsresult Reconfigure(const dom::MediaTrackConstraints& aConstraints,
@@ -192,6 +192,9 @@ class MediaManager final : public nsIMediaManagerService, public nsIObserver {
   bool IsWindowListenerStillActive(
       const RefPtr<GetUserMediaWindowListener>& aListener);
 
+  static bool IsOn(const dom::OwningBooleanOrMediaTrackConstraints& aUnion) {
+    return !aUnion.IsBoolean() || aUnion.GetAsBoolean();
+  }
   typedef dom::NavigatorUserMediaSuccessCallback GetUserMediaSuccessCallback;
   typedef dom::NavigatorUserMediaErrorCallback GetUserMediaErrorCallback;
 
@@ -229,11 +232,6 @@ class MediaManager final : public nsIMediaManagerService, public nsIObserver {
 
   nsresult EnumerateDevices(nsPIDOMWindowInner* aWindow,
                             dom::Promise& aPromise);
-
-  RefPtr<StreamPromise> GetDisplayMedia(
-      nsPIDOMWindowInner* aWindow,
-      const dom::DisplayMediaStreamConstraints& aConstraintsPassedIn,
-      dom::CallerType aCallerType);
 
   // Get the sink that corresponds to the given device id.
   // It is resposible to check if an application is

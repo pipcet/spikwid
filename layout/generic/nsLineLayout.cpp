@@ -230,7 +230,8 @@ void nsLineLayout::BeginLineReflow(nscoord aICoord, nscoord aBCoord,
       MOZ_ASSERT(mBlockReflowInput->GetWritingMode() == pfd->mWritingMode,
                  "mBlockReflowInput->frame == frame, "
                  "hence they should have identical writing mode");
-      pfd->mOffsets = mBlockReflowInput->ComputedLogicalOffsets();
+      pfd->mOffsets =
+          mBlockReflowInput->ComputedLogicalOffsets(pfd->mWritingMode);
     }
   }
 }
@@ -701,8 +702,8 @@ static bool IsPercentageAware(const nsIFrame* aFrame, WritingMode aWM) {
   if ((pos->ISizeDependsOnContainer(aWM) && !pos->ISize(aWM).IsAuto()) ||
       pos->MaxISizeDependsOnContainer(aWM) ||
       pos->MinISizeDependsOnContainer(aWM) ||
-      pos->OffsetHasPercent(aWM.IsVertical() ? eSideBottom : eSideRight) ||
-      pos->OffsetHasPercent(aWM.IsVertical() ? eSideTop : eSideLeft)) {
+      pos->mOffset.GetIStart(aWM).HasPercent() ||
+      pos->mOffset.GetIEnd(aWM).HasPercent()) {
     return true;
   }
 
@@ -824,16 +825,12 @@ void nsLineLayout::ReflowFrame(nsIFrame* aFrame, nsReflowStatus& aReflowStatus,
     if (reflowInput.ComputedISize() == NS_UNCONSTRAINEDSIZE) {
       reflowInput.AvailableISize() = availableSpaceOnLine;
     }
-    WritingMode stateWM = reflowInput.GetWritingMode();
-    pfd->mMargin =
-        reflowInput.ComputedLogicalMargin().ConvertTo(lineWM, stateWM);
-    pfd->mBorderPadding =
-        reflowInput.ComputedLogicalBorderPadding().ConvertTo(lineWM, stateWM);
+    pfd->mMargin = reflowInput.ComputedLogicalMargin(lineWM);
+    pfd->mBorderPadding = reflowInput.ComputedLogicalBorderPadding(lineWM);
     pfd->mRelativePos =
         reflowInput.mStyleDisplay->IsRelativelyPositionedStyle();
     if (pfd->mRelativePos) {
-      pfd->mOffsets =
-          reflowInput.ComputedLogicalOffsets().ConvertTo(frameWM, stateWM);
+      pfd->mOffsets = reflowInput.ComputedLogicalOffsets(frameWM);
     }
 
     // Calculate whether the the frame should have a start margin and
@@ -3222,8 +3219,8 @@ void nsLineLayout::ApplyRelativePositioning(PerFrameData* aPFD) {
 }
 
 // This method do relative positioning for ruby annotations.
-void nsLineLayout::RelativePositionAnnotations(
-    PerSpanData* aRubyPSD, nsOverflowAreas& aOverflowAreas) {
+void nsLineLayout::RelativePositionAnnotations(PerSpanData* aRubyPSD,
+                                               OverflowAreas& aOverflowAreas) {
   MOZ_ASSERT(aRubyPSD->mFrame->mFrame->IsRubyFrame());
   for (PerFrameData* pfd = aRubyPSD->mFirstFrame; pfd; pfd = pfd->mNext) {
     MOZ_ASSERT(pfd->mFrame->IsRubyBaseContainerFrame());
@@ -3232,7 +3229,7 @@ void nsLineLayout::RelativePositionAnnotations(
       nsIFrame* rtcFrame = rtc->mFrame;
       MOZ_ASSERT(rtcFrame->IsRubyTextContainerFrame());
       ApplyRelativePositioning(rtc);
-      nsOverflowAreas rtcOverflowAreas;
+      OverflowAreas rtcOverflowAreas;
       RelativePositionFrames(rtc->mSpan, rtcOverflowAreas);
       aOverflowAreas.UnionWith(rtcOverflowAreas + rtcFrame->GetPosition());
     }
@@ -3240,8 +3237,8 @@ void nsLineLayout::RelativePositionAnnotations(
 }
 
 void nsLineLayout::RelativePositionFrames(PerSpanData* psd,
-                                          nsOverflowAreas& aOverflowAreas) {
-  nsOverflowAreas overflowAreas;
+                                          OverflowAreas& aOverflowAreas) {
+  OverflowAreas overflowAreas;
   WritingMode wm = psd->mWritingMode;
   if (psd != mRootSpan) {
     // The span's overflow areas come in three parts:
@@ -3290,7 +3287,7 @@ void nsLineLayout::RelativePositionFrames(PerSpanData* psd,
     // system. We adjust the childs combined area into our coordinate
     // system before computing the aggregated value by adding in
     // <b>x</b> and <b>y</b> which were computed above.
-    nsOverflowAreas r;
+    OverflowAreas r;
     if (pfd->mSpan) {
       // Compute a new combined area for the child span before
       // aggregating it into our combined area.

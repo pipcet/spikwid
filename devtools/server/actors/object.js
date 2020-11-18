@@ -65,8 +65,6 @@ const proto = {
    *        the caller:
    *          - createValueGrip
    *              Creates a value grip for the given object
-   *          - sources
-   *              SourcesManager getter that manages the sources of a thread
    *          - createEnvironmentActor
    *              Creates and return an environment actor
    *          - getGripDepth
@@ -81,7 +79,6 @@ const proto = {
     {
       thread,
       createValueGrip: createValueGripHook,
-      sources,
       createEnvironmentActor,
       getGripDepth,
       incrementGripDepth,
@@ -100,7 +97,6 @@ const proto = {
     this.thread = thread;
     this.hooks = {
       createValueGrip: createValueGripHook,
-      sources,
       createEnvironmentActor,
       getGripDepth,
       incrementGripDepth,
@@ -169,8 +165,9 @@ const proto = {
 
     this.hooks.incrementGripDepth();
 
-    if (g.class == "Promise") {
-      g.promiseState = this._createPromiseState();
+    // TODO (bug 1676476): remove this and instead add a previewer for promises.
+    if (g.class == "Promise" && this.hooks.getGripDepth() < 3) {
+      g.promiseState = this.promiseState().promiseState;
     }
 
     if (g.class == "Function") {
@@ -254,7 +251,7 @@ const proto = {
   /**
    * Returns an object exposing the internal Promise state.
    */
-  _createPromiseState: function() {
+  promiseState: function() {
     const { state, value, reason } = getPromiseState(this.obj);
     const promiseState = { state };
 
@@ -271,33 +268,7 @@ const proto = {
       promiseState.timeToSettle = this.obj.promiseTimeToResolution;
     }
 
-    return promiseState;
-  },
-
-  /**
-   * Handle a protocol request to provide the definition site of this function
-   * object.
-   */
-  definitionSite: function() {
-    if (this.obj.class != "Function") {
-      return this.throwError(
-        "objectNotFunction",
-        this.actorID + " is not a function."
-      );
-    }
-
-    if (!this.obj.script) {
-      return this.throwError(
-        "noScript",
-        this.actorID + " has no Debugger.Script"
-      );
-    }
-
-    return {
-      source: this.hooks.sources().createSourceActor(this.obj.script.source),
-      line: this.obj.script.startLine,
-      column: 0, // TODO bug 901138: use Debugger.Script.prototype.startColumn
-    };
+    return { promiseState };
   },
 
   /**

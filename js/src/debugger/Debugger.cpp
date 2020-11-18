@@ -25,8 +25,8 @@
 #include <string.h>    // for strlen, strcmp
 #include <utility>     // for std::move
 
-#include "jsapi.h"        // for CallArgs, CallArgsFromVp
-#include "jstypes.h"      // for JS_PUBLIC_API
+#include "jsapi.h"    // for CallArgs, CallArgsFromVp
+#include "jstypes.h"  // for JS_PUBLIC_API
 
 #include "builtin/Array.h"               // for NewDenseFullyAllocatedArray
 #include "debugger/DebugAPI.h"           // for ResumeMode, DebugAPI
@@ -6029,7 +6029,8 @@ bool Debugger::isCompilableUnit(JSContext* cx, unsigned argc, Value* vp) {
   }
 
   LifoAllocScope allocScope(&cx->tempLifoAlloc());
-  frontend::CompilationState compilationState(cx, allocScope, options);
+  frontend::CompilationState compilationState(cx, allocScope, options,
+                                              compilationInfo.get().stencil);
 
   JS::AutoSuppressWarningReporter suppressWarnings(cx);
   frontend::Parser<frontend::FullParseHandler, char16_t> parser(

@@ -30,7 +30,7 @@ impl RenderNotifier for Notifier {
         })
     }
 
-    fn wake_up(&self) {
+    fn wake_up(&self, _composite_needed: bool) {
         #[cfg(not(target_os = "android"))]
         let _ = self.events_proxy.wakeup();
     }
@@ -38,9 +38,9 @@ impl RenderNotifier for Notifier {
     fn new_frame_ready(&self,
                        _: DocumentId,
                        _scrolled: bool,
-                       _composite_needed: bool,
+                       composite_needed: bool,
                        _render_time: Option<u64>) {
-        self.wake_up();
+        self.wake_up(composite_needed);
     }
 }
 
@@ -185,7 +185,7 @@ pub fn main_wrapper<E: Example>(
         None,
     ).unwrap();
     let mut api = sender.create_api();
-    let document_id = api.add_document(device_size, 0);
+    let document_id = api.add_document(device_size);
 
     let external = example.get_image_handler(&*gl);
 
@@ -317,7 +317,7 @@ pub fn main_wrapper<E: Example>(
         api.send_transaction(document_id, txn);
 
         renderer.update();
-        renderer.render(device_size).unwrap();
+        renderer.render(device_size, 0).unwrap();
         let _ = renderer.flush_pipeline_info();
         example.draw_custom(&*gl);
         windowed_context.swap_buffers().ok();
