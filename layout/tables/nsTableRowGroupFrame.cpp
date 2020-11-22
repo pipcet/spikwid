@@ -258,17 +258,17 @@ void nsTableRowGroupFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
 }
 
 nsIFrame::LogicalSides nsTableRowGroupFrame::GetLogicalSkipSides(
-    const ReflowInput* aReflowInput) const {
+    const Maybe<SkipSidesDuringReflow>&) const {
   LogicalSides skip(mWritingMode);
   if (MOZ_UNLIKELY(StyleBorder()->mBoxDecorationBreak ==
                    StyleBoxDecorationBreak::Clone)) {
     return skip;
   }
 
-  if (nullptr != GetPrevInFlow()) {
+  if (GetPrevInFlow()) {
     skip |= eLogicalSideBitsBStart;
   }
-  if (nullptr != GetNextInFlow()) {
+  if (GetNextInFlow()) {
     skip |= eLogicalSideBitsBEnd;
   }
   return skip;
@@ -1101,6 +1101,7 @@ nsresult nsTableRowGroupFrame::SplitRowGroup(nsPresContext* aPresContext,
 
   nsTableRowFrame* prevRowFrame = nullptr;
   aDesiredSize.Height() = 0;
+  aDesiredSize.SetOverflowAreasToDesiredBounds();
 
   const nscoord availWidth = aReflowInput.AvailableWidth();
   const nscoord availHeight = aReflowInput.AvailableHeight();

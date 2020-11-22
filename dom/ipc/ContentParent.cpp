@@ -3664,6 +3664,19 @@ mozilla::ipc::IPCResult ContentParent::RecvCloneDocumentTreeInto(
     return IPC_OK();
   }
 
+  if (NS_WARN_IF(cp->GetRemoteType() == GetRemoteType())) {
+    // Wanted to switch to a target browsing context that's already local again.
+    // See bug 1676996 for how this can happen.
+    //
+    // Dropping the switch on the floor seems fine for this case, though we
+    // could also try to clone the local document.
+    //
+    // If the remote type matches & it's in the same group (which was confirmed
+    // by CloneIsLegal), it must be the exact same process.
+    MOZ_DIAGNOSTIC_ASSERT(cp == this);
+    return IPC_OK();
+  }
+
   target
       ->ChangeRemoteness(cp->GetRemoteType(), /* aLoadID = */ 0,
                          /* aReplaceBC = */ false, /* aSpecificGroupId = */ 0)
@@ -7018,10 +7031,12 @@ mozilla::ipc::IPCResult ContentParent::RecvHistoryCommit(
 
 mozilla::ipc::IPCResult ContentParent::RecvHistoryGo(
     const MaybeDiscarded<BrowsingContext>& aContext, int32_t aOffset,
-    uint64_t aHistoryEpoch, HistoryGoResolver&& aResolveRequestedIndex) {
+    uint64_t aHistoryEpoch, bool aRequireUserInteraction,
+    HistoryGoResolver&& aResolveRequestedIndex) {
   if (!aContext.IsDiscarded()) {
-    aContext.get_canonical()->HistoryGo(aOffset, aHistoryEpoch, Some(ChildID()),
-                                        std::move(aResolveRequestedIndex));
+    aContext.get_canonical()->HistoryGo(
+        aOffset, aHistoryEpoch, aRequireUserInteraction, Some(ChildID()),
+        std::move(aResolveRequestedIndex));
   }
   return IPC_OK();
 }

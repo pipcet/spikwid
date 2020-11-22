@@ -2,7 +2,10 @@ from __future__ import absolute_import
 
 import mozunit
 
-from mozversioncontrol import get_repository_object
+from mozversioncontrol import (
+    get_repository_object,
+    NonexistentFile,
+)
 
 STEPS = {
     "hg": [
@@ -36,6 +39,14 @@ def test_file_content(repo):
     assert vcs.get_file_content("foo") == b"foo\n"
     assert vcs.get_file_content("bar") == b"foo\n"
     assert vcs.get_file_content("bar", revision=head_ref) == b"bar\n"
+
+    # Ensure a file that can't be found throws the right error.
+    good = False
+    try:
+        vcs.get_file_content("baz", revision=head_ref)
+    except NonexistentFile:
+        good = True
+    assert good
 
 
 if __name__ == "__main__":

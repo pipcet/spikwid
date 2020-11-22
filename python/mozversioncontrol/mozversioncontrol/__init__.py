@@ -51,6 +51,10 @@ class CannotDeleteFromRootOfRepositoryException(Exception):
     the repository, which is not permitted."""
 
 
+class NonexistentFile(Exception):
+    """Represents that we attempted to get the content of a file that does not exist."""
+
+
 def get_tool_path(tool):
     """Obtain the path of `tool`."""
     if os.path.isabs(tool) and os.path.exists(tool):
@@ -233,6 +237,8 @@ class Repository(object):
     def get_file_content(self, path, revision=None):
         """Return as a bytestring the contents of the file as of the given
         revision, or the current revision if none is provided.
+
+        Returns the file content or raises NonexistentFile if the file cannot be found.
         """
 
     @abc.abstractmethod
@@ -471,7 +477,10 @@ class HgRepository(Repository):
         args = ["cat", path]
         if revision:
             args += ["-r", revision]
-        return self._run(*args, universal_newlines=False)
+        try:
+            return self._run(*args, universal_newlines=False)
+        except subprocess.CalledProcessError as e:
+            raise NonexistentFile("Could not find file; got error %s" % e)
 
     def working_directory_clean(self, untracked=False, ignored=False):
         args = ["status", "--modified", "--added", "--removed", "--deleted"]
@@ -614,7 +623,10 @@ class GitRepository(Repository):
 
     def get_file_content(self, path, revision=None):
         revision = revision or "HEAD"
-        return self._run("show", revision + ":" + path, universal_newlines=False)
+        try:
+            return self._run("show", revision + ":" + path, universal_newlines=False)
+        except subprocess.CalledProcessError as e:
+            raise NonexistentFile("Could not find file; got error %s" % e)
 
     def working_directory_clean(self, untracked=False, ignored=False):
         args = ["status", "--porcelain"]

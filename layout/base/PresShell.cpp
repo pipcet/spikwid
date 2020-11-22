@@ -5385,6 +5385,11 @@ nsresult PresShell::SetResolutionAndScaleTo(float aResolution,
     MOZ_ASSERT(mResolution.isSome());
     return NS_OK;
   }
+
+  // GetResolution handles mResolution being nothing by returning 1 so this
+  // is checking that the resolution is actually changing.
+  bool resolutionUpdated = (aResolution != GetResolution());
+
   RenderingState state(this);
   state.mResolution = Some(aResolution);
   SetRenderingState(state);
@@ -5393,7 +5398,7 @@ nsresult PresShell::SetResolutionAndScaleTo(float aResolution,
   }
   if (aOrigin == ResolutionChangeOrigin::Apz) {
     mResolutionUpdatedByApz = true;
-  } else {
+  } else if (resolutionUpdated) {
     mResolutionUpdated = true;
   }
 
@@ -5404,7 +5409,7 @@ nsresult PresShell::SetResolutionAndScaleTo(float aResolution,
   return NS_OK;
 }
 
-float PresShell::GetCumulativeResolution() {
+float PresShell::GetCumulativeResolution() const {
   float resolution = GetResolution();
   nsPresContext* parentCtx = GetPresContext()->GetParentPresContext();
   if (parentCtx) {

@@ -17,6 +17,10 @@ if ("ShadowRoot" in this) {
 }
 </script>
 <a id="test-mailto" href="mailto:codemonkey@mozilla.com">Mail the monkey!</a><br>
+<div id="test-paste-listener" onpaste="doSomething()">
+  ABCD
+  <p id="test-paste-listener-child">EFGH</p>
+</div>
 <input id="test-input"><br>
 <img id="test-image" src="ctxmenu-image.png">
 <svg>
@@ -78,7 +82,6 @@ if ("ShadowRoot" in this) {
 <a id="test-image-link" href="#"><img src="ctxmenu-image.png"></a>
 <input id="test-select-input-text" type="text" value="input">
 <input id="test-select-input-text-type-password" type="password" value="password">
-<embed id="test-plugin" style="width: 200px; height: 200px;" type="application/x-test"></embed>
 <img id="test-longdesc" src="ctxmenu-image.png" longdesc="http://www.mozilla.org"></embed>
 <iframe id="test-srcdoc" width="98"  height="98" srcdoc="Hello World" style="border: 1px solid black"></iframe>
 <svg id="svg-with-link" width=10 height=10><a xlink:href="http://example.com/"><circle cx="50%" cy="50%" r="50%" fill="blue"/></a></svg>

@@ -207,8 +207,10 @@ impl SwTile {
         let dest_rect = transform
             .outer_transformed_rect(&valid.to_f32())?
             .round_out()
-            .to_i32()
-            .intersection(clip_rect)?;
+            .to_i32();
+        if !dest_rect.intersects(clip_rect) {
+             return None;
+        }
         // To get a valid source rect, we need to inverse transform the clipped destination rect to find out the effect
         // of the clip rect in source-space. After this, we subtract off the source-space valid rect origin to get
         // a source rect that is now relative to the surface origin rather than absolute.
@@ -371,6 +373,7 @@ impl DrawTileHelper {
         viewport: &DeviceIntRect,
         dest: &DeviceIntRect,
         src: &DeviceIntRect,
+        _clip: &DeviceIntRect,
         surface: &SwSurface,
         tile: &SwTile,
         flip_y: bool,
@@ -443,6 +446,7 @@ struct SwCompositeJob {
     locked_dst: swgl::LockedResource,
     src_rect: DeviceIntRect,
     dst_rect: DeviceIntRect,
+    clipped_dst: DeviceIntRect,
     opaque: bool,
     flip_y: bool,
     filter: ImageRendering,
@@ -457,8 +461,12 @@ impl SwCompositeJob {
         // the following index.
         let band_index = band_index as i32;
         let num_bands = self.num_bands as i32;
-        let band_offset = (self.dst_rect.size.height * band_index) / num_bands;
-        let band_height = (self.dst_rect.size.height * (band_index + 1)) / num_bands - band_offset;
+        let band_offset = (self.clipped_dst.size.height * band_index) / num_bands;
+        let band_height = (self.clipped_dst.size.height * (band_index + 1)) / num_bands - band_offset;
+        // Create a rect that is the intersection of the band with the clipped dest
+        let band_clip = DeviceIntRect::new(DeviceIntPoint::new(self.clipped_dst.origin.x,
+                                                               self.clipped_dst.origin.y + band_offset),
+                                           DeviceIntSize::new(self.clipped_dst.size.width, band_height));
         match self.locked_src {
             SwCompositeSource::BGRA(ref resource) => {
                 self.locked_dst.composite(
@@ -474,8 +482,10 @@ impl SwCompositeJob {
                     self.opaque,
                     self.flip_y,
                     image_rendering_to_gl_filter(self.filter),
-                    band_offset,
-                    band_height,
+                    band_clip.origin.x,
+                    band_clip.origin.y,
+                    band_clip.size.width,
+                    band_clip.size.height,
                 );
             }
             SwCompositeSource::YUV(ref y, ref u, ref v, color_space, color_depth) => {
@@ -500,8 +510,10 @@ impl SwCompositeJob {
                     self.dst_rect.size.width,
                     self.dst_rect.size.height,
                     self.flip_y,
-                    band_offset,
-                    band_height,
+                    band_clip.origin.x,
+                    band_clip.origin.y,
+                    band_clip.size.width,
+                    band_clip.size.height,
                 );
             }
         }
@@ -748,6 +760,7 @@ impl SwCompositeThread {
         locked_dst: swgl::LockedResource,
         src_rect: DeviceIntRect,
         dst_rect: DeviceIntRect,
+        clip_rect: DeviceIntRect,
         opaque: bool,
         flip_y: bool,
         filter: ImageRendering,
@@ -756,8 +769,13 @@ impl SwCompositeThread {
     ) {
         // For jobs that would span a sufficiently large destination rectangle, split
         // it into multiple horizontal bands so that multiple threads can process them.
-        let num_bands = if dst_rect.size.width >= 64 && dst_rect.size.height >= 64 {
-            (dst_rect.size.height / 64).min(4) as u8
+        let clipped_dst = match dst_rect.intersection(&clip_rect) {
+            Some(clipped_dst) => clipped_dst,
+            None => return,
+        };
+
+        let num_bands = if clipped_dst.size.width >= 64 && clipped_dst.size.height >= 64 {
+            (clipped_dst.size.height / 64).min(4) as u8
         } else {
             1
         };
@@ -766,6 +784,7 @@ impl SwCompositeThread {
             locked_dst,
             src_rect,
             dst_rect,
+            clipped_dst,
             opaque,
             flip_y,
             filter,
@@ -948,6 +967,7 @@ impl SwCompositor {
         // Only create the SwComposite thread if we're neither using OpenGL composition nor a native
         // render compositor. Thus, we are compositing into the main software framebuffer, which in
         // that case benefits from compositing asynchronously while we are updating tiles.
+        assert!(native_gl.is_none() || compositor.is_none());
         let composite_thread = if native_gl.is_none() && compositor.is_none() {
             Some(SwCompositeThread::new())
         } else {
@@ -1020,6 +1040,7 @@ impl SwCompositor {
     /// in composition.
     fn init_overlaps(
         &self,
+        overlap_id: &NativeSurfaceId,
         overlap_surface: &SwSurface,
         overlap_tile: &SwTile,
         overlap_transform: &CompositorSurfaceTransform,
@@ -1033,6 +1054,11 @@ impl SwCompositor {
         // on its own future update.
         let mut overlaps = if overlap_tile.invalid.get() { 1 } else { 0 };
         for &(ref id, ref transform, ref clip_rect, _) in &self.frame_surfaces {
+            // We only want to consider surfaces that were added before the current one we're
+            // checking for overlaps. If we find that surface, then we're done.
+            if id == overlap_id {
+                break;
+            }
             // If the surface's clip rect doesn't overlap the tile's rect,
             // then there is no need to check any tiles within the surface.
             if !overlap_rect.intersects(clip_rect) {
@@ -1109,6 +1135,7 @@ impl SwCompositor {
                     framebuffer,
                     src_rect,
                     dst_rect,
+                    *clip_rect,
                     surface.is_opaque,
                     flip_y,
                     filter,
@@ -1537,21 +1564,6 @@ impl Compositor for SwCompositor {
                     native_gl.bind_buffer(gl::PIXEL_UNPACK_BUFFER, 0);
                 }
 
-                if let Some(compositor) = &mut self.compositor {
-                    let info = compositor.bind(id, tile.dirty_rect, tile.valid_rect);
-                    native_gl.bind_framebuffer(gl::DRAW_FRAMEBUFFER, info.fbo_id);
-
-                    let viewport = dirty.translate(info.origin.to_vector());
-                    let draw_tile = self.draw_tile.as_ref().unwrap();
-                    draw_tile.enable(&viewport);
-                    draw_tile.draw(&viewport, &viewport, &dirty, &surface, &tile, false, gl::LINEAR);
-                    draw_tile.disable();
-
-                    native_gl.bind_framebuffer(gl::DRAW_FRAMEBUFFER, 0);
-
-                    compositor.unbind();
-                }
-
                 native_gl.bind_texture(gl::TEXTURE_2D, 0);
             }
         }
@@ -1593,13 +1605,6 @@ impl Compositor for SwCompositor {
                 self.late_surfaces.push((id, transform, clip_rect, filter));
                 return;
             }
-
-            // Compute overlap dependencies for the surface.
-            if let Some(surface) = self.surfaces.get(&id) {
-                for tile in &surface.tiles {
-                    self.init_overlaps(surface, tile, &transform, &clip_rect);
-                }
-            }
         }
 
         self.frame_surfaces.push((id, transform, clip_rect, filter));
@@ -1610,8 +1615,26 @@ impl Compositor for SwCompositor {
     /// frame will not have overlap dependencies assigned and so must instead
     /// be added to the late_surfaces queue to be processed at the end of the
     /// frame.
-    fn start_compositing(&mut self, _dirty_rects: &[DeviceIntRect]) {
+    fn start_compositing(&mut self, dirty_rects: &[DeviceIntRect]) {
+        if dirty_rects.len() == 1 {
+            // Factor dirty rect into surface clip rects and discard surfaces that are
+            // entirely clipped out.
+            for &mut (ref _id, ref _transform, ref mut clip_rect, _filter) in &mut self.frame_surfaces {
+                *clip_rect = clip_rect.intersection(&dirty_rects[0]).unwrap_or_default();
+            }
+            self.frame_surfaces.retain(|&(_, _, clip_rect, _)| !clip_rect.is_empty());
+        }
+
         if let Some(ref composite_thread) = self.composite_thread {
+            // Compute overlap dependencies for surfaces.
+            for &(ref id, ref transform, ref clip_rect, _filter) in &self.frame_surfaces {
+                if let Some(surface) = self.surfaces.get(id) {
+                    for tile in &surface.tiles {
+                        self.init_overlaps(id, surface, tile, transform, clip_rect);
+                    }
+                }
+            }
+
             composite_thread.start_compositing();
             // Issue any initial composite jobs for the SwComposite thread.
             let mut lock = composite_thread.lock();
@@ -1656,6 +1679,7 @@ impl Compositor for SwCompositor {
                                 &viewport,
                                 &dst_rect,
                                 &src_rect,
+                                clip_rect,
                                 surface,
                                 tile,
                                 flip_y,

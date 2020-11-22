@@ -768,7 +768,8 @@ nscoord nsBlockFrame::GetMinISize(gfxContext* aRenderingContext) {
     curFrame->LazyMarkLinesDirty();
   }
 
-  if (HasAnyStateBits(NS_BLOCK_NEEDS_BIDI_RESOLUTION)) {
+  if (HasAnyStateBits(NS_BLOCK_NEEDS_BIDI_RESOLUTION) &&
+      PresContext()->BidiEnabled()) {
     ResolveBidi();
   }
 
@@ -855,7 +856,8 @@ nscoord nsBlockFrame::GetPrefISize(gfxContext* aRenderingContext) {
     curFrame->LazyMarkLinesDirty();
   }
 
-  if (HasAnyStateBits(NS_BLOCK_NEEDS_BIDI_RESOLUTION)) {
+  if (HasAnyStateBits(NS_BLOCK_NEEDS_BIDI_RESOLUTION) &&
+      PresContext()->BidiEnabled()) {
     ResolveBidi();
   }
   InlinePrefISizeData data;
@@ -1251,7 +1253,7 @@ void nsBlockFrame::Reflow(nsPresContext* aPresContext, ReflowOutput& aMetrics,
 
   const ReflowInput* reflowInput = &aReflowInput;
   WritingMode wm = aReflowInput.GetWritingMode();
-  nscoord consumedBSize = ConsumedBSize(wm);
+  nscoord consumedBSize = CalcAndCacheConsumedBSize();
   nscoord effectiveComputedBSize =
       GetEffectiveComputedBSize(aReflowInput, consumedBSize);
   Maybe<ReflowInput> mutableReflowInput;
@@ -1328,7 +1330,8 @@ void nsBlockFrame::Reflow(nsPresContext* aPresContext, ReflowOutput& aMetrics,
   BlockReflowInput state(*reflowInput, aPresContext, this, blockStartMarginRoot,
                          blockEndMarginRoot, needFloatManager, consumedBSize);
 
-  if (HasAnyStateBits(NS_BLOCK_NEEDS_BIDI_RESOLUTION)) {
+  if (HasAnyStateBits(NS_BLOCK_NEEDS_BIDI_RESOLUTION) &&
+      PresContext()->BidiEnabled()) {
     static_cast<nsBlockFrame*>(FirstContinuation())->ResolveBidi();
   }
 
@@ -2026,8 +2029,8 @@ void nsBlockFrame::ComputeFinalSize(const ReflowInput& aReflowInput,
   aMetrics.SetSize(wm, finalSize);
 
 #ifdef DEBUG_blocks
-  if ((CRAZY_SIZE(aMetrics.Width()) || CRAZY_SIZE(aMetrics.Height())) &&
-      !GetParent()->IsCrazySizeAssertSuppressed()) {
+  if ((ABSURD_SIZE(aMetrics.Width()) || ABSURD_SIZE(aMetrics.Height())) &&
+      !GetParent()->IsAbsurdSizeAssertSuppressed()) {
     ListTag(stdout);
     printf(": WARNING: desired:%d,%d\n", aMetrics.Width(), aMetrics.Height());
   }
@@ -4920,11 +4923,11 @@ bool nsBlockFrame::PlaceLine(BlockReflowInput& aState,
   }
 
 #ifdef DEBUG
-  if (!GetParent()->IsCrazySizeAssertSuppressed()) {
+  if (!GetParent()->IsAbsurdSizeAssertSuppressed()) {
     static nscoord lastHeight = 0;
-    if (CRAZY_SIZE(aLine->BStart())) {
+    if (ABSURD_SIZE(aLine->BStart())) {
       lastHeight = aLine->BStart();
-      if (abs(aLine->BStart() - lastHeight) > CRAZY_COORD / 10) {
+      if (abs(aLine->BStart() - lastHeight) > ABSURD_COORD / 10) {
         nsIFrame::ListTag(stdout);
         printf(": line=%p y=%d line.bounds.height=%d\n",
                static_cast<void*>(aLine.get()), aLine->BStart(),
@@ -7737,12 +7740,7 @@ nscoord nsBlockFrame::ComputeFinalBSize(const ReflowInput& aReflowInput,
 nsresult nsBlockFrame::ResolveBidi() {
   NS_ASSERTION(!GetPrevInFlow(),
                "ResolveBidi called on non-first continuation");
-
-  nsPresContext* presContext = PresContext();
-  if (!presContext->BidiEnabled()) {
-    return NS_OK;
-  }
-
+  MOZ_ASSERT(PresContext()->BidiEnabled());
   return nsBidiPresUtils::Resolve(this);
 }
 

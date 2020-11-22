@@ -361,6 +361,12 @@ struct vec2_scalar {
     return *this;
   }
 
+  vec2_scalar operator/=(vec2_scalar a) {
+    x /= a.x;
+    y /= a.y;
+    return *this;
+  }
+
   vec2_scalar operator+=(vec2_scalar a) {
     x += a.x;
     y += a.y;
@@ -414,7 +420,7 @@ struct vec2 {
   constexpr vec2(vec2_scalar s) : x(s.x), y(s.y) {}
   constexpr vec2(vec2_scalar s0, vec2_scalar s1, vec2_scalar s2, vec2_scalar s3)
       : x(Float{s0.x, s1.x, s2.x, s3.x}), y(Float{s0.y, s1.y, s2.y, s3.y}) {}
-  vec2(ivec2 a);
+  explicit vec2(ivec2 a);
   Float x;
   Float y;
 
@@ -641,11 +647,13 @@ template <typename T> SI auto round_pixel(T v) { return roundfast(v, 255.0f); }
 
 float round(float a) { return roundf(a); }
 
-float fract(float a) { return a - floor(a); }
-
 Float round(Float v) { return floor(v + 0.5f); }
 
+float fract(float a) { return a - floor(a); }
+
 Float fract(Float v) { return v - floor(v); }
+
+vec2 fract(vec2 v) { return vec2(fract(v.x), fract(v.y)); }
 
 // X derivatives can be approximated by dFdx(x) = x[1] - x[0].
 // Y derivatives are not easily available since we operate in terms of X spans

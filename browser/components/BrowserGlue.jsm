@@ -16,59 +16,97 @@ const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 const { AppConstants } = ChromeUtils.import(
   "resource://gre/modules/AppConstants.jsm"
 );
-ChromeUtils.defineModuleGetter(
-  this,
-  "ASRouterDefaultConfig",
-  "resource://activity-stream/lib/ASRouterDefaultConfig.jsm"
-);
-ChromeUtils.defineModuleGetter(
-  this,
-  "ASRouterNewTabHook",
-  "resource://activity-stream/lib/ASRouterNewTabHook.jsm"
-);
-ChromeUtils.defineModuleGetter(
-  this,
-  "ActorManagerParent",
-  "resource://gre/modules/ActorManagerParent.jsm"
-);
 
-ChromeUtils.defineModuleGetter(
-  this,
-  "AboutNewTab",
-  "resource:///modules/AboutNewTab.jsm"
-);
+XPCOMUtils.defineLazyModuleGetters(this, {
+  AboutNewTab: "resource:///modules/AboutNewTab.jsm",
+  ActorManagerParent: "resource://gre/modules/ActorManagerParent.jsm",
+  AddonManager: "resource://gre/modules/AddonManager.jsm",
+  AppMenuNotifications: "resource://gre/modules/AppMenuNotifications.jsm",
+  ASRouterDefaultConfig:
+    "resource://activity-stream/lib/ASRouterDefaultConfig.jsm",
+  ASRouterNewTabHook: "resource://activity-stream/lib/ASRouterNewTabHook.jsm",
+  AsyncShutdown: "resource://gre/modules/AsyncShutdown.jsm",
+  Blocklist: "resource://gre/modules/Blocklist.jsm",
+  BookmarkHTMLUtils: "resource://gre/modules/BookmarkHTMLUtils.jsm",
+  BookmarkJSONUtils: "resource://gre/modules/BookmarkJSONUtils.jsm",
+  BrowserUsageTelemetry: "resource:///modules/BrowserUsageTelemetry.jsm",
+  BrowserUtils: "resource://gre/modules/BrowserUtils.jsm",
+  BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.jsm",
+  ContextualIdentityService:
+    "resource://gre/modules/ContextualIdentityService.jsm",
+  Corroborate: "resource://gre/modules/Corroborate.jsm",
+  DeferredTask: "resource://gre/modules/DeferredTask.jsm",
+  Discovery: "resource:///modules/Discovery.jsm",
+  DoHController: "resource:///modules/DoHController.jsm",
+  DownloadsViewableInternally:
+    "resource:///modules/DownloadsViewableInternally.jsm",
+  E10SUtils: "resource://gre/modules/E10SUtils.jsm",
+  ExtensionsUI: "resource:///modules/ExtensionsUI.jsm",
+  FeatureGate: "resource://featuregates/FeatureGate.jsm",
+  FirefoxMonitor: "resource:///modules/FirefoxMonitor.jsm",
+  FxAccounts: "resource://gre/modules/FxAccounts.jsm",
+  HomePage: "resource:///modules/HomePage.jsm",
+  Integration: "resource://gre/modules/Integration.jsm",
+  Log: "resource://gre/modules/Log.jsm",
+  LoginBreaches: "resource:///modules/LoginBreaches.jsm",
+  NetUtil: "resource://gre/modules/NetUtil.jsm",
+  NewTabUtils: "resource://gre/modules/NewTabUtils.jsm",
+  Normandy: "resource://normandy/Normandy.jsm",
+  OS: "resource://gre/modules/osfile.jsm",
+  OsEnvironment: "resource://gre/modules/OsEnvironment.jsm",
+  PageActions: "resource:///modules/PageActions.jsm",
+  PageThumbs: "resource://gre/modules/PageThumbs.jsm",
+  PdfJs: "resource://pdf.js/PdfJs.jsm",
+  PermissionUI: "resource:///modules/PermissionUI.jsm",
+  PlacesBackups: "resource://gre/modules/PlacesBackups.jsm",
+  PlacesDBUtils: "resource://gre/modules/PlacesDBUtils.jsm",
+  PlacesUIUtils: "resource:///modules/PlacesUIUtils.jsm",
+  PlacesUtils: "resource://gre/modules/PlacesUtils.jsm",
+  PluralForm: "resource://gre/modules/PluralForm.jsm",
+  PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.jsm",
+  ProcessHangMonitor: "resource:///modules/ProcessHangMonitor.jsm",
+  PublicSuffixList: "resource://gre/modules/netwerk-dns/PublicSuffixList.jsm",
+  RemoteSettings: "resource://services-settings/remote-settings.js",
+  RemoteSecuritySettings:
+    "resource://gre/modules/psm/RemoteSecuritySettings.jsm",
+  RFPHelper: "resource://gre/modules/RFPHelper.jsm",
+  SafeBrowsing: "resource://gre/modules/SafeBrowsing.jsm",
+  Sanitizer: "resource:///modules/Sanitizer.jsm",
+  SaveToPocket: "chrome://pocket/content/SaveToPocket.jsm",
+  SearchTelemetry: "resource:///modules/SearchTelemetry.jsm",
+  SessionStartup: "resource:///modules/sessionstore/SessionStartup.jsm",
+  SessionStore: "resource:///modules/sessionstore/SessionStore.jsm",
+  TabCrashHandler: "resource:///modules/ContentCrashHandlers.jsm",
+  TabUnloader: "resource:///modules/TabUnloader.jsm",
+  TelemetryUtils: "resource://gre/modules/TelemetryUtils.jsm",
+  TRRRacer: "resource:///modules/TRRPerformance.jsm",
+  UIState: "resource://services-sync/UIState.jsm",
+  WebChannel: "resource://gre/modules/WebChannel.jsm",
+  WindowsRegistry: "resource://gre/modules/WindowsRegistry.jsm",
+});
 
-ChromeUtils.defineModuleGetter(
-  this,
-  "E10SUtils",
-  "resource://gre/modules/E10SUtils.jsm"
-);
+// eslint-disable-next-line no-unused-vars
+XPCOMUtils.defineLazyModuleGetters(this, {
+  AboutLoginsParent: "resource:///modules/AboutLoginsParent.jsm",
+  PluginManager: "resource:///actors/PluginParent.jsm",
+});
 
-ChromeUtils.defineModuleGetter(this, "Log", "resource://gre/modules/Log.jsm");
-
-ChromeUtils.defineModuleGetter(
-  this,
-  "NetUtil",
-  "resource://gre/modules/NetUtil.jsm"
-);
-
-ChromeUtils.defineModuleGetter(
-  this,
-  "DeferredTask",
-  "resource://gre/modules/DeferredTask.jsm"
-);
-
-ChromeUtils.defineModuleGetter(
-  this,
-  "FeatureGate",
-  "resource://featuregates/FeatureGate.jsm"
-);
-
-ChromeUtils.defineModuleGetter(
-  this,
-  "PlacesUIUtils",
-  "resource:///modules/PlacesUIUtils.jsm"
-);
+// Modules requiring an initialization method call.
+let initializedModules = {};
+[
+  [
+    "ContentPrefServiceParent",
+    "resource://gre/modules/ContentPrefServiceParent.jsm",
+    "alwaysInit",
+  ],
+  ["UpdateListener", "resource://gre/modules/UpdateListener.jsm", "init"],
+].forEach(([name, resource, init]) => {
+  XPCOMUtils.defineLazyGetter(this, name, () => {
+    ChromeUtils.import(resource, initializedModules);
+    initializedModules[name][init]();
+    return initializedModules[name];
+  });
+});
 
 XPCOMUtils.defineLazyServiceGetter(
   this,
@@ -194,8 +232,12 @@ let JSWINDOWACTORS = {
       },
     },
     // The wildcard on about:newtab is for the ?endpoint query parameter
-    // that is used for snippets debugging.
-    matches: ["about:home", "about:welcome", "about:newtab*"],
+    // that is used for snippets debugging. The wildcard for about:home
+    // is similar, and also allows for falling back to loading the
+    // about:home document dynamically if an attempt is made to load
+    // about:home?jscache from the AboutHomeStartupCache as a top-level
+    // load.
+    matches: ["about:home*", "about:welcome", "about:newtab*"],
     remoteTypes: ["privilegedabout"],
   },
 
@@ -794,92 +836,6 @@ XPCOMUtils.defineLazyGetter(
   "WeaveService",
   () => Cc["@mozilla.org/weave/service;1"].getService().wrappedJSObject
 );
-
-// lazy module getters
-
-XPCOMUtils.defineLazyModuleGetters(this, {
-  AddonManager: "resource://gre/modules/AddonManager.jsm",
-  AppMenuNotifications: "resource://gre/modules/AppMenuNotifications.jsm",
-  AsyncShutdown: "resource://gre/modules/AsyncShutdown.jsm",
-  Blocklist: "resource://gre/modules/Blocklist.jsm",
-  BookmarkHTMLUtils: "resource://gre/modules/BookmarkHTMLUtils.jsm",
-  BookmarkJSONUtils: "resource://gre/modules/BookmarkJSONUtils.jsm",
-  BrowserUsageTelemetry: "resource:///modules/BrowserUsageTelemetry.jsm",
-  BrowserUtils: "resource://gre/modules/BrowserUtils.jsm",
-  BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.jsm",
-  ContextualIdentityService:
-    "resource://gre/modules/ContextualIdentityService.jsm",
-  Corroborate: "resource://gre/modules/Corroborate.jsm",
-  Discovery: "resource:///modules/Discovery.jsm",
-  DoHController: "resource:///modules/DoHController.jsm",
-  DownloadsViewableInternally:
-    "resource:///modules/DownloadsViewableInternally.jsm",
-  ExtensionsUI: "resource:///modules/ExtensionsUI.jsm",
-  FirefoxMonitor: "resource:///modules/FirefoxMonitor.jsm",
-  FxAccounts: "resource://gre/modules/FxAccounts.jsm",
-  HomePage: "resource:///modules/HomePage.jsm",
-  Integration: "resource://gre/modules/Integration.jsm",
-  LoginBreaches: "resource:///modules/LoginBreaches.jsm",
-  NewTabUtils: "resource://gre/modules/NewTabUtils.jsm",
-  Normandy: "resource://normandy/Normandy.jsm",
-  OS: "resource://gre/modules/osfile.jsm",
-  OsEnvironment: "resource://gre/modules/OsEnvironment.jsm",
-  PageActions: "resource:///modules/PageActions.jsm",
-  PageThumbs: "resource://gre/modules/PageThumbs.jsm",
-  PdfJs: "resource://pdf.js/PdfJs.jsm",
-  PermissionUI: "resource:///modules/PermissionUI.jsm",
-  PlacesBackups: "resource://gre/modules/PlacesBackups.jsm",
-  PlacesUtils: "resource://gre/modules/PlacesUtils.jsm",
-  PluralForm: "resource://gre/modules/PluralForm.jsm",
-  PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.jsm",
-  ProcessHangMonitor: "resource:///modules/ProcessHangMonitor.jsm",
-  PublicSuffixList: "resource://gre/modules/netwerk-dns/PublicSuffixList.jsm",
-  RemoteSettings: "resource://services-settings/remote-settings.js",
-  RemoteSecuritySettings:
-    "resource://gre/modules/psm/RemoteSecuritySettings.jsm",
-  RFPHelper: "resource://gre/modules/RFPHelper.jsm",
-  SafeBrowsing: "resource://gre/modules/SafeBrowsing.jsm",
-  Sanitizer: "resource:///modules/Sanitizer.jsm",
-  SaveToPocket: "chrome://pocket/content/SaveToPocket.jsm",
-  SearchTelemetry: "resource:///modules/SearchTelemetry.jsm",
-  SessionStartup: "resource:///modules/sessionstore/SessionStartup.jsm",
-  SessionStore: "resource:///modules/sessionstore/SessionStore.jsm",
-  TabCrashHandler: "resource:///modules/ContentCrashHandlers.jsm",
-  TabUnloader: "resource:///modules/TabUnloader.jsm",
-  TRRRacer: "resource:///modules/TRRPerformance.jsm",
-  UIState: "resource://services-sync/UIState.jsm",
-  WebChannel: "resource://gre/modules/WebChannel.jsm",
-  WindowsRegistry: "resource://gre/modules/WindowsRegistry.jsm",
-});
-
-// eslint-disable-next-line no-unused-vars
-XPCOMUtils.defineLazyModuleGetters(this, {
-  AboutLoginsParent: "resource:///modules/AboutLoginsParent.jsm",
-  AsyncPrefs: "resource://gre/modules/AsyncPrefs.jsm",
-  PluginManager: "resource:///actors/PluginParent.jsm",
-});
-
-/**
- * IF YOU ADD OR REMOVE FROM THIS LIST, PLEASE UPDATE THE LIST ABOVE AS WELL.
- * XXX Bug 1325373 is for making eslint detect these automatically.
- */
-
-let initializedModules = {};
-
-[
-  [
-    "ContentPrefServiceParent",
-    "resource://gre/modules/ContentPrefServiceParent.jsm",
-    "alwaysInit",
-  ],
-  ["UpdateListener", "resource://gre/modules/UpdateListener.jsm", "init"],
-].forEach(([name, resource, init]) => {
-  XPCOMUtils.defineLazyGetter(this, name, () => {
-    ChromeUtils.import(resource, initializedModules);
-    initializedModules[name][init]();
-    return initializedModules[name];
-  });
-});
 
 if (AppConstants.MOZ_CRASHREPORTER) {
   XPCOMUtils.defineLazyModuleGetters(this, {
@@ -1898,11 +1854,12 @@ BrowserGlue.prototype = {
 
     this._collectFirstPartyIsolationTelemetry();
 
-    if (!this._placesTelemetryGathered) {
-      Cc["@mozilla.org/places/categoriesStarter;1"]
-        .getService(Ci.nsIObserver)
-        .observe(null, "gather-places-telemetry", null);
+    if (!this._placesTelemetryGathered && TelemetryUtils.isTelemetryEnabled) {
       this._placesTelemetryGathered = true;
+      // Collect Places telemetry on the first idle.
+      Services.tm.idleDispatchToMainThread(() => {
+        PlacesDBUtils.telemetry();
+      });
     }
 
     // Set the default favicon size for UI views that use the page-icon protocol.
@@ -4921,6 +4878,7 @@ var AboutHomeStartupCache = {
   _initted: false,
   _hasWrittenThisSession: false,
   _finalized: false,
+  _firstPrivilegedProcessCreated: false,
 
   init() {
     if (this._initted) {
@@ -4966,6 +4924,10 @@ var AboutHomeStartupCache = {
     Services.obs.addObserver(this, "process-type-set");
     Services.obs.addObserver(this, "ipc:content-shutdown");
     Services.obs.addObserver(this, "intl:app-locales-changed");
+
+    this.log.trace("Constructing pipes.");
+    this._pagePipe = this.makePipe();
+    this._scriptPipe = this.makePipe();
 
     this._cacheEntryPromise = new Promise(resolve => {
       this._cacheEntryResolver = resolve;
@@ -5041,9 +5003,12 @@ var AboutHomeStartupCache = {
       this.log = null;
     }
 
+    this._procManager = null;
+    this._procManagerID = null;
     this._appender = null;
     this._cacheDeferred = null;
     this._finalized = false;
+    this._firstPrivilegedProcessCreated = false;
   },
 
   _aboutHomeURI: null,
@@ -5178,20 +5143,6 @@ var AboutHomeStartupCache = {
     return pipe;
   },
 
-  /**
-   * Constructs and caches two nsIPipe instances - one for the about:home
-   * page, and one for its hydration script. If these nsIPipe instances
-   * already exist, this function does nothing.
-   */
-  makePipes() {
-    if (this._pagePipe && this._scriptPipe) {
-      return;
-    }
-    this.log.trace("Constructing pipes.");
-    this._pagePipe = this.makePipe();
-    this._scriptPipe = this.makePipe();
-  },
-
   get pagePipe() {
     return this._pagePipe;
   },
@@ -5209,13 +5160,8 @@ var AboutHomeStartupCache = {
    * In the event that the nsICacheEntry doesn't contain anything usable,
    * the nsInputStreams on the nsIPipe's are closed.
    */
-  maybeConnectToPipes() {
-    if (!this._cacheEntry) {
-      this.log.trace(
-        "Not connecting to pipes yet - the cache entry isn't available yet"
-      );
-      return;
-    }
+  connectToPipes() {
+    this.log.trace(`Connecting nsICacheEntry to pipes.`);
 
     // If the cache doesn't yet exist, we'll know because the version metadata
     // won't exist yet.
@@ -5294,47 +5240,7 @@ var AboutHomeStartupCache = {
     }
 
     this.setDeferredResult(this.CACHE_RESULT_SCALARS.VALID_AND_USED);
-    this.log.trace("Streams connected to pipes. Dropping references to pipes.");
-    this._pagePipe = null;
-    this._scriptPipe = null;
-  },
-
-  /**
-   * Sends down the nsIPipe's to a recently created "privileged about
-   * content process".
-   *
-   * @param aProcManager (ContentProcessMessageManager)
-   *   The message manager for the newly created "privileged about
-   *   content process".
-   * @param aProcessParent
-   *   The nsIDOMProcessParent for the tab.
-   */
-  sendCacheInputStreams(aProcManager, aProcessParent) {
-    if (aProcManager.remoteType != E10SUtils.PRIVILEGEDABOUT_REMOTE_TYPE) {
-      throw new Error(
-        "Cannot send about:home cache to a non-privileged content process."
-      );
-    }
-    // Construct the nsIPipe's if they haven't been made already, which
-    // can occur if the nsICacheEntry hasn't been retrieved yet.
-    this.makePipes();
-    this.log.info("Sending input streams down to content process.");
-    let actor = aProcessParent.getActor("BrowserProcess");
-    actor.sendAsyncMessage(this.SEND_STREAMS_MESSAGE, {
-      pageInputStream: this.pagePipe.inputStream,
-      scriptInputStream: this.scriptPipe.inputStream,
-    });
-
-    // We might have the nsICacheEntry already, so we can connect it
-    // to the pipes immediately. Otherwise, we'll wait until the cache
-    // entry has been retrieved.
-    if (this._cacheEntry) {
-      this.log.trace(
-        "The cache entry is already available. Connecting to pipes " +
-          "immediately."
-      );
-      this.maybeConnectToPipes();
-    }
+    this.log.trace("Streams connected to pipes.");
   },
 
   /**
@@ -5478,15 +5384,36 @@ var AboutHomeStartupCache = {
    */
   onContentProcessCreated(childID, procManager, processParent) {
     if (procManager.remoteType == E10SUtils.PRIVILEGEDABOUT_REMOTE_TYPE) {
+      if (this._finalized) {
+        this.log.trace(
+          "Ignoring privileged about content process launch after finalization."
+        );
+        return;
+      }
+
+      if (this._firstPrivilegedProcessCreated) {
+        this.log.trace(
+          "Ignoring non-first privileged about content processes."
+        );
+        return;
+      }
+
       this.log.trace(
-        `A privileged about content process is launching with ID ${childID}.` +
-          "Sending it the cache input streams."
+        `A privileged about content process is launching with ID ${childID}.`
       );
-      this.sendCacheInputStreams(procManager, processParent);
+
+      this.log.info("Sending input streams down to content process.");
+      let actor = processParent.getActor("BrowserProcess");
+      actor.sendAsyncMessage(this.SEND_STREAMS_MESSAGE, {
+        pageInputStream: this.pagePipe.inputStream,
+        scriptInputStream: this.scriptPipe.inputStream,
+      });
+
       procManager.addMessageListener(this.CACHE_RESPONSE_MESSAGE, this);
       procManager.addMessageListener(this.CACHE_USAGE_RESULT_MESSAGE, this);
       this._procManager = procManager;
       this._procManagerID = childID;
+      this._firstPrivilegedProcessCreated = true;
     }
   },
 
@@ -5500,7 +5427,9 @@ var AboutHomeStartupCache = {
    *   ipc:content-shutdown.
    */
   onContentProcessShutdown(childID) {
+    this.log.info(`Content process shutdown: ${childID}`);
     if (this._procManagerID == childID) {
+      this.log.info("It was the current privileged about process.");
       if (this._cacheDeferred) {
         this.log.error(
           "A privileged about content process shut down while cache streams " +
@@ -5700,9 +5629,7 @@ var AboutHomeStartupCache = {
     this.log.trace("Cache entry is available.");
 
     this._cacheEntry = aEntry;
-    this.makePipes();
-    this.maybeConnectToPipes();
-
+    this.connectToPipes();
     this._cacheEntryResolver(this._cacheEntry);
   },
 };

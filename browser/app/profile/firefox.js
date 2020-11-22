@@ -368,7 +368,9 @@ pref("browser.urlbar.update2.emptySearchBehavior", 0);
 
 // Whether the urlbar displays one-offs to filter searches to history,
 // bookmarks, or tabs.
-pref("browser.urlbar.update2.localOneOffs", true);
+pref("browser.urlbar.shortcuts.bookmarks", true);
+pref("browser.urlbar.shortcuts.tabs", true);
+pref("browser.urlbar.shortcuts.history", true);
 
 // Whether the urlbar one-offs act as search filters instead of executing a
 // search immediately.
@@ -1368,6 +1370,10 @@ pref("browser.newtab.preload", true);
 // Preference to enable the entire new newtab experience at once.
 pref("browser.newtabpage.activity-stream.newNewtabExperience.enabled", false);
 
+// A preference which allows us to enable the fly out customization overlay
+// on the newtab page.
+pref("browser.newtabpage.activity-stream.customizationMenu.enabled", false);
+
 // Activity Stream prefs that control to which page to redirect
 #ifndef RELEASE_OR_BETA
   pref("browser.newtabpage.activity-stream.debug", false);
@@ -1436,7 +1442,7 @@ pref("browser.newtabpage.activity-stream.feeds.section.topstories", true);
   pref("browser.newtabpage.activity-stream.improvesearch.handoffToAwesomebar", false);
 #endif
 
-pref("browser.newtabpage.activity-stream.logowordmark.alwaysVisible", false);
+pref("browser.newtabpage.activity-stream.logowordmark.alwaysVisible", true);
 
 // Used to display triplet cards on newtab
 pref("trailhead.firstrun.newtab.triplets", "");
@@ -1882,7 +1888,7 @@ pref("browser.esedbreader.loglevel", "Error");
 
 pref("browser.laterrun.enabled", false);
 
-pref("dom.ipc.processPrelaunch.enabled", true);
+pref("dom.ipc.processPrelaunch.enabled", false);
 
 // See comments in bug 1340115 on how we got to these numbers.
 pref("browser.migrate.chrome.history.limit", 2000);
@@ -1892,6 +1898,7 @@ pref("extensions.pocket.api", "");
 pref("extensions.pocket.enabled", false);
 pref("extensions.pocket.oAuthConsumerKey", "");
 pref("extensions.pocket.site", "");
+pref("browser.migrate.showBookmarksToolbarAfterMigration", false);
 
 // Can be removed once Bug 1618058 is resolved.
 pref("signon.generation.confidenceThreshold", "0.75");
@@ -2067,6 +2074,11 @@ pref("browser.toolbars.keyboard_navigation", true);
 // "always": Always show
 // "never": Never show
 pref("browser.toolbars.bookmarks.visibility", "newtab");
+
+// Visibility of the "Show Other Bookmarks" menuitem in the
+// bookmarks toolbar contextmenu.
+pref("browser.toolbars.bookmarks.showOtherBookmarks", true);
+
 // When true, this pref will always show the bookmarks bar on
 // the New Tab Page, allowing showing/hiding via keyboard shortcut,
 // and other functionality to improve the usage of the Bookmarks Toolbar.

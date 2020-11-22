@@ -3327,7 +3327,7 @@ nsDocShell::GotoIndex(int32_t aIndex) {
   NS_ENSURE_TRUE(rootSH, NS_ERROR_FAILURE);
 
   ErrorResult rv;
-  rootSH->GotoIndex(aIndex, aIndex - rootSH->Index(), rv);
+  rootSH->GotoIndex(aIndex, aIndex - rootSH->Index(), false, rv);
   return rv.StealNSResult();
 }
 

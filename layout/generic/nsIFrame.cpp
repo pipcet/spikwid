@@ -1626,7 +1626,7 @@ nsMargin nsIFrame::GetUsedPadding() const {
   return padding;
 }
 
-nsIFrame::Sides nsIFrame::GetSkipSides(const ReflowInput* aReflowInput) const {
+nsIFrame::Sides nsIFrame::GetSkipSides() const {
   if (MOZ_UNLIKELY(StyleBorder()->mBoxDecorationBreak ==
                    StyleBoxDecorationBreak::Clone) &&
       !HasAnyStateBits(NS_FRAME_IS_OVERFLOW_CONTAINER)) {
@@ -1636,7 +1636,7 @@ nsIFrame::Sides nsIFrame::GetSkipSides(const ReflowInput* aReflowInput) const {
   // Convert the logical skip sides to physical sides using the frame's
   // writing mode
   WritingMode writingMode = GetWritingMode();
-  LogicalSides logicalSkip = GetLogicalSkipSides(aReflowInput);
+  LogicalSides logicalSkip = GetLogicalSkipSides();
   Sides skip;
 
   if (logicalSkip.BStart()) {
@@ -5999,33 +5999,6 @@ AspectRatio nsIFrame::GetAspectRatio() const {
 /* virtual */
 AspectRatio nsIFrame::GetIntrinsicRatio() const { return AspectRatio(); }
 
-static nscoord ComputeInlineSizeFromAspectRatio(
-    WritingMode aWM, const StyleAspectRatio& aAspectRatio, nscoord aBlockSize,
-    const LogicalSize& aBoxSizingAdjustment) {
-  MOZ_ASSERT(aAspectRatio.HasFiniteRatio(),
-             "Infinite or zero ratio may have undefined behavior when "
-             "computing the size");
-  return aAspectRatio.ratio.AsRatio()
-             .ToLayoutRatio()
-             .ConvertToWritingMode(aWM)
-             .ApplyTo(aBlockSize + aBoxSizingAdjustment.BSize(aWM)) -
-         aBoxSizingAdjustment.ISize(aWM);
-}
-
-static nscoord ComputeBlockSizeFromAspectRatio(
-    WritingMode aWM, const StyleAspectRatio& aAspectRatio, nscoord aInlineSize,
-    const LogicalSize& aBoxSizingAdjustment) {
-  MOZ_ASSERT(aAspectRatio.HasFiniteRatio(),
-             "Infinite or zero ratio may have undefined behavior when "
-             "computing the size");
-  return aAspectRatio.ratio.AsRatio()
-             .ToLayoutRatio()
-             .ConvertToWritingMode(aWM)
-             .Inverted()
-             .ApplyTo(aInlineSize + aBoxSizingAdjustment.ISize(aWM)) -
-         aBoxSizingAdjustment.BSize(aWM);
-}
-
 static bool ShouldApplyAutomaticMinimumOnInlineAxis(
     WritingMode aWM, const nsStyleDisplay* aDisplay,
     const nsStylePosition* aPosition) {
@@ -6066,13 +6039,17 @@ static MinMaxSize ComputeTransferredMinMaxInlineSize(
   MinMaxSize transferredISize;
 
   if (aMinMaxBSize.mMinSize > 0) {
-    transferredISize.mMinSize = ComputeInlineSizeFromAspectRatio(
-        aWM, aAspectRatio, aMinMaxBSize.mMinSize, aBoxSizingAdjustment);
+    transferredISize.mMinSize =
+        aAspectRatio.ToLayoutRatio().ComputeRatioDependentSize(
+            LogicalAxis::eLogicalAxisInline, aWM, aMinMaxBSize.mMinSize,
+            aBoxSizingAdjustment);
   }
 
   if (aMinMaxBSize.mMaxSize != NS_UNCONSTRAINEDSIZE) {
-    transferredISize.mMaxSize = ComputeInlineSizeFromAspectRatio(
-        aWM, aAspectRatio, aMinMaxBSize.mMaxSize, aBoxSizingAdjustment);
+    transferredISize.mMaxSize =
+        aAspectRatio.ToLayoutRatio().ComputeRatioDependentSize(
+            LogicalAxis::eLogicalAxisInline, aWM, aMinMaxBSize.mMaxSize,
+            aBoxSizingAdjustment);
   }
 
   // Minimum size wins over maximum size.
@@ -6206,8 +6183,9 @@ nsIFrame::SizeComputationResult nsIFrame::ComputeSize(
     auto bSize = nsLayoutUtils::ComputeBSizeValue(
         aCBSize.BSize(aWM), boxSizingAdjust.BSize(aWM),
         blockStyleCoord->AsLengthPercentage());
-    result.ISize(aWM) = ComputeInlineSizeFromAspectRatio(
-        aWM, stylePos->mAspectRatio, bSize, boxSizingAdjust);
+    result.ISize(aWM) =
+        stylePos->mAspectRatio.ToLayoutRatio().ComputeRatioDependentSize(
+            LogicalAxis::eLogicalAxisInline, aWM, bSize, boxSizingAdjust);
     aspectRatioUsage = AspectRatioUsage::ToComputeISize;
   } else if (MOZ_UNLIKELY(isGridItem) && !IsTrueOverflowContainer()) {
     // 'auto' inline-size for grid-level box - fill the CB for 'stretch' /
@@ -6339,8 +6317,10 @@ nsIFrame::SizeComputationResult nsIFrame::ComputeSize(
           blockStyleCoord->AsLengthPercentage());
     } else if (stylePos->mAspectRatio.HasFiniteRatio() &&
                result.ISize(aWM) != NS_UNCONSTRAINEDSIZE) {
-      result.BSize(aWM) = ComputeBlockSizeFromAspectRatio(
-          aWM, stylePos->mAspectRatio, result.ISize(aWM), boxSizingAdjust);
+      result.BSize(aWM) =
+          stylePos->mAspectRatio.ToLayoutRatio().ComputeRatioDependentSize(
+              LogicalAxis::eLogicalAxisBlock, aWM, result.ISize(aWM),
+              boxSizingAdjust);
       MOZ_ASSERT(aspectRatioUsage == AspectRatioUsage::None);
       aspectRatioUsage = AspectRatioUsage::ToComputeBSize;
     } else if (MOZ_UNLIKELY(isGridItem) && blockStyleCoord->IsAuto() &&
@@ -9556,8 +9536,6 @@ bool nsIFrame::FinishAndStoreOverflow(OverflowAreas& aOverflowAreas,
   // the area unnecessarily.
   if ((aNewSize.width != 0 || !IsInlineFrame()) &&
       !HasAnyStateBits(NS_FRAME_SVG_LAYOUT)) {
-    // Bug 1677642: We should probably call OverflowArea::UnionAllWith() once
-    // the scrollable overflow is using UnionEdges.
     for (const auto otype : AllOverflowTypes()) {
       nsRect& o = aOverflowAreas.Overflow(otype);
       o.UnionRectEdges(o, bounds);
@@ -10431,7 +10409,6 @@ void nsIFrame::BoxReflow(nsBoxLayoutState& aState, nsPresContext* aPresContext,
   }
 
   nsReflowStatus status;
-  WritingMode wm = aDesiredSize.GetWritingMode();
 
   bool needsReflow = IsSubtreeDirty();
 
@@ -10446,7 +10423,7 @@ void nsIFrame::BoxReflow(nsBoxLayoutState& aState, nsPresContext* aPresContext,
         needsReflow = false;
         aDesiredSize.Width() = aWidth;
         aDesiredSize.Height() = aHeight;
-        SetSize(aDesiredSize.Size(wm).ConvertTo(GetWritingMode(), wm));
+        SetSize(aDesiredSize.Size(GetWritingMode()));
       } else {
         aDesiredSize.Width() = metrics->mLastSize.width;
         aDesiredSize.Height() = metrics->mLastSize.height;

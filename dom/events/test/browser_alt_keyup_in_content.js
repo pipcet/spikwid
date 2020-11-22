@@ -35,13 +35,42 @@ add_task(async function runTests() {
   // In this test, menu popups shouldn't be open, but this helps avoiding
   // intermittent failure after inactivating the menubar.
   let popupEvents = 0;
-  function onPopupShown() {
-    popupEvents++;
-    info(`A popup is shown (visible popups: ${popupEvents})`);
+  function getPopupInfo(aPopupEventTarget) {
+    return `<${
+      aPopupEventTarget.nodeName
+    }${aPopupEventTarget.getAttribute("id") !== null ? ` id="${aPopupEventTarget.getAttribute("id")}"` : ""}>`;
   }
-  function onPopupHidden() {
+  function onPopupShown(aEvent) {
+    // Don't warn after timed out.
+    if (!runningTests) {
+      return;
+    }
+    popupEvents++;
+    info(
+      `A popup (${getPopupInfo(
+        aEvent.target
+      )}) is shown (visible popups: ${popupEvents})`
+    );
+  }
+  function onPopupHidden(aEvent) {
+    // Don't warn after timed out.
+    if (!runningTests) {
+      return;
+    }
+    if (popupEvents === 0) {
+      info(
+        `WARNING: There are some unexpected popups which may be not cleaned up by the previous test (${getPopupInfo(
+          aEvent.target
+        )})`
+      );
+      return;
+    }
     popupEvents--;
-    info(`A popup is hidden (visible popups: ${popupEvents})`);
+    info(
+      `A popup (${getPopupInfo(
+        aEvent.target
+      )}) is hidden (visible popups: ${popupEvents})`
+    );
   }
   try {
     Services.prefs.setBoolPref("ui.key.menuAccessKeyFocuses", true);

@@ -467,7 +467,7 @@ pref("media.videocontrols.picture-in-picture.video-toggle.has-used", false);
     pref("media.getusermedia.microphone.off_while_disabled.enabled", false);
   #else
     pref("media.getusermedia.camera.off_while_disabled.enabled", true);
-    pref("media.getusermedia.microphone.off_while_disabled.enabled", true);
+    pref("media.getusermedia.microphone.off_while_disabled.enabled", false);
   #endif
   pref("media.getusermedia.camera.off_while_disabled.delay_ms", 3000);
   pref("media.getusermedia.microphone.off_while_disabled.delay_ms", 3000);
@@ -1049,9 +1049,11 @@ pref("dom.cycle_collector.incremental", true);
 //   3 = openAbused
 pref("privacy.popups.disable_from_plugins", 3);
 
-// Enable Paritioned LocalStorage for a list of hosts when detected as trackers
+// Fix cookie blocking breakage by providing ephemeral Paritioned LocalStorage
+// for a list of hosts when detected as trackers.
 // (See nsICookieService::BEHAVIOR_REJECT_TRACKER cookie behavior)
-pref("privacy.restrict3rdpartystorage.partitionedHosts", "accounts.google.com/o/oauth2/");
+// See: Bug 1505212, Bug 1659394, Bug 1631811, Bug 1665035.
+pref("privacy.restrict3rdpartystorage.partitionedHosts", "accounts.google.com/o/oauth2/,d35nw2lg0ahg0v.cloudfront.net/,datastudio.google.com/embed/reporting/,d3qlaywcwingl6.cloudfront.net/");
 
 // If a host is contained in this pref list, user-interaction is required
 // before granting the storage access permission.
@@ -3610,7 +3612,7 @@ pref("font.size.monospace.x-math", 13);
   pref("font.name-list.monospace.ja", "MotoyaLMaru, MotoyaLCedar, Noto Sans Mono CJK JP, SEC Mono CJK JP, Droid Sans Mono");
 
   pref("font.name-list.serif.ko", "Charis SIL Compact, Noto Serif CJK KR, Noto Serif, Droid Serif, HYSerif");
-  pref("font.name-list.sans-serif.ko", "Roboto, Google Sans, SmartGothic, NanumGothic, Noto Sans KR, Noto Sans CJK KR, SEC CJK KR, DroidSansFallback, Droid Sans Fallback");
+  pref("font.name-list.sans-serif.ko", "Roboto, Google Sans, SmartGothic, NanumGothic, Noto Sans KR, Noto Sans CJK KR, SamsungKorean_v2.0, SEC CJK KR, DroidSansFallback, Droid Sans Fallback");
   pref("font.name-list.monospace.ko", "Droid Sans Mono, Noto Sans Mono CJK KR, SEC Mono CJK KR");
 
   pref("font.name-list.serif.th", "Charis SIL Compact, Noto Serif, Noto Serif Thai, Droid Serif");
