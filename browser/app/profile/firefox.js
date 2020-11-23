@@ -283,13 +283,13 @@ pref("browser.startup.preXulSkeletonUI", false);
 // platforms that don't always need it (Win/Linux).
 pref("toolkit.lazyHiddenWindow", true);
 
-pref("browser.slowStartup.notificationDisabled", false);
+pref("browser.slowStartup.notificationDisabled", true);
 pref("browser.slowStartup.timeThreshold", 20000);
 pref("browser.slowStartup.maxSamples", 5);
 
 pref("browser.chrome.site_icons", true);
 // browser.warnOnQuit == false will override all other possible prompts when quitting or restarting
-pref("browser.warnOnQuit", true);
+pref("browser.warnOnQuit", false);
 pref("browser.fullscreen.autohide", true);
 pref("browser.overlink-delay", 80);
 
@@ -470,7 +470,7 @@ pref("browser.search.separatePrivateDefault.ui.enabled", false);
 pref("browser.search.separatePrivateDefault.ui.banner.max", 0);
 
 // Enables the display of the Mozilla VPN banner in private browsing windows
-pref("browser.privatebrowsing.vpnpromourl", "https://vpn.mozilla.org/?utm_source=firefox-browser&utm_medium=firefox-%CHANNEL%-browser&utm_campaign=private-browsing-vpn-link");
+pref("browser.privatebrowsing.vpnpromourl", "");
 
 pref("browser.sessionhistory.max_entries", 50);
 
@@ -671,7 +671,7 @@ pref("privacy.sanitize.timeSpan", 1);
 
 pref("privacy.sanitize.migrateFx3Prefs",    false);
 
-pref("privacy.panicButton.enabled",         true);
+pref("privacy.panicButton.enabled",         false);
 
 // Time until temporary permissions expire, in ms
 pref("privacy.temporary_permission_expire_time_ms",  3600000);
@@ -1943,7 +1943,7 @@ pref("webchannel.allowObject.urlWhitelist", "");
 // crash reports, and then show a notification for submitting
 // those reports.
 #ifdef NIGHTLY_BUILD
-  pref("browser.crashReports.unsubmittedCheck.enabled", true);
+  pref("browser.crashReports.unsubmittedCheck.enabled", false);
 #else
   pref("browser.crashReports.unsubmittedCheck.enabled", false);
 #endif
@@ -2018,7 +2018,7 @@ pref("browser.chrome.errorReporter.infoURL",
 // Normandy client preferences
 pref("app.normandy.api_url", "");
 pref("app.normandy.dev_mode", false);
-pref("app.normandy.enabled", true);
+pref("app.normandy.enabled", false);
 pref("app.normandy.first_run", true);
 pref("app.normandy.logging.level", 50); // Warn
 pref("app.normandy.run_interval_seconds", 21600); // 6 hours
@@ -2026,7 +2026,7 @@ pref("app.normandy.shieldLearnMoreUrl", "");
 pref("app.normandy.last_seen_buildid", "");
 pref("app.normandy.onsync_skew_sec", 600);
 #ifdef MOZ_DATA_REPORTING
-  pref("app.shield.optoutstudies.enabled", true);
+  pref("app.shield.optoutstudies.enabled", false);
 #else
   pref("app.shield.optoutstudies.enabled", false);
 #endif
@@ -2059,9 +2059,9 @@ pref("toolkit.coverage.enabled", false);
 pref("toolkit.coverage.endpoint.base", "");
 
 // Discovery prefs
-pref("browser.discovery.enabled", true);
-pref("browser.discovery.containers.enabled", true);
-pref("browser.discovery.sites", "addons.mozilla.org");
+pref("browser.discovery.enabled", false);
+pref("browser.discovery.containers.enabled", false);
+pref("browser.discovery.sites", "");
 
 pref("browser.engagement.recent_visited_origins.expiry", 86400); // 24 * 60 * 60 (24 hours in seconds)
 
@@ -2083,7 +2083,7 @@ pref("browser.toolbars.bookmarks.showOtherBookmarks", true);
 // the New Tab Page, allowing showing/hiding via keyboard shortcut,
 // and other functionality to improve the usage of the Bookmarks Toolbar.
 #ifdef EARLY_BETA_OR_EARLIER
-pref("browser.toolbars.bookmarks.2h2020", true);
+pref("browser.toolbars.bookmarks.2h2020", false);
 #else
 pref("browser.toolbars.bookmarks.2h2020", false);
 #endif
@@ -2092,7 +2092,7 @@ pref("browser.toolbars.bookmarks.2h2020", false);
 // This pref will surface existing Firefox Account information
 // as a button next to the hamburger menu. It allows
 // quick access to sign-in and manage your Firefox Account.
-pref("identity.fxaccounts.toolbar.enabled", true);
+pref("identity.fxaccounts.toolbar.enabled", false);
 pref("identity.fxaccounts.toolbar.accessed", false);
 
 // Prefs for different services supported by Firefox Account
@@ -2516,10 +2516,3 @@ pref("devtools.popup.disable_autohide", false);
 
 // FirstStartup service time-out in ms
 pref("first-startup.timeout", 30000);
-
-// Enable the default browser agent.
-// The agent still runs as scheduled if this pref is disabled,
-// but it exits immediately before taking any action.
-#ifdef XP_WIN
-  pref("default-browser-agent.enabled", true);
-#endif
