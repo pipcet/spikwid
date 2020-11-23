@@ -431,9 +431,7 @@ JS::ContextOptions& JS::ContextOptions::setWasmSimdWormhole(bool flag) {
 }
 
 JS::ContextOptions& JS::ContextOptions::setFuzzing(bool flag) {
-#ifdef FUZZING
   fuzzing_ = flag;
-#endif
   return *this;
 }
 
