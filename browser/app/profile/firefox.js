@@ -322,10 +322,6 @@ pref("browser.startup.upgradeDialog.enabled", true);
 // platforms that don't always need it (Win/Linux).
 pref("toolkit.lazyHiddenWindow", true);
 
-pref("browser.chrome.site_icons", true);
-// browser.warnOnQuit == false will override all other possible prompts when quitting or restarting
-pref("browser.warnOnQuit", true);
-
 // Whether to warn when quitting when using the shortcut key.
 #if defined(XP_WIN)
   pref("browser.warnOnQuitShortcut", false);
@@ -340,6 +336,15 @@ pref("browser.warnOnQuit", true);
   pref("browser.fullscreen.autohide", true);
 #endif
 
+pref("browser.slowStartup.notificationDisabled", true);
+pref("browser.slowStartup.timeThreshold", 20000);
+pref("browser.slowStartup.maxSamples", 5);
+
+pref("browser.chrome.site_icons", true);
+// browser.warnOnQuit == false will override all other possible prompts when quitting or restarting
+pref("browser.warnOnQuit", false);
+pref("browser.warnOnQuitShortcut", true);
+pref("browser.fullscreen.autohide", true);
 pref("browser.overlink-delay", 80);
 
 // Whether using `ctrl` when hitting return/enter in the URL bar
@@ -550,7 +555,7 @@ pref("browser.search.separatePrivateDefault.ui.enabled", false);
 pref("browser.search.separatePrivateDefault.ui.banner.max", 0);
 
 // Enables the display of the Mozilla VPN banner in private browsing windows
-pref("browser.privatebrowsing.vpnpromourl", "https://vpn.mozilla.org/?utm_source=firefox-browser&utm_medium=firefox-%CHANNEL%-browser&utm_campaign=private-browsing-vpn-link");
+pref("browser.privatebrowsing.vpnpromourl", "");
 
 // Whether the user is opted-in to privacy segmentation.
 pref("browser.privacySegmentation.enabled", false);
@@ -798,7 +803,7 @@ pref("privacy.sanitize.timeSpan", 1);
 
 pref("privacy.sanitize.migrateFx3Prefs",    false);
 
-pref("privacy.panicButton.enabled",         true);
+pref("privacy.panicButton.enabled",         false);
 
 // Time until temporary permissions expire, in ms
 pref("privacy.temporary_permission_expire_time_ms",  3600000);
@@ -2105,7 +2110,7 @@ pref("webchannel.allowObject.urlWhitelist", "");
 // crash reports, and then show a notification for submitting
 // those reports.
 #ifdef NIGHTLY_BUILD
-  pref("browser.crashReports.unsubmittedCheck.enabled", true);
+  pref("browser.crashReports.unsubmittedCheck.enabled", false);
 #else
   pref("browser.crashReports.unsubmittedCheck.enabled", false);
 #endif
@@ -2144,7 +2149,7 @@ pref("browser.chrome.errorReporter.infoURL",
 // Normandy client preferences
 pref("app.normandy.api_url", "");
 pref("app.normandy.dev_mode", false);
-pref("app.normandy.enabled", true);
+pref("app.normandy.enabled", false);
 pref("app.normandy.first_run", true);
 pref("app.normandy.logging.level", 50); // Warn
 pref("app.normandy.run_interval_seconds", 21600); // 6 hours
@@ -2152,7 +2157,7 @@ pref("app.normandy.shieldLearnMoreUrl", "");
 pref("app.normandy.last_seen_buildid", "");
 pref("app.normandy.onsync_skew_sec", 600);
 #ifdef MOZ_DATA_REPORTING
-  pref("app.shield.optoutstudies.enabled", true);
+  pref("app.shield.optoutstudies.enabled", false);
 #else
   pref("app.shield.optoutstudies.enabled", false);
 #endif
@@ -2198,9 +2203,9 @@ pref("toolkit.coverage.enabled", false);
 pref("toolkit.coverage.endpoint.base", "");
 
 // Discovery prefs
-pref("browser.discovery.enabled", true);
-pref("browser.discovery.containers.enabled", true);
-pref("browser.discovery.sites", "addons.mozilla.org");
+pref("browser.discovery.enabled", false);
+pref("browser.discovery.containers.enabled", false);
+pref("browser.discovery.sites", "");
 
 pref("browser.engagement.recent_visited_origins.expiry", 86400); // 24 * 60 * 60 (24 hours in seconds)
 pref("browser.engagement.downloads-button.has-used", false);
@@ -2224,11 +2229,12 @@ pref("browser.toolbars.bookmarks.visibility", "newtab");
 // bookmarks toolbar contextmenu.
 pref("browser.toolbars.bookmarks.showOtherBookmarks", true);
 
+pref("browser.toolbars.bookmarks.2h2020", false);
 // Prefs to control the Firefox Account toolbar menu.
 // This pref will surface existing Firefox Account information
 // as a button next to the hamburger menu. It allows
 // quick access to sign-in and manage your Firefox Account.
-pref("identity.fxaccounts.toolbar.enabled", true);
+pref("identity.fxaccounts.toolbar.enabled", false);
 pref("identity.fxaccounts.toolbar.accessed", false);
 
 // Prefs for different services supported by Firefox Account
@@ -2654,54 +2660,3 @@ pref("devtools.popup.disable_autohide", false);
 
 // FirstStartup service time-out in ms
 pref("first-startup.timeout", 30000);
-
-// Enable the default browser agent.
-// The agent still runs as scheduled if this pref is disabled,
-// but it exits immediately before taking any action.
-#ifdef XP_WIN
-  pref("default-browser-agent.enabled", true);
-#endif
-
-// Test Prefs that do nothing for testing
-#if defined(EARLY_BETA_OR_EARLIER)
-  pref("app.normandy.test-prefs.bool", false);
-  pref("app.normandy.test-prefs.integer", 0);
-  pref("app.normandy.test-prefs.string", "");
-#endif
-
-// Shows 'View Image Info' item in the image context menu
-#ifdef MOZ_DEV_EDITION
-  pref("browser.menu.showViewImageInfo", true);
-#else
-  pref("browser.menu.showViewImageInfo", false);
-#endif
-
-// Mozilla-controlled domains that are allowed to use non-standard
-// context properties for SVG images for use in the browser UI. Please
-// keep this list short. This preference (and SVG `context-` keyword support)
-// are expected to go away once a standardized alternative becomes
-// available.
-pref("svg.context-properties.content.allowed-domains", "profile.accounts.firefox.com,profile.stage.mozaws.net");
-
-// Preference that allows individual users to disable Firefox Translations.
-#ifdef NIGHTLY_BUILD
-  pref("extensions.translations.disabled", true);
-#endif
-
-// A set of scores for rating the relevancy of snapshots. The suffixes after the
-// last decimal are prefixed by `_score` and reference the functions called in
-// SnapshotScorer.
-pref("browser.snapshots.score.Visit", 1);
-pref("browser.snapshots.score.CurrentSession", 1);
-pref("browser.snapshots.score.IsUserPersisted", 1);
-pref("browser.snapshots.score.IsUsedRemoved", -10);
-
-// A set of weights for the snapshot recommendation sources. The suffixes after
-// the last decimal map to the keys of `Snapshots.recommendationSources`.
-pref("browser.snapshots.source.CommonReferrer", 3);
-pref("browser.snapshots.source.Overlapping", 3);
-
-// Expiration days for snapshots.
-pref("browser.places.snapshots.expiration.days", 210);
-// For user managed snapshots we use more than a year, to support yearly tasks.
-pref("browser.places.snapshots.expiration.userManaged.days", 420);
