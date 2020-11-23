@@ -39,8 +39,6 @@ static_assert(eAuthorSheetFeatures == 0 && eUserSheetFeatures == 1 &&
               "in SheetLoadData::mParsingMode");
 
 class SheetLoadData final : public PreloaderBase,
-                            // FIXME(bug 1653011): This is a bit unfortunate.
-                            public SupportsWeakPtr<SheetLoadData>,
                             public nsIRunnable,
                             public nsIThreadObserver {
   using MediaMatched = dom::LinkStyle::MediaMatched;
@@ -138,6 +136,10 @@ class SheetLoadData final : public PreloaderBase,
   // LoadSheet or an @import from such a sheet.  Non-document sheet loads can
   // proceed even if we have no document.
   const bool mIsNonDocumentSheet : 1;
+
+  // Whether this stylesheet is for a child sheet load. This is necessary
+  // because the sheet could be detached mid-load by CSSOM.
+  const bool mIsChildSheet : 1;
 
   // mIsLoading is true from the moment we are placed in the loader's
   // "loading datas" table (right after the async channel is opened)
@@ -250,7 +252,17 @@ class SheetLoadData final : public PreloaderBase,
 
   bool IsLinkPreload() const { return mIsPreload == IsPreload::FromLink; }
 
+  bool BlocksLoadEvent() const { return !RootLoadData().IsLinkPreload(); }
+
  private:
+  const SheetLoadData& RootLoadData() const {
+    auto* top = this;
+    while (top->mParentData) {
+      top = top->mParentData;
+    }
+    return *top;
+  }
+
   void FireLoadEvent(nsIThreadInternal* aThread);
 };
 

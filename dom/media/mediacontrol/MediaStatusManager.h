@@ -180,16 +180,24 @@ class MediaStatusManager : public IMediaInfoUpdater {
   MediaEventSource<MediaMetadataBase>& MetadataChangedEvent() {
     return mMetadataChangedEvent;
   }
+
   MediaEventSource<PositionState>& PositionChangedEvent() {
     return mPositionStateChangedEvent;
   }
 
+  MediaEventSource<MediaSessionPlaybackState>& PlaybackChangedEvent() {
+    return mPlaybackStateChangedEvent;
+  }
+
   // Return the actual playback state.
-  MediaSessionPlaybackState GetState() const;
+  MediaSessionPlaybackState PlaybackState() const;
+
+  // When page title changes, we might need to update it on the default
+  // metadata as well.
+  void NotifyPageTitleChanged();
 
  protected:
   ~MediaStatusManager() = default;
-  virtual void HandleActualPlaybackStateChanged() = 0;
 
   // This event would be notified when the active media session changes its
   // supported actions.
@@ -222,6 +230,8 @@ class MediaStatusManager : public IMediaInfoUpdater {
   // Use copyable array so that we can use the result as a parameter for the
   // media event.
   CopyableTArray<MediaSessionAction> GetSupportedActions() const;
+
+  void StoreMediaSessionContextIdOnWindowContext();
 
   // When the amount of playing media changes, we would use this function to
   // update the guessed playback state.
@@ -257,6 +267,7 @@ class MediaStatusManager : public IMediaInfoUpdater {
   MediaEventProducer<nsTArray<MediaSessionAction>>
       mSupportedActionsChangedEvent;
   MediaEventProducer<PositionState> mPositionStateChangedEvent;
+  MediaEventProducer<MediaSessionPlaybackState> mPlaybackStateChangedEvent;
   MediaPlaybackStatus mPlaybackStatusDelegate;
 };
 

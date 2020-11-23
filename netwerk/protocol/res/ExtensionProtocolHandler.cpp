@@ -300,7 +300,7 @@ void ExtensionStreamGetter::OnStream(already_AddRefed<nsIInputStream> aStream) {
     return;
   }
 
-  rv = pump->AsyncRead(listener, nullptr);
+  rv = pump->AsyncRead(listener);
   if (NS_FAILED(rv)) {
     CancelRequest(listener, mChannel, rv);
   }
@@ -781,9 +781,9 @@ Result<nsCOMPtr<nsIInputStream>, nsresult> ExtensionProtocolHandler::NewStream(
   }
 
   nsCOMPtr<nsIInputStream> inputStream;
-  MOZ_TRY(NS_NewLocalFileInputStream(getter_AddRefs(inputStream), requestedFile,
-                                     PR_RDONLY, -1,
-                                     nsIFileInputStream::DEFER_OPEN));
+  MOZ_TRY_VAR(inputStream,
+              NS_NewLocalFileInputStream(requestedFile, PR_RDONLY, -1,
+                                         nsIFileInputStream::DEFER_OPEN));
 
   return inputStream;
 }
@@ -891,7 +891,7 @@ void ExtensionProtocolHandler::NewSimpleChannel(nsIURI* aURI,
         nsresult rv = origChannel->AsyncOpen(listener);
         if (NS_FAILED(rv)) {
           simpleChannel->Cancel(NS_BINDING_ABORTED);
-          return RequestOrReason(rv);
+          return Err(rv);
         }
         return RequestOrReason(origChannel);
       });

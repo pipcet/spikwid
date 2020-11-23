@@ -427,6 +427,8 @@ class AutofillRecords {
 
     this._data.push(recordToSave);
 
+    this.updateUseCountTelemetry();
+
     this._store.saveSoon();
 
     Services.obs.notifyObservers(
@@ -553,6 +555,8 @@ class AutofillRecords {
     recordFound.timesUsed++;
     recordFound.timeLastUsed = Date.now();
 
+    this.updateUseCountTelemetry();
+
     this._store.saveSoon();
     Services.obs.notifyObservers(
       {
@@ -565,6 +569,8 @@ class AutofillRecords {
       "notifyUsed"
     );
   }
+
+  updateUseCountTelemetry() {}
 
   /**
    * Removes the specified record. No error occurs if the record isn't found.
@@ -606,6 +612,8 @@ class AutofillRecords {
         this._data.splice(index, 1);
       }
     }
+
+    this.updateUseCountTelemetry();
 
     this._store.saveSoon();
     Services.obs.notifyObservers(
@@ -1759,6 +1767,19 @@ class CreditCards extends AutofillRecords {
       VALID_CREDIT_CARD_COMPUTED_FIELDS,
       CREDIT_CARD_SCHEMA_VERSION
     );
+    Services.obs.addObserver(this, "formautofill-storage-changed");
+  }
+
+  observe(subject, topic, data) {
+    switch (topic) {
+      case "formautofill-storage-changed":
+        let count = this._data.filter(entry => !entry.deleted).length;
+        Services.telemetry.scalarSet(
+          "formautofill.creditCards.autofill_profiles_count",
+          count
+        );
+        break;
+    }
   }
 
   async computeFields(creditCard) {
@@ -2079,6 +2100,17 @@ class CreditCards extends AutofillRecords {
 
     await this.update(guid, creditCardToMerge, true);
     return true;
+  }
+
+  updateUseCountTelemetry() {
+    let histogram = Services.telemetry.getHistogramById("CREDITCARD_NUM_USES");
+    histogram.clear();
+
+    let records = this._data.filter(r => !r.deleted);
+
+    for (let record of records) {
+      histogram.add(record.timesUsed);
+    }
   }
 }
 

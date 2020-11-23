@@ -9,6 +9,7 @@
 
 #include "mozilla/net/DNSByTypeRecord.h"
 #include "mozilla/Assertions.h"
+#include "nsClassHashtable.h"
 #include "nsIChannel.h"
 #include "nsIHttpPushListener.h"
 #include "nsIInterfaceRequestor.h"
@@ -16,42 +17,14 @@
 #include "nsHostResolver.h"
 #include "nsThreadUtils.h"
 #include "nsXULAppAPI.h"
+#include "DNSPacket.h"
 
 namespace mozilla {
 namespace net {
 
-// the values map to RFC1035 type identifiers
-enum TrrType {
-  TRRTYPE_A = 1,
-  TRRTYPE_NS = 2,
-  TRRTYPE_CNAME = 5,
-  TRRTYPE_AAAA = 28,
-  TRRTYPE_TXT = 16,
-  TRRTYPE_HTTPSSVC = 65345,
-};
-
-class DOHaddr : public LinkedListElement<DOHaddr> {
- public:
-  NetAddr mNet;
-  uint32_t mTtl;
-};
-
 class TRRService;
 class TRRServiceChannel;
 extern TRRService* gTRRService;
-
-class DOHresp {
- public:
-  ~DOHresp() {
-    DOHaddr* el;
-    while ((el = mAddresses.popLast())) {
-      delete el;
-    }
-  }
-  nsresult Add(uint32_t TTL, unsigned char* dns, unsigned int index,
-               uint16_t len, bool aLocalAllowed);
-  LinkedList<DOHaddr> mAddresses;
-};
 
 class TRR : public Runnable,
             public nsITimerCallback,
@@ -65,10 +38,6 @@ class TRR : public Runnable,
   NS_DECL_NSIREQUESTOBSERVER
   NS_DECL_NSISTREAMLISTENER
   NS_DECL_NSITIMERCALLBACK
-
-  // Never accept larger DOH responses than this as that would indicate
-  // something is wrong. Typical ones are much smaller.
-  static const unsigned int kMaxSize = 3200;
 
   // Number of "steps" we follow CNAME chains
   static const unsigned int kCnameChaseMax = 64;
@@ -96,7 +65,7 @@ class TRR : public Runnable,
         mType(aType),
         mPB(aPB),
         mCnameLoop(aLoopCount),
-        mOriginSuffix(aRec ? aRec->originSuffix : EmptyCString()) {
+        mOriginSuffix(aRec ? aRec->originSuffix : ""_ns) {
     MOZ_DIAGNOSTIC_ASSERT(XRE_IsParentProcess() || XRE_IsSocketProcess(),
                           "TRR must be in parent or socket process");
   }
@@ -135,10 +104,6 @@ class TRR : public Runnable,
  private:
   ~TRR() = default;
   nsresult SendHTTPRequest();
-  nsresult DohEncode(nsCString& aBody, bool aDisableECS);
-  nsresult PassQName(unsigned int& index);
-  nsresult GetQname(nsACString& aQname, unsigned int& aIndex);
-  nsresult DohDecode(nsCString& aHost);
   nsresult ReturnData(nsIChannel* aChannel);
 
   // FailData() must be called to signal that the asynch TRR resolve is
@@ -148,13 +113,15 @@ class TRR : public Runnable,
   // other error codes must be used. This distinction is important for the
   // subsequent logic to separate the error reasons.
   nsresult FailData(nsresult error);
-  nsresult DohDecodeQuery(const nsCString& query, nsCString& host,
-                          enum TrrType& type);
+  static nsresult DohDecodeQuery(const nsCString& query, nsCString& host,
+                                 enum TrrType& type);
   nsresult ReceivePush(nsIHttpChannel* pushed, nsHostRecord* pushedRec);
   nsresult On200Response(nsIChannel* aChannel);
   nsresult FollowCname(nsIChannel* aChannel);
 
   bool UseDefaultServer();
+  void SaveAdditionalRecords(
+      const nsClassHashtable<nsCStringHashKey, DOHresp>& aRecords);
 
   nsresult CreateChannelHelper(nsIURI* aUri, nsIChannel** aResult);
 
@@ -162,20 +129,17 @@ class TRR : public Runnable,
   static nsresult SetupTRRServiceChannelInternal(nsIHttpChannel* aChannel,
                                                  bool aUseGet);
 
-  nsresult ParseSvcParam(unsigned int svcbIndex, uint16_t key,
-                         SvcFieldValue& field, uint16_t length);
+  void StoreIPHintAsDNSRecord(const struct SVCB& aSVCBRecord);
 
   nsCOMPtr<nsIChannel> mChannel;
   enum TrrType mType;
-  unsigned char mResponse[kMaxSize];
-  unsigned int mBodySize = 0;
+  DNSPacket mPacket;
   bool mFailed = false;
   bool mPB;
   DOHresp mDNS;
   nsCOMPtr<nsITimer> mTimeout;
   nsCString mCname;
   uint32_t mCnameLoop = kCnameChaseMax;  // loop detection counter
-  bool mAllowRFC1918 = false;
 
   uint32_t mTTL = UINT32_MAX;
   TypeRecordResultType mResult = mozilla::AsVariant(Nothing());

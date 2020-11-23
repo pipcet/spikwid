@@ -8,7 +8,8 @@ use crate::sections_translator::{
 };
 use crate::state::ModuleTranslationState;
 use cranelift_codegen::timing;
-use wasmparser::{NameSectionReader, Parser, Payload};
+use std::prelude::v1::*;
+use wasmparser::{NameSectionReader, Parser, Payload, Validator};
 
 /// Translate a sequence of bytes forming a valid Wasm binary into a list of valid Cranelift IR
 /// [`Function`](cranelift_codegen::ir::Function).
@@ -18,84 +19,139 @@ pub fn translate_module<'data>(
 ) -> WasmResult<ModuleTranslationState> {
     let _tt = timing::wasm_translate_module();
     let mut module_translation_state = ModuleTranslationState::new();
+    let mut validator = Validator::new();
+    validator.wasm_features(environ.wasm_features());
+    let mut stack = Vec::new();
+    let mut modules = 1;
+    let mut cur_module = 0;
 
     for payload in Parser::new(0).parse_all(data) {
         match payload? {
-            Payload::Version { .. } | Payload::End => {}
+            Payload::Version { num, range } => {
+                validator.version(num, &range)?;
+                environ.module_start(cur_module);
+            }
+            Payload::End => {
+                validator.end()?;
+                environ.module_end(cur_module);
+                if let Some((other, other_index)) = stack.pop() {
+                    validator = other;
+                    cur_module = other_index;
+                }
+            }
 
             Payload::TypeSection(types) => {
+                validator.type_section(&types)?;
                 parse_type_section(types, &mut module_translation_state, environ)?;
             }
 
             Payload::ImportSection(imports) => {
+                validator.import_section(&imports)?;
                 parse_import_section(imports, environ)?;
             }
 
             Payload::FunctionSection(functions) => {
+                validator.function_section(&functions)?;
                 parse_function_section(functions, environ)?;
             }
 
             Payload::TableSection(tables) => {
+                validator.table_section(&tables)?;
                 parse_table_section(tables, environ)?;
             }
 
             Payload::MemorySection(memories) => {
+                validator.memory_section(&memories)?;
                 parse_memory_section(memories, environ)?;
             }
 
             Payload::GlobalSection(globals) => {
+                validator.global_section(&globals)?;
                 parse_global_section(globals, environ)?;
             }
 
             Payload::ExportSection(exports) => {
+                validator.export_section(&exports)?;
                 parse_export_section(exports, environ)?;
             }
 
-            Payload::StartSection { func, .. } => {
+            Payload::StartSection { func, range } => {
+                validator.start_section(func, &range)?;
                 parse_start_section(func, environ)?;
             }
 
             Payload::ElementSection(elements) => {
+                validator.element_section(&elements)?;
                 parse_element_section(elements, environ)?;
             }
 
-            Payload::CodeSectionStart { .. } => {}
-            Payload::CodeSectionEntry(code) => {
-                let mut code = code.get_binary_reader();
-                let size = code.bytes_remaining();
-                let offset = code.original_position();
-                environ.define_function_body(
-                    &module_translation_state,
-                    code.read_bytes(size)?,
-                    offset,
-                )?;
+            Payload::CodeSectionStart { count, range, .. } => {
+                validator.code_section_start(count, &range)?;
+                environ.reserve_function_bodies(count, range.start as u64);
+            }
+
+            Payload::CodeSectionEntry(body) => {
+                let func_validator = validator.code_section_entry()?;
+                environ.define_function_body(func_validator, body)?;
             }
 
             Payload::DataSection(data) => {
+                validator.data_section(&data)?;
                 parse_data_section(data, environ)?;
             }
 
-            Payload::DataCountSection { count, .. } => {
+            Payload::DataCountSection { count, range } => {
+                validator.data_count_section(count, &range)?;
                 environ.reserve_passive_data(count)?;
             }
 
-            Payload::ModuleSection(_)
-            | Payload::InstanceSection(_)
-            | Payload::AliasSection(_)
-            | Payload::ModuleCodeSectionStart { .. }
-            | Payload::ModuleCodeSectionEntry { .. } => {
+            Payload::ModuleSection(s) => {
+                validator.module_section(&s)?;
+                environ.reserve_modules(s.get_count());
+            }
+            Payload::InstanceSection(s) => {
+                validator.instance_section(&s)?;
                 unimplemented!("module linking not implemented yet")
+            }
+            Payload::AliasSection(s) => {
+                validator.alias_section(&s)?;
+                unimplemented!("module linking not implemented yet")
+            }
+            Payload::ModuleCodeSectionStart {
+                count,
+                range,
+                size: _,
+            } => {
+                validator.module_code_section_start(count, &range)?;
+            }
+
+            Payload::ModuleCodeSectionEntry { .. } => {
+                let subvalidator = validator.module_code_section_entry();
+                stack.push((validator, cur_module));
+                validator = subvalidator;
+                cur_module = modules;
+                modules += 1;
             }
 
             Payload::CustomSection {
                 name: "name",
                 data,
                 data_offset,
-            } => parse_name_section(NameSectionReader::new(data, data_offset)?, environ)?,
+            } => {
+                let result = NameSectionReader::new(data, data_offset)
+                    .map_err(|e| e.into())
+                    .and_then(|s| parse_name_section(s, environ));
+                if let Err(e) = result {
+                    log::warn!("failed to parse name section {:?}", e);
+                }
+            }
 
             Payload::CustomSection { name, data, .. } => environ.custom_section(name, data)?,
 
-            Payload::UnknownSection { .. } => unreachable!(),
+            Payload::UnknownSection { id, range, .. } => {
+                validator.unknown_section(id, &range)?;
+                unreachable!();
+            }
         }
     }
 

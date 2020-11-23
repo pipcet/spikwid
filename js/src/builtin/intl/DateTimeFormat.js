@@ -387,12 +387,10 @@ function InitializeDateTimeFormat(dateTimeFormat, thisValue, locales, options, m
     formatOpt.hour = GetOption(options, "hour", "string", ["2-digit", "numeric"], undefined);
     formatOpt.minute = GetOption(options, "minute", "string", ["2-digit", "numeric"], undefined);
     formatOpt.second = GetOption(options, "second", "string", ["2-digit", "numeric"], undefined);
+    formatOpt.fractionalSecondDigits = GetNumberOption(options, "fractionalSecondDigits", 1, 3,
+                                                       undefined);
     formatOpt.timeZoneName = GetOption(options, "timeZoneName", "string", ["short", "long"],
                                        undefined);
-
-#ifdef NIGHTLY_BUILD
-    formatOpt.fractionalSecondDigits = GetNumberOption(options, "fractionalSecondDigits", 0, 3, 0);
-#endif
 
     // Steps 23-24 provided by ICU - see comment after this function.
 
@@ -419,7 +417,8 @@ function InitializeDateTimeFormat(dateTimeFormat, thisValue, locales, options, m
 
     if (dateStyle !== undefined || timeStyle !== undefined) {
       var optionsList = [
-          "weekday", "era", "year", "month", "day", "hour", "minute", "second", "timeZoneName",
+          "weekday", "era", "year", "month", "day", "hour", "minute", "second",
+          "fractionalSecondDigits", "timeZoneName",
       ];
 
       for (var i = 0; i < optionsList.length; i++) {
@@ -429,13 +428,6 @@ function InitializeDateTimeFormat(dateTimeFormat, thisValue, locales, options, m
                              dateStyle !== undefined ? "dateStyle" : "timeStyle");
           }
       }
-
-#ifdef NIGHTLY_BUILD
-      if (formatOpt.fractionalSecondDigits !== 0) {
-          ThrowTypeError(JSMSG_INVALID_DATETIME_OPTION, "fractionalSecondDigits",
-                         dateStyle !== undefined ? "dateStyle" : "timeStyle");
-      }
-#endif
     }
 
     // Steps 26-28 provided by ICU, more or less - see comment after this function.
@@ -656,7 +648,6 @@ function toICUSkeleton(options) {
         skeleton += "s";
         break;
     }
-#ifdef NIGHTLY_BUILD
     switch (options.fractionalSecondDigits) {
     case 1:
         skeleton += "S";
@@ -668,7 +659,6 @@ function toICUSkeleton(options) {
         skeleton += "SSS";
         break;
     }
-#endif
     switch (options.timeZoneName) {
     case "short":
         skeleton += "z";
@@ -736,10 +726,8 @@ function ToDateTimeOptions(options, required, defaults) {
             needDefaults = false;
         if (options.second !== undefined)
             needDefaults = false;
-#ifdef NIGHTLY_BUILD
         if (options.fractionalSecondDigits !== undefined)
             needDefaults = false;
-#endif
     }
 
     // "DateTimeFormat dateStyle & timeStyle" propsal
@@ -1207,11 +1195,9 @@ function resolveICUPattern(pattern, result, includeDateTimeFields) {
     if (second) {
         _DefineDataProperty(result, "second", second);
     }
-#ifdef NIGHTLY_BUILD
     if (fractionalSecondDigits) {
         _DefineDataProperty(result, "fractionalSecondDigits", fractionalSecondDigits);
     }
-#endif
     if (timeZoneName) {
         _DefineDataProperty(result, "timeZoneName", timeZoneName);
     }

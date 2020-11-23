@@ -49,7 +49,7 @@ const EXPORTED_SYMBOLS = ["BroadcastConduit", "ConduitsParent"];
  */
 
 const {
-  ExtensionUtils: { DefaultWeakMap },
+  ExtensionUtils: { DefaultWeakMap, ExtensionError },
 } = ChromeUtils.import("resource://gre/modules/ExtensionUtils.jsm");
 
 const { BaseConduit } = ChromeUtils.import(
@@ -288,8 +288,15 @@ class BroadcastConduit extends BaseConduit {
               result = value;
             }
           })
-          // Ignore errors trying to query child Messengers being destroyed.
-          .catch(err => err.result !== Cr.NS_ERROR_NOT_AVAILABLE && reject(err))
+          .catch(err => {
+            // Forward errors that are exposed to extension, but ignore
+            // internal errors such as actor destruction and DataCloneError.
+            if (err instanceof ExtensionError || err?.mozWebExtLocation) {
+              reject(err);
+            } else {
+              Cu.reportError(err);
+            }
+          })
       );
       // Ensure resolving when there are no responses.
       Promise.allSettled(promises).then(() => resolve(result));
@@ -365,16 +372,9 @@ class ConduitsParent extends JSWindowActorParent {
   }
 
   /**
-   * JSWindowActor method, called before actor is destroyed.
-   */
-  willDestroy() {
-    Hub.actorClosed(this);
-  }
-
-  /**
-   * JSWindowActor method, ensure cleanup (see bug 1596187).
+   * JSWindowActor method, ensure cleanup.
    */
   didDestroy() {
-    this.willDestroy();
+    Hub.actorClosed(this);
   }
 }

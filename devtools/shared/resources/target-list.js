@@ -7,9 +7,6 @@
 const Services = require("Services");
 const EventEmitter = require("devtools/shared/event-emitter");
 
-// eslint-disable-next-line mozilla/reject-some-requires
-const { gDevTools } = require("devtools/client/framework/devtools");
-
 const BROWSERTOOLBOX_FISSION_ENABLED = "devtools.browsertoolbox.fission";
 
 const {
@@ -46,6 +43,9 @@ class TargetList extends EventEmitter {
    *    all the targets are going to be declared as destroyed and the new ones
    *    will be notified to the user of this API.
    *
+   * @fires target-tread-wrong-order-on-resume : An event that is emitted when resuming
+   *        the thread throws with the "wrongOrder" error.
+   *
    * @param {RootFront} rootFront
    *        The root front.
    * @param {TargetFront} targetFront
@@ -74,8 +74,11 @@ class TargetList extends EventEmitter {
     this.onLocalTabRemotenessChange = this.onLocalTabRemotenessChange.bind(
       this
     );
-    if (targetFront.isLocalTab) {
-      targetFront.on("remoteness-change", this.onLocalTabRemotenessChange);
+    if (this.descriptorFront?.isLocalTab) {
+      this.descriptorFront.on(
+        "remoteness-change",
+        this.onLocalTabRemotenessChange
+      );
     }
 
     // Reports if we have at least one listener for the given target type
@@ -83,6 +86,12 @@ class TargetList extends EventEmitter {
 
     // List of all the target fronts
     this._targets = new Set();
+    // {Map<Function, Set<targetFront>>} A Map keyed by `onAvailable` function passed to
+    // `watchTargets`, whose initial value is a Set of the existing target fronts at the
+    // time watchTargets is called.
+    this._pendingWatchTargetInitialization = new Map();
+
+    // Add the top-level target to debug to the list of targets.
     this._targets.add(targetFront);
 
     // Listeners for target creation and destruction
@@ -118,7 +127,9 @@ class TargetList extends EventEmitter {
     // Public flag to allow listening for workers even if the fission pref is off
     // This allows listening for workers in the content toolbox outside of fission contexts
     // For now, this is only toggled by tests.
-    this.listenForWorkers = false;
+    this.listenForWorkers =
+      this.rootFront.traits.workerConsoleApiMessagesDispatchedToMainThread ===
+      false;
     this.listenForServiceWorkers = false;
     this.destroyServiceWorkersOnNavigation = false;
   }
@@ -137,6 +148,10 @@ class TargetList extends EventEmitter {
           targetFront.actorID
         );
       }
+      return;
+    }
+
+    if (this.isDestroyed() || targetFront.isDestroyedOrBeingDestroyed()) {
       return;
     }
 
@@ -166,8 +181,19 @@ class TargetList extends EventEmitter {
     targetFront.setTargetType(targetType);
 
     this._targets.add(targetFront);
+    try {
+      await targetFront.attachAndInitThread(this);
+    } catch (e) {
+      console.error("Error when attaching target:", e);
+      this._targets.delete(targetFront);
+      return;
+    }
 
-    // Notify the target front creation listeners
+    for (const targetFrontsSet of this._pendingWatchTargetInitialization.values()) {
+      targetFrontsSet.delete(targetFront);
+    }
+
+    // Then, once the target is attached, notify the target front creation listeners
     await this._createListeners.emitAsync(targetType, {
       targetFront,
       isTargetSwitching,
@@ -178,6 +204,9 @@ class TargetList extends EventEmitter {
     if (targetFront.isTopLevel) {
       await this.startListening({ onlyLegacy: true });
     }
+
+    // To be consumed by tests triggering frame navigations, spawning workers...
+    this.emitForTests("processed-available-target", targetFront);
   }
 
   _onTargetDestroyed(targetFront, isTargetSwitching = false) {
@@ -200,6 +229,10 @@ class TargetList extends EventEmitter {
     return this._listenersStarted.has(type);
   }
 
+  hasTargetWatcherSupport(type) {
+    return !!this.watcherFront?.traits[type];
+  }
+
   /**
    * Start listening for targets from the server
    *
@@ -216,6 +249,16 @@ class TargetList extends EventEmitter {
    *        but still register listeners set via Legacy Listeners.
    */
   async startListening({ onlyLegacy = false } = {}) {
+    // Cache the Watcher once for all, the first time we call `startListening()`.
+    // This `watcherFront` attribute may be then used in any function in TargetList or ResourceWatcher after this.
+    if (!this.watcherFront) {
+      // Bug 1675763: Watcher actor is not available in all situations yet.
+      const supportsWatcher = this.descriptorFront?.traits?.watcher;
+      if (supportsWatcher) {
+        this.watcherFront = await this.descriptorFront.getWatcher();
+      }
+    }
+
     let types = [];
     if (this.targetFront.isParentProcess) {
       const fissionBrowserToolboxEnabled = Services.prefs.getBoolPref(
@@ -225,9 +268,7 @@ class TargetList extends EventEmitter {
         types = TargetList.ALL_TYPES;
       }
     } else if (this.targetFront.isLocalTab) {
-      if (gDevTools.isFissionContentToolboxEnabled()) {
-        types = [TargetList.TYPES.FRAME];
-      }
+      types = [TargetList.TYPES.FRAME];
     }
     if (this.listenForWorkers && !types.includes(TargetList.TYPES.WORKER)) {
       types.push(TargetList.TYPES.WORKER);
@@ -256,24 +297,20 @@ class TargetList extends EventEmitter {
       this._setListening(type, true);
 
       // Starting with FF77, we support frames watching via watchTargets for Tab and Process descriptors
-      const supportsWatcher = this.descriptorFront?.traits?.watcher;
-      if (supportsWatcher) {
-        const watcher = await this.descriptorFront.getWatcher();
-        if (watcher.traits[type]) {
-          // When we switch to a new top level target, we don't have to stop and restart
-          // Watcher listener as it is independant from the top level target.
-          // This isn't the case for some Legacy Listeners, which fetch targets from the top level target
-          if (onlyLegacy) {
-            continue;
-          }
-          if (!this._startedListeningToWatcher) {
-            this._startedListeningToWatcher = true;
-            watcher.on("target-available", this._onTargetAvailable);
-            watcher.on("target-destroyed", this._onTargetDestroyed);
-          }
-          await watcher.watchTargets(type);
+      if (this.hasTargetWatcherSupport(type)) {
+        // When we switch to a new top level target, we don't have to stop and restart
+        // Watcher listener as it is independant from the top level target.
+        // This isn't the case for some Legacy Listeners, which fetch targets from the top level target
+        if (onlyLegacy) {
           continue;
         }
+        if (!this._startedListeningToWatcher) {
+          this._startedListeningToWatcher = true;
+          this.watcherFront.on("target-available", this._onTargetAvailable);
+          this.watcherFront.on("target-destroyed", this._onTargetDestroyed);
+        }
+        await this.watcherFront.watchTargets(type);
+        continue;
       }
       if (this.legacyImplementation[type]) {
         await this.legacyImplementation[type].listen();
@@ -299,18 +336,14 @@ class TargetList extends EventEmitter {
       this._setListening(type, false);
 
       // Starting with FF77, we support frames watching via watchTargets for Tab and Process descriptors
-      const supportsWatcher = this.descriptorFront?.traits?.watcher;
-      if (supportsWatcher) {
-        const watcher = this.descriptorFront.getCachedWatcher();
-        if (watcher && watcher.traits[type]) {
-          // When we switch to a new top level target, we don't have to stop and restart
-          // Watcher listener as it is independant from the top level target.
-          // This isn't the case for some Legacy Listeners, which fetch targets from the top level target
-          if (!onlyLegacy) {
-            watcher.unwatchTargets(type);
-          }
-          continue;
+      if (this.hasTargetWatcherSupport(type)) {
+        // When we switch to a new top level target, we don't have to stop and restart
+        // Watcher listener as it is independant from the top level target.
+        // This isn't the case for some Legacy Listeners, which fetch targets from the top level target
+        if (!onlyLegacy) {
+          this.watcherFront.unwatchTargets(type);
         }
+        continue;
       }
       if (this.legacyImplementation[type]) {
         this.legacyImplementation[type].unlisten();
@@ -333,7 +366,7 @@ class TargetList extends EventEmitter {
       return TargetList.TYPES.PROCESS;
     }
 
-    if (typeName == "workerTarget") {
+    if (typeName == "workerDescriptor" || typeName == "workerTarget") {
       if (target.isSharedWorker) {
         return TargetList.TYPES.SHARED_WORKER;
       }
@@ -375,27 +408,54 @@ class TargetList extends EventEmitter {
     }
 
     // Notify about already existing target of these types
-    const promises = [...this._targets]
-      .filter(targetFront => types.includes(targetFront.targetType))
-      .map(async targetFront => {
-        try {
-          // Ensure waiting for eventual async create listeners
-          // which may setup things regarding the existing targets
-          // and listen callsite may care about the full initialization
-          await onAvailable({
-            targetFront,
-            isTargetSwitching: false,
-          });
-        } catch (e) {
-          // Prevent throwing when onAvailable handler throws on one target
-          // so that it can try to register the other targets
-          console.error(
-            "Exception when calling onAvailable handler",
-            e.message,
-            e
-          );
-        }
-      });
+    const targetFronts = [...this._targets].filter(targetFront =>
+      types.includes(targetFront.targetType)
+    );
+    this._pendingWatchTargetInitialization.set(
+      onAvailable,
+      new Set(targetFronts)
+    );
+    const promises = targetFronts.map(async targetFront => {
+      // Attach the targets that aren't attached yet (e.g. the initial top-level target),
+      // and wait for the other ones to be fully attached.
+      try {
+        await targetFront.attachAndInitThread(this);
+      } catch (e) {
+        console.error("Error when attaching target:", e);
+        return;
+      }
+
+      // It can happen that onAvailable was already called with this targetFront at
+      // this time (via _onTargetAvailable). If that's the case, we don't want to call
+      // onAvailable a second time.
+      if (
+        this._pendingWatchTargetInitialization &&
+        this._pendingWatchTargetInitialization.has(onAvailable) &&
+        !this._pendingWatchTargetInitialization
+          .get(onAvailable)
+          .has(targetFront)
+      ) {
+        return;
+      }
+
+      try {
+        // Ensure waiting for eventual async create listeners
+        // which may setup things regarding the existing targets
+        // and listen callsite may care about the full initialization
+        await onAvailable({
+          targetFront,
+          isTargetSwitching: false,
+        });
+      } catch (e) {
+        // Prevent throwing when onAvailable handler throws on one target
+        // so that it can try to register the other targets
+        console.error(
+          "Exception when calling onAvailable handler",
+          e.message,
+          e
+        );
+      }
+    });
 
     for (const type of types) {
       this._createListeners.on(type, onAvailable);
@@ -405,13 +465,14 @@ class TargetList extends EventEmitter {
     }
 
     await Promise.all(promises);
+    this._pendingWatchTargetInitialization.delete(onAvailable);
   }
 
   /**
    * Stop listening for the creation and/or destruction of a given type of target fronts.
    * See `watchTargets()` for documentation of the arguments.
    */
-  async unwatchTargets(types, onAvailable, onDestroy) {
+  unwatchTargets(types, onAvailable, onDestroy) {
     if (typeof onAvailable != "function") {
       throw new Error(
         "TargetList.unwatchTargets expects a function as second argument"
@@ -424,6 +485,7 @@ class TargetList extends EventEmitter {
         this._destroyListeners.off(type, onDestroy);
       }
     }
+    this._pendingWatchTargetInitialization.delete(onAvailable);
   }
 
   /**
@@ -465,15 +527,16 @@ class TargetList extends EventEmitter {
   }
 
   /**
-   * This function is triggered by an event sent by LocalTabTarget when
-   * the tab navigates to a distinct content process.
+   * This function is triggered by an event sent by the TabDescriptor when
+   * the tab navigates to a distinct process.
    *
    * @param TargetFront targetFront
-   *        The LocalTabTarget instance that navigated to another process
+   *        The BrowsingContextTargetFront instance that navigated to another process
    */
   async onLocalTabRemotenessChange(targetFront) {
-    // Cache the client as this property will be nullified when the target is closed
+    // Cache the tab & client as this property will be nullified when the target is closed
     const client = targetFront.client;
+    const localTab = targetFront.localTab;
 
     // By default, we do close the DevToolsClient when the target is destroyed.
     // This happens when we close the toolbox (Toolbox.destroy calls Target.destroy),
@@ -488,7 +551,7 @@ class TargetList extends EventEmitter {
     await targetFront.once("target-destroyed");
 
     // Fetch the new target from the existing client so that the new target uses the same client.
-    const newTarget = await TargetFactory.forTab(targetFront.localTab, client);
+    const newTarget = await TargetFactory.forTab(localTab, client);
 
     this.switchToTarget(newTarget);
   }
@@ -502,9 +565,6 @@ class TargetList extends EventEmitter {
    */
   async switchToTarget(newTarget) {
     newTarget.setIsTopLevel(true);
-    if (newTarget.isLocalTab) {
-      newTarget.on("remoteness-change", this.onLocalTabRemotenessChange);
-    }
 
     // Notify about this new target to creation listeners
     await this._onTargetAvailable(newTarget, true);
@@ -514,6 +574,17 @@ class TargetList extends EventEmitter {
 
   isTargetRegistered(targetFront) {
     return this._targets.has(targetFront);
+  }
+
+  isDestroyed() {
+    return this._isDestroyed;
+  }
+
+  destroy() {
+    this.stopListening();
+    this._createListeners.off();
+    this._destroyListeners.off();
+    this._isDestroyed = true;
   }
 }
 

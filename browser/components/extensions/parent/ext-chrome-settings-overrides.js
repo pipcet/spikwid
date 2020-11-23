@@ -57,6 +57,8 @@ XPCOMUtils.defineLazyGetter(this, "homepagePopup", () => {
     descriptionMessageId: "homepageControlled.message",
     learnMoreMessageId: "homepageControlled.learnMore",
     learnMoreLink: "extension-home",
+    preferencesLocation: "home-homeOverride",
+    preferencesEntrypoint: "addon-manage-home-override",
     async beforeDisableAddon(popup, win) {
       // Disabling an add-on should remove the tabs that it has open, but we want
       // to open the new homepage in this tab (which might get closed).
@@ -229,17 +231,9 @@ this.chrome_settings_overrides = class extends ExtensionAPI {
         ENGINE_ADDED_SETTING_NAME
       );
     }
-    // We can call removeEngine in nsSearchService startup, if so we dont
-    // need to reforward the call, just disable the web extension.
-    if (!Services.search.isInitialized) {
-      return;
-    }
 
     try {
-      let engines = await Services.search.getEnginesByExtensionID(id);
-      if (engines.length) {
-        await Services.search.removeWebExtensionEngine(id);
-      }
+      await Services.search.removeWebExtensionEngine(id);
     } catch (e) {
       Cu.reportError(e);
     }

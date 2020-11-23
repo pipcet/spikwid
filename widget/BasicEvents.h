@@ -480,7 +480,8 @@ class WidgetEvent : public WidgetEventTime {
         break;
       default:
         if (mMessage == eResize || mMessage == eMozVisualResize ||
-            mMessage == eMozVisualScroll || mMessage == eEditorInput) {
+            mMessage == eMozVisualScroll || mMessage == eEditorInput ||
+            mMessage == eFormSelect) {
           mFlags.mCancelable = false;
         } else {
           mFlags.mCancelable = true;
@@ -902,7 +903,7 @@ class WidgetEvent : public WidgetEventTime {
             mMessage == eMouseOut || mMessage == eMouseMove ||
             mMessage == eContextMenu || mMessage == eXULPopupShowing ||
             mMessage == eXULPopupHiding || mMessage == eXULPopupShown ||
-            mMessage == eXULPopupHidden || mMessage == eXULPopupPositioned;
+            mMessage == eXULPopupHidden;
         break;
       case ePointerEventClass:
         // All pointer events are composed

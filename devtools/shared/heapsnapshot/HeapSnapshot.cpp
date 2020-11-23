@@ -34,6 +34,7 @@
 
 #include "jsapi.h"
 #include "jsfriendapi.h"
+#include "js/Object.h"  // JS::GetCompartment
 #include "nsCycleCollectionParticipant.h"
 #include "nsCRTGlue.h"
 #include "nsIFile.h"
@@ -176,19 +177,16 @@ const CharT* HeapSnapshot::getOrInternString(
 }
 
 // Get a de-duplicated string as a Maybe<StringOrRef> from the given `msg`.
-#define GET_STRING_OR_REF_WITH_PROP_NAMES(msg, strPropertyName, \
-                                          refPropertyName)      \
-  (msg.has_##refPropertyName()                                  \
-       ? Some(StringOrRef(msg.refPropertyName()))               \
-       : msg.has_##strPropertyName()                            \
-             ? Some(StringOrRef(&msg.strPropertyName()))        \
-             : Nothing())
+#define GET_STRING_OR_REF_WITH_PROP_NAMES(msg, strPropertyName,              \
+                                          refPropertyName)                   \
+  (msg.has_##refPropertyName()   ? Some(StringOrRef(msg.refPropertyName()))  \
+   : msg.has_##strPropertyName() ? Some(StringOrRef(&msg.strPropertyName())) \
+                                 : Nothing())
 
-#define GET_STRING_OR_REF(msg, property)                           \
-  (msg.has_##property##ref()                                       \
-       ? Some(StringOrRef(msg.property##ref()))                    \
-       : msg.has_##property() ? Some(StringOrRef(&msg.property())) \
-                              : Nothing())
+#define GET_STRING_OR_REF(msg, property)                              \
+  (msg.has_##property##ref() ? Some(StringOrRef(msg.property##ref())) \
+   : msg.has_##property()    ? Some(StringOrRef(&msg.property()))     \
+                             : Nothing())
 
 bool HeapSnapshot::saveNode(const protobuf::Node& node,
                             NodeIdSet& edgeReferents) {
@@ -666,7 +664,7 @@ static bool PopulateCompartmentsWithGlobals(CompartmentSet& compartments,
                                             HandleObjectVector globals) {
   unsigned length = globals.length();
   for (unsigned i = 0; i < length; i++) {
-    if (!compartments.put(GetObjectCompartment(globals[i]))) return false;
+    if (!compartments.put(JS::GetCompartment(globals[i]))) return false;
   }
 
   return true;

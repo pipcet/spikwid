@@ -39,9 +39,8 @@
         clippy::float_arithmetic,
         clippy::mut_mut,
         clippy::nonminimal_bool,
-        clippy::option_map_unwrap_or,
-        clippy::option_map_unwrap_or_else,
-        clippy::print_stdout,
+        clippy::map_unwrap_or,
+        clippy::clippy::print_stdout,
         clippy::unicode_not_nfc,
         clippy::use_self
     )
@@ -92,7 +91,7 @@ macro_rules! entity_impl {
         }
 
         impl $entity {
-            /// Return the underlying index value as a `u32`.
+            /// Create a new instance from a `u32`.
             #[allow(dead_code)]
             pub fn from_u32(x: u32) -> Self {
                 debug_assert!(x < $crate::__core::u32::MAX);

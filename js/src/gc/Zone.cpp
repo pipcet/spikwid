@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "gc/Zone-inl.h"
+#include "js/shadow/Zone.h"  // JS::shadow::Zone
 
 #include <type_traits>
 
@@ -14,8 +15,9 @@
 #include "gc/PublicIterators.h"
 #include "jit/BaselineIC.h"
 #include "jit/BaselineJIT.h"
+#include "jit/Invalidation.h"
 #include "jit/Ion.h"
-#include "jit/JitRealm.h"
+#include "jit/JitZone.h"
 #include "vm/Runtime.h"
 #include "wasm/WasmInstance.h"
 
@@ -103,7 +105,7 @@ bool ZoneAllocator::addSharedMemory(void* mem, size_t nbytes, MemoryUse use) {
     ptr->value().nbytes = nbytes;
   }
 
-  maybeMallocTriggerZoneGC();
+  maybeTriggerGCOnMalloc();
 
   return true;
 }
@@ -149,6 +151,7 @@ JS::Zone::Zone(JSRuntime* rt)
       data(this, nullptr),
       tenuredStrings(this, 0),
       tenuredBigInts(this, 0),
+      nurseryAllocatedStrings(this, 0),
       allocNurseryStrings(this, true),
       allocNurseryBigInts(this, true),
       suppressAllocationMetadataBuilder(this, false),
@@ -167,8 +170,6 @@ JS::Zone::Zone(JSRuntime* rt)
       atomCache_(this),
       externalStringCache_(this),
       functionToStringCache_(this),
-      keepAtomsCount(this, 0),
-      purgeAtomsDeferred(this, 0),
       propertyTree_(this, this),
       baseShapes_(this, this),
       initialShapes_(this, this),
@@ -235,7 +236,24 @@ void Zone::setNeedsIncrementalBarrier(bool needs) {
   needsIncrementalBarrier_ = needs;
 }
 
-void Zone::beginSweepTypes() { types.beginSweep(); }
+void Zone::changeGCState(GCState prev, GCState next) {
+  MOZ_ASSERT(RuntimeHeapIsBusy());
+  MOZ_ASSERT(canCollect());
+  MOZ_ASSERT(gcState() == prev);
+
+  // This can be called when barriers have been temporarily disabled by
+  // AutoDisableBarriers. In that case, don't update needsIncrementalBarrier_
+  // and barriers will be re-enabled by ~AutoDisableBarriers() if necessary.
+  bool barriersDisabled = isGCMarking() && !needsIncrementalBarrier();
+
+  gcState_ = next;
+
+  // Update the barriers state when we transition between marking and
+  // non-marking states, unless barriers have been disabled.
+  if (!barriersDisabled) {
+    needsIncrementalBarrier_ = isGCMarking();
+  }
+}
 
 template <class Pred>
 static void EraseIf(js::gc::WeakEntryVector& entries, Pred pred) {
@@ -460,10 +478,6 @@ void Zone::discardJitCode(JSFreeOp* fop,
     // stubs because the optimizedStubSpace will be purged below.
     if (discardBaselineCode) {
       jitScript->purgeOptimizedStubs(script);
-
-      // ICs were purged so the script will need to warm back up before it can
-      // be inlined during Ion compilation.
-      jitScript->clearIonCompiledOrInlined();
     }
 
     // Finally, reset the active flag.
@@ -484,11 +498,19 @@ void Zone::discardJitCode(JSFreeOp* fop,
   }
 }
 
-void JS::Zone::delegatePreWriteBarrierInternal(JSObject* obj,
-                                               JSObject* delegate) {
-  MOZ_ASSERT(js::gc::detail::GetDelegate(obj) == delegate);
+void JS::Zone::beforeClearDelegateInternal(JSObject* wrapper,
+                                           JSObject* delegate) {
+  MOZ_ASSERT(js::gc::detail::GetDelegate(wrapper) == delegate);
   MOZ_ASSERT(needsIncrementalBarrier());
-  GCMarker::fromTracer(barrierTracer())->severWeakDelegate(obj, delegate);
+  GCMarker::fromTracer(barrierTracer())->severWeakDelegate(wrapper, delegate);
+}
+
+void JS::Zone::afterAddDelegateInternal(JSObject* wrapper) {
+  JSObject* delegate = js::gc::detail::GetDelegate(wrapper);
+  if (delegate) {
+    GCMarker::fromTracer(barrierTracer())
+        ->restoreWeakDelegate(wrapper, delegate);
+  }
 }
 
 #ifdef JSGC_HASH_TABLE_CHECKS
@@ -620,30 +642,7 @@ bool Zone::ownedByCurrentHelperThread() {
   return helperThreadOwnerContext_ == TlsContext.get();
 }
 
-void Zone::releaseAtoms() {
-  MOZ_ASSERT(hasKeptAtoms());
-
-  keepAtomsCount--;
-
-  if (!hasKeptAtoms() && purgeAtomsDeferred) {
-    purgeAtomsDeferred = false;
-    purgeAtomCache();
-  }
-}
-
-void Zone::purgeAtomCacheOrDefer() {
-  if (hasKeptAtoms()) {
-    purgeAtomsDeferred = true;
-    return;
-  }
-
-  purgeAtomCache();
-}
-
 void Zone::purgeAtomCache() {
-  MOZ_ASSERT(!hasKeptAtoms());
-  MOZ_ASSERT(!purgeAtomsDeferred);
-
   atomCache().clearAndCompact();
 
   // Also purge the dtoa caches so that subsequent lookups populate atom
@@ -653,22 +652,13 @@ void Zone::purgeAtomCache() {
   }
 }
 
-void Zone::traceAtomCache(JSTracer* trc) {
-  MOZ_ASSERT(hasKeptAtoms());
-  for (auto r = atomCache().all(); !r.empty(); r.popFront()) {
-    JSAtom* atom = r.front().asPtrUnbarriered();
-    TraceRoot(trc, &atom, "kept atom");
-    MOZ_ASSERT(r.front().asPtrUnbarriered() == atom);
-  }
-}
-
 void Zone::addSizeOfIncludingThis(
     mozilla::MallocSizeOf mallocSizeOf, JS::CodeSizes* code, size_t* typePool,
     size_t* regexpZone, size_t* jitZone, size_t* baselineStubsOptimized,
     size_t* uniqueIdMap, size_t* shapeCaches, size_t* atomsMarkBitmaps,
     size_t* compartmentObjects, size_t* crossCompartmentWrappersTables,
     size_t* compartmentsPrivateData, size_t* scriptCountsMapArg) {
-  *typePool += types.typeLifoAlloc().sizeOfExcludingThis(mallocSizeOf);
+  // TODO(no-TI): remove typePool argument.
   *regexpZone += regExps().sizeOfExcludingThis(mallocSizeOf);
   if (jitZone_) {
     jitZone_->addSizeOfIncludingThis(mallocSizeOf, code, jitZone,

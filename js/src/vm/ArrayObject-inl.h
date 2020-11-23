@@ -24,12 +24,6 @@ inline void ArrayObject::setLength(JSContext* cx, uint32_t length) {
   MOZ_ASSERT(lengthIsWritable());
   MOZ_ASSERT_IF(length != getElementsHeader()->length,
                 !denseElementsAreFrozen());
-
-  if (length > INT32_MAX) {
-    /* Track objects with overflowing lengths in type information. */
-    MarkObjectGroupFlags(cx, this, OBJECT_FLAG_LENGTH_OVERFLOW);
-  }
-
   getElementsHeader()->length = length;
 }
 
@@ -41,16 +35,12 @@ inline void ArrayObject::setLength(JSContext* cx, uint32_t length) {
   MOZ_ASSERT(clasp == shape->getObjectClass());
   MOZ_ASSERT(clasp == &ArrayObject::class_);
   MOZ_ASSERT_IF(clasp->hasFinalize(), heap == gc::TenuredHeap);
-  MOZ_ASSERT_IF(group->hasUnanalyzedPreliminaryObjects(),
-                heap == js::gc::TenuredHeap);
-  MOZ_ASSERT_IF(group->shouldPreTenureDontCheckGeneration(),
-                heap == gc::TenuredHeap);
 
   // Arrays can use their fixed slots to store elements, so can't have shapes
   // which allow named properties to be stored in the fixed slots.
   MOZ_ASSERT(shape->numFixedSlots() == 0);
 
-  size_t nDynamicSlots = dynamicSlotsCount(0, shape->slotSpan(), clasp);
+  size_t nDynamicSlots = calculateDynamicSlots(0, shape->slotSpan(), clasp);
   JSObject* obj = js::AllocateObject(cx, kind, nDynamicSlots, heap, clasp);
   if (!obj) {
     return nullptr;
@@ -61,7 +51,7 @@ inline void ArrayObject::setLength(JSContext* cx, uint32_t length) {
   aobj->initShape(shape);
   // NOTE: Dynamic slots are created internally by Allocate<JSObject>.
   if (!nDynamicSlots) {
-    aobj->initSlots(nullptr);
+    aobj->initEmptyDynamicSlots();
   }
 
   MOZ_ASSERT(clasp->shouldDelayMetadataBuilder());

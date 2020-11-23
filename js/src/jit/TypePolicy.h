@@ -8,13 +8,14 @@
 #define jit_TypePolicy_h
 
 #include "jit/IonTypes.h"
-#include "jit/JitAllocPolicy.h"
+#include "js/ScalarType.h"  // js::Scalar::Type
 
 namespace js {
 namespace jit {
 
 class MInstruction;
 class MDefinition;
+class TempAllocator;
 
 extern MDefinition* AlwaysBoxAt(TempAllocator& alloc, MInstruction* at,
                                 MDefinition* operand);
@@ -125,14 +126,6 @@ class SameValuePolicy final : public TypePolicy {
 class TestPolicy final : public TypePolicy {
  public:
   constexpr TestPolicy() = default;
-  EMPTY_DATA_;
-  MOZ_MUST_USE bool adjustInputs(TempAllocator& alloc,
-                                 MInstruction* ins) const override;
-};
-
-class TypeBarrierPolicy final : public TypePolicy {
- public:
-  constexpr TypeBarrierPolicy() = default;
   EMPTY_DATA_;
   MOZ_MUST_USE bool adjustInputs(TempAllocator& alloc,
                                  MInstruction* ins) const override;
@@ -461,16 +454,6 @@ class CallSetElementPolicy final : public TypePolicy {
                                  MInstruction* def) const override;
 };
 
-// First operand will be boxed to a Value (except for an object)
-// Second operand (if specified) will forcefully be unboxed to an object
-class InstanceOfPolicy final : public TypePolicy {
- public:
-  constexpr InstanceOfPolicy() = default;
-  EMPTY_DATA_;
-  MOZ_MUST_USE bool adjustInputs(TempAllocator& alloc,
-                                 MInstruction* def) const override;
-};
-
 class StoreDataViewElementPolicy;
 class StoreTypedArrayHolePolicy;
 
@@ -512,14 +495,6 @@ class StoreTypedArrayHolePolicy final : public StoreUnboxedScalarPolicy {
 class ClampPolicy final : public TypePolicy {
  public:
   constexpr ClampPolicy() = default;
-  EMPTY_DATA_;
-  MOZ_MUST_USE bool adjustInputs(TempAllocator& alloc,
-                                 MInstruction* ins) const override;
-};
-
-class FilterTypeSetPolicy final : public TypePolicy {
- public:
-  constexpr FilterTypeSetPolicy() = default;
   EMPTY_DATA_;
   MOZ_MUST_USE bool adjustInputs(TempAllocator& alloc,
                                  MInstruction* ins) const override;

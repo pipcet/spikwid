@@ -32,6 +32,8 @@
 #include "builtin/RegExp.h"
 #include "jit/InlinableNatives.h"
 #include "js/Conversions.h"
+#include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
+#include "js/friend/StackLimits.h"    // js::CheckRecursionLimit
 #if !JS_HAS_INTL_API
 #  include "js/LocaleSensitive.h"
 #endif
@@ -3305,15 +3307,6 @@ static ArrayObject* NewFullyAllocatedStringArray(JSContext* cx,
     return nullptr;
   }
 
-  // Only string values will be added to this array. Inform TI early about
-  // the element type, so we can directly initialize all elements using
-  // NativeObject::initDenseElement() instead of the slightly more expensive
-  // NativeObject::initDenseElementWithType() method.
-  // Since this function is never called to create a zero-length array, it's
-  // always necessary and correct to call AddTypePropertyId here.
-  MOZ_ASSERT(length > 0);
-  AddTypePropertyId(cx, array, JSID_VOID, TypeSet::StringType());
-
   return array;
 }
 
@@ -3580,8 +3573,8 @@ static const JSFunctionSpec string_methods[] = {
     JS_FN(js_toSource_str, str_toSource, 0, 0),
 
     /* Java-like methods. */
-    JS_FN(js_toString_str, str_toString, 0, 0),
-    JS_FN(js_valueOf_str, str_toString, 0, 0),
+    JS_INLINABLE_FN(js_toString_str, str_toString, 0, 0, StringToString),
+    JS_INLINABLE_FN(js_valueOf_str, str_toString, 0, 0, StringValueOf),
     JS_INLINABLE_FN("toLowerCase", str_toLowerCase, 0, 0, StringToLowerCase),
     JS_INLINABLE_FN("toUpperCase", str_toUpperCase, 0, 0, StringToUpperCase),
     JS_INLINABLE_FN("charAt", str_charAt, 1, 0, StringCharAt),

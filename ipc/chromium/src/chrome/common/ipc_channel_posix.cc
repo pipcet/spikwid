@@ -33,8 +33,10 @@
 #include "chrome/common/ipc_channel_utils.h"
 #include "chrome/common/ipc_message_utils.h"
 #include "mozilla/ipc/ProtocolUtils.h"
+#include "mozilla/Atomics.h"
 #include "mozilla/StaticMutex.h"
 #include "mozilla/UniquePtr.h"
+#include "mozilla/Unused.h"
 
 #ifdef FUZZING
 #  include "mozilla/ipc/Faulty.h"
@@ -80,88 +82,6 @@ namespace IPC {
 //------------------------------------------------------------------------------
 namespace {
 
-// The PipeMap class works around this quirk related to unit tests:
-//
-// When running as a server, we install the client socket in a
-// specific file descriptor number (@gClientChannelFd). However, we
-// also have to support the case where we are running unittests in the
-// same process.  (We do not support forking without execing.)
-//
-// Case 1: normal running
-//   The IPC server object will install a mapping in PipeMap from the
-//   name which it was given to the client pipe. When forking the client, the
-//   GetClientFileDescriptorMapping will ensure that the socket is installed in
-//   the magic slot (@gClientChannelFd). The client will search for the
-//   mapping, but it won't find any since we are in a new process. Thus the
-//   magic fd number is returned. Once the client connects, the server will
-//   close its copy of the client socket and remove the mapping.
-//
-// Case 2: unittests - client and server in the same process
-//   The IPC server will install a mapping as before. The client will search
-//   for a mapping and find out. It duplicates the file descriptor and
-//   connects. Once the client connects, the server will close the original
-//   copy of the client socket and remove the mapping. Thus, when the client
-//   object closes, it will close the only remaining copy of the client socket
-//   in the fd table and the server will see EOF on its side.
-//
-// TODO(port): a client process cannot connect to multiple IPC channels with
-// this scheme.
-
-class PipeMap {
- public:
-  // Lookup a given channel id. Return -1 if not found.
-  int Lookup(const std::string& channel_id) {
-    mozilla::StaticMutexAutoLock locked(lock_);
-
-    ChannelToFDMap::const_iterator i = map_.find(channel_id);
-    if (i == map_.end()) return -1;
-    return i->second;
-  }
-
-  // Remove the mapping for the given channel id. No error is signaled if the
-  // channel_id doesn't exist
-  void Remove(const std::string& channel_id) {
-    mozilla::StaticMutexAutoLock locked(lock_);
-
-    ChannelToFDMap::iterator i = map_.find(channel_id);
-    if (i != map_.end()) map_.erase(i);
-  }
-
-  // Insert a mapping from @channel_id to @fd. It's a fatal error to insert a
-  // mapping if one already exists for the given channel_id
-  void Insert(const std::string& channel_id, int fd) {
-    mozilla::StaticMutexAutoLock locked(lock_);
-    DCHECK(fd != -1);
-
-    ChannelToFDMap::const_iterator i = map_.find(channel_id);
-    CHECK(i == map_.end())
-    << "Creating second IPC server for '" << channel_id
-    << "' while first still exists";
-    map_[channel_id] = fd;
-  }
-
-  static PipeMap& instance() {
-    // This setup is a little gross: the `map` instance lives until libxul is
-    // unloaded, but leak checking runs prior to that, and would see a Mutex
-    // instance contained in PipeMap as still live.  Said instance would be
-    // reported as a leak...but it's not, really.  To avoid that, we need to
-    // use StaticMutex (which is not leak-checked), but StaticMutex can't be
-    // a member variable.  So we have to have this separate variable and pass
-    // it into the PipeMap constructor.
-    static mozilla::StaticMutex mutex;
-    static PipeMap map(mutex);
-    return map;
-  }
-
- private:
-  explicit PipeMap(mozilla::StaticMutex& aMutex) : lock_(aMutex) {}
-  ~PipeMap() = default;
-
-  mozilla::StaticMutex& lock_;
-  typedef std::map<std::string, int> ChannelToFDMap;
-  ChannelToFDMap map_;
-};
-
 // This is the file descriptor number that a client process expects to find its
 // IPC socket.
 static int gClientChannelFd =
@@ -172,17 +92,6 @@ static int gClientChannelFd =
     3
 #endif  // defined(MOZ_WIDGET_ANDROID)
     ;
-
-// Used to map a channel name to the equivalent FD # in the client process.
-int ChannelNameToClientFD(const std::string& channel_id) {
-  // See the large block comment above PipeMap for the reasoning here.
-  const int fd = PipeMap::instance().Lookup(channel_id);
-  if (fd != -1) return dup(fd);
-
-  // If we don't find an entry, we assume that the correct value has been
-  // inserted in the magic slot.
-  return gClientChannelFd;
-}
 
 //------------------------------------------------------------------------------
 const size_t kMaxPipeNameLength = sizeof(((sockaddr_un*)0)->sun_path);
@@ -199,6 +108,42 @@ bool SetCloseOnExec(int fd) {
 
 bool ErrorIsBrokenPipe(int err) { return err == EPIPE || err == ECONNRESET; }
 
+// Some Android ARM64 devices appear to have a bug where sendmsg
+// sometimes returns 0xFFFFFFFF, which we're assuming is a -1 that was
+// incorrectly truncated to 32-bit and then zero-extended.
+// See bug 1660826 for details.
+//
+// This is a workaround to detect that value and replace it with -1
+// (and check that there really was an error), because the largest
+// amount we'll ever write is Channel::kMaximumMessageSize (256MiB).
+//
+// The workaround is also enabled on x86_64 Android on debug builds,
+// although the bug isn't known to manifest there, so that there will
+// be some CI coverage of this code.
+
+static inline ssize_t corrected_sendmsg(int socket,
+                                        const struct msghdr* message,
+                                        int flags) {
+#if defined(ANDROID) && \
+    (defined(__aarch64__) || (defined(DEBUG) && defined(__x86_64__)))
+  static constexpr auto kBadValue = static_cast<ssize_t>(0xFFFFFFFF);
+  static_assert(kBadValue > 0);
+
+#  ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
+  errno = 0;
+#  endif
+  ssize_t bytes_written = sendmsg(socket, message, flags);
+  if (bytes_written == kBadValue) {
+    MOZ_DIAGNOSTIC_ASSERT(errno != 0);
+    bytes_written = -1;
+  }
+  MOZ_DIAGNOSTIC_ASSERT(bytes_written < kBadValue);
+  return bytes_written;
+#else
+  return sendmsg(socket, message, flags);
+#endif
+}
+
 }  // namespace
 //------------------------------------------------------------------------------
 
@@ -206,15 +151,13 @@ bool ErrorIsBrokenPipe(int err) { return err == EPIPE || err == ECONNRESET; }
 void Channel::SetClientChannelFd(int fd) { gClientChannelFd = fd; }
 #endif  // defined(MOZ_WIDGET_ANDROID)
 
-Channel::ChannelImpl::ChannelImpl(const std::wstring& channel_id, Mode mode,
+Channel::ChannelImpl::ChannelImpl(const ChannelId& channel_id, Mode mode,
                                   Listener* listener)
     : factory_(this) {
   Init(mode, listener);
 
-  if (!CreatePipe(channel_id, mode)) {
-    // The pipe may have been closed already.
-    CHROMIUM_LOG(WARNING) << "Unable to create pipe named \"" << channel_id
-                          << "\" in "
+  if (!CreatePipe(mode)) {
+    CHROMIUM_LOG(WARNING) << "Unable to create pipe in "
                           << (mode == MODE_SERVER ? "server" : "client")
                           << " mode error(" << strerror(errno) << ").";
     closed_ = true;
@@ -258,13 +201,11 @@ void Channel::ChannelImpl::Init(Mode mode, Listener* listener) {
   output_queue_length_ = 0;
 }
 
-bool Channel::ChannelImpl::CreatePipe(const std::wstring& channel_id,
-                                      Mode mode) {
+bool Channel::ChannelImpl::CreatePipe(Mode mode) {
   DCHECK(server_listen_pipe_ == -1 && pipe_ == -1);
 
-  // socketpair()
-  pipe_name_ = WideToASCII(channel_id);
   if (mode == MODE_SERVER) {
+    // socketpair()
     int pipe_fds[2];
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, pipe_fds) != 0) {
       mozilla::ipc::AnnotateCrashReportWithErrno(
@@ -291,13 +232,11 @@ bool Channel::ChannelImpl::CreatePipe(const std::wstring& channel_id,
 
     pipe_ = pipe_fds[0];
     client_pipe_ = pipe_fds[1];
-
-    if (pipe_name_.length()) {
-      PipeMap::instance().Insert(pipe_name_, client_pipe_);
-    }
   } else {
-    pipe_ = ChannelNameToClientFD(pipe_name_);
-    DCHECK(pipe_ > 0);
+    static mozilla::Atomic<bool> consumed(false);
+    CHECK(!consumed.exchange(true))
+    << "child process main channel can be created only once";
+    pipe_ = gClientChannelFd;
     waiting_connect_ = false;
   }
 
@@ -617,17 +556,17 @@ bool Channel::ChannelImpl::ProcessOutgoingMessages() {
                               // no connection?
   is_blocked_on_write_ = false;
 
-  if (output_queue_.empty()) return true;
+  if (output_queue_.IsEmpty()) return true;
 
   if (pipe_ == -1) return false;
 
   // Write out all the messages we can till the write blocks or there are no
   // more outgoing messages.
-  while (!output_queue_.empty()) {
+  while (!output_queue_.IsEmpty()) {
 #ifdef FUZZING
     mozilla::ipc::Faulty::instance().MaybeCollectAndClosePipe(pipe_);
 #endif
-    Message* msg = output_queue_.front().get();
+    Message* msg = output_queue_.FirstElement().get();
 
     struct msghdr msgh = {0};
 
@@ -713,7 +652,8 @@ bool Channel::ChannelImpl::ProcessOutgoingMessages() {
     msgh.msg_iov = iov;
     msgh.msg_iovlen = iov_count;
 
-    ssize_t bytes_written = HANDLE_EINTR(sendmsg(pipe_, &msgh, MSG_DONTWAIT));
+    ssize_t bytes_written =
+        HANDLE_EINTR(corrected_sendmsg(pipe_, &msgh, MSG_DONTWAIT));
 
 #if !defined(OS_MACOSX)
     // On OSX CommitAll gets called later, once we get the
@@ -806,8 +746,8 @@ bool Channel::ChannelImpl::ProcessOutgoingMessages() {
 bool Channel::ChannelImpl::Send(mozilla::UniquePtr<Message> message) {
 #ifdef IPC_MESSAGE_DEBUG_EXTRA
   DLOG(INFO) << "sending message @" << message.get() << " on channel @" << this
-             << " with type " << message->type() << " (" << output_queue_.size()
-             << " in queue)";
+             << " with type " << message->type() << " ("
+             << output_queue_.Count() << " in queue)";
 #endif
 
 #ifdef FUZZING
@@ -847,7 +787,6 @@ void Channel::ChannelImpl::GetClientFileDescriptorMapping(int* src_fd,
 
 void Channel::ChannelImpl::CloseClientFileDescriptor() {
   if (client_pipe_ != -1) {
-    PipeMap::instance().Remove(pipe_name_);
     IGNORE_EINTR(close(client_pipe_));
     client_pipe_ = -1;
   }
@@ -885,7 +824,7 @@ void Channel::ChannelImpl::OutputQueuePush(mozilla::UniquePtr<Message> msg) {
 
   MOZ_DIAGNOSTIC_ASSERT(!closed_);
   msg->AssertAsLargeAsHeader();
-  output_queue_.push(std::move(msg));
+  output_queue_.Push(std::move(msg));
   output_queue_length_++;
 }
 
@@ -893,7 +832,7 @@ void Channel::ChannelImpl::OutputQueuePop() {
   // Clear any reference to the front of output_queue_ before we destroy it.
   partial_write_iter_.reset();
 
-  output_queue_.pop();
+  mozilla::UniquePtr<Message> message = output_queue_.Pop();
   output_queue_length_--;
 }
 
@@ -925,12 +864,11 @@ void Channel::ChannelImpl::Close() {
     pipe_ = -1;
   }
   if (client_pipe_ != -1) {
-    PipeMap::instance().Remove(pipe_name_);
     IGNORE_EINTR(close(client_pipe_));
     client_pipe_ = -1;
   }
 
-  while (!output_queue_.empty()) {
+  while (!output_queue_.IsEmpty()) {
     OutputQueuePop();
   }
 
@@ -960,7 +898,7 @@ uint32_t Channel::ChannelImpl::Unsound_NumQueuedMessages() const {
 
 //------------------------------------------------------------------------------
 // Channel's methods simply call through to ChannelImpl.
-Channel::Channel(const std::wstring& channel_id, Mode mode, Listener* listener)
+Channel::Channel(const ChannelId& channel_id, Mode mode, Listener* listener)
     : channel_impl_(new ChannelImpl(channel_id, mode, listener)) {
   MOZ_COUNT_CTOR(IPC::Channel);
 }
@@ -1012,14 +950,9 @@ uint32_t Channel::Unsound_NumQueuedMessages() const {
 }
 
 // static
-std::wstring Channel::GenerateVerifiedChannelID(const std::wstring& prefix) {
-  // A random name is sufficient validation on posix systems, so we don't need
-  // an additional shared secret.
+Channel::ChannelId Channel::GenerateVerifiedChannelID() { return {}; }
 
-  std::wstring id = prefix;
-  if (!id.empty()) id.append(L".");
-
-  return id.append(GenerateUniqueRandomChannelID());
-}
+// static
+Channel::ChannelId Channel::ChannelIDForCurrentProcess() { return {}; }
 
 }  // namespace IPC

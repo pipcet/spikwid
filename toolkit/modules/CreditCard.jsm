@@ -48,7 +48,6 @@ const CREDIT_CARD_IIN = [
   { type: "diners", start: 3095, end: 3095, len: [14, 19] },
   { type: "diners", start: 36, end: 36, len: [14, 19] },
   { type: "diners", start: 38, end: 39, len: [14, 19] },
-  { type: "diners", start: 54, end: 55, len: 16 },
   { type: "discover", start: 6011, end: 6011, len: [16, 19] },
   { type: "discover", start: 622126, end: 622925, len: [16, 19] },
   { type: "discover", start: 624000, end: 626999, len: [16, 19] },
@@ -313,8 +312,9 @@ class CreditCard {
   /**
    * Get credit card display label. It should display masked numbers, the
    * cardholder's name, and the expiration date, separated by a commas.
+   * In addition, the card type is provided in the accessibility label.
    */
-  static getLabelInfo({ number, name, month, year }) {
+  static getLabelInfo({ number, name, month, year, type }) {
     let formatSelector = ["number"];
     if (name) {
       formatSelector.push("name");
@@ -322,7 +322,7 @@ class CreditCard {
     if (month && year) {
       formatSelector.push("expiration");
     }
-    let stringId = "credit-card-label-" + formatSelector.join("-");
+    let stringId = `credit-card-label-${formatSelector.join("-")}-2`;
     return {
       id: stringId,
       args: {
@@ -330,6 +330,7 @@ class CreditCard {
         name,
         month: month?.toString(),
         year: year?.toString(),
+        type,
       },
     };
   }

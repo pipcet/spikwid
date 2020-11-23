@@ -16,7 +16,6 @@ ChromeUtils.defineModuleGetter(
   "DownloadStore",
   "resource://gre/modules/DownloadStore.jsm"
 );
-ChromeUtils.defineModuleGetter(this, "OS", "resource://gre/modules/osfile.jsm");
 
 /**
  * Returns a new DownloadList object with an associated DownloadStore.
@@ -62,14 +61,6 @@ add_task(async function test_save_reload() {
     })
   );
 
-  // This PDF download should not be serialized because it never succeeds.
-  let pdfDownload = await Downloads.createDownload({
-    source: { url: httpUrl("empty.txt"), referrerInfo },
-    target: getTempFile(TEST_TARGET_FILE_NAME),
-    saver: "pdf",
-  });
-  listForSave.add(pdfDownload);
-
   // If we used a callback to adjust the channel, the download should
   // not be serialized because we can't recreate it across sessions.
   let adjustedDownload = await Downloads.createDownload({
@@ -88,9 +79,8 @@ add_task(async function test_save_reload() {
   await storeForSave.save();
   await storeForLoad.load();
 
-  // Remove the PDF and adjusted downloads because they should not appear here.
+  // Remove the adjusted download because it should not appear here.
   listForSave.remove(adjustedDownload);
-  listForSave.remove(pdfDownload);
 
   let itemsForSave = await listForSave.getAll();
   let itemsForLoad = await listForLoad.getAll();
@@ -132,12 +122,19 @@ add_task(async function test_save_reload() {
 add_task(async function test_save_empty() {
   let [, store] = await promiseNewListAndStore();
 
-  let createdFile = await OS.File.open(store.path, { create: true });
-  await createdFile.close();
+  await IOUtils.writeAtomic(store.path, new Uint8Array());
 
   await store.save();
 
-  Assert.equal(false, await OS.File.exists(store.path));
+  let successful;
+  try {
+    await IOUtils.read(store.path);
+    successful = true;
+  } catch (ex) {
+    successful = ex.name != "NotFoundError";
+  }
+
+  ok(!successful, "File should not exist");
 
   // If the file does not exist, saving should not generate exceptions.
   await store.save();
@@ -149,9 +146,15 @@ add_task(async function test_save_empty() {
 add_task(async function test_load_empty() {
   let [list, store] = await promiseNewListAndStore();
 
-  Assert.equal(false, await OS.File.exists(store.path));
+  let succeesful;
+  try {
+    await IOUtils.read(store.path);
+    succeesful = true;
+  } catch (ex) {
+    succeesful = ex.name != "NotFoundError";
+  }
 
-  await store.load();
+  ok(!succeesful, "File should not exist");
 
   let items = await list.getAll();
   Assert.equal(items.length, 0);
@@ -196,7 +199,7 @@ add_task(async function test_load_string_predefined() {
     filePathLiteral +
     "}]}";
 
-  await OS.File.writeAtomic(store.path, new TextEncoder().encode(string), {
+  await IOUtils.writeAtomic(store.path, new TextEncoder().encode(string), {
     tmpPath: store.path + ".tmp",
   });
 
@@ -237,7 +240,7 @@ add_task(async function test_load_string_unrecognized() {
     "}," +
     '"saver":{"type":"copy"}}]}';
 
-  await OS.File.writeAtomic(store.path, new TextEncoder().encode(string), {
+  await IOUtils.writeAtomic(store.path, new TextEncoder().encode(string), {
     tmpPath: store.path + ".tmp",
   });
 
@@ -261,7 +264,7 @@ add_task(async function test_load_string_malformed() {
     '{"list":[{"source":null,"target":null},' +
     '{"source":{"url":"about:blank"}}}';
 
-  await OS.File.writeAtomic(store.path, new TextEncoder().encode(string), {
+  await IOUtils.writeAtomic(store.path, new TextEncoder().encode(string), {
     tmpPath: store.path + ".tmp",
   });
 

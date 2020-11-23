@@ -112,8 +112,7 @@
 
 #include "mozilla/intl/LocaleService.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 static const nsLiteralCString kVibrationPermissionType = "vibration"_ns;
 
@@ -711,8 +710,7 @@ void VibrateWindowListener::RemoveListener() {
 void Navigator::SetVibrationPermission(bool aPermitted, bool aPersistent) {
   MOZ_ASSERT(NS_IsMainThread());
 
-  nsTArray<uint32_t> pattern;
-  pattern.SwapElements(mRequestedVibrationPattern);
+  nsTArray<uint32_t> pattern = std::move(mRequestedVibrationPattern);
 
   if (!mWindow) {
     return;
@@ -787,7 +785,7 @@ bool Navigator::Vibrate(const nsTArray<uint32_t>& aPattern) {
     return true;
   }
 
-  mRequestedVibrationPattern.SwapElements(pattern);
+  mRequestedVibrationPattern = std::move(pattern);
 
   PermissionDelegateHandler* permissionHandler =
       doc->GetPermissionDelegateHandler();
@@ -986,7 +984,6 @@ void Navigator::CheckProtocolHandlerAllowed(const nsAString& aScheme,
 
 void Navigator::RegisterProtocolHandler(const nsAString& aScheme,
                                         const nsAString& aURI,
-                                        const nsAString& aTitle,
                                         ErrorResult& aRv) {
   if (!mWindow || !mWindow->GetOuterWindow() || !mWindow->GetDocShell() ||
       !mWindow->GetDoc()) {
@@ -1015,9 +1012,13 @@ void Navigator::RegisterProtocolHandler(const nsAString& aScheme,
     return;
   }
 
+  // Determine a title from the document URI.
+  nsAutoCString docDisplayHostPort;
+  docURI->GetDisplayHostPort(docDisplayHostPort);
+  NS_ConvertASCIItoUTF16 title(docDisplayHostPort);
+
   if (XRE_IsContentProcess()) {
     nsAutoString scheme(aScheme);
-    nsAutoString title(aTitle);
     RefPtr<BrowserChild> browserChild = BrowserChild::GetFrom(mWindow);
     browserChild->SendRegisterProtocolHandler(scheme, handlerURI, title,
                                               docURI);
@@ -1027,8 +1028,8 @@ void Navigator::RegisterProtocolHandler(const nsAString& aScheme,
   nsCOMPtr<nsIWebProtocolHandlerRegistrar> registrar =
       do_GetService(NS_WEBPROTOCOLHANDLERREGISTRAR_CONTRACTID);
   if (registrar) {
-    aRv = registrar->RegisterProtocolHandler(aScheme, handlerURI, aTitle,
-                                             docURI, mWindow->GetOuterWindow());
+    aRv = registrar->RegisterProtocolHandler(aScheme, handlerURI, title, docURI,
+                                             mWindow->GetOuterWindow());
   }
 }
 
@@ -1274,40 +1275,45 @@ void Navigator::MozGetUserMedia(const MediaStreamConstraints& aConstraints,
                                 CallerType aCallerType, ErrorResult& aRv) {
   MOZ_ASSERT(NS_IsMainThread());
 
-  if (!mWindow || !mWindow->GetOuterWindow() ||
-      mWindow->GetOuterWindow()->GetCurrentInnerWindow() != mWindow) {
-    aRv.Throw(NS_ERROR_NOT_AVAILABLE);
+  if (!mWindow || !mWindow->IsFullyActive()) {
+    aRv.ThrowInvalidStateError("The document is not fully active.");
     return;
   }
-
+  RefPtr<MediaManager::StreamPromise> sp;
+  if (!MediaManager::IsOn(aConstraints.mVideo) &&
+      !MediaManager::IsOn(aConstraints.mAudio)) {
+    sp = MediaManager::StreamPromise::CreateAndReject(
+        MakeRefPtr<MediaMgrError>(MediaMgrError::Name::TypeError,
+                                  "audio and/or video is required"),
+        __func__);
+  } else {
+    sp = MediaManager::Get()->GetUserMedia(mWindow, aConstraints, aCallerType);
+  }
   RefPtr<NavigatorUserMediaSuccessCallback> onsuccess(&aOnSuccess);
   RefPtr<NavigatorUserMediaErrorCallback> onerror(&aOnError);
 
   nsWeakPtr weakWindow = nsWeakPtr(do_GetWeakReference(mWindow));
-
-  MediaManager::Get()
-      ->GetUserMedia(mWindow, aConstraints, aCallerType)
-      ->Then(
-          GetMainThreadSerialEventTarget(), __func__,
-          [weakWindow, onsuccess = std::move(onsuccess)](
-              const RefPtr<DOMMediaStream>& aStream) MOZ_CAN_RUN_SCRIPT {
-            nsCOMPtr<nsPIDOMWindowInner> window = do_QueryReferent(weakWindow);
-            if (!window || !window->GetOuterWindow() ||
-                window->GetOuterWindow()->GetCurrentInnerWindow() != window) {
-              return;  // Leave Promise pending after navigation by design.
-            }
-            MediaManager::CallOnSuccess(*onsuccess, *aStream);
-          },
-          [weakWindow, onerror = std::move(onerror)](
-              const RefPtr<MediaMgrError>& aError) MOZ_CAN_RUN_SCRIPT {
-            nsCOMPtr<nsPIDOMWindowInner> window = do_QueryReferent(weakWindow);
-            if (!window || !window->GetOuterWindow() ||
-                window->GetOuterWindow()->GetCurrentInnerWindow() != window) {
-              return;  // Leave Promise pending after navigation by design.
-            }
-            auto error = MakeRefPtr<MediaStreamError>(window, *aError);
-            MediaManager::CallOnError(*onerror, *error);
-          });
+  sp->Then(
+      GetMainThreadSerialEventTarget(), __func__,
+      [weakWindow, onsuccess = std::move(onsuccess)](
+          const RefPtr<DOMMediaStream>& aStream) MOZ_CAN_RUN_SCRIPT {
+        nsCOMPtr<nsPIDOMWindowInner> window = do_QueryReferent(weakWindow);
+        if (!window || !window->GetOuterWindow() ||
+            window->GetOuterWindow()->GetCurrentInnerWindow() != window) {
+          return;  // Leave Promise pending after navigation by design.
+        }
+        MediaManager::CallOnSuccess(*onsuccess, *aStream);
+      },
+      [weakWindow, onerror = std::move(onerror)](
+          const RefPtr<MediaMgrError>& aError) MOZ_CAN_RUN_SCRIPT {
+        nsCOMPtr<nsPIDOMWindowInner> window = do_QueryReferent(weakWindow);
+        if (!window || !window->GetOuterWindow() ||
+            window->GetOuterWindow()->GetCurrentInnerWindow() != window) {
+          return;  // Leave Promise pending after navigation by design.
+        }
+        auto error = MakeRefPtr<MediaStreamError>(window, *aError);
+        MediaManager::CallOnError(*onerror, *error);
+      });
 }
 
 void Navigator::MozGetUserMediaDevices(
@@ -1373,6 +1379,14 @@ Promise* Navigator::Share(const ShareData& aData, ErrorResult& aRv) {
     return nullptr;
   }
 
+  if (!FeaturePolicyUtils::IsFeatureAllowed(mWindow->GetExtantDoc(),
+                                            u"web-share"_ns)) {
+    aRv.ThrowNotAllowedError(
+        "Document's Permission Policy does not allow calling "
+        "share() from this context.");
+    return nullptr;
+  }
+
   if (mSharePromise) {
     NS_WARNING("Only one share picker at a time per navigator instance");
     aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
@@ -1410,6 +1424,20 @@ Promise* Navigator::Share(const ShareData& aData, ErrorResult& aRv) {
       return nullptr;
     }
     url = result.unwrap();
+    // Check that we only share loadable URLs (e.g., http/https).
+    // we also exclude blobs, as it doesn't make sense to share those outside
+    // the context of the browser.
+    const uint32_t flags =
+        nsIScriptSecurityManager::DISALLOW_INHERIT_PRINCIPAL |
+        nsIScriptSecurityManager::DISALLOW_SCRIPT;
+    if (NS_FAILED(
+            nsContentUtils::GetSecurityManager()->CheckLoadURIWithPrincipal(
+                doc->NodePrincipal(), url, flags, doc->InnerWindowID())) ||
+        url->SchemeIs("blob")) {
+      aRv.ThrowTypeError<MSG_INVALID_URL_SCHEME>("Share",
+                                                 url->GetSpecOrDefault());
+      return nullptr;
+    }
   }
 
   // Process the title member...
@@ -1441,26 +1469,23 @@ Promise* Navigator::Share(const ShareData& aData, ErrorResult& aRv) {
     return nullptr;
   }
 
-  auto shareResolver = [self = RefPtr<Navigator>(this)](nsresult aResult) {
-    MOZ_ASSERT(self->mSharePromise);
-    if (NS_SUCCEEDED(aResult)) {
-      self->mSharePromise->MaybeResolveWithUndefined();
-    } else {
-      self->mSharePromise->MaybeReject(aResult);
-    }
-    self->mSharePromise = nullptr;
-  };
-
-  auto shareRejector = [self = RefPtr<Navigator>(this)](
-                           mozilla::ipc::ResponseRejectReason&& aReason) {
-    // IPC died or maybe page navigated...
-    if (self->mSharePromise) {
-      self->mSharePromise = nullptr;
-    }
-  };
-
   // Do the share
-  wgc->SendShare(data, shareResolver, shareRejector);
+  wgc->SendShare(data)->Then(
+      GetCurrentSerialEventTarget(), __func__,
+      [self = RefPtr{this}](
+          PWindowGlobalChild::SharePromise::ResolveOrRejectValue&& aResult) {
+        if (aResult.IsResolve()) {
+          if (NS_SUCCEEDED(aResult.ResolveValue())) {
+            self->mSharePromise->MaybeResolveWithUndefined();
+          } else {
+            self->mSharePromise->MaybeReject(aResult.ResolveValue());
+          }
+        } else if (self->mSharePromise) {
+          // IPC died
+          self->mSharePromise->MaybeReject(NS_BINDING_ABORTED);
+        }
+        self->mSharePromise = nullptr;
+      });
   return mSharePromise;
 }
 
@@ -1471,7 +1496,7 @@ already_AddRefed<LegacyMozTCPSocket> Navigator::MozTCPSocket() {
 
 void Navigator::GetGamepads(nsTArray<RefPtr<Gamepad>>& aGamepads,
                             ErrorResult& aRv) {
-  if (!mWindow) {
+  if (!mWindow || !mWindow->GetExtantDoc()) {
     aRv.Throw(NS_ERROR_UNEXPECTED);
     return;
   }
@@ -1483,7 +1508,7 @@ void Navigator::GetGamepads(nsTArray<RefPtr<Gamepad>>& aGamepads,
   if (!mGamepadSecureContextWarningShown && !win->IsSecureContext()) {
     mGamepadSecureContextWarningShown = true;
     auto msg =
-        u"The Gamepad API is only available in "
+        u"The Gamepad API will only be available in "
         "secure contexts (e.g., https). Please see "
         "https://hacks.mozilla.org/2020/07/securing-gamepad-api/ for more "
         "info."_ns;
@@ -1491,8 +1516,19 @@ void Navigator::GetGamepads(nsTArray<RefPtr<Gamepad>>& aGamepads,
         msg, nsIScriptError::warningFlag, "DOM"_ns, win->GetExtantDoc());
   }
 
-#ifdef NIGHTLY_BUILD
+#ifdef EARLY_BETA_OR_EARLIER
   if (!win->IsSecureContext()) {
+    return;
+  }
+#endif
+
+#ifdef NIGHTLY_BUILD
+  // We will move this into Beta in Firefox 82
+  if (!FeaturePolicyUtils::IsFeatureAllowed(win->GetExtantDoc(),
+                                            u"gamepad"_ns)) {
+    aRv.ThrowSecurityError(
+        "Document's Permission Policy does not allow calling "
+        "getGamepads() from this context.");
     return;
   }
 #endif
@@ -1837,11 +1873,8 @@ nsresult Navigator::GetPlatform(nsAString& aPlatform,
   // hardcoded and we are seeking backward compatibility here (bug 47080).
 #if defined(WIN32)
   aPlatform.AssignLiteral("Win32");
-#elif defined(XP_MACOSX) && defined(__ppc__)
-  aPlatform.AssignLiteral("MacPPC");
-#elif defined(XP_MACOSX) && defined(__i386__)
-  aPlatform.AssignLiteral("MacIntel");
-#elif defined(XP_MACOSX) && defined(__x86_64__)
+#elif defined(XP_MACOSX)
+  // Always return "MacIntel", even on ARM64 macOS like Safari does.
   aPlatform.AssignLiteral("MacIntel");
 #else
   // XXX Communicator uses compiled-in build-time string defines
@@ -2133,5 +2166,4 @@ bool Navigator::Webdriver() {
   return Preferences::GetBool("marionette.enabled", false);
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

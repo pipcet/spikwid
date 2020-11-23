@@ -33,6 +33,9 @@ search-input-box =
 
 managed-notice = Your browser is being managed by your organization.
 
+category-list =
+    .aria-label = Categories
+
 pane-general-title = General
 category-general =
     .tooltiptext = { pane-general-title }
@@ -59,6 +62,10 @@ category-experimental =
 pane-experimental-subtitle = Proceed with Caution
 pane-experimental-search-results-header = { -brand-short-name } Experiments: Proceed with Caution
 pane-experimental-description = Changing advanced configuration preferences can impact { -brand-short-name } performance or security.
+
+pane-experimental-reset =
+  .label = Restore Defaults
+  .accesskey = R
 
 help-button-label = { -brand-short-name } Support
 addons-button-label = Extensions & Themes
@@ -88,21 +95,13 @@ restart-later = Restart Later
 ## Variables:
 ##   $name (String): name of the extension
 
-# This string is shown to notify the user that their home page
-# is being controlled by an extension.
-extension-controlled-homepage-override = An extension, <img data-l10n-name="icon"/> { $name }, is controlling your home page.
-
-# This string is shown to notify the user that their new tab page
-# is being controlled by an extension.
-extension-controlled-new-tab-url = An extension, <img data-l10n-name="icon"/> { $name }, is controlling your New Tab page.
+# This string is shown to notify the user that the password manager setting
+# is being controlled by an extension
+extension-controlled-password-saving = An extension, <img data-l10n-name="icon"/> { $name }, is controlling this setting.
 
 # This string is shown to notify the user that their notifications permission
 # is being controlled by an extension.
 extension-controlled-web-notifications= An extension, <img data-l10n-name="icon"/> { $name }, is controlling this setting.
-
-# This string is shown to notify the user that the default search engine
-# is being controlled by an extension.
-extension-controlled-default-search = An extension, <img data-l10n-name="icon"/> { $name }, has set your default search engine.
 
 # This string is shown to notify the user that Container Tabs
 # are being enabled by an extension.
@@ -374,11 +373,6 @@ applications-manage-app =
     .label = Application Details…
 applications-always-ask =
     .label = Always ask
-applications-type-pdf = Portable Document Format (PDF)
-
-# Variables:
-#   $type (String) - the MIME type (e.g application/binary)
-applications-type-pdf-with-type = { applications-type-pdf } ({ $type })
 
 # Variables:
 #   $type-description (String) - Description of the type (e.g "Portable Document Format")
@@ -542,6 +536,12 @@ browsing-picture-in-picture-toggle-enabled =
 
 browsing-picture-in-picture-learn-more = Learn more
 
+browsing-media-control =
+    .label = Control media via keyboard, headset, or virtual interface
+    .accesskey = v
+
+browsing-media-control-learn-more = Learn more
+
 browsing-cfr-recommendations =
     .label = Recommend extensions as you browse
     .accesskey = R
@@ -619,6 +619,8 @@ home-prefs-search-header =
 home-prefs-topsites-header =
     .label = Top Sites
 home-prefs-topsites-description = The sites you visit most
+home-prefs-topsites-by-option-sponsored =
+    .label = Sponsored Top Sites
 
 ## Variables:
 ##  $provider (String): Name of the corresponding content provider, e.g "Pocket".
@@ -699,7 +701,7 @@ suggestions-addressbar-settings-generic = Change preferences for other address b
 
 search-suggestions-cant-show = Search suggestions will not be shown in location bar results because you have configured { -brand-short-name } to never remember history.
 
-search-one-click-header = One-Click Search Engines
+search-one-click-header2 = Search Shortcuts
 
 search-one-click-desc = Choose the alternative search engines that appear below the address bar and search bar when you start to enter a keyword.
 
@@ -715,6 +717,9 @@ search-restore-default =
 search-remove-engine =
     .label = Remove
     .accesskey = R
+search-add-engine =
+    .label = Add
+    .accesskey = A
 
 search-find-more-link = Find more search engines
 
@@ -935,26 +940,37 @@ forms-fill-logins-and-passwords =
 forms-saved-logins =
     .label = Saved Logins…
     .accesskey = L
-forms-master-pw-use =
-    .label = Use a master password
+forms-primary-pw-use =
+    .label = Use a Primary Password
     .accesskey = U
+forms-primary-pw-learn-more-link = Learn more
+# This string uses the former name of the Primary Password feature
+# ("Master Password" in English) so that the preferences can be found
+# when searching for the old name. The accesskey is unused.
 forms-master-pw-change =
     .label = Change Master Password…
     .accesskey = M
+forms-primary-pw-change =
+    .label = Change Primary Password…
+    .accesskey = P
+# Leave this message empty if the translation for "Primary Password" matches
+# "Master Password" in your language. If you're editing the FTL file directly,
+# use { "" } as the value.
+forms-primary-pw-former-name = Formerly known as Master Password
 
-forms-master-pw-fips-title = You are currently in FIPS mode. FIPS requires a non-empty Master Password.
+forms-primary-pw-fips-title = You are currently in FIPS mode. FIPS requires a non-empty Primary Password.
 forms-master-pw-fips-desc = Password Change Failed
 
 ## OS Authentication dialog
 
-# This message can be seen by trying to add a Master Password.
-master-password-os-auth-dialog-message-win = To create a Master Password, enter your Windows login credentials. This helps protect the security of your accounts.
+# This message can be seen by trying to add a Primary Password.
+primary-password-os-auth-dialog-message-win = To create a Primary Password, enter your Windows login credentials. This helps protect the security of your accounts.
 
-# This message can be seen by trying to add a Master Password.
+# This message can be seen by trying to add a Primary Password.
 # The macOS strings are preceded by the operating system with "Firefox is trying to "
 # and includes subtitle of "Enter password for the user "xxx" to allow this." These
 # notes are only valid for English. Please test in your locale.
-master-password-os-auth-dialog-message-macosx = create a Master Password
+primary-password-os-auth-dialog-message-macosx = create a Primary Password
 master-password-os-auth-dialog-caption = { -brand-full-name }
 
 ## Privacy Section - History
@@ -1043,6 +1059,10 @@ sitedata-option-block-cross-site-trackers =
     .label = Cross-site trackers
 sitedata-option-block-cross-site-and-social-media-trackers =
     .label = Cross-site and social media trackers
+sitedata-option-block-cross-site-tracking-cookies-including-social-media =
+    .label = Cross-site tracking cookies — includes social media cookies
+sitedata-option-block-cross-site-cookies-including-social-media =
+    .label = Cross-site cookies — includes social media cookies
 sitedata-option-block-cross-site-and-social-media-trackers-plus-isolate =
     .label = Cross-site and social media trackers, and isolate remaining cookies
 sitedata-option-block-unvisited =
@@ -1093,6 +1113,8 @@ content-blocking-section-top-level-description = Trackers follow you around onli
 
 content-blocking-learn-more = Learn more
 
+content-blocking-fpi-incompatibility-warning = You are using First Party Isolation (FPI), which overrides some of { -brand-short-name }’s cookie settings.
+
 ## These strings are used to define the different levels of
 ## Enhanced Tracking Protection.
 
@@ -1113,6 +1135,7 @@ content-blocking-etp-strict-desc = Stronger protection, but may cause some sites
 content-blocking-etp-custom-desc = Choose which trackers and scripts to block.
 
 content-blocking-private-windows = Tracking content in Private Windows
+content-blocking-cross-site-cookies = Cross-site cookies
 content-blocking-cross-site-tracking-cookies = Cross-site tracking cookies
 content-blocking-cross-site-tracking-cookies-plus-isolate = Cross-site tracking cookies, and isolate remaining cookies
 content-blocking-social-media-trackers = Social media trackers
@@ -1125,6 +1148,7 @@ content-blocking-fingerprinters = Fingerprinters
 
 content-blocking-warning-title = Heads up!
 content-blocking-and-isolating-etp-warning-description = Blocking trackers and isolating cookies could impact the functionality of some sites. Reload a page with trackers to load all content.
+content-blocking-and-isolating-etp-warning-description-2 = This setting may cause some websites to not display content or work correctly. If a site seems broken, you may want to turn off tracking protection for that site to load all content.
 content-blocking-warning-learn-how = Learn how
 
 content-blocking-reload-description = You will need to reload your tabs to apply these changes.
@@ -1222,12 +1246,6 @@ permissions-addon-install-warning =
 permissions-addon-exceptions =
     .label = Exceptions…
     .accesskey = E
-
-permissions-a11y-privacy-checkbox =
-    .label = Prevent accessibility services from accessing your browser
-    .accesskey = a
-
-permissions-a11y-privacy-link = Learn more
 
 ## Privacy Section - Data Collection
 

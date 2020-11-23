@@ -9,8 +9,6 @@ toolkit.jar:
   content/mozapps/extensions/extensions.js                      (content/extensions.js)
   content/mozapps/extensions/blocklist.xhtml                    (content/blocklist.xhtml)
   content/mozapps/extensions/blocklist.js                       (content/blocklist.js)
-  content/mozapps/extensions/pluginPrefs.xhtml                  (content/pluginPrefs.xhtml)
-  content/mozapps/extensions/pluginPrefs.js                     (content/pluginPrefs.js)
   content/mozapps/extensions/OpenH264-license.txt               (content/OpenH264-license.txt)
   content/mozapps/extensions/aboutaddons.html                   (content/aboutaddons.html)
   content/mozapps/extensions/aboutaddons.js                     (content/aboutaddons.js)
@@ -24,6 +22,7 @@ toolkit.jar:
   content/mozapps/extensions/drag-drop-addon-installer.js       (content/drag-drop-addon-installer.js)
   content/mozapps/extensions/firefox-compact-dark.svg           (content/firefox-compact-dark.svg)
   content/mozapps/extensions/firefox-compact-light.svg          (content/firefox-compact-light.svg)
+  content/mozapps/extensions/firefox-alpenglow.svg              (content/firefox-alpenglow.svg)
   content/mozapps/extensions/message-bar.css                    (content/message-bar.css)
   content/mozapps/extensions/message-bar.js                     (content/message-bar.js)
   content/mozapps/extensions/named-deck.js                      (content/named-deck.js)
@@ -32,4 +31,8 @@ toolkit.jar:
   content/mozapps/extensions/rating-star.css                    (content/rating-star.css)
   content/mozapps/extensions/shortcuts.css                      (content/shortcuts.css)
   content/mozapps/extensions/shortcuts.js                       (content/shortcuts.js)
+
+% resource default-theme %content/mozapps/extensions/default-theme/
+  content/mozapps/extensions/default-theme/icon.svg             (default-theme/icon.svg)
+  content/mozapps/extensions/default-theme/manifest.json        (default-theme/manifest.json)
 #endif

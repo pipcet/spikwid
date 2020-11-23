@@ -182,8 +182,7 @@ void SMILTimedElement::RemoveInstanceTimes(InstanceTimeList& aArray,
       newArray.AppendElement(item);
     }
   }
-  aArray.Clear();
-  aArray.SwapElements(newArray);
+  aArray = std::move(newArray);
 }
 
 //----------------------------------------------------------------------
@@ -1355,9 +1354,9 @@ void SMILTimedElement::DoPostSeek() {
 
 void SMILTimedElement::UnpreserveInstanceTimes(InstanceTimeList& aList) {
   const SMILInterval* prevInterval = GetPreviousInterval();
-  const SMILInstanceTime* cutoff =
-      mCurrentInterval ? mCurrentInterval->Begin()
-                       : prevInterval ? prevInterval->Begin() : nullptr;
+  const SMILInstanceTime* cutoff = mCurrentInterval ? mCurrentInterval->Begin()
+                                   : prevInterval   ? prevInterval->Begin()
+                                                    : nullptr;
   uint32_t count = aList.Length();
   for (uint32_t i = 0; i < count; ++i) {
     SMILInstanceTime* instance = aList[i].get();
@@ -1418,8 +1417,7 @@ void SMILTimedElement::FilterIntervals() {
       filteredList.AppendElement(std::move(mOldIntervals[i]));
     }
   }
-  mOldIntervals.Clear();
-  mOldIntervals.SwapElements(filteredList);
+  mOldIntervals = std::move(filteredList);
 }
 
 namespace {
@@ -1622,11 +1620,9 @@ bool SMILTimedElement::GetNextInterval(const SMILInterval* aPrevInterval,
     // it by searching for the next interval that starts AFTER our current
     // zero-duration interval.
     if (prevIntervalWasZeroDur && tempEnd->Time() == beginAfter) {
-      if (prevIntervalWasZeroDur) {
-        beginAfter.SetMillis(tempBegin->Time().GetMillis() + 1);
-        prevIntervalWasZeroDur = false;
-        continue;
-      }
+      beginAfter.SetMillis(tempBegin->Time().GetMillis() + 1);
+      prevIntervalWasZeroDur = false;
+      continue;
     }
     prevIntervalWasZeroDur = tempBegin->Time() == tempEnd->Time();
 

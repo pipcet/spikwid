@@ -18,7 +18,7 @@ namespace js {
 
 namespace jit {
 
-enum class ScriptGCThingType { Atom, RegExp, Function, Scope, BigInt };
+enum class ScriptGCThingType { Atom, RegExp, Object, Function, Scope, BigInt };
 
 // Base class for BaselineCompiler and BaselineInterpreterGenerator. The Handler
 // template is a class storing fields/methods that are interpreter or compiler
@@ -142,6 +142,8 @@ class BaselineCodeGen {
     return emitDebugInstrumentation(ifDebuggee, mozilla::Maybe<F>());
   }
 
+  bool emitSuspend(JSOp op);
+
   template <typename F>
   MOZ_MUST_USE bool emitAfterYieldDebugInstrumentation(const F& ifDebuggee,
                                                        Register scratch);
@@ -229,7 +231,6 @@ class BaselineCodeGen {
   MOZ_MUST_USE bool emitSetPropSuper(bool strict);
 
   MOZ_MUST_USE bool emitBindName(JSOp op);
-  MOZ_MUST_USE bool emitDefLexical(JSOp op);
 
   // Try to bake in the result of GETGNAME/BINDGNAME instead of using an IC.
   // Return true if we managed to optimize the op.
@@ -254,7 +255,6 @@ class BaselineCodeGen {
   MOZ_MUST_USE bool emitEpilogue();
   MOZ_MUST_USE bool emitOutOfLinePostBarrierSlot();
   MOZ_MUST_USE bool emitStackCheck();
-  MOZ_MUST_USE bool emitArgumentTypeChecks();
   MOZ_MUST_USE bool emitDebugPrologue();
   MOZ_MUST_USE bool emitDebugEpilogue();
 
@@ -360,7 +360,7 @@ class BaselineCompilerHandler {
     return script()->nslots() > NumSlotsLimit;
   }
 
-  JSObject* maybeNoCloneSingletonObject();
+  bool canHaveFixedSlots() const { return script()->nfixed() != 0; }
 };
 
 using BaselineCompilerCodeGen = BaselineCodeGen<BaselineCompilerHandler>;
@@ -483,7 +483,7 @@ class BaselineInterpreterHandler {
   // include them.
   bool mustIncludeSlotsInStackCheck() const { return true; }
 
-  JSObject* maybeNoCloneSingletonObject() { return nullptr; }
+  bool canHaveFixedSlots() const { return true; }
 };
 
 using BaselineInterpreterCodeGen = BaselineCodeGen<BaselineInterpreterHandler>;

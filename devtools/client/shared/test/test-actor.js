@@ -13,9 +13,8 @@ const {
   getAdjustedQuads,
   getWindowDimensions,
 } = require("devtools/shared/layout/utils");
-const defer = require("devtools/shared/defer");
 const {
-  isAuthorStylesheet,
+  isAgentStylesheet,
   getCSSStyleRules,
 } = require("devtools/shared/inspector/css-logic");
 const InspectorUtils = require("InspectorUtils");
@@ -680,18 +679,17 @@ var TestActor = protocol.ActorClassWithSpec(testSpec, {
    * @param {String} selector The node selector
    */
   reloadFrame: function(selector) {
-    const node = this._querySelector(selector);
+    return new Promise(resolve => {
+      const node = this._querySelector(selector);
 
-    const deferred = defer();
+      const onLoad = function() {
+        node.removeEventListener("load", onLoad);
+        resolve();
+      };
+      node.addEventListener("load", onLoad);
 
-    const onLoad = function() {
-      node.removeEventListener("load", onLoad);
-      deferred.resolve();
-    };
-    node.addEventListener("load", onLoad);
-
-    node.contentWindow.location.reload();
-    return deferred.promise;
+      node.contentWindow.location.reload();
+    });
   },
 
   /**
@@ -729,30 +727,28 @@ var TestActor = protocol.ActorClassWithSpec(testSpec, {
       return {};
     }
 
-    const deferred = defer();
-    this.content.addEventListener(
-      "scroll",
-      function(event) {
-        const data = { x: this.content.scrollX, y: this.content.scrollY };
-        deferred.resolve(data);
-      },
-      { once: true }
-    );
+    return new Promise(resolve => {
+      this.content.addEventListener(
+        "scroll",
+        function(event) {
+          const data = { x: this.content.scrollX, y: this.content.scrollY };
+          resolve(data);
+        },
+        { once: true }
+      );
 
-    this.content[relative ? "scrollBy" : "scrollTo"](x, y);
-
-    return deferred.promise;
+      this.content[relative ? "scrollBy" : "scrollTo"](x, y);
+    });
   },
 
   /**
    * Forces the reflow and waits for the next repaint.
    */
   reflow: function() {
-    const deferred = defer();
-    this.content.document.documentElement.offsetWidth;
-    this.content.requestAnimationFrame(deferred.resolve);
-
-    return deferred.promise;
+    return new Promise(resolve => {
+      this.content.document.documentElement.offsetWidth;
+      this.content.requestAnimationFrame(resolve);
+    });
   },
 
   async getNodeRect(selector) {
@@ -822,7 +818,7 @@ var TestActor = protocol.ActorClassWithSpec(testSpec, {
       const sheet = domRules[i].parentStyleSheet;
       sheets.push({
         href: sheet.href,
-        isContentSheet: isAuthorStylesheet(sheet),
+        isContentSheet: !isAgentStylesheet(sheet),
       });
     }
 
@@ -845,15 +841,31 @@ class TestFront extends protocol.FrontClassWithSpec(testSpec) {
   constructor(client, targetFront, parentFront) {
     super(client, targetFront, parentFront);
     this.formAttributeName = "testActor";
+    // The currently active highlighter is obtained by calling a custom getter
+    // provided manually after requesting TestFront. See `getTestActor(toolbox)`
+    this._highlighter = null;
   }
 
-  async initialize() {
-    const inspectorFront = await this.targetFront.getFront("inspector");
-    this.highlighter = inspectorFront.highlighter;
+  /**
+   * Override the highlighter getter with a custom method that returns
+   * the currently active highlighter instance.
+   *
+   * @param {Function|Highlighter} _customHighlighterGetter
+   */
+  set highlighter(_customHighlighterGetter) {
+    this._highlighter = _customHighlighterGetter;
   }
 
-  setHighlighter(highlighter) {
-    this.highlighter = highlighter;
+  /**
+   * The currently active highlighter instance.
+   * If there is a custom getter for the highlighter, return its result.
+   *
+   * @return {Highlighter|null}
+   */
+  get highlighter() {
+    return typeof this._highlighter === "function"
+      ? this._highlighter()
+      : this._highlighter;
   }
 
   /**
@@ -881,7 +893,7 @@ class TestFront extends protocol.FrontClassWithSpec(testSpec) {
    * Get the value of an attribute on one of the highlighter's node.
    * @param {String} nodeID The Id of the node in the highlighter.
    * @param {String} name The name of the attribute.
-   * @param {Object} highlighter Optional custom highlither to target
+   * @param {Object} highlighter Optional custom highlighter to target
    * @return {String} value
    */
   getHighlighterNodeAttribute(nodeID, name, highlighter) {
@@ -903,6 +915,12 @@ class TestFront extends protocol.FrontClassWithSpec(testSpec) {
    * Is the highlighter currently visible on the page?
    */
   isHighlighting() {
+    // Once the highlighter is hidden, the reference to it is lost.
+    // Assume it is not highlighting.
+    if (!this.highlighter) {
+      return false;
+    }
+
     return this.getHighlighterNodeAttribute(
       "box-model-elements",
       "hidden"

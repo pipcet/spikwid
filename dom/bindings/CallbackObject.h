@@ -33,6 +33,7 @@
 #include "xpcpublic.h"
 #include "jsapi.h"
 #include "js/ContextOptions.h"
+#include "js/Object.h"  // JS::GetCompartment
 #include "js/TracingAPI.h"
 
 namespace mozilla {
@@ -140,14 +141,12 @@ class CallbackObject : public nsISupports {
   enum ExceptionHandling {
     // Report any exception and don't throw it to the caller code.
     eReportExceptions,
+    // Throw any exception to the caller code and don't report it.
+    eRethrowExceptions,
     // Throw an exception to the caller code if the thrown exception is a
     // binding object for a DOMException from the caller's scope, otherwise
     // report it.
-    eRethrowContentExceptions,
-    // Throw exceptions to the caller code, unless the caller realm is
-    // provided, the exception is not a DOMException from the caller
-    // realm, and the caller realm does not subsume our unwrapped callback.
-    eRethrowExceptions
+    eRethrowContentExceptions
   };
 
   // Append a UTF-8 string to aOutString that describes the callback function,
@@ -215,8 +214,8 @@ class CallbackObject : public nsISupports {
                          nsIGlobalObject* aIncumbentGlobal) {
     MOZ_ASSERT(aCallback && !mCallback);
     MOZ_ASSERT(aCallbackGlobal);
-    MOZ_DIAGNOSTIC_ASSERT(js::GetObjectCompartment(aCallback) ==
-                          js::GetObjectCompartment(aCallbackGlobal));
+    MOZ_DIAGNOSTIC_ASSERT(JS::GetCompartment(aCallback) ==
+                          JS::GetCompartment(aCallbackGlobal));
     MOZ_ASSERT(JS_IsGlobalObject(aCallbackGlobal));
     mCallback = aCallback;
     mCallbackGlobal = aCallbackGlobal;
@@ -351,7 +350,7 @@ class CallbackObject : public nsISupports {
     JSContext* mCx;
 
     // Caller's realm. This will only have a sensible value if
-    // mExceptionHandling == eRethrowContentExceptions or eRethrowExceptions.
+    // mExceptionHandling == eRethrowContentExceptions.
     JS::Realm* mRealm;
 
     // And now members whose construction/destruction order we need to control.

@@ -30,6 +30,11 @@ const { actionTypes: at, actionCreators: ac } = ChromeUtils.import(
 );
 ChromeUtils.defineModuleGetter(
   this,
+  "Region",
+  "resource://gre/modules/Region.jsm"
+);
+ChromeUtils.defineModuleGetter(
+  this,
   "PersistentCache",
   "resource://activity-stream/lib/PersistentCache.jsm"
 );
@@ -172,6 +177,10 @@ this.DiscoveryStreamFeed = class DiscoveryStreamFeed {
     });
   }
 
+  get region() {
+    return Region.home;
+  }
+
   get showSpocs() {
     // Combine user-set sponsored opt-out with Mozilla-set config
     return (
@@ -259,7 +268,8 @@ this.DiscoveryStreamFeed = class DiscoveryStreamFeed {
     // 2. Hardcoded layouts don't have this already done for us.
     const endpoint = rawEndpoint
       .replace("$apiKey", apiKey)
-      .replace("$locale", this.locale);
+      .replace("$locale", this.locale)
+      .replace("$region", this.region);
 
     try {
       // Make sure the requested endpoint is allowed
@@ -449,7 +459,6 @@ this.DiscoveryStreamFeed = class DiscoveryStreamFeed {
           type: at.DISCOVERY_STREAM_SPOCS_ENDPOINT,
           data: {
             url,
-            spocs_per_domain: layoutResp.spocs.spocs_per_domain,
           },
           meta: {
             isStartup,
@@ -690,7 +699,6 @@ this.DiscoveryStreamFeed = class DiscoveryStreamFeed {
     let frequencyCapped = [];
     let blockedItems = [];
     let belowMinScore = [];
-    let flightDupes = [];
 
     const { placements } = this.store.getState().DiscoveryStream.spocs;
 
@@ -785,20 +793,12 @@ this.DiscoveryStreamFeed = class DiscoveryStreamFeed {
               } = this.filterBlocked(capResult);
               blockedItems = [...blockedItems, ...blocks];
 
-              // It's important that we score before removing flight dupes.
-              // This ensure we remove the lower ranking dupes.
               const {
                 data: scoredResults,
                 filtered: minScoreFilter,
               } = await this.scoreItems(blockedResults, "spocs");
 
               belowMinScore = [...belowMinScore, ...minScoreFilter];
-
-              let {
-                data: dupesResult,
-                filtered: dupes,
-              } = this.removeFlightDupes(scoredResults);
-              flightDupes = [...flightDupes, ...dupes];
 
               spocsState.spocs = {
                 ...spocsState.spocs,
@@ -807,7 +807,7 @@ this.DiscoveryStreamFeed = class DiscoveryStreamFeed {
                   context,
                   sponsor,
                   sponsored_by_override,
-                  items: dupesResult,
+                  items: scoredResults,
                 },
               };
             }
@@ -824,7 +824,6 @@ this.DiscoveryStreamFeed = class DiscoveryStreamFeed {
               frequency_cap: frequencyCapped,
               blocked_by_user: blockedItems,
               below_min_score: belowMinScore,
-              flight_duplicate: flightDupes,
             },
             true
           );
@@ -963,6 +962,36 @@ this.DiscoveryStreamFeed = class DiscoveryStreamFeed {
     }
   }
 
+  /*
+   * This function is used to sort any type of story, both spocs and recs.
+   * This uses hierarchical sorting, first sorting by priority, then by score within a priority.
+   * This function could be sorting an array of spocs or an array of recs.
+   * A rec would have priority undefined, and a spoc would probably have a priority set.
+   * Priority is sorted ascending, so low numbers are the highest priority.
+   * Score is sorted descending, so high numbers are the highest score.
+   * Undefined priority values are considered the lowest priority.
+   * A negative priority is considered the same as undefined, lowest priority.
+   * A negative priority is unlikely and not currently supported or expected.
+   * A negative score is a possible use case.
+   */
+  sortItem(a, b) {
+    // If the priorities are the same, sort based on score.
+    // If both item priorities are undefined,
+    // we can safely sort via score.
+    if (a.priority === b.priority) {
+      return b.score - a.score;
+    } else if (!a.priority || a.priority <= 0) {
+      // If priority is undefined or an unexpected value,
+      // consider it lowest priority.
+      return 1;
+    } else if (!b.priority || b.priority <= 0) {
+      // Also consider this case lowest priority.
+      return -1;
+    }
+    // Our primary sort for items with priority.
+    return a.priority - b.priority;
+  }
+
   async scoreItems(items, type) {
     const filtered = [];
     const scoreStart = Cu.now();
@@ -989,7 +1018,7 @@ this.DiscoveryStreamFeed = class DiscoveryStreamFeed {
         return false;
       })
       // Sort by highest scores.
-      .sort((a, b) => b.score - a.score);
+      .sort(this.sortItem);
 
     if (this.personalized && personalizedByType) {
       this.providerSwitcher.dispatchRelevanceScoreDuration(scoreStart);
@@ -1028,38 +1057,6 @@ this.DiscoveryStreamFeed = class DiscoveryStreamFeed {
       };
     }
     return { data, filtered };
-  }
-
-  removeFlightDupes(spocs) {
-    if (spocs && spocs.length) {
-      const spocsPerDomain =
-        this.store.getState().DiscoveryStream.spocs.spocs_per_domain || 1;
-      const flightMap = {};
-      const flightDuplicates = [];
-
-      // This removes flight dupes.
-      // We do this only after scoring and sorting because that way
-      // we can keep the first item we see, and end up keeping the highest scored.
-      const newSpocs = spocs.filter(s => {
-        if (!flightMap[s.flight_id]) {
-          flightMap[s.flight_id] = 1;
-          return true;
-        } else if (flightMap[s.flight_id] < spocsPerDomain) {
-          flightMap[s.flight_id]++;
-          return true;
-        }
-        flightDuplicates.push(s);
-        return false;
-      });
-      return {
-        data: newSpocs,
-        filtered: flightDuplicates,
-      };
-    }
-    return {
-      data: spocs,
-      filtered: [],
-    };
   }
 
   // For backwards compatibility, older spoc endpoint don't have flight_id,
@@ -1947,7 +1944,6 @@ getHardcodedLayout = isBasicLayout => ({
   lastUpdate: Date.now(),
   spocs: {
     url: "https://spocs.getpocket.com/spocs",
-    spocs_per_domain: 3,
   },
   layout: [
     {
@@ -2003,7 +1999,7 @@ getHardcodedLayout = isBasicLayout => ({
             },
             link_url: "https://getpocket.com/firefox/new_tab_learn_more",
             icon:
-              "resource://activity-stream/data/content/assets/glyph-pocket-16.svg",
+              "chrome://activity-stream/content/data/content/assets/glyph-pocket-16.svg",
           },
           properties: {},
           styles: {
@@ -2027,7 +2023,7 @@ getHardcodedLayout = isBasicLayout => ({
           feed: {
             embed_reference: null,
             url:
-              "https://getpocket.cdn.mozilla.net/v3/firefox/global-recs?version=3&consumer_key=$apiKey&locale_lang=$locale&count=30",
+              "https://getpocket.cdn.mozilla.net/v3/firefox/global-recs?version=3&consumer_key=$apiKey&locale_lang=$locale&region=$region&count=30",
           },
           spocs: {
             probability: 1,
@@ -2053,29 +2049,33 @@ getHardcodedLayout = isBasicLayout => ({
             alignment: "left-align",
             links: [
               {
-                name: "Must Reads",
-                url: "https://getpocket.com/explore/must-reads?src=fx_new_tab",
+                name: "Self Improvement",
+                url:
+                  "https://getpocket.com/explore/self-improvement?utm_source=pocket-newtab",
               },
               {
-                name: "Productivity",
+                name: "Food",
                 url:
-                  "https://getpocket.com/explore/productivity?src=fx_new_tab",
+                  "https://getpocket.com/explore/food?utm_source=pocket-newtab",
+              },
+              {
+                name: "Entertainment",
+                url:
+                  "https://getpocket.com/explore/entertainment?utm_source=pocket-newtab",
               },
               {
                 name: "Health",
-                url: "https://getpocket.com/explore/health?src=fx_new_tab",
+                url:
+                  "https://getpocket.com/explore/health?utm_source=pocket-newtab",
               },
               {
-                name: "Finance",
-                url: "https://getpocket.com/explore/finance?src=fx_new_tab",
-              },
-              {
-                name: "Technology",
-                url: "https://getpocket.com/explore/technology?src=fx_new_tab",
+                name: "Science",
+                url:
+                  "https://getpocket.com/explore/science?utm_source=pocket-newtab",
               },
               {
                 name: "More Recommendations ›",
-                url: "https://getpocket.com/explore?src=fx_new_tab&cdn=0",
+                url: "https://getpocket.com/explore?utm_source=pocket-newtab",
               },
             ],
           },

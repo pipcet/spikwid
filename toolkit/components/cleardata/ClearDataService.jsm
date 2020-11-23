@@ -166,6 +166,42 @@ const NetworkCacheCleaner = {
   },
 };
 
+const CSSCacheCleaner = {
+  deleteByHost(aHost, aOriginAttributes) {
+    return new Promise(aResolve => {
+      // Delete data from both HTTP and HTTPS sites.
+      let httpURI = Services.io.newURI("http://" + aHost);
+      let httpsURI = Services.io.newURI("https://" + aHost);
+      let httpPrincipal = Services.scriptSecurityManager.createContentPrincipal(
+        httpURI,
+        aOriginAttributes
+      );
+      let httpsPrincipal = Services.scriptSecurityManager.createContentPrincipal(
+        httpsURI,
+        aOriginAttributes
+      );
+
+      ChromeUtils.clearStyleSheetCache(httpPrincipal);
+      ChromeUtils.clearStyleSheetCache(httpsPrincipal);
+      aResolve();
+    });
+  },
+
+  deleteByPrincipal(aPrincipal) {
+    return new Promise(aResolve => {
+      ChromeUtils.clearStyleSheetCache(aPrincipal);
+      aResolve();
+    });
+  },
+
+  deleteAll() {
+    return new Promise(aResolve => {
+      ChromeUtils.clearStyleSheetCache();
+      aResolve();
+    });
+  },
+};
+
 const ImageCacheCleaner = {
   deleteByHost(aHost, aOriginAttributes) {
     return new Promise(aResolve => {
@@ -694,6 +730,32 @@ const PushNotificationsCleaner = {
 };
 
 const StorageAccessCleaner = {
+  // This is a special function to implement deleteUserInteractionForClearingHistory.
+  deleteExceptPrincipals(aPrincipalsWithStorage, aFrom) {
+    // We compare by base domain in order to simulate the behavior
+    // from purging, Consider a scenario where the user is logged
+    // into sub.example.com but the cookies are on example.com. In this
+    // case, we will remove the user interaction for sub.example.com
+    // because its principal does not match the one with storage.
+    let baseDomainsWithStorage = new Set();
+    for (let principal of aPrincipalsWithStorage) {
+      baseDomainsWithStorage.add(principal.baseDomain);
+    }
+
+    return new Promise(aResolve => {
+      for (let perm of Services.perms.getAllByTypeSince(
+        "storageAccessAPI",
+        aFrom
+      )) {
+        if (!baseDomainsWithStorage.has(perm.principal.baseDomain)) {
+          Services.perms.removePermission(perm);
+        }
+      }
+
+      aResolve();
+    });
+  },
+
   deleteByHost(aHost, aOriginAttributes) {
     return new Promise(aResolve => {
       for (let perm of Services.perms.all) {
@@ -928,6 +990,11 @@ const SecuritySettingsCleaner = {
           );
         }
       }
+      let cars = Cc[
+        "@mozilla.org/security/clientAuthRememberService;1"
+      ].getService(Ci.nsIClientAuthRememberService);
+
+      cars.deleteDecisionsByHost(aHost, aOriginAttributes);
 
       aResolve();
     });
@@ -941,6 +1008,10 @@ const SecuritySettingsCleaner = {
         Ci.nsISiteSecurityService
       );
       sss.clearAll();
+      let cars = Cc[
+        "@mozilla.org/security/clientAuthRememberService;1"
+      ].getService(Ci.nsIClientAuthRememberService);
+      cars.clearRememberedDecisions();
       aResolve();
     });
   },
@@ -1046,6 +1117,11 @@ const FLAGS_MAP = [
   {
     flag: Ci.nsIClearDataService.CLEAR_IMAGE_CACHE,
     cleaners: [ImageCacheCleaner],
+  },
+
+  {
+    flag: Ci.nsIClearDataService.CLEAR_CSS_CACHE,
+    cleaners: [CSSCacheCleaner],
   },
 
   {
@@ -1274,6 +1350,24 @@ ClearDataService.prototype = Object.freeze({
         return Promise.resolve();
       }
     );
+  },
+
+  deleteUserInteractionForClearingHistory(
+    aPrincipalsWithStorage,
+    aFrom,
+    aCallback
+  ) {
+    if (!aCallback) {
+      return Cr.NS_ERROR_INVALID_ARG;
+    }
+
+    StorageAccessCleaner.deleteExceptPrincipals(
+      aPrincipalsWithStorage,
+      aFrom
+    ).then(() => {
+      aCallback.onDataDeleted(0);
+    });
+    return Cr.NS_OK;
   },
 
   // This internal method uses aFlags against FLAGS_MAP in order to retrieve a

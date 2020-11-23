@@ -8,6 +8,7 @@
 #define vm_ProxyObject_h
 
 #include "js/Proxy.h"
+#include "js/shadow/Object.h"  // JS::shadow::Object
 #include "vm/JSObject.h"
 
 namespace js {
@@ -33,7 +34,7 @@ class ProxyObject : public JSObject {
     static_assert(offsetof(ProxyObject, data) == detail::ProxyDataOffset,
                   "proxy object layout must match shadow interface");
     static_assert(offsetof(ProxyObject, data.reservedSlots) ==
-                      offsetof(shadow::Object, slots),
+                      offsetof(JS::shadow::Object, slots),
                   "Proxy reservedSlots must overlay native object slots field");
   }
 
@@ -68,6 +69,9 @@ class ProxyObject : public JSObject {
                                                     HandleValueVector values);
 
   const Value& private_() const { return GetProxyPrivate(this); }
+  const Value& expando() const { return GetProxyExpando(this); }
+
+  void setExpando(JSObject* expando);
 
   void setCrossCompartmentPrivate(const Value& priv);
   void setSameCompartmentPrivate(const Value& priv);
@@ -107,6 +111,11 @@ class ProxyObject : public JSObject {
   GCPtrValue* slotOfPrivate() {
     return reinterpret_cast<GCPtrValue*>(
         &detail::GetProxyDataLayout(this)->values()->privateSlot);
+  }
+
+  GCPtrValue* slotOfExpando() {
+    return reinterpret_cast<GCPtrValue*>(
+        &detail::GetProxyDataLayout(this)->values()->expandoSlot);
   }
 
   void setPrivate(const Value& priv);

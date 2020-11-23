@@ -64,6 +64,7 @@
 #include "nsVariant.h"
 #include "nsIScriptError.h"
 #include "nsICachingChannel.h"
+#include "nsICookieJarSettings.h"
 #include "nsContentUtils.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsError.h"
@@ -518,12 +519,12 @@ nsresult XMLHttpRequestMainThread::AppendToResponseText(
       return NS_ERROR_OUT_OF_MEMORY;
     }
 
-    nsresult rv;
-    BulkWriteHandle<char16_t> handle =
-        helper.BulkWrite(destBufferLen.value(), rv);
-    if (NS_FAILED(rv)) {
-      return rv;
+    auto handleOrErr = helper.BulkWrite(destBufferLen.value());
+    if (handleOrErr.isErr()) {
+      return handleOrErr.unwrapErr();
     }
+
+    auto handle = handleOrErr.unwrap();
 
     uint32_t result;
     size_t read;
@@ -1333,8 +1334,7 @@ void XMLHttpRequestMainThread::ResumeEventDispatching() {
   MOZ_ASSERT(mEventDispatchingSuspended);
   mEventDispatchingSuspended = false;
 
-  nsTArray<PendingEvent> pendingEvents;
-  pendingEvents.SwapElements(mPendingEvents);
+  nsTArray<PendingEvent> pendingEvents = std::move(mPendingEvents);
 
   if (NS_FAILED(CheckCurrentGlobalCorrectness())) {
     return;
@@ -1591,7 +1591,7 @@ nsresult XMLHttpRequestMainThread::StreamReaderFunc(
     MOZ_ASSERT(!xmlHttpRequest->mResponseXML,
                "We shouldn't be parsing a doc here");
     rv = xmlHttpRequest->AppendToResponseText(
-        AsBytes(MakeSpan(fromRawSegment, count)));
+        AsBytes(Span(fromRawSegment, count)));
     if (NS_WARN_IF(NS_FAILED(rv))) {
       return rv;
     }
@@ -1605,7 +1605,7 @@ nsresult XMLHttpRequestMainThread::StreamReaderFunc(
     // stream is not supported.
     nsCOMPtr<nsIInputStream> copyStream;
     rv = NS_NewByteInputStream(getter_AddRefs(copyStream),
-                               MakeSpan(fromRawSegment, count),
+                               Span(fromRawSegment, count),
                                NS_ASSIGNMENT_DEPEND);
 
     if (NS_SUCCEEDED(rv) && xmlHttpRequest->mXMLParserStreamListener) {
@@ -2011,7 +2011,7 @@ XMLHttpRequestMainThread::OnStartRequest(nsIRequest* request) {
     }
 
     // Create an empty document from it.
-    const nsAString& emptyStr = EmptyString();
+    const auto& emptyStr = u""_ns;
     nsIGlobalObject* global = DOMEventTargetHelper::GetParentObject();
 
     nsCOMPtr<nsIPrincipal> requestingPrincipal;
@@ -2161,7 +2161,7 @@ XMLHttpRequestMainThread::OnStopRequest(nsIRequest* request, nsresult status) {
       }
 
       ChromeFilePropertyBag bag;
-      bag.mType = NS_ConvertUTF8toUTF16(contentType);
+      CopyUTF8toUTF16(contentType, bag.mType);
 
       nsCOMPtr<nsIGlobalObject> global = GetOwnerGlobal();
 
@@ -2458,7 +2458,7 @@ nsresult XMLHttpRequestMainThread::CreateChannel() {
     rv = httpChannel->SetRequestMethod(mRequestMethod);
     NS_ENSURE_SUCCESS(rv, rv);
 
-    httpChannel->SetSource(profiler_get_backtrace());
+    httpChannel->SetSource(profiler_capture_backtrace());
 
     // Set the initiator type
     nsCOMPtr<nsITimedChannel> timedChannel(do_QueryInterface(httpChannel));
@@ -3240,7 +3240,8 @@ void XMLHttpRequestMainThread::SetOriginStack(
   mOriginStack = std::move(aOriginStack);
 }
 
-void XMLHttpRequestMainThread::SetSource(UniqueProfilerBacktrace aSource) {
+void XMLHttpRequestMainThread::SetSource(
+    UniquePtr<ProfileChunkedBuffer> aSource) {
   if (!mChannel) {
     return;
   }
@@ -4032,6 +4033,12 @@ void RequestHeaders::ApplyToChannel(nsIHttpChannel* aChannel,
          header.mName.LowerCaseEqualsASCII("content-language") ||
          header.mName.LowerCaseEqualsASCII("content-location"))) {
       continue;
+    }
+    // Update referrerInfo to override referrer header in system privileged.
+    if (header.mName.LowerCaseEqualsASCII("referer")) {
+      DebugOnly<nsresult> rv = aChannel->SetNewReferrerInfo(
+          header.mValue, nsIReferrerInfo::ReferrerPolicyIDL::UNSAFE_URL, true);
+      MOZ_ASSERT(NS_SUCCEEDED(rv));
     }
     if (header.mValue.IsEmpty()) {
       DebugOnly<nsresult> rv = aChannel->SetEmptyRequestHeader(header.mName);

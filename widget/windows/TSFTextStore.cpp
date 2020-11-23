@@ -194,7 +194,7 @@ static nsCString GetCLSIDNameStr(REFCLSID aCLSID) {
   LPOLESTR str = nullptr;
   HRESULT hr = ::StringFromCLSID(aCLSID, &str);
   if (FAILED(hr) || !str || !str[0]) {
-    return EmptyCString();
+    return ""_ns;
   }
 
   nsCString result;
@@ -207,7 +207,7 @@ static nsCString GetGUIDNameStr(REFGUID aGUID) {
   OLECHAR str[40];
   int len = ::StringFromGUID2(aGUID, str, ArrayLength(str));
   if (!len || !str[0]) {
-    return EmptyCString();
+    return ""_ns;
   }
 
   return NS_ConvertUTF16toUTF8(str);
@@ -314,7 +314,7 @@ static nsCString GetRIIDNameStr(REFIID aRIID) {
   LPOLESTR str = nullptr;
   HRESULT hr = ::StringFromIID(aRIID, &str);
   if (FAILED(hr) || !str || !str[0]) {
-    return EmptyCString();
+    return ""_ns;
   }
 
   nsAutoString key(L"Interface\\");
@@ -421,11 +421,10 @@ static const nsCString GetSinkMaskNameStr(DWORD aSinkMask) {
 }
 
 static const char* GetActiveSelEndName(TsActiveSelEnd aSelEnd) {
-  return aSelEnd == TS_AE_NONE
-             ? "TS_AE_NONE"
-             : aSelEnd == TS_AE_START
-                   ? "TS_AE_START"
-                   : aSelEnd == TS_AE_END ? "TS_AE_END" : "Unknown";
+  return aSelEnd == TS_AE_NONE    ? "TS_AE_NONE"
+         : aSelEnd == TS_AE_START ? "TS_AE_START"
+         : aSelEnd == TS_AE_END   ? "TS_AE_END"
+                                  : "Unknown";
 }
 
 static const nsCString GetLockFlagNameStr(DWORD aLockFlags) {
@@ -674,76 +673,6 @@ class GetEscapedUTF8String final : public NS_ConvertUTF16toUTF8 {
     ReplaceSubstring("\r", "\\r");
     ReplaceSubstring("\n", "\\n");
     ReplaceSubstring("\t", "\\t");
-  }
-};
-
-class GetIMEStateString : public nsAutoCString {
- public:
-  explicit GetIMEStateString(const IMEState& aIMEState) {
-    AppendLiteral("{ mEnabled=");
-    switch (aIMEState.mEnabled) {
-      case IMEState::DISABLED:
-        AppendLiteral("DISABLED");
-        break;
-      case IMEState::ENABLED:
-        AppendLiteral("ENABLED");
-        break;
-      case IMEState::PASSWORD:
-        AppendLiteral("PASSWORD");
-        break;
-      case IMEState::PLUGIN:
-        AppendLiteral("PLUGIN");
-        break;
-      case IMEState::UNKNOWN:
-        AppendLiteral("UNKNOWN");
-        break;
-      default:
-        AppendPrintf("Unknown value (%d)", aIMEState.mEnabled);
-        break;
-    }
-    AppendLiteral(", mOpen=");
-    switch (aIMEState.mOpen) {
-      case IMEState::OPEN_STATE_NOT_SUPPORTED:
-        AppendLiteral("OPEN_STATE_NOT_SUPPORTED or DONT_CHANGE_OPEN_STATE");
-        break;
-      case IMEState::OPEN:
-        AppendLiteral("OPEN");
-        break;
-      case IMEState::CLOSED:
-        AppendLiteral("CLOSED");
-        break;
-      default:
-        AppendPrintf("Unknown value (%d)", aIMEState.mOpen);
-        break;
-    }
-    AppendLiteral(" }");
-  }
-};
-
-class GetInputContextString : public nsAutoCString {
- public:
-  explicit GetInputContextString(const InputContext& aInputContext) {
-    AppendPrintf("{ mIMEState=%s, ",
-                 GetIMEStateString(aInputContext.mIMEState).get());
-    AppendLiteral("mOrigin=");
-    switch (aInputContext.mOrigin) {
-      case InputContext::ORIGIN_MAIN:
-        AppendLiteral("ORIGIN_MAIN");
-        break;
-      case InputContext::ORIGIN_CONTENT:
-        AppendLiteral("ORIGIN_CONTENT");
-        break;
-      default:
-        AppendPrintf("Unknown value (%d)", aInputContext.mOrigin);
-        break;
-    }
-    AppendPrintf(
-        ", mHTMLInputType=\"%s\", mHTMLInputInputmode=\"%s\", "
-        "mActionHint=\"%s\", mMayBeIMEUnaware=%s }",
-        NS_ConvertUTF16toUTF8(aInputContext.mHTMLInputType).get(),
-        NS_ConvertUTF16toUTF8(aInputContext.mHTMLInputInputmode).get(),
-        NS_ConvertUTF16toUTF8(aInputContext.mActionHint).get(),
-        GetBoolName(aInputContext.mMayBeIMEUnaware));
   }
 };
 
@@ -1666,9 +1595,9 @@ TSFStaticSink::OnActivated(DWORD dwProfileType, LANGID langid, REFCLSID rclsid,
            this,
            dwProfileType == TF_PROFILETYPE_INPUTPROCESSOR
                ? "TF_PROFILETYPE_INPUTPROCESSOR"
-               : dwProfileType == TF_PROFILETYPE_KEYBOARDLAYOUT
-                     ? "TF_PROFILETYPE_KEYBOARDLAYOUT"
-                     : "Unknown",
+           : dwProfileType == TF_PROFILETYPE_KEYBOARDLAYOUT
+               ? "TF_PROFILETYPE_KEYBOARDLAYOUT"
+               : "Unknown",
            dwProfileType, langid, GetCLSIDNameStr(rclsid).get(),
            GetGUIDNameStr(catid).get(), GetGUIDNameStr(guidProfile).get(), hkl,
            dwFlags, GetBoolName(dwFlags & TF_IPSINK_FLAG_ACTIVE),
@@ -2407,11 +2336,11 @@ void TSFTextStore::FlushPendingActions() {
           MOZ_LOG(sTextStoreLog, LogLevel::Error,
                   ("0x%p   TSFTextStore::FlushPendingActions() "
                    "FAILED to dispatch compositionstart event, "
-                   "IsHandlingComposition()=%s",
-                   this, GetBoolName(IsHandlingComposition())));
+                   "IsHandlingCompositionInContent()=%s",
+                   this, GetBoolName(IsHandlingCompositionInContent())));
           // XXX Is this right? If there is a composition in content,
           //     shouldn't we wait NOTIFY_IME_OF_COMPOSITION_EVENT_HANDLED?
-          mDeferClearingContentForTSF = !IsHandlingComposition();
+          mDeferClearingContentForTSF = !IsHandlingCompositionInContent();
         }
         if (!widget || widget->Destroyed()) {
           break;
@@ -2438,11 +2367,11 @@ void TSFTextStore::FlushPendingActions() {
           MOZ_LOG(sTextStoreLog, LogLevel::Error,
                   ("0x%p   TSFTextStore::FlushPendingActions() "
                    "FAILED to setting pending composition... "
-                   "IsHandlingComposition()=%s",
-                   this, GetBoolName(IsHandlingComposition())));
+                   "IsHandlingCompositionInContent()=%s",
+                   this, GetBoolName(IsHandlingCompositionInContent())));
           // XXX Is this right? If there is a composition in content,
           //     shouldn't we wait NOTIFY_IME_OF_COMPOSITION_EVENT_HANDLED?
-          mDeferClearingContentForTSF = !IsHandlingComposition();
+          mDeferClearingContentForTSF = !IsHandlingCompositionInContent();
         } else {
           MOZ_LOG(sTextStoreLog, LogLevel::Debug,
                   ("0x%p   TSFTextStore::FlushPendingActions() "
@@ -2455,11 +2384,11 @@ void TSFTextStore::FlushPendingActions() {
             MOZ_LOG(sTextStoreLog, LogLevel::Error,
                     ("0x%p   TSFTextStore::FlushPendingActions() "
                      "FAILED to dispatch compositionchange event, "
-                     "IsHandlingComposition()=%s",
-                     this, GetBoolName(IsHandlingComposition())));
+                     "IsHandlingCompositionInContent()=%s",
+                     this, GetBoolName(IsHandlingCompositionInContent())));
             // XXX Is this right? If there is a composition in content,
             //     shouldn't we wait NOTIFY_IME_OF_COMPOSITION_EVENT_HANDLED?
-            mDeferClearingContentForTSF = !IsHandlingComposition();
+            mDeferClearingContentForTSF = !IsHandlingCompositionInContent();
           }
           // Be aware, the mWidget might already have been destroyed.
         }
@@ -2491,11 +2420,11 @@ void TSFTextStore::FlushPendingActions() {
           MOZ_LOG(sTextStoreLog, LogLevel::Error,
                   ("0x%p   TSFTextStore::FlushPendingActions() "
                    "FAILED to dispatch compositioncommit event, "
-                   "IsHandlingComposition()=%s",
-                   this, GetBoolName(IsHandlingComposition())));
+                   "IsHandlingCompositionInContent()=%s",
+                   this, GetBoolName(IsHandlingCompositionInContent())));
           // XXX Is this right? If there is a composition in content,
           //     shouldn't we wait NOTIFY_IME_OF_COMPOSITION_EVENT_HANDLED?
-          mDeferClearingContentForTSF = !IsHandlingComposition();
+          mDeferClearingContentForTSF = !IsHandlingCompositionInContent();
         }
         break;
       }
@@ -4429,14 +4358,18 @@ TSFTextStore::GetTextExt(TsViewCookie vcView, LONG acpStart, LONG acpEnd,
       sTextStoreLog, LogLevel::Info,
       ("0x%p TSFTextStore::GetTextExt(vcView=%ld, "
        "acpStart=%ld, acpEnd=%ld, prc=0x%p, pfClipped=0x%p), "
-       "IsHandlingComposition()=%s, "
+       "IsHandlingCompositionInParent()=%s, "
+       "IsHandlingCompositionInContent()=%s, "
        "mContentForTSF={ MinOffsetOfLayoutChanged()=%u, "
-       "LatestCompositionStartOffset()=%d, LatestCompositionEndOffset()=%d }, "
-       "mComposition= { IsComposing()=%s, mStart=%d, EndOffset()=%d }, "
+       "LatestCompositionStartOffset()=%d, LatestCompositionEndOffset()=%d, "
+       "mSelection={ acpStart=%ld, acpEnd=%ld, style.ase=%s, "
+       "style.fInterimChar=%s } "
+       "}, mComposition={ IsComposing()=%s, mStart=%d, EndOffset()=%d }, "
        "mDeferNotifyingTSF=%s, mWaitingQueryLayout=%s, "
        "IMEHandler::IsA11yHandlingNativeCaret()=%s",
        this, vcView, acpStart, acpEnd, prc, pfClipped,
-       GetBoolName(IsHandlingComposition()),
+       GetBoolName(IsHandlingCompositionInParent()),
+       GetBoolName(IsHandlingCompositionInContent()),
        mContentForTSF.MinOffsetOfLayoutChanged(),
        mContentForTSF.HasOrHadComposition()
            ? mContentForTSF.LatestCompositionStartOffset()
@@ -4444,6 +4377,10 @@ TSFTextStore::GetTextExt(TsViewCookie vcView, LONG acpStart, LONG acpEnd,
        mContentForTSF.HasOrHadComposition()
            ? mContentForTSF.LatestCompositionEndOffset()
            : -1,
+       mContentForTSF.Selection().StartOffset(),
+       mContentForTSF.Selection().EndOffset(),
+       GetActiveSelEndName(mContentForTSF.Selection().ActiveSelEnd()),
+       GetBoolName(mContentForTSF.Selection().IsInterimChar()),
        GetBoolName(mComposition.IsComposing()), mComposition.mStart,
        mComposition.EndOffset(), GetBoolName(mDeferNotifyingTSF),
        GetBoolName(mWaitingQueryLayout),
@@ -4493,7 +4430,8 @@ TSFTextStore::GetTextExt(TsViewCookie vcView, LONG acpStart, LONG acpEnd,
 
   mWaitingQueryLayout = false;
 
-  if (IsHandlingComposition() && mContentForTSF.HasOrHadComposition() &&
+  if (IsHandlingCompositionInContent() &&
+      mContentForTSF.HasOrHadComposition() &&
       mContentForTSF.IsLayoutChanged() &&
       mContentForTSF.MinOffsetOfLayoutChanged() > LONG_MAX) {
     MOZ_LOG(sTextStoreLog, LogLevel::Error,
@@ -4541,8 +4479,9 @@ TSFTextStore::GetTextExt(TsViewCookie vcView, LONG acpStart, LONG acpEnd,
     // the position where TSFTextStore believes it at.
     options.mRelativeToInsertionPoint = true;
     startOffset -= mComposition.mStart;
-  } else if (IsHandlingComposition() && mContentForTSF.HasOrHadComposition()) {
-    // If there was a composition and it hasn't been committed in the content
+  } else if (IsHandlingCompositionInParent() &&
+             mContentForTSF.HasOrHadComposition()) {
+    // If there was a composition and its commit event hasn't been dispatched
     // yet, ContentCacheInParent is still open for relative offset query from
     // the latest composition.
     options.mRelativeToInsertionPoint = true;
@@ -4655,7 +4594,8 @@ bool TSFTextStore::MaybeHackNoErrorLayoutBugs(LONG& aACPStart, LONG& aACPEnd) {
   // TS_E_NOLAYOUT correctly in this case. See:
   // https://github.com/google/mozc/blob/6b878e31fb6ac4347dc9dfd8ccc1080fe718479f/src/win32/tip/tip_range_util.cc#L237-L257
 
-  if (!IsHandlingComposition() || !mContentForTSF.HasOrHadComposition() ||
+  if (!IsHandlingCompositionInContent() ||
+      !mContentForTSF.HasOrHadComposition() ||
       !mContentForTSF.IsLayoutChangedAt(aACPEnd)) {
     return false;
   }
@@ -5058,11 +4998,10 @@ TSFTextStore::InsertTextAtSelection(DWORD dwFlags, const WCHAR* pchText,
        "pchText=0x%p \"%s\", cch=%lu, pacpStart=0x%p, pacpEnd=0x%p, "
        "pChange=0x%p), IsComposing()=%s",
        this,
-       dwFlags == 0
-           ? "0"
-           : dwFlags == TF_IAS_NOQUERY
-                 ? "TF_IAS_NOQUERY"
-                 : dwFlags == TF_IAS_QUERYONLY ? "TF_IAS_QUERYONLY" : "Unknown",
+       dwFlags == 0                  ? "0"
+       : dwFlags == TF_IAS_NOQUERY   ? "TF_IAS_NOQUERY"
+       : dwFlags == TF_IAS_QUERYONLY ? "TF_IAS_QUERYONLY"
+                                     : "Unknown",
        pchText, pchText && cch ? GetEscapedUTF8String(pchText, cch).get() : "",
        cch, pacpStart, pacpEnd, pChange,
        GetBoolName(mComposition.IsComposing())));
@@ -5740,7 +5679,7 @@ nsresult TSFTextStore::OnFocusChange(bool aGotFocus,
            "aFocusedWidget=0x%p, aContext=%s), "
            "sThreadMgr=0x%p, sEnabledTextStore=0x%p",
            GetBoolName(aGotFocus), aFocusedWidget,
-           GetInputContextString(aContext).get(), sThreadMgr.get(),
+           mozilla::ToString(aContext).c_str(), sThreadMgr.get(),
            sEnabledTextStore.get()));
 
   if (NS_WARN_IF(!IsInTSFMode())) {
@@ -6086,7 +6025,8 @@ nsresult TSFTextStore::OnSelectionChangeInternal(
   // because we may have some cache to do it.
   // Note that if we have composition, we'll notified composition-updated
   // later so that we don't need to create native caret in such case.
-  if (!IsHandlingComposition() && IMEHandler::NeedsToCreateNativeCaret()) {
+  if (!IsHandlingCompositionInContent() &&
+      IMEHandler::NeedsToCreateNativeCaret()) {
     CreateNativeCaret();
   }
 
@@ -6329,7 +6269,7 @@ nsresult TSFTextStore::OnUpdateCompositionInternal() {
   // If composition is completely finished both in TSF/TIP and the focused
   // editor which may be in a remote process, we can clear the cache and don't
   // have it until starting next composition.
-  if (!mComposition.IsComposing() && !IsHandlingComposition()) {
+  if (!mComposition.IsComposing() && !IsHandlingCompositionInContent()) {
     mDeferClearingContentForTSF = false;
   }
   mDeferNotifyingTSF = false;
@@ -6654,33 +6594,46 @@ void TSFTextStore::SetInputContext(nsWindowBase* aWidget,
           ("TSFTextStore::SetInputContext(aWidget=%p, "
            "aContext=%s, aAction.mFocusChange=%s), "
            "sEnabledTextStore(0x%p)={ mWidget=0x%p }, ThinksHavingFocus()=%s",
-           aWidget, GetInputContextString(aContext).get(),
+           aWidget, mozilla::ToString(aContext).c_str(),
            GetFocusChangeName(aAction.mFocusChange), sEnabledTextStore.get(),
            sEnabledTextStore ? sEnabledTextStore->mWidget.get() : nullptr,
            GetBoolName(ThinksHavingFocus())));
 
-  // When this is called when the widget is created, there is nothing to do.
-  if (aAction.mFocusChange == InputContextAction::WIDGET_CREATED) {
-    return;
-  }
-
-  NS_ENSURE_TRUE_VOID(IsInTSFMode());
-
-  if (aAction.mFocusChange != InputContextAction::FOCUS_NOT_CHANGED) {
-    if (sEnabledTextStore) {
-      RefPtr<TSFTextStore> textStore(sEnabledTextStore);
-      textStore->SetInputScope(aContext.mHTMLInputType,
-                               aContext.mHTMLInputInputmode,
-                               aContext.mInPrivateBrowsing);
-    }
-    return;
+  switch (aAction.mFocusChange) {
+    case InputContextAction::WIDGET_CREATED:
+      // If this is called when the widget is created, there is nothing to do.
+      return;
+    case InputContextAction::FOCUS_NOT_CHANGED:
+    case InputContextAction::MENU_LOST_PSEUDO_FOCUS:
+      if (NS_WARN_IF(!IsInTSFMode())) {
+        return;
+      }
+      // In these cases, `NOTIFY_IME_OF_FOCUS` won't be sent.  Therefore,
+      // we need to reset text store for new state right now.
+      break;
+    default:
+      NS_WARNING_ASSERTION(IsInTSFMode(),
+                           "Why is this called when TSF is disabled?");
+      if (sEnabledTextStore) {
+        RefPtr<TSFTextStore> textStore(sEnabledTextStore);
+        textStore->SetInputScope(aContext.mHTMLInputType,
+                                 aContext.mHTMLInputInputmode,
+                                 aContext.mInPrivateBrowsing);
+      }
+      return;
   }
 
   // If focus isn't actually changed but the enabled state is changed,
   // emulate the focus move.
   if (!ThinksHavingFocus() && aContext.mIMEState.IsEditable()) {
+    MOZ_LOG(sTextStoreLog, LogLevel::Debug,
+            ("  TSFTextStore::SetInputContent() emulates focus for IME "
+             "state change"));
     OnFocusChange(true, aWidget, aContext);
   } else if (ThinksHavingFocus() && !aContext.mIMEState.IsEditable()) {
+    MOZ_LOG(sTextStoreLog, LogLevel::Debug,
+            ("  TSFTextStore::SetInputContent() emulates blur for IME "
+             "state change"));
     OnFocusChange(false, aWidget, aContext);
   }
 }

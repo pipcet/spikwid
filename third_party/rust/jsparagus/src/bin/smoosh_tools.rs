@@ -3,7 +3,7 @@ use std::env::{self, Args};
 use std::fs::{create_dir_all, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{self, Command};
+use std::process::{self, exit, Command};
 use std::str::FromStr;
 
 static USAGE_STRING: &'static str = r#"Tools for jsparagus + SmooshMonkey development
@@ -739,7 +739,10 @@ fn bench(args: &SimpleArgs) -> Result<(), Error> {
         "Unable to serialize benchmark script path".into(),
     ))?;
 
-    run_mach(&["run", "-f", cmp_parsers, "--", "--", realjs_path], args)
+    run_mach(
+        &["run", "-f", cmp_parsers, "--", "--", "--dir", realjs_path],
+        args,
+    )
 }
 
 fn test(args: &SimpleArgs) -> Result<(), Error> {
@@ -938,6 +941,9 @@ fn main() {
 
     match result {
         Ok(_) => {}
-        Err(e) => e.dump(),
+        Err(e) => {
+            e.dump();
+            exit(1)
+        }
     }
 }

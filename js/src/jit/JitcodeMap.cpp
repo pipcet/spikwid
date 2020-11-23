@@ -15,11 +15,14 @@
 #include "gc/Marking.h"
 #include "gc/Statistics.h"
 #include "jit/BaselineJIT.h"
-#include "jit/JitRealm.h"
+#include "jit/InlineScriptTree.h"
+#include "jit/JitRuntime.h"
 #include "jit/JitSpewer.h"
 #include "js/Vector.h"
+#include "vm/BytecodeLocation.h"  // for BytecodeLocation
 #include "vm/GeckoProfiler.h"
 
+#include "vm/BytecodeLocation-inl.h"
 #include "vm/GeckoProfiler-inl.h"
 #include "vm/JSScript-inl.h"
 #include "vm/TypeInference-inl.h"
@@ -559,6 +562,7 @@ void JitcodeGlobalTable::setAllEntriesAsExpired() {
   }
 }
 
+// TODO(no-TI): remove this and IfUnmarked.
 struct Unconditionally {
   template <typename T>
   static bool ShouldTrace(JSRuntime* rt, T* thingp) {
@@ -572,12 +576,6 @@ struct IfUnmarked {
     return !IsMarkedUnbarriered(rt, thingp);
   }
 };
-
-template <>
-bool IfUnmarked::ShouldTrace<TypeSet::Type>(JSRuntime* rt,
-                                            TypeSet::Type* type) {
-  return !TypeSet::IsTypeMarked(rt, type);
-}
 
 bool JitcodeGlobalTable::markIteratively(GCMarker* marker) {
   // JitcodeGlobalTable must keep entries that are in the sampler buffer

@@ -10,6 +10,7 @@
 #include "mozilla/AlreadyAddRefed.h"
 #include "mozilla/dom/BindingDeclarations.h"
 #include "mozilla/dom/ChromeUtilsBinding.h"
+#include "mozilla/dom/Exceptions.h"
 #include "mozilla/ErrorResult.h"
 #include "nsDOMNavigationTiming.h"  // for DOMHighResTimeStamp
 #include "nsIDOMProcessChild.h"
@@ -82,7 +83,7 @@ class ChromeUtils {
                             const nsAString& aMessage);
 
   static void AddProfilerMarker(GlobalObject& aGlobal, const nsACString& aName,
-                                const Optional<DOMHighResTimeStamp>& aStartTime,
+                                const ProfilerMarkerOptionsOrDouble& aOptions,
                                 const Optional<nsACString>& text);
 
   static void OriginAttributesToSuffix(
@@ -148,6 +149,8 @@ class ChromeUtils {
                                   ErrorResult& aRv);
 
   static void ClearRecentJSDevError(GlobalObject& aGlobal);
+
+  static void ClearStyleSheetCache(GlobalObject&, nsIPrincipal* aForPrincipal);
 
   static already_AddRefed<Promise> RequestPerformanceMetrics(
       GlobalObject& aGlobal, ErrorResult& aRv);
@@ -216,22 +219,11 @@ class ChromeUtils {
   static void PrivateNoteIntentionalCrash(const GlobalObject& aGlobal,
                                           ErrorResult& aError);
 
-  static void GenerateMediaControlKey(const GlobalObject& aGlobal,
-                                      MediaControlKey aKey);
-
   static nsIDOMProcessChild* GetDomProcessChild(const GlobalObject&);
 
   static void GetAllDOMProcesses(
       GlobalObject& aGlobal, nsTArray<RefPtr<nsIDOMProcessParent>>& aParents,
       ErrorResult& aRv);
-
-  // This function would only be used for testing.
-  static void GetCurrentActiveMediaMetadata(const GlobalObject& aGlobal,
-                                            MediaMetadataInit& aMetadata);
-
-  // This function would only be used for testing.
-  static MediaSessionPlaybackTestState GetCurrentMediaSessionPlaybackState(
-      GlobalObject& aGlobal);
 };
 
 }  // namespace dom

@@ -11,15 +11,22 @@
 
 #include "jit/CacheIR.h"
 #include "jit/JitOptions.h"
+#include "jit/MacroAssembler.h"
 #include "jit/SharedICRegisters.h"
+#include "js/ScalarType.h"  // js::Scalar::Type
 
 namespace js {
+
+class TypedArrayObject;
+
 namespace jit {
 
 class BaselineCacheIRCompiler;
 class IonCacheIRCompiler;
 
-// [SMDDOC] CacheIR Value Representation and Tracking
+enum class ICStubEngine : uint8_t;
+
+// [SMDOC] CacheIR Value Representation and Tracking
 //
 // While compiling an IC stub the CacheIR compiler needs to keep track of the
 // physical location for each logical piece of data we care about, as well as
@@ -347,7 +354,7 @@ class MOZ_RAII CacheRegisterAllocator {
 
   void popPayload(MacroAssembler& masm, OperandLocation* loc, Register dest);
   void popValue(MacroAssembler& masm, OperandLocation* loc, ValueOperand dest);
-  Address valueAddress(MacroAssembler& masm, OperandLocation* loc);
+  Address valueAddress(MacroAssembler& masm, const OperandLocation* loc) const;
 
 #ifdef DEBUG
   void assertValidState() const;
@@ -496,9 +503,17 @@ class MOZ_RAII CacheRegisterAllocator {
 
   // Loads (potentially coercing) and unboxes a value into a float register
   // This is infallible, as there should have been a previous guard
-  // to ensure the ValOperandId is already a number.
+  // to ensure the value is already a number.
+  // Does not change the allocator's state.
   void ensureDoubleRegister(MacroAssembler& masm, NumberOperandId op,
-                            FloatRegister dest);
+                            FloatRegister dest) const;
+
+  // Loads an unboxed value into a scratch register. This can be useful
+  // especially on 32-bit x86 when there are not enough registers for
+  // useRegister.
+  // Does not change the allocator's state.
+  void copyToScratchRegister(MacroAssembler& masm, TypedOperandId typedId,
+                             Register dest) const;
 
   // Returns |val|'s JSValueType or JSVAL_TYPE_UNKNOWN.
   JSValueType knownType(ValOperandId val) const;
@@ -711,9 +726,6 @@ class MOZ_RAII CacheIRCompiler {
   mozilla::Maybe<TypedOrValueRegister> outputUnchecked_;
   Mode mode_;
 
-  // Whether this IC may read double values from uint32 arrays.
-  mozilla::Maybe<bool> allowDoubleResult_;
-
   // Distance from the IC to the stub data; mostly will be
   // sizeof(stubType)
   uint32_t stubDataOffset_;
@@ -754,18 +766,6 @@ class MOZ_RAII CacheIRCompiler {
            !allocator.isDeadAfterInstruction(objId);
   }
 
-  bool emitLoadTypedElementResult(ObjOperandId objId, Int32OperandId indexId,
-                                  TypedThingLayout layout,
-                                  Scalar::Type elementType, bool handleOOB,
-                                  bool allowDoubleForUint32);
-
-  bool emitStoreTypedElement(ObjOperandId objId, TypedThingLayout layout,
-                             Scalar::Type elementType, Int32OperandId indexId,
-                             uint32_t rhsId, bool handleOOB);
-
-  void emitStoreTypedObjectReferenceProp(ValueOperand val, ReferenceType type,
-                                         const Address& dest, Register scratch);
-
   void emitRegisterEnumerator(Register enumeratorsList, Register iter,
                               Register scratch);
 
@@ -799,6 +799,9 @@ class MOZ_RAII CacheIRCompiler {
                                           JSOp op,
                                           const AutoOutputRegister& output);
 
+  MOZ_MUST_USE bool emitMathFunctionNumberResultShared(
+      UnaryMathFunction fun, FloatRegister inputScratch, ValueOperand output);
+
   template <typename Fn, Fn fn>
   MOZ_MUST_USE bool emitBigIntBinaryOperationShared(BigIntOperandId lhsId,
                                                     BigIntOperandId rhsId);
@@ -807,6 +810,13 @@ class MOZ_RAII CacheIRCompiler {
   MOZ_MUST_USE bool emitBigIntUnaryOperationShared(BigIntOperandId inputId);
 
   bool emitDoubleIncDecResult(bool isInc, NumberOperandId inputId);
+
+  using AtomicsReadWriteModifyFn = int32_t (*)(TypedArrayObject*, int32_t,
+                                               int32_t);
+
+  MOZ_MUST_USE bool emitAtomicsReadModifyWriteResult(
+      ObjOperandId objId, Int32OperandId indexId, Int32OperandId valueId,
+      Scalar::Type elementType, AtomicsReadWriteModifyFn fn);
 
   CACHE_IR_COMPILER_SHARED_GENERATED
 
@@ -826,11 +836,11 @@ class MOZ_RAII CacheIRCompiler {
   }
   int32_t int32StubField(uint32_t offset) {
     MOZ_ASSERT(stubFieldPolicy_ == StubFieldPolicy::Constant);
-    return readStubWord(offset, StubField::Type::RawWord);
+    return readStubWord(offset, StubField::Type::RawInt32);
   }
   uint32_t uint32StubField(uint32_t offset) {
     MOZ_ASSERT(stubFieldPolicy_ == StubFieldPolicy::Constant);
-    return readStubWord(offset, StubField::Type::RawWord);
+    return readStubWord(offset, StubField::Type::RawInt32);
   }
   Shape* shapeStubField(uint32_t offset) {
     MOZ_ASSERT(stubFieldPolicy_ == StubFieldPolicy::Constant);
@@ -862,15 +872,19 @@ class MOZ_RAII CacheIRCompiler {
   }
   JS::Compartment* compartmentStubField(uint32_t offset) {
     MOZ_ASSERT(stubFieldPolicy_ == StubFieldPolicy::Constant);
-    return (JS::Compartment*)readStubWord(offset, StubField::Type::RawWord);
+    return (JS::Compartment*)readStubWord(offset, StubField::Type::RawPointer);
   }
   const JSClass* classStubField(uintptr_t offset) {
     MOZ_ASSERT(stubFieldPolicy_ == StubFieldPolicy::Constant);
-    return (const JSClass*)readStubWord(offset, StubField::Type::RawWord);
+    return (const JSClass*)readStubWord(offset, StubField::Type::RawPointer);
   }
   const void* proxyHandlerStubField(uintptr_t offset) {
     MOZ_ASSERT(stubFieldPolicy_ == StubFieldPolicy::Constant);
-    return (const void*)readStubWord(offset, StubField::Type::RawWord);
+    return (const void*)readStubWord(offset, StubField::Type::RawPointer);
+  }
+  const void* pointerStubField(uintptr_t offset) {
+    MOZ_ASSERT(stubFieldPolicy_ == StubFieldPolicy::Constant);
+    return (const void*)readStubWord(offset, StubField::Type::RawPointer);
   }
   jsid idStubField(uint32_t offset) {
     MOZ_ASSERT(stubFieldPolicy_ == StubFieldPolicy::Constant);
@@ -882,11 +896,6 @@ class MOZ_RAII CacheIRCompiler {
 #endif
 
  public:
-  // The maximum number of arguments passed to a spread call or
-  // fun_apply IC.  Keep this small to avoid controllable stack
-  // overflows by attackers passing large arrays.
-  static const uint32_t MAX_ARGS_ARRAY_LENGTH = 16;
-
   void callVMInternal(MacroAssembler& masm, VMFunctionId id);
   template <typename Fn, Fn fn>
   void callVM(MacroAssembler& masm);
@@ -1079,6 +1088,8 @@ class MOZ_RAII AutoCallVM {
   template <typename Fn>
   void storeResult();
 
+  void leaveBaselineStubFrame();
+
  public:
   AutoCallVM(MacroAssembler& masm, CacheIRCompiler* compiler,
              CacheRegisterAllocator& allocator);
@@ -1089,7 +1100,16 @@ class MOZ_RAII AutoCallVM {
   void call() {
     compiler_->callVM<Fn, fn>(masm_);
     storeResult<Fn>();
+    leaveBaselineStubFrame();
   }
+
+  template <typename Fn, Fn fn>
+  void callNoResult() {
+    compiler_->callVM<Fn, fn>(masm_);
+    leaveBaselineStubFrame();
+  }
+
+  ValueOperand outputValueReg() const { return output_->valueReg(); }
 };
 
 // RAII class to allocate FloatReg0 as a scratch register and release it when
@@ -1215,12 +1235,6 @@ class CacheIRStubInfo {
 
 template <typename T>
 void TraceCacheIRStub(JSTracer* trc, T* stub, const CacheIRStubInfo* stubInfo);
-
-void LoadTypedThingData(MacroAssembler& masm, TypedThingLayout layout,
-                        Register obj, Register result);
-
-void LoadTypedThingLength(MacroAssembler& masm, TypedThingLayout layout,
-                          Register obj, Register result);
 
 }  // namespace jit
 }  // namespace js

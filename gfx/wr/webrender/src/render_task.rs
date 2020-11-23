@@ -13,7 +13,7 @@ use crate::gpu_cache::{GpuCache, GpuCacheAddress, GpuCacheHandle};
 use crate::gpu_types::{BorderInstance, ImageSource, UvRectKind};
 use crate::internal_types::{CacheTextureId, FastHashMap, LayerIndex, SavedTargetIndex};
 use crate::picture::ResolvedSurfaceTexture;
-use crate::prim_store::PictureIndex;
+use crate::prim_store::{ClipData, PictureIndex};
 use crate::prim_store::image::ImageCacheKey;
 use crate::prim_store::gradient::{GRADIENT_FP_STOPS, GradientStopKey};
 #[cfg(feature = "debugger")]
@@ -26,14 +26,14 @@ use crate::render_task_cache::{RenderTaskCacheKey, RenderTaskCacheKeyKind};
 use crate::visibility::PrimitiveVisibilityMask;
 use smallvec::SmallVec;
 
-const RENDER_TASK_SIZE_SANITY_CHECK: i32 = 16000;
 const FLOATS_PER_RENDER_TASK_INFO: usize = 8;
+pub const MAX_RENDER_TASK_SIZE: i32 = 16384;
 pub const MAX_BLUR_STD_DEVIATION: f32 = 4.0;
 pub const MIN_DOWNSCALING_RT_SIZE: i32 = 8;
 
 fn render_task_sanity_check(size: &DeviceIntSize) {
-    if size.width > RENDER_TASK_SIZE_SANITY_CHECK ||
-        size.height > RENDER_TASK_SIZE_SANITY_CHECK {
+    if size.width > MAX_RENDER_TASK_SIZE ||
+        size.height > MAX_RENDER_TASK_SIZE {
         error!("Attempting to create a render task of size {}x{}", size.width, size.height);
         panic!();
     }
@@ -45,15 +45,17 @@ fn render_task_sanity_check(size: &DeviceIntSize) {
 #[cfg_attr(feature = "replay", derive(Deserialize))]
 pub struct RenderTaskAddress(pub u16);
 
+impl Into<RenderTaskAddress> for RenderTaskId {
+    fn into(self) -> RenderTaskAddress {
+        RenderTaskAddress(self.index as u16)
+    }
+}
+
 /// Identifies the output buffer location for a given `RenderTask`.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "capture", derive(Serialize))]
 #[cfg_attr(feature = "replay", derive(Deserialize))]
 pub enum RenderTaskLocation {
-    /// The `RenderTask` should be drawn to a fixed region in a specific render
-    /// target. This is used for the root `RenderTask`, where the main
-    /// framebuffer is used as the render target.
-    Fixed(DeviceIntRect),
     /// The `RenderTask` should be drawn to a target provided by the atlas
     /// allocator. This is the most common case.
     ///
@@ -95,7 +97,6 @@ impl RenderTaskLocation {
 
     pub fn size(&self) -> DeviceIntSize {
         match self {
-            RenderTaskLocation::Fixed(rect) => rect.size,
             RenderTaskLocation::Dynamic(_, size) => *size,
             RenderTaskLocation::TextureCache { rect, .. } => rect.size,
             RenderTaskLocation::PictureCache { size, .. } => *size,
@@ -104,7 +105,6 @@ impl RenderTaskLocation {
 
     pub fn to_source_rect(&self) -> (DeviceIntRect, LayerIndex) {
         match *self {
-            RenderTaskLocation::Fixed(rect) => (rect, 0),
             RenderTaskLocation::Dynamic(None, _) => panic!("Expected position to be set for the task!"),
             RenderTaskLocation::Dynamic(Some((origin, layer)), size) => (DeviceIntRect::new(origin, size), layer.0 as LayerIndex),
             RenderTaskLocation::TextureCache { rect, layer, .. } => (rect, layer),
@@ -123,15 +123,17 @@ pub struct CacheMaskTask {
     pub root_spatial_node_index: SpatialNodeIndex,
     pub clip_node_range: ClipNodeRange,
     pub device_pixel_scale: DevicePixelScale,
+    pub clear_to_one: bool,
 }
 
 #[derive(Debug)]
 #[cfg_attr(feature = "capture", derive(Serialize))]
 #[cfg_attr(feature = "replay", derive(Deserialize))]
 pub struct ClipRegionTask {
-    pub clip_data_address: GpuCacheAddress,
     pub local_pos: LayoutPoint,
     pub device_pixel_scale: DevicePixelScale,
+    pub clip_data: ClipData,
+    pub clear_to_one: bool,
 }
 
 #[cfg_attr(feature = "capture", derive(Serialize))]
@@ -271,7 +273,7 @@ pub enum RenderTaskKind {
     ClipRegion(ClipRegionTask),
     VerticalBlur(BlurTask),
     HorizontalBlur(BlurTask),
-    Readback(DeviceIntRect),
+    Readback,
     Scaling(ScalingTask),
     Blit(BlitTask),
     Border(BorderTask),
@@ -290,7 +292,7 @@ impl RenderTaskKind {
             RenderTaskKind::ClipRegion(..) => "ClipRegion",
             RenderTaskKind::VerticalBlur(..) => "VerticalBlur",
             RenderTaskKind::HorizontalBlur(..) => "HorizontalBlur",
-            RenderTaskKind::Readback(..) => "Readback",
+            RenderTaskKind::Readback => "Readback",
             RenderTaskKind::Scaling(..) => "Scaling",
             RenderTaskKind::Blit(..) => "Blit",
             RenderTaskKind::Border(..) => "Border",
@@ -301,20 +303,6 @@ impl RenderTaskKind {
             RenderTaskKind::Test(..) => "Test",
         }
     }
-}
-
-#[derive(Debug, Copy, Clone, PartialEq)]
-#[cfg_attr(feature = "capture", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
-pub enum ClearMode {
-    // Applicable to color and alpha targets.
-    Zero,
-    One,
-    /// This task doesn't care what it is cleared to - it will completely overwrite it.
-    DontCare,
-
-    // Applicable to color targets only.
-    Transparent,
 }
 
 /// In order to avoid duplicating the down-scaling and blur passes when a picture has several blurs,
@@ -355,7 +343,6 @@ pub struct RenderTask {
     pub location: RenderTaskLocation,
     pub children: TaskDependencies,
     pub kind: RenderTaskKind,
-    pub clear_mode: ClearMode,
     pub saved_index: Option<SavedTargetIndex>,
 }
 
@@ -365,7 +352,6 @@ impl RenderTask {
         size: DeviceIntSize,
         children: TaskDependencies,
         kind: RenderTaskKind,
-        clear_mode: ClearMode,
     ) -> Self {
         render_task_sanity_check(&size);
 
@@ -373,7 +359,6 @@ impl RenderTask {
             location: RenderTaskLocation::Dynamic(None, size),
             children,
             kind,
-            clear_mode,
             saved_index: None,
         }
     }
@@ -388,7 +373,6 @@ impl RenderTask {
             location,
             children,
             kind: RenderTaskKind::Test(target),
-            clear_mode: ClearMode::Transparent,
             saved_index: None,
         }
     }
@@ -407,7 +391,6 @@ impl RenderTask {
     ) -> Self {
         let size = match location {
             RenderTaskLocation::Dynamic(_, size) => size,
-            RenderTaskLocation::Fixed(rect) => rect.size,
             RenderTaskLocation::TextureCache { rect, .. } => rect.size,
             RenderTaskLocation::PictureCache { size, .. } => size,
         };
@@ -432,7 +415,6 @@ impl RenderTask {
                 scissor_rect,
                 valid_rect,
             }),
-            clear_mode: ClearMode::Transparent,
             saved_index: None,
         }
     }
@@ -453,16 +435,14 @@ impl RenderTask {
                 start_point,
                 end_point,
             }),
-            ClearMode::DontCare,
         )
     }
 
-    pub fn new_readback(screen_rect: DeviceIntRect) -> Self {
+    pub fn new_readback(size: DeviceIntSize) -> Self {
         RenderTask::with_dynamic_location(
-            screen_rect.size,
+            size,
             TaskDependencies::new(),
-            RenderTaskKind::Readback(screen_rect),
-            ClearMode::Transparent,
+            RenderTaskKind::Readback,
         )
     }
 
@@ -495,7 +475,6 @@ impl RenderTask {
                 source,
                 padding,
             }),
-            ClearMode::Transparent,
         )
     }
 
@@ -515,7 +494,6 @@ impl RenderTask {
                 wavy_line_thickness,
                 local_size,
             }),
-            ClearMode::Transparent,
         )
     }
 
@@ -553,7 +531,6 @@ impl RenderTask {
                         .clone();
                     let blur_radius_dp = cache_key.blur_radius_dp as f32;
                     let device_pixel_scale = DevicePixelScale::new(cache_key.device_pixel_scale.to_f32_px());
-                    let clip_data_address = gpu_cache.get_address(&source.clip_data_handle);
 
                     // Request a cacheable render task with a blurred, minimal
                     // sized box-shadow rect.
@@ -567,11 +544,17 @@ impl RenderTask {
                         None,
                         false,
                         |render_tasks| {
+                            let clip_data = ClipData::rounded_rect(
+                                source.minimal_shadow_rect.size,
+                                &source.shadow_radius,
+                                ClipMode::Clip,
+                            );
+
                             // Draw the rounded rect.
                             let mask_task_id = render_tasks.add().init(RenderTask::new_rounded_rect_mask(
                                 cache_size,
-                                clip_data_address,
                                 source.minimal_shadow_rect.origin,
+                                clip_data,
                                 device_pixel_scale,
                                 fb_config,
                             ));
@@ -582,7 +565,6 @@ impl RenderTask {
                                 mask_task_id,
                                 render_tasks,
                                 RenderTargetKind::Alpha,
-                                ClearMode::Zero,
                                 None,
                                 cache_size,
                             )
@@ -607,12 +589,6 @@ impl RenderTask {
         // If we have a potentially tiled clip mask, clear the mask area first. Otherwise,
         // the first (primary) clip mask will overwrite all the clip mask pixels with
         // blending disabled to set to the initial value.
-        let clear_mode = if needs_clear {
-            ClearMode::One
-        } else {
-            ClearMode::DontCare
-        };
-
         render_tasks.add().init(
             RenderTask::with_dynamic_location(
                 outer_rect.size.to_i32(),
@@ -622,34 +598,28 @@ impl RenderTask {
                     clip_node_range,
                     root_spatial_node_index,
                     device_pixel_scale,
+                    clear_to_one: needs_clear,
                 }),
-                clear_mode,
             )
         )
     }
 
     pub fn new_rounded_rect_mask(
         size: DeviceIntSize,
-        clip_data_address: GpuCacheAddress,
         local_pos: LayoutPoint,
+        clip_data: ClipData,
         device_pixel_scale: DevicePixelScale,
         fb_config: &FrameBuilderConfig,
     ) -> Self {
-        let clear_mode = if fb_config.gpu_supports_fast_clears {
-            ClearMode::One
-        } else {
-            ClearMode::DontCare
-        };
-
         RenderTask::with_dynamic_location(
             size,
             TaskDependencies::new(),
             RenderTaskKind::ClipRegion(ClipRegionTask {
-                clip_data_address,
                 local_pos,
                 device_pixel_scale,
+                clip_data,
+                clear_to_one: fb_config.gpu_supports_fast_clears,
             }),
-            clear_mode,
         )
     }
 
@@ -695,7 +665,6 @@ impl RenderTask {
         src_task_id: RenderTaskId,
         render_tasks: &mut RenderTaskGraph,
         target_kind: RenderTargetKind,
-        clear_mode: ClearMode,
         mut blur_cache: Option<&mut BlurTaskCache>,
         blur_region: DeviceIntSize,
     ) -> RenderTaskId {
@@ -761,7 +730,6 @@ impl RenderTask {
                     blur_region,
                     uv_rect_kind,
                 }),
-                clear_mode,
             ));
 
             render_tasks.add().init(RenderTask::with_dynamic_location(
@@ -774,7 +742,6 @@ impl RenderTask {
                     blur_region,
                     uv_rect_kind,
                 }),
-                clear_mode,
             ))
         });
 
@@ -795,7 +762,6 @@ impl RenderTask {
             RenderTaskKind::Border(BorderTask {
                 instances,
             }),
-            ClearMode::Transparent,
         )
     }
 
@@ -836,7 +802,6 @@ impl RenderTask {
                     uv_rect_kind,
                     padding,
                 }),
-                ClearMode::DontCare,
             )
         )
     }
@@ -946,7 +911,8 @@ impl RenderTask {
                     ))
                 }
                 FilterPrimitiveKind::Blur(ref blur) => {
-                    let blur_std_deviation = blur.radius * device_pixel_scale.0;
+                    let width_std_deviation = blur.width * device_pixel_scale.0;
+                    let height_std_deviation = blur.height * device_pixel_scale.0;
                     let input_task_id = get_task_input(
                         &blur.input,
                         filter_primitives,
@@ -958,7 +924,7 @@ impl RenderTask {
                     );
 
                     RenderTask::new_blur(
-                        DeviceSize::new(blur_std_deviation, blur_std_deviation),
+                        DeviceSize::new(width_std_deviation, height_std_deviation),
                         // TODO: This is a hack to ensure that a blur task's input is always
                         // in the blur's previous pass.
                         render_tasks.add().init(RenderTask::new_svg_filter_primitive(
@@ -969,7 +935,6 @@ impl RenderTask {
                         )),
                         render_tasks,
                         RenderTargetKind::Color,
-                        ClearMode::Transparent,
                         None,
                         content_size,
                     )
@@ -1038,7 +1003,6 @@ impl RenderTask {
                         offset_task_id,
                         render_tasks,
                         RenderTargetKind::Color,
-                        ClearMode::Transparent,
                         None,
                         content_size,
                     );
@@ -1155,14 +1119,13 @@ impl RenderTask {
                 uv_rect_kind,
                 info,
             }),
-            ClearMode::Transparent,
         )
     }
 
     pub fn uv_rect_kind(&self) -> UvRectKind {
         match self.kind {
             RenderTaskKind::CacheMask(..) |
-            RenderTaskKind::Readback(..) => {
+            RenderTaskKind::Readback => {
                 unreachable!("bug: unexpected render task");
             }
 
@@ -1241,7 +1204,7 @@ impl RenderTask {
                     task.blur_region.height as f32,
                 ]
             }
-            RenderTaskKind::Readback(..) |
+            RenderTaskKind::Readback |
             RenderTaskKind::Scaling(..) |
             RenderTaskKind::Border(..) |
             RenderTaskKind::LineDecoration(..) |
@@ -1265,13 +1228,7 @@ impl RenderTask {
             }
         };
 
-        let (mut target_rect, target_index) = self.get_target_rect();
-        // The primitives inside a fixed-location render task
-        // are already placed to their corresponding positions,
-        // so the shader doesn't need to shift by the origin.
-        if let RenderTaskLocation::Fixed(_) = self.location {
-            target_rect.origin = DeviceIntPoint::origin();
-        }
+        let (target_rect, target_index) = self.get_target_rect();
 
         RenderTaskData {
             data: [
@@ -1300,7 +1257,7 @@ impl RenderTask {
                 gpu_cache.get_address(&info.uv_rect_handle)
             }
             RenderTaskKind::ClipRegion(..) |
-            RenderTaskKind::Readback(..) |
+            RenderTaskKind::Readback |
             RenderTaskKind::Scaling(..) |
             RenderTaskKind::Blit(..) |
             RenderTaskKind::Border(..) |
@@ -1318,7 +1275,6 @@ impl RenderTask {
 
     pub fn get_dynamic_size(&self) -> DeviceIntSize {
         match self.location {
-            RenderTaskLocation::Fixed(..) => DeviceIntSize::zero(),
             RenderTaskLocation::Dynamic(_, size) => size,
             RenderTaskLocation::TextureCache { rect, .. } => rect.size,
             RenderTaskLocation::PictureCache { size, .. } => size,
@@ -1327,9 +1283,6 @@ impl RenderTask {
 
     pub fn get_target_rect(&self) -> (DeviceIntRect, RenderTargetIndex) {
         match self.location {
-            RenderTaskLocation::Fixed(rect) => {
-                (rect, RenderTargetIndex(0))
-            }
             // Previously, we only added render tasks after the entire
             // primitive chain was determined visible. This meant that
             // we could assert any render task in the list was also
@@ -1373,7 +1326,7 @@ impl RenderTask {
     pub fn target_kind(&self) -> RenderTargetKind {
         match self.kind {
             RenderTaskKind::LineDecoration(..) |
-            RenderTaskKind::Readback(..) |
+            RenderTaskKind::Readback |
             RenderTaskKind::Border(..) |
             RenderTaskKind::Gradient(..) |
             RenderTaskKind::Picture(..) |
@@ -1419,7 +1372,7 @@ impl RenderTask {
             RenderTaskKind::SvgFilter(ref mut info) => {
                 (&mut info.uv_rect_handle, info.uv_rect_kind)
             }
-            RenderTaskKind::Readback(..) |
+            RenderTaskKind::Readback |
             RenderTaskKind::Scaling(..) |
             RenderTaskKind::Blit(..) |
             RenderTaskKind::ClipRegion(..) |
@@ -1508,9 +1461,8 @@ impl RenderTask {
                 pt.new_level("HorizontalBlur".to_owned());
                 task.print_with(pt);
             }
-            RenderTaskKind::Readback(ref rect) => {
+            RenderTaskKind::Readback => {
                 pt.new_level("Readback".to_owned());
-                pt.add_item(format!("rect: {:?}", rect));
             }
             RenderTaskKind::Scaling(ref kind) => {
                 pt.new_level("Scaling".to_owned());
@@ -1536,7 +1488,6 @@ impl RenderTask {
             }
         }
 
-        pt.add_item(format!("clear to: {:?}", self.clear_mode));
         pt.add_item(format!("dimensions: {:?}", self.location.size()));
 
         for &child_id in &self.children {
@@ -1553,7 +1504,6 @@ impl RenderTask {
     #[inline]
     pub fn mark_for_saving(&mut self) {
         match self.location {
-            RenderTaskLocation::Fixed(..) |
             RenderTaskLocation::Dynamic(..) => {
                 self.saved_index = Some(SavedTargetIndex::PENDING);
             }

@@ -95,6 +95,11 @@ class GCVector {
     return vector.emplaceBack(std::forward<Args>(args)...);
   }
 
+  template <typename... Args>
+  void infallibleEmplaceBack(Args&&... args) {
+    vector.infallibleEmplaceBack(std::forward<Args>(args)...);
+  }
+
   template <typename U>
   void infallibleAppend(U&& aU) {
     return vector.infallibleAppend(std::forward<U>(aU));
@@ -114,6 +119,11 @@ class GCVector {
   template <typename U>
   MOZ_MUST_USE bool appendAll(const U& aU) {
     return vector.append(aU.begin(), aU.end());
+  }
+  template <typename T2, size_t MinInlineCapacity2, typename AllocPolicy2>
+  MOZ_MUST_USE bool appendAll(
+      GCVector<T2, MinInlineCapacity2, AllocPolicy2>&& aU) {
+    return vector.appendAll(aU.begin(), aU.end());
   }
 
   MOZ_MUST_USE bool appendN(const T& val, size_t count) {
@@ -144,6 +154,24 @@ class GCVector {
     for (auto& elem : vector) {
       GCPolicy<T>::trace(trc, &elem, "vector element");
     }
+  }
+
+  bool traceWeak(JSTracer* trc) {
+    T* src = begin();
+    T* dst = begin();
+    while (src != end()) {
+      if (GCPolicy<T>::traceWeak(trc, src)) {
+        if (src != dst) {
+          *dst = std::move(*src);
+        }
+        dst++;
+      }
+      src++;
+    }
+
+    MOZ_ASSERT(dst <= end());
+    shrinkBy(end() - dst);
+    return !empty();
   }
 
   bool needsSweep() const { return !this->empty(); }
@@ -254,8 +282,12 @@ class MutableWrappedPtrOperations<JS::GCVector<T, Capacity, AllocPolicy>,
   MOZ_MUST_USE bool emplaceBack(Args&&... aArgs) {
     return vec().emplaceBack(std::forward<Args>(aArgs)...);
   }
+  template <typename... Args>
+  void infallibleEmplaceBack(Args&&... args) {
+    vec().infallibleEmplaceBack(std::forward<Args>(args)...);
+  }
   template <typename U>
-  MOZ_MUST_USE bool appendAll(const U& aU) {
+  MOZ_MUST_USE bool appendAll(U&& aU) {
     return vec().appendAll(aU);
   }
   MOZ_MUST_USE bool appendN(const T& aT, size_t aN) {

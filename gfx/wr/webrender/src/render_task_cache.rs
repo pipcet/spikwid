@@ -16,7 +16,7 @@ use crate::prim_store::gradient::GradientCacheKey;
 use crate::prim_store::line_dec::LineDecorationCacheKey;
 use crate::resource_cache::CacheItem;
 use std::{mem, usize, f32, i32};
-use crate::texture_cache::{TextureCache, TextureCacheHandle, Eviction};
+use crate::texture_cache::{TextureCache, TextureCacheHandle, Eviction, TargetShader};
 use crate::render_target::RenderTargetKind;
 use crate::render_task::{RenderTask, RenderTaskLocation};
 use crate::render_task_graph::{RenderTaskGraph, RenderTaskId};
@@ -121,7 +121,6 @@ impl RenderTaskCache {
     ) {
         // Find out what size to alloc in the texture cache.
         let size = match render_task.location {
-            RenderTaskLocation::Fixed(..) |
             RenderTaskLocation::PictureCache { .. } |
             RenderTaskLocation::TextureCache { .. } => {
                 panic!("BUG: dynamic task was expected");
@@ -161,6 +160,7 @@ impl RenderTaskCache {
             None,
             render_task.uv_rect_kind(),
             Eviction::Auto,
+            TargetShader::Default,
         );
 
         // Get the allocation details in the texture cache, and store

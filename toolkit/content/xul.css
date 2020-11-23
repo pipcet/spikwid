@@ -95,7 +95,7 @@ iframe {
 /******** window & page ******/
 
 window {
-  overflow: -moz-hidden-unscrollable;
+  overflow: clip;
   -moz-box-orient: vertical;
 }
 
@@ -123,6 +123,13 @@ html|label.toolbarbutton-badge:empty {
   display: none;
 }
 
+/********** button **********/
+
+button {
+  -moz-default-appearance: button;
+  appearance: auto;
+}
+
 /******** browser, editor, iframe ********/
 
 browser,
@@ -137,6 +144,15 @@ iframe {
   iframe {
     display: block;
   }
+}
+
+/* Allow the browser to shrink below its intrinsic size, to match legacy
+ * behavior */
+browser {
+  align-self: stretch;
+  justify-self: stretch;
+  min-height: 0;
+  min-width: 0;
 }
 
 /*********** popup notification ************/
@@ -310,27 +326,6 @@ panel[type="arrow"][animating] {
   pointer-events: none;
 }
 
-/******** grid **********/
-
-grid {
-  display: -moz-grid;
-}
-
-rows,
-columns {
-  display: -moz-grid-group;
-}
-
-row,
-column {
-  display: -moz-grid-line;
-}
-
-rows,
-column {
-  -moz-box-orient: vertical;
-}
-
 /******** tree ******/
 
 treecolpicker {
@@ -339,7 +334,7 @@ treecolpicker {
 
 treechildren {
   display: -moz-box;
-  -moz-user-select: none;
+  user-select: none;
   -moz-box-flex: 1;
 }
 
@@ -444,7 +439,7 @@ tooltip[titletip="true"] {
 /********** textbox **********/
 
 search-textbox {
-  -moz-user-select: text;
+  user-select: text;
   text-shadow: none;
 }
 
@@ -474,7 +469,7 @@ search-textbox {
 .autocomplete-richlistitem {
   -moz-box-orient: vertical;
   -moz-box-align: center;
-  overflow: -moz-hidden-unscrollable;
+  overflow: clip;
 }
 
 %endif
@@ -568,12 +563,6 @@ richlistbox {
 /*********** findbar ************/
 findbar {
   overflow-x: hidden;
-}
-
-/*********** tabmodalprompt ************/
-tabmodalprompt {
-  overflow: hidden;
-  text-shadow: none;
 }
 
 /* Some elements that in HTML blocks should be inline-level by default */

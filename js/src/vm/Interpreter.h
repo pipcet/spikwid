@@ -13,6 +13,7 @@
 
 #include "jspubtd.h"
 
+#include "vm/BuiltinObjectKind.h"
 #include "vm/CheckIsObjectKind.h"  // CheckIsObjectKind
 #include "vm/Iteration.h"
 #include "vm/Stack.h"
@@ -503,9 +504,6 @@ bool ThrowOperation(JSContext* cx, HandleValue v);
 bool GetProperty(JSContext* cx, HandleValue value, HandlePropertyName name,
                  MutableHandleValue vp);
 
-bool GetValueProperty(JSContext* cx, HandleValue value, HandlePropertyName name,
-                      MutableHandleValue vp);
-
 JSObject* Lambda(JSContext* cx, HandleFunction fun, HandleObject parent);
 
 JSObject* LambdaArrow(JSContext* cx, HandleFunction fun, HandleObject parent,
@@ -517,11 +515,8 @@ bool SetObjectElement(JSContext* cx, HandleObject obj, HandleValue index,
 bool SetObjectElementWithReceiver(JSContext* cx, HandleObject obj,
                                   HandleValue index, HandleValue value,
                                   HandleValue receiver, bool strict);
-bool SetObjectElement(JSContext* cx, HandleObject obj, HandleValue index,
-                      HandleValue value, HandleValue receiver, bool strict,
-                      HandleScript script, jsbytecode* pc);
 
-bool InitElementArray(JSContext* cx, jsbytecode* pc, HandleObject obj,
+bool InitElementArray(JSContext* cx, jsbytecode* pc, HandleArrayObject arr,
                       uint32_t index, HandleValue value);
 
 bool AddValues(JSContext* cx, MutableHandleValue lhs, MutableHandleValue rhs,
@@ -586,21 +581,12 @@ bool DelElemOperation(JSContext* cx, HandleValue val, HandleValue index,
 
 JSObject* BindVarOperation(JSContext* cx, JSObject* envChain);
 
-bool DefVarOperation(JSContext* cx, HandleObject envChain, HandleScript script,
-                     jsbytecode* pc);
-
-bool DefLexicalOperation(JSContext* cx, HandleObject envChain,
-                         HandleScript script, jsbytecode* pc);
-
-bool DefFunOperation(JSContext* cx, HandleScript script, HandleObject envChain,
-                     HandleFunction funArg);
-
 JSObject* SingletonObjectLiteralOperation(JSContext* cx, HandleScript script,
                                           jsbytecode* pc);
 
 JSObject* ImportMetaOperation(JSContext* cx, HandleScript script);
 
-JSObject* FunctionProtoOperation(JSContext* cx);
+JSObject* BuiltinObjectOperation(JSContext* cx, BuiltinObjectKind kind);
 
 bool ThrowMsgOperation(JSContext* cx, const unsigned throwMsgKind);
 
@@ -669,7 +655,7 @@ void ReportInNotObjectError(JSContext* cx, HandleValue lref, int lindex,
 
 // The parser only reports redeclarations that occurs within a single
 // script. Due to the extensibility of the global lexical scope, we also check
-// for redeclarations during runtime in JSOp::Def{Var,Let,Const}.
+// for redeclarations during runtime in JSOp::GlobalOrEvalDeclInstantation.
 void ReportRuntimeRedeclaration(JSContext* cx, HandlePropertyName name,
                                 const char* redeclKind);
 

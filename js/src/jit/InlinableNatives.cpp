@@ -16,6 +16,7 @@
 #  include "builtin/intl/RelativeTimeFormat.h"
 #endif
 #include "builtin/MapObject.h"
+#include "js/experimental/JitInfo.h"
 #include "vm/ArrayBufferObject.h"
 #include "vm/AsyncIteration.h"
 #include "vm/Iteration.h"
@@ -23,6 +24,15 @@
 
 using namespace js;
 using namespace js::jit;
+
+#define ADD_NATIVE(native)                   \
+  const JSJitInfo js::jit::JitInfo_##native{ \
+      {nullptr},                             \
+      {uint16_t(InlinableNative::native)},   \
+      {0},                                   \
+      JSJitInfo::InlinableNative};
+INLINABLE_NATIVE_LIST(ADD_NATIVE)
+#undef ADD_NATIVE
 
 const JSClass* js::jit::InlinableNativeGuardToClass(InlinableNative native) {
   switch (native) {
@@ -248,8 +258,11 @@ bool js::jit::CanInlineNativeCrossRealm(InlinableNative native) {
     case InlinableNative::DataViewSetFloat64:
     case InlinableNative::DataViewSetBigInt64:
     case InlinableNative::DataViewSetBigUint64:
+    case InlinableNative::NumberToString:
     case InlinableNative::ReflectGetPrototypeOf:
     case InlinableNative::String:
+    case InlinableNative::StringToString:
+    case InlinableNative::StringValueOf:
     case InlinableNative::StringCharCodeAt:
     case InlinableNative::StringFromCharCode:
     case InlinableNative::StringFromCodePoint:
@@ -259,6 +272,7 @@ bool js::jit::CanInlineNativeCrossRealm(InlinableNative native) {
     case InlinableNative::Object:
     case InlinableNative::ObjectCreate:
     case InlinableNative::ObjectIs:
+    case InlinableNative::ObjectIsPrototypeOf:
     case InlinableNative::ObjectToString:
     case InlinableNative::TypedArrayConstructor:
       // Default to false for most natives.

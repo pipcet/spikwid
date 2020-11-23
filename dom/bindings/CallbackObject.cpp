@@ -21,8 +21,7 @@
 #include "js/ContextOptions.h"
 #include "nsJSPrincipals.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(CallbackObject)
   NS_INTERFACE_MAP_ENTRY(mozilla::dom::CallbackObject)
@@ -199,6 +198,10 @@ CallbackObject::CallSetup::CallSetup(CallbackObject* aCallback,
       mErrorResult(aRv),
       mExceptionHandling(aExceptionHandling),
       mIsMainThread(NS_IsMainThread()) {
+  MOZ_ASSERT_IF(aExceptionHandling == eReportExceptions ||
+                    aExceptionHandling == eRethrowExceptions,
+                !aRealm);
+
   CycleCollectedJSContext* ccjs = CycleCollectedJSContext::Get();
   if (ccjs) {
     ccjs->EnterMicroTask();
@@ -264,6 +267,7 @@ CallbackObject::CallSetup::CallSetup(CallbackObject* aCallback,
     return;
   }
 
+  AutoAllowLegacyScriptExecution exemption;
   mAutoEntryScript.emplace(globalObject, aExecutionReason, mIsMainThread);
   mAutoEntryScript->SetWebIDLCallerPrincipal(webIDLCallerPrincipal);
   nsIGlobalObject* incumbent = aCallback->IncumbentGlobalOrNull();
@@ -317,29 +321,8 @@ CallbackObject::CallSetup::CallSetup(CallbackObject* aCallback,
 bool CallbackObject::CallSetup::ShouldRethrowException(
     JS::Handle<JS::Value> aException) {
   if (mExceptionHandling == eRethrowExceptions) {
-    if (!mRealm) {
-      // Caller didn't ask us to filter for only exceptions we subsume.
-      return true;
-    }
-
-    // On workers, we don't have nsIPrincipals to work with.  But we also only
-    // have one realm, so check whether mRealm is the same as the current realm
-    // of mCx.
-    if (mRealm == js::GetContextRealm(mCx)) {
-      return true;
-    }
-
-    MOZ_ASSERT(NS_IsMainThread());
-
-    // At this point mCx is in the realm of our unwrapped callback, so just
-    // check whether the principal of mRealm subsumes that of the current
-    // realm/global of mCx.
-    nsIPrincipal* callerPrincipal =
-        nsJSPrincipals::get(JS::GetRealmPrincipals(mRealm));
-    nsIPrincipal* calleePrincipal = nsContentUtils::SubjectPrincipal();
-    if (callerPrincipal->SubsumesConsideringDomain(calleePrincipal)) {
-      return true;
-    }
+    MOZ_ASSERT(!mRealm);
+    return true;
   }
 
   MOZ_ASSERT(mRealm);
@@ -447,5 +430,4 @@ already_AddRefed<nsISupports> CallbackObjectHolderBase::ToXPCOMCallback(
   return retval.forget();
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

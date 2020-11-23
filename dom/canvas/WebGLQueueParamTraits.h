@@ -44,6 +44,9 @@ template <>
 struct IsTriviallySerializable<webgl::GetUniformData> : std::true_type {};
 
 template <>
+struct IsTriviallySerializable<mozilla::webgl::PackingInfo> : std::true_type {};
+
+template <>
 struct IsTriviallySerializable<ICRData> : std::true_type {};
 
 template <>
@@ -70,62 +73,45 @@ struct QueueParamTraits<RawBuffer<T>> {
   using ParamType = RawBuffer<T>;
 
   template <typename U>
-  static QueueStatus Write(ProducerView<U>& aProducerView,
-                           const ParamType& aArg) {
-    aProducerView.WriteParam(aArg.mLength);
-    return (aArg.mLength > 0)
-               ? aProducerView.Write(aArg.mData, aArg.mLength * sizeof(T))
-               : aProducerView.GetStatus();
+  static QueueStatus Write(ProducerView<U>& view, const ParamType& in) {
+    const auto& elemCount = in.size();
+    auto status = view.WriteParam(elemCount);
+    if (!status) return status;
+    if (!elemCount) return status;
+
+    const auto& begin = in.begin();
+    const bool hasData = static_cast<bool>(begin);
+    status = view.WriteParam(hasData);
+    if (!status) return status;
+    if (!hasData) return status;
+
+    status = view.WriteFromRange(in.Data());
+    return status;
   }
 
-  template <typename U, typename ElementType = typename std::remove_cv_t<
-                            typename ParamType::ElementType>>
-  static QueueStatus Read(ConsumerView<U>& aConsumerView, ParamType* aArg) {
-    size_t len;
-    QueueStatus status = aConsumerView.ReadParam(&len);
-    if (!status) {
-      return status;
-    }
-
-    if (len == 0) {
-      aArg->mLength = 0;
-      aArg->mData = nullptr;
+  template <typename U>
+  static QueueStatus Read(ConsumerView<U>& view, ParamType* const out) {
+    size_t elemCount = 0;
+    auto status = view.ReadParam(&elemCount);
+    if (!status) return status;
+    if (!elemCount) {
+      *out = {};
       return QueueStatus::kSuccess;
     }
 
-    struct RawBufferReadMatcher {
-      QueueStatus operator()(RefPtr<mozilla::ipc::SharedMemoryBasic>& smem) {
-        if (!smem) {
-          return QueueStatus::kFatalError;
-        }
-        mArg->mSmem = smem;
-        mArg->mData = static_cast<ElementType*>(smem->memory());
-        mArg->mLength = mLength;
-        mArg->mOwnsData = false;
-        return QueueStatus::kSuccess;
-      }
-      QueueStatus operator()() {
-        mArg->mSmem = nullptr;
-        ElementType* buf = new ElementType[mLength];
-        mArg->mData = buf;
-        mArg->mLength = mLength;
-        mArg->mOwnsData = true;
-        return mConsumerView.Read(buf, mLength * sizeof(T));
-      }
+    uint8_t hasData = 0;
+    status = view.ReadParam(&hasData);
+    if (!status) return status;
+    if (!hasData) {
+      auto temp = RawBuffer<T>{elemCount};
+      *out = std::move(temp);
+      return QueueStatus::kSuccess;
+    }
 
-      ConsumerView<U>& mConsumerView;
-      ParamType* mArg;
-      size_t mLength;
-    };
-
-    return aConsumerView.ReadVariant(
-        len * sizeof(T), RawBufferReadMatcher{aConsumerView, aArg, len});
-  }
-
-  template <typename View>
-  static size_t MinSize(View& aView, const ParamType& aArg) {
-    return aView.MinSizeParam(aArg.mLength) +
-           aView.MinSizeBytes(aArg.mLength * sizeof(T));
+    auto data = view.template ReadRange<T>(elemCount);
+    if (!data) return QueueStatus::kTooSmall;
+    *out = std::move(RawBuffer<T>{*data});
+    return QueueStatus::kSuccess;
   }
 };
 
@@ -168,19 +154,6 @@ struct QueueParamTraits<Result<V, E>> {
     }
     return status;
   }
-
-  template <typename View>
-  static size_t MinSize(View& aView, const T& aArg) {
-    auto size = aView.template MinSizeParam<bool>();
-    if (aArg.isOk()) {
-      const auto& val = aArg.unwrap();
-      size += aView.MinSizeParam(val);
-    } else {
-      const auto& val = aArg.unwrapErr();
-      size += aView.MinSizeParam(val);
-    }
-    return size;
-  }
 };
 
 template <>
@@ -189,9 +162,10 @@ struct QueueParamTraits<std::string> {
 
   template <typename U>
   static QueueStatus Write(ProducerView<U>& aProducerView, const T& aArg) {
-    auto status = aProducerView.WriteParam(aArg.size());
+    const auto size = aArg.size();
+    auto status = aProducerView.WriteParam(size);
     if (!status) return status;
-    status = aProducerView.Write(aArg.data(), aArg.size());
+    status = aProducerView.WriteFromRange(Range<const char>{aArg.data(), size});
     return status;
   }
 
@@ -201,20 +175,10 @@ struct QueueParamTraits<std::string> {
     auto status = aConsumerView.ReadParam(&size);
     if (!status) return status;
 
-    const UniqueBuffer temp = malloc(size);
-    const auto dest = static_cast<char*>(temp.get());
-    if (!dest) return QueueStatus::kFatalError;
-
-    status = aConsumerView.Read(dest, size);
-    aArg->assign(dest, size);
+    const auto view = aConsumerView.template ReadRange<char>(size);
+    if (!view) return QueueStatus::kFatalError;
+    aArg->assign(view->begin().get(), size);
     return status;
-  }
-
-  template <typename View>
-  static size_t MinSize(View& aView, const T& aArg) {
-    auto size = aView.MinSizeParam(aArg.size());
-    size += aView.MinSizeBytes(aArg.size());
-    return size;
   }
 };
 
@@ -226,27 +190,26 @@ struct QueueParamTraits<std::vector<U>> {
   static QueueStatus Write(ProducerView<V>& aProducerView, const T& aArg) {
     auto status = aProducerView.WriteParam(aArg.size());
     if (!status) return status;
-    status = aProducerView.Write(aArg.data(), aArg.size());
+
+    for (const auto& cur : aArg) {
+      status = aProducerView.WriteParam(cur);
+      if (!status) return status;
+    }
     return status;
   }
 
   template <typename V>
   static QueueStatus Read(ConsumerView<V>& aConsumerView, T* aArg) {
-    MOZ_CRASH("no way to fallibly resize vectors without exceptions");
     size_t size;
     auto status = aConsumerView.ReadParam(&size);
     if (!status) return status;
-
     aArg->resize(size);
-    status = aConsumerView.Read(aArg->data(), size);
-    return status;
-  }
 
-  template <typename View>
-  static size_t MinSize(View& aView, const T& aArg) {
-    auto size = aView.MinSizeParam(aArg.size());
-    size += aView.MinSizeBytes(aArg.size() * sizeof(U));
-    return size;
+    for (auto& cur : *aArg) {
+      status = aConsumerView.ReadParam(&cur);
+      if (!status) return status;
+    }
+    return status;
   }
 };
 
@@ -275,14 +238,24 @@ struct QueueParamTraits<CompileResult> {
     aConsumerView.ReadParam(&aArg->translatedSource);
     return aConsumerView.ReadParam(&aArg->success);
   }
-
-  template <typename View>
-  static size_t MinSize(View& aView, const T& aArg) {
-    return aView.MinSizeParam(aArg.pending) + aView.MinSizeParam(aArg.log) +
-           aView.MinSizeParam(aArg.translatedSource) +
-           aView.MinSizeParam(aArg.success);
-  }
 };
+
+template <>
+struct QueueParamTraits<mozilla::layers::TextureType>
+    : public ContiguousEnumSerializer<mozilla::layers::TextureType,
+                                      mozilla::layers::TextureType::Unknown,
+                                      mozilla::layers::TextureType::Last> {};
+
+template <>
+struct QueueParamTraits<mozilla::gfx::SurfaceFormat>
+    : public ContiguousEnumSerializerInclusive<
+          mozilla::gfx::SurfaceFormat, mozilla::gfx::SurfaceFormat::B8G8R8A8,
+          mozilla::gfx::SurfaceFormat::UNKNOWN> {};
+
+template <>
+struct QueueParamTraits<gfxAlphaType>
+    : public ContiguousEnumSerializerInclusive<
+          gfxAlphaType, gfxAlphaType::Opaque, gfxAlphaType::NonPremult> {};
 
 }  // namespace webgl
 }  // namespace mozilla

@@ -15,17 +15,16 @@ class nsLookAndFeel final : public nsXPLookAndFeel {
 
   void NativeInit() final;
   virtual void RefreshImpl() override;
-  virtual nsresult NativeGetColor(ColorID aID, nscolor& aResult) override;
-  virtual nsresult GetIntImpl(IntID aID, int32_t& aResult) override;
-  virtual nsresult GetFloatImpl(FloatID aID, float& aResult) override;
-  virtual bool GetFontImpl(FontID aID, nsString& aName,
-                           gfxFontStyle& aStyle) override;
+  nsresult NativeGetInt(IntID aID, int32_t& aResult) override;
+  nsresult NativeGetFloat(FloatID aID, float& aResult) override;
+  nsresult NativeGetColor(ColorID aID, nscolor& aResult) override;
+  bool NativeGetFont(FontID aID, nsString& aName,
+                     gfxFontStyle& aStyle) override;
   virtual bool GetEchoPasswordImpl() override;
   virtual uint32_t GetPasswordMaskDelayImpl() override;
   virtual char16_t GetPasswordCharacterImpl() override;
-  virtual nsTArray<LookAndFeelInt> GetIntCacheImpl() override;
-  virtual void SetIntCacheImpl(
-      const nsTArray<LookAndFeelInt>& aLookAndFeelIntCache) override;
+  LookAndFeelCache GetCacheImpl() override;
+  void SetCacheImpl(const LookAndFeelCache& aCache) override;
 
  protected:
   bool mInitializedSystemColors = false;

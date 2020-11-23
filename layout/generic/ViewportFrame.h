@@ -52,7 +52,8 @@ class ViewportFrame : public nsContainerFrame {
                                 const nsDisplayListSet& aLists) override;
 
   void BuildDisplayListForTopLayer(nsDisplayListBuilder* aBuilder,
-                                   nsDisplayList* aList);
+                                   nsDisplayList* aList,
+                                   bool* aIsOpaque = nullptr);
 
   virtual nscoord GetMinISize(gfxContext* aRenderingContext) override;
   virtual nscoord GetPrefISize(gfxContext* aRenderingContext) override;
@@ -60,7 +61,7 @@ class ViewportFrame : public nsContainerFrame {
                       const ReflowInput& aReflowInput,
                       nsReflowStatus& aStatus) override;
 
-  bool ComputeCustomOverflow(nsOverflowAreas&) override { return false; }
+  bool ComputeCustomOverflow(mozilla::OverflowAreas&) override { return false; }
 
   /**
    * Adjust aReflowInput to account for scrollbars and pres shell

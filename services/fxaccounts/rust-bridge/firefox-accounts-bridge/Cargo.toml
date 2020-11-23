@@ -20,5 +20,5 @@ nserror = { path = "../../../../xpcom/rust/nserror" }
 nsstring = { path = "../../../../xpcom/rust/nsstring" }
 xpcom = { path = "../../../../xpcom/rust/xpcom" }
 storage_variant = { path = "../../../../storage/variant" }
-thin-vec = { version = "0.1", features = ["gecko-ffi"] }
-fxa-client = { git = "https://github.com/mozilla/application-services", rev = "61dcc364ac0d6d0816ab88a494bbf20d824b009b", features = ["gecko"] }
+thin-vec = { version = "0.2.1", features = ["gecko-ffi"] }
+fxa-client = { git = "https://github.com/mozilla/application-services", rev = "8a576fbe79199fa8664f64285524017f74ebcc5f", features = ["gecko"] }

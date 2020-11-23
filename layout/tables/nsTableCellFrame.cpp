@@ -392,8 +392,8 @@ void nsTableCellFrame::InvalidateFrame(uint32_t aDisplayItemKey,
                                        bool aRebuildDisplayItems) {
   nsIFrame::InvalidateFrame(aDisplayItemKey, aRebuildDisplayItems);
   if (GetTableFrame()->IsBorderCollapse()) {
-    GetParent()->InvalidateFrameWithRect(
-        GetVisualOverflowRect() + GetPosition(), aDisplayItemKey, false);
+    GetParent()->InvalidateFrameWithRect(InkOverflowRect() + GetPosition(),
+                                         aDisplayItemKey, false);
   }
 }
 
@@ -523,17 +523,17 @@ void nsTableCellFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
 }
 
 nsIFrame::LogicalSides nsTableCellFrame::GetLogicalSkipSides(
-    const ReflowInput* aReflowInput) const {
+    const Maybe<SkipSidesDuringReflow>&) const {
   LogicalSides skip(mWritingMode);
   if (MOZ_UNLIKELY(StyleBorder()->mBoxDecorationBreak ==
                    StyleBoxDecorationBreak::Clone)) {
     return skip;
   }
 
-  if (nullptr != GetPrevInFlow()) {
+  if (GetPrevInFlow()) {
     skip |= eLogicalSideBitsBStart;
   }
-  if (nullptr != GetNextInFlow()) {
+  if (GetNextInFlow()) {
     skip |= eLogicalSideBitsBEnd;
   }
   return skip;
@@ -622,12 +622,12 @@ void nsTableCellFrame::BlockDirAlignChild(WritingMode aWM, nscoord aMaxAscent) {
   }
   if (HasView()) {
     nsContainerFrame::SyncFrameViewAfterReflow(PresContext(), this, GetView(),
-                                               desiredSize.VisualOverflow(),
+                                               desiredSize.InkOverflow(),
                                                ReflowChildFlags::Default);
   }
 }
 
-bool nsTableCellFrame::ComputeCustomOverflow(nsOverflowAreas& aOverflowAreas) {
+bool nsTableCellFrame::ComputeCustomOverflow(OverflowAreas& aOverflowAreas) {
   nsRect bounds(nsPoint(0, 0), GetSize());
   bounds.Inflate(GetBorderOverflow());
 
@@ -727,7 +727,7 @@ nscoord nsTableCellFrame::GetMinISize(gfxContext* aRenderingContext) {
 
   nsIFrame* inner = mFrames.FirstChild();
   result = nsLayoutUtils::IntrinsicForContainer(aRenderingContext, inner,
-                                                nsLayoutUtils::MIN_ISIZE);
+                                                IntrinsicISizeType::MinISize);
   return result;
 }
 
@@ -738,7 +738,7 @@ nscoord nsTableCellFrame::GetPrefISize(gfxContext* aRenderingContext) {
 
   nsIFrame* inner = mFrames.FirstChild();
   result = nsLayoutUtils::IntrinsicForContainer(aRenderingContext, inner,
-                                                nsLayoutUtils::PREF_ISIZE);
+                                                IntrinsicISizeType::PrefISize);
   return result;
 }
 
@@ -819,7 +819,7 @@ void nsTableCellFrame::Reflow(nsPresContext* aPresContext,
   LogicalSize availSize = aReflowInput.AvailableSize();
 
   LogicalMargin borderPadding =
-      aReflowInput.ComputedLogicalPadding() + GetBorderWidth(wm);
+      aReflowInput.ComputedLogicalPadding(wm) + GetBorderWidth(wm);
 
   ReflowOutput kidSize(wm);
   kidSize.ClearSize();
@@ -904,7 +904,7 @@ void nsTableCellFrame::Reflow(nsPresContext* aPresContext,
   LogicalPoint kidOrigin(wm, borderPadding.IStart(wm),
                          borderPadding.BStart(wm));
   nsRect origRect = firstKid->GetRect();
-  nsRect origVisualOverflow = firstKid->GetVisualOverflowRect();
+  nsRect origInkOverflow = firstKid->InkOverflowRect();
   bool firstReflow = firstKid->HasAnyStateBits(NS_FRAME_FIRST_REFLOW);
 
   ReflowChild(firstKid, aPresContext, kidSize, kidReflowInput, wm, kidOrigin,
@@ -943,7 +943,7 @@ void nsTableCellFrame::Reflow(nsPresContext* aPresContext,
                     kidOrigin, containerSize, ReflowChildFlags::Default);
 
   if (tableFrame->IsBorderCollapse()) {
-    nsTableFrame::InvalidateTableFrame(firstKid, origRect, origVisualOverflow,
+    nsTableFrame::InvalidateTableFrame(firstKid, origRect, origInkOverflow,
                                        firstReflow);
   }
   // first, compute the bsize which can be set w/o being restricted by

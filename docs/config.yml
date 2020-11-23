@@ -25,6 +25,7 @@ categories:
         - widget/cocoa
         - code-quality
         - writing-rust-code
+        - tools/profiler
     build_doc:
         - mach
         - tools/try
@@ -32,6 +33,7 @@ categories:
         - taskcluster
         - tools/moztreedocs
     testing_doc:
+        - testing/testing-policy
         - testing/marionette
         - testing/geckodriver
         - web-platform
@@ -48,6 +50,8 @@ categories:
         - python
     fennec_doc:
         - mobile/android
+    metrics_doc:
+        - metrics
 
 redirects:
     browser/browser: browser

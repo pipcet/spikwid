@@ -60,6 +60,9 @@ function openContextMenu(aMessage, aBrowser, aActor) {
     parentAllowsMixedContent: data.parentAllowsMixedContent,
     userContextId: data.userContextId,
     webExtContextData: data.webExtContextData,
+    cookieJarSettings: E10SUtils.deserializeCookieJarSettings(
+      data.cookieJarSettings
+    ),
   };
 
   let popup = browser.ownerDocument.getElementById("contentAreaContextMenu");
@@ -212,7 +215,6 @@ class nsContextMenu {
     this.onCTPPlugin = context.onCTPPlugin;
     this.onDRMMedia = context.onDRMMedia;
     this.onPiPVideo = context.onPiPVideo;
-    this.onMediaStreamVideo = context.onMediaStreamVideo;
     this.onEditable = context.onEditable;
     this.onImage = context.onImage;
     this.onKeywordField = context.onKeywordField;
@@ -226,6 +228,7 @@ class nsContextMenu {
     this.onSpellcheckable = context.onSpellcheckable;
     this.onTextInput = context.onTextInput;
     this.onVideo = context.onVideo;
+    this.hasPasteEventListeners = context.hasPasteEventListeners;
 
     this.target = context.target;
     this.targetIdentifier = context.targetIdentifier;
@@ -443,6 +446,7 @@ class nsContextMenu {
       this.onTextInput ||
       this.onLink ||
       this.isContentSelected ||
+      this.hasPasteEventListeners ||
       this.onImage ||
       this.onCanvas ||
       this.onVideo ||
@@ -484,7 +488,16 @@ class nsContextMenu {
     // View source is always OK, unless in directory listing.
     this.showItem(
       "context-viewpartialsource-selection",
-      !this.inAboutDevtoolsToolbox && this.isContentSelected
+      !this.inAboutDevtoolsToolbox &&
+        this.isContentSelected &&
+        this.selectionInfo.isDocumentLevelSelection
+    );
+
+    this.showItem(
+      "context-print-selection",
+      !this.inAboutDevtoolsToolbox &&
+        this.isContentSelected &&
+        this.selectionInfo.isDocumentLevelSelection
     );
 
     var shouldShow = !(
@@ -745,9 +758,15 @@ class nsContextMenu {
     this.showItem("context-sep-undo", this.onTextInput);
     this.showItem("context-cut", this.onTextInput);
     this.showItem("context-copy", this.isContentSelected || this.onTextInput);
-    this.showItem("context-paste", this.onTextInput);
+    this.showItem(
+      "context-paste",
+      this.hasPasteEventListeners || this.onTextInput
+    );
     this.showItem("context-delete", this.onTextInput);
-    this.showItem("context-sep-paste", this.onTextInput);
+    this.showItem(
+      "context-sep-paste",
+      this.hasPasteEventListeners || this.onTextInput
+    );
     this.showItem(
       "context-selectall",
       !(
@@ -832,7 +851,6 @@ class nsContextMenu {
           "media.videocontrols.picture-in-picture.enabled"
         ) &&
         this.onVideo &&
-        !this.onMediaStreamVideo &&
         !this.target.ownerDocument.fullscreen;
       this.showItem("context-video-pictureinpicture", shouldDisplay);
     }
@@ -926,7 +944,9 @@ class nsContextMenu {
       if (
         !loginFillInfo ||
         !loginFillInfo.passwordField.found ||
-        documentURI.schemeIs("about")
+        documentURI.schemeIs("about") ||
+        this.browser.contentPrincipal.spec ==
+          "resource://pdf.js/web/viewer.html"
       ) {
         // Both generation and fill will default to disabled.
         return;
@@ -1303,6 +1323,7 @@ class nsContextMenu {
 
     // Cache this because we fetch the data async
     let referrerInfo = this.contentData.referrerInfo;
+    let cookieJarSettings = this.contentData.cookieJarSettings;
 
     this.actor.saveVideoFrameAsImage(this.targetIdentifier).then(dataURL => {
       // FIXME can we switch this to a blob URL?
@@ -1316,6 +1337,7 @@ class nsContextMenu {
         "SaveImageTitle",
         null, // chosen data
         referrerInfo,
+        cookieJarSettings,
         null, // initiating doc
         false, // don't skip prompt for where to save
         null, // cache key
@@ -1339,6 +1361,7 @@ class nsContextMenu {
 
     openUILink(this.bgImageURL, e, {
       referrerInfo: this.contentData.referrerInfo,
+      forceAllowDataURI: true,
       triggeringPrincipal: this.principal,
       csp: this.csp,
     });
@@ -1613,6 +1636,7 @@ class nsContextMenu {
     let doc = this.ownerDoc;
     let isContentWindowPrivate = this.ownerDoc.isPrivate;
     let referrerInfo = this.contentData.referrerInfo;
+    let cookieJarSettings = this.contentData.cookieJarSettings;
     let isPrivate = PrivateBrowsingUtils.isBrowserPrivate(this.browser);
     if (this.onCanvas) {
       // Bypass cache, since it's a data: URL.
@@ -1627,6 +1651,7 @@ class nsContextMenu {
           "SaveImageTitle",
           null, // chosen data
           referrerInfo,
+          cookieJarSettings,
           null, // initiating doc
           false, // don't skip prompt for where to save
           null, // cache key
@@ -1646,6 +1671,7 @@ class nsContextMenu {
         "SaveImageTitle",
         null, // chosen data
         referrerInfo,
+        cookieJarSettings,
         null, // initiating doc
         false, // don't skip prompt for where to save
         null, // cache key
@@ -1661,6 +1687,7 @@ class nsContextMenu {
         false,
         doc,
         referrerInfo,
+        cookieJarSettings,
         this.frameOuterWindowID,
         "",
         isContentWindowPrivate
@@ -1882,7 +1909,19 @@ class nsContextMenu {
   }
 
   printFrame() {
-    PrintUtils.printWindow(this.actor.browsingContext);
+    PrintUtils.startPrintWindow(
+      "context_print_frame",
+      this.actor.browsingContext
+    );
+  }
+
+  printSelection() {
+    PrintUtils.startPrintWindow(
+      "context_print_selection",
+      this.actor.browsingContext,
+      /* aOpenWindowInfo = */ null,
+      /* aPrintSelectionOnly = */ true
+    );
   }
 
   switchPageDirection() {
@@ -1927,6 +1966,15 @@ class nsContextMenu {
 
   // Formats the 'Search <engine> for "<selection or link text>"' context menu.
   showAndFormatSearchContextItem() {
+    let menuItem = document.getElementById("context-searchselect");
+    let menuItemPrivate = document.getElementById(
+      "context-searchselect-private"
+    );
+    if (!Services.search.isInitialized) {
+      menuItem.hidden = true;
+      menuItemPrivate.hidden = true;
+      return;
+    }
     const docIsPrivate = PrivateBrowsingUtils.isBrowserPrivate(this.browser);
     const privatePref = "browser.search.separatePrivateDefault.ui.enabled";
     let showSearchSelect =
@@ -1940,10 +1988,6 @@ class nsContextMenu {
       !docIsPrivate &&
       Services.prefs.getBoolPref(privatePref);
 
-    let menuItem = document.getElementById("context-searchselect");
-    let menuItemPrivate = document.getElementById(
-      "context-searchselect-private"
-    );
     menuItem.hidden = !showSearchSelect;
     menuItemPrivate.hidden = !showPrivateSearchSelect;
     // If we're not showing the menu items, we can skip formatting the labels.

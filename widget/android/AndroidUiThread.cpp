@@ -15,6 +15,7 @@
 #include "mozilla/ThreadEventQueue.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/UniquePtr.h"
+#include "GeckoProfiler.h"
 #include "nsThread.h"
 #include "nsThreadManager.h"
 #include "nsThreadUtils.h"
@@ -53,9 +54,9 @@ class AndroidUiThread : public nsThread {
  public:
   NS_INLINE_DECL_REFCOUNTING_INHERITED(AndroidUiThread, nsThread)
   AndroidUiThread()
-      : nsThread(MakeNotNull<ThreadEventQueue<mozilla::EventQueue>*>(
-                     MakeUnique<mozilla::EventQueue>()),
-                 nsThread::NOT_MAIN_THREAD, 0) {}
+      : nsThread(
+            MakeNotNull<ThreadEventQueue*>(MakeUnique<mozilla::EventQueue>()),
+            nsThread::NOT_MAIN_THREAD, 0) {}
 
   nsresult Dispatch(already_AddRefed<nsIRunnable> aEvent,
                     uint32_t aFlags) override;
@@ -164,6 +165,7 @@ class CreateOnUiThread : public Runnable {
     sThread = new AndroidUiThread();
     sThread->InitCurrentThread();
     sThread->SetObserver(new ThreadObserver());
+    PROFILER_REGISTER_THREAD("AndroidUI");
     sMessageLoop =
         new MessageLoop(MessageLoop::TYPE_MOZILLA_ANDROID_UI, sThread.get());
     lock.NotifyAll();
@@ -193,6 +195,7 @@ class DestroyOnUiThread : public Runnable {
     delete sMessageLoop;
     sMessageLoop = nullptr;
     MOZ_ASSERT(sThread);
+    PROFILER_UNREGISTER_THREAD();
     nsThreadManager::get().UnregisterCurrentThread(*sThread);
     sThread = nullptr;
     mDestroyed = true;

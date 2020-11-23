@@ -37,12 +37,14 @@ impl QPackDecoder {
     #[must_use]
     pub fn new(qpack_settings: QpackSettings) -> Self {
         qdebug!("Decoder: creating a new qpack decoder.");
+        let mut send_buf = QPData::default();
+        send_buf.encode_varint(QPACK_UNI_STREAM_TYPE_DECODER);
         Self {
             instruction_reader: EncoderInstructionReader::new(),
             table: HeaderTable::new(false),
             acked_inserts: 0,
             max_entries: qpack_settings.max_table_size_decoder >> 5,
-            send_buf: QPData::default(),
+            send_buf,
             local_stream_id: None,
             remote_stream_id: None,
             max_table_size: qpack_settings.max_table_size_decoder,
@@ -151,7 +153,10 @@ impl QPackDecoder {
     }
 
     pub fn cancel_stream(&mut self, stream_id: u64) {
-        DecoderInstruction::StreamCancellation { stream_id }.marshal(&mut self.send_buf);
+        if self.table.capacity() > 0 {
+            self.blocked_streams.retain(|(id, _)| *id != stream_id);
+            DecoderInstruction::StreamCancellation { stream_id }.marshal(&mut self.send_buf);
+        }
     }
 
     /// # Errors
@@ -189,10 +194,20 @@ impl QPackDecoder {
 
         match decoder.decode_header_block(&self.table, self.max_entries, self.table.base()) {
             Ok(HeaderDecoderResult::Blocked(req_insert_cnt)) => {
-                self.blocked_streams.push((stream_id, req_insert_cnt));
                 if self.blocked_streams.len() > self.max_blocked_streams {
                     Err(Error::DecompressionFailed)
                 } else {
+                    let r = self
+                        .blocked_streams
+                        .iter()
+                        .filter_map(|(id, req)| if *id == stream_id { Some(*req) } else { None })
+                        .collect::<Vec<_>>();
+                    if !r.is_empty() {
+                        debug_assert!(r.len() == 1);
+                        debug_assert!(r[0] == req_insert_cnt);
+                        return Ok(None);
+                    }
+                    self.blocked_streams.push((stream_id, req_insert_cnt));
                     Ok(None)
                 }
             }
@@ -220,7 +235,6 @@ impl QPackDecoder {
             panic!("Adding multiple local streams");
         }
         self.local_stream_id = Some(stream_id);
-        self.send_buf.encode_varint(QPACK_UNI_STREAM_TYPE_DECODER);
     }
 
     /// # Errors
@@ -245,8 +259,8 @@ impl QPackDecoder {
     }
 
     #[must_use]
-    pub fn stats(&self) -> &Stats {
-        &self.stats
+    pub fn stats(&self) -> Stats {
+        self.stats.clone()
     }
 }
 

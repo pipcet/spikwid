@@ -1,9 +1,8 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: sw=2 ts=4 et :
- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 #ifndef mozilla_ipc_ProtocolUtils_h
 #define mozilla_ipc_ProtocolUtils_h 1
@@ -514,9 +513,9 @@ class IToplevelProtocol : public IProtocol {
   already_AddRefed<nsISerialEventTarget> GetMessageEventTarget(
       const Message& aMsg);
 
- private:
   base::ProcessId OtherPidMaybeInvalid() const { return mOtherPid; }
 
+ private:
   int32_t NextId();
 
   template <class T>
@@ -573,13 +572,13 @@ inline bool LoggingEnabled() {
 #endif
 }
 
+#if defined(DEBUG) || defined(FUZZING)
+bool LoggingEnabledFor(const char* aTopLevelProtocol, const char* aFilter);
+#endif
+
 inline bool LoggingEnabledFor(const char* aTopLevelProtocol) {
 #if defined(DEBUG) || defined(FUZZING)
-  const char* filter = PR_GetEnv("MOZ_IPC_MESSAGE_LOG");
-  if (!filter) {
-    return false;
-  }
-  return strcmp(filter, "1") == 0 || strcmp(filter, aTopLevelProtocol) == 0;
+  return LoggingEnabledFor(aTopLevelProtocol, PR_GetEnv("MOZ_IPC_MESSAGE_LOG"));
 #else
   return false;
 #endif

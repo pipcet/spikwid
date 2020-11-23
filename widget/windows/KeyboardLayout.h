@@ -39,7 +39,7 @@
 #define VK_OEM_102 0xE2
 #define VK_OEM_CLEAR 0xFE
 
-class nsIIdleServiceInternal;
+class nsIUserIdleServiceInternal;
 
 namespace mozilla {
 namespace widget {
@@ -382,10 +382,10 @@ class MOZ_STACK_CLASS NativeKey final {
     MSG GetCharMsg(HWND aWnd) const {
       MSG msg;
       msg.hwnd = aWnd;
-      msg.message =
-          mIsDeadKey && mIsSysKey
-              ? WM_SYSDEADCHAR
-              : mIsDeadKey ? WM_DEADCHAR : mIsSysKey ? WM_SYSCHAR : WM_CHAR;
+      msg.message = mIsDeadKey && mIsSysKey ? WM_SYSDEADCHAR
+                    : mIsDeadKey            ? WM_DEADCHAR
+                    : mIsSysKey             ? WM_SYSCHAR
+                                            : WM_CHAR;
       msg.wParam = static_cast<WPARAM>(mCharCode);
       msg.lParam = static_cast<LPARAM>(mScanCode << 16);
       msg.time = 0;
@@ -955,7 +955,7 @@ class KeyboardLayout {
   ~KeyboardLayout();
 
   static KeyboardLayout* sInstance;
-  static nsIIdleServiceInternal* sIdleService;
+  static nsIUserIdleServiceInternal* sIdleService;
 
   struct DeadKeyTableListEntry {
     DeadKeyTableListEntry* next;

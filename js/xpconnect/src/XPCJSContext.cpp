@@ -28,6 +28,7 @@
 #ifdef FUZZING
 #  include "mozilla/StaticPrefs_fuzzing.h"
 #endif
+#include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_browser.h"
 #include "mozilla/StaticPrefs_javascript.h"
 #include "mozilla/dom/ScriptSettings.h"
@@ -39,7 +40,9 @@
 #include "jsapi.h"
 #include "js/ContextOptions.h"
 #include "js/MemoryMetrics.h"
+#include "js/OffThreadScriptCompilation.h"
 #include "mozilla/dom/BindingUtils.h"
+#include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/ScriptLoader.h"
 #include "mozilla/dom/WindowBinding.h"
@@ -60,9 +63,6 @@
 #include "nsIXULRuntime.h"
 #include "nsJSPrincipals.h"
 #include "ExpandedPrincipal.h"
-#ifdef MOZ_GECKO_PROFILER
-#  include "ProfilerMarkerPayload.h"
-#endif
 
 #if defined(XP_LINUX) && !defined(ANDROID)
 // For getrlimit and min/max.
@@ -93,12 +93,10 @@ static void WatchdogMain(void* arg);
 class Watchdog;
 class WatchdogManager;
 class MOZ_RAII AutoLockWatchdog final {
-  MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
   Watchdog* const mWatchdog;
 
  public:
-  explicit AutoLockWatchdog(
-      Watchdog* aWatchdog MOZ_GUARD_OBJECT_NOTIFIER_PARAM);
+  explicit AutoLockWatchdog(Watchdog* aWatchdog);
   ~AutoLockWatchdog();
 };
 
@@ -380,18 +378,15 @@ class WatchdogManager {
     }
 
     if (mWatchdog) {
-      int32_t contentTime =
-          Preferences::GetInt(PREF_MAX_SCRIPT_RUN_TIME_CONTENT, 10);
+      int32_t contentTime = StaticPrefs::dom_max_script_run_time();
       if (contentTime <= 0) {
         contentTime = INT32_MAX;
       }
-      int32_t chromeTime =
-          Preferences::GetInt(PREF_MAX_SCRIPT_RUN_TIME_CHROME, 20);
+      int32_t chromeTime = StaticPrefs::dom_max_chrome_script_run_time();
       if (chromeTime <= 0) {
         chromeTime = INT32_MAX;
       }
-      int32_t extTime =
-          Preferences::GetInt(PREF_MAX_SCRIPT_RUN_TIME_EXT_CONTENT, 5);
+      int32_t extTime = StaticPrefs::dom_max_ext_content_script_run_time();
       if (extTime <= 0) {
         extTime = INT32_MAX;
       }
@@ -450,10 +445,7 @@ class WatchdogManager {
   PRTime mTimestamps[kWatchdogTimestampCategoryCount - 1];
 };
 
-AutoLockWatchdog::AutoLockWatchdog(
-    Watchdog* aWatchdog MOZ_GUARD_OBJECT_NOTIFIER_PARAM_IN_IMPL)
-    : mWatchdog(aWatchdog) {
-  MOZ_GUARD_OBJECT_NOTIFIER_INIT;
+AutoLockWatchdog::AutoLockWatchdog(Watchdog* aWatchdog) : mWatchdog(aWatchdog) {
   if (mWatchdog) {
     PR_Lock(mWatchdog->GetLock());
   }
@@ -577,6 +569,9 @@ AutoScriptActivity::~AutoScriptActivity() {
   MOZ_ALWAYS_TRUE(mActive == XPCJSContext::RecordScriptActivity(mOldValue));
 }
 
+static const double sChromeSlowScriptTelemetryCutoff(10.0);
+static bool sTelemetryEventEnabled(false);
+
 // static
 bool XPCJSContext::InterruptCallback(JSContext* cx) {
   XPCJSContext* self = XPCJSContext::Get();
@@ -593,9 +588,7 @@ bool XPCJSContext::InterruptCallback(JSContext* cx) {
     if (const char* file = scriptFilename.get()) {
       filename.Assign(file, strlen(file));
     }
-    PROFILER_ADD_MARKER_WITH_PAYLOAD("JS::InterruptCallback", JS,
-                                     TextMarkerPayload,
-                                     (filename, TimeStamp::Now()));
+    PROFILER_MARKER_TEXT("JS::InterruptCallback", JS, {}, filename);
   }
 #endif
 
@@ -607,6 +600,7 @@ bool XPCJSContext::InterruptCallback(JSContext* cx) {
     self->mSlowScriptSecondHalf = false;
     self->mSlowScriptActualWait = mozilla::TimeDuration();
     self->mTimeoutAccumulated = false;
+    self->mExecutedChromeScript = false;
     return true;
   }
 
@@ -619,39 +613,83 @@ bool XPCJSContext::InterruptCallback(JSContext* cx) {
   // This is at least the second interrupt callback we've received since
   // returning to the event loop. See how long it's been, and what the limit
   // is.
-  TimeDuration duration = TimeStamp::NowLoRes() - self->mSlowScriptCheckpoint;
+  TimeStamp now = TimeStamp::NowLoRes();
+  TimeDuration duration = now - self->mSlowScriptCheckpoint;
   int32_t limit;
 
   nsString addonId;
   const char* prefName;
-
+  bool runningContentJS = false;
   auto principal = BasePrincipal::Cast(nsContentUtils::SubjectPrincipal(cx));
   bool chrome = principal->Is<SystemPrincipal>();
   if (chrome) {
     prefName = PREF_MAX_SCRIPT_RUN_TIME_CHROME;
-    limit = Preferences::GetInt(prefName, 20);
+    limit = StaticPrefs::dom_max_chrome_script_run_time();
+    self->mExecutedChromeScript = true;
   } else if (auto policy = principal->ContentScriptAddonPolicy()) {
     policy->GetId(addonId);
     prefName = PREF_MAX_SCRIPT_RUN_TIME_EXT_CONTENT;
-    limit = Preferences::GetInt(prefName, 5);
+    limit = StaticPrefs::dom_max_ext_content_script_run_time();
   } else {
     prefName = PREF_MAX_SCRIPT_RUN_TIME_CONTENT;
-    limit = Preferences::GetInt(prefName, 10);
+    limit = StaticPrefs::dom_max_script_run_time();
+    runningContentJS = true;
   }
 
+  // When the parent process slow script dialog is disabled, we still want
+  // to be able to track things for telemetry, so set `mSlowScriptSecondHalf`
+  // to true in that case:
+  if (limit == 0 && chrome &&
+      duration.ToSeconds() > sChromeSlowScriptTelemetryCutoff / 2.0) {
+    self->mSlowScriptSecondHalf = true;
+    return true;
+  }
   // If there's no limit, or we're within the limit, let it go.
   if (limit == 0 || duration.ToSeconds() < limit / 2.0) {
     return true;
   }
 
+  self->mSlowScriptCheckpoint = now;
   self->mSlowScriptActualWait += duration;
 
   // In order to guard against time changes or laptops going to sleep, we
   // don't trigger the slow script warning until (limit/2) seconds have
   // elapsed twice.
   if (!self->mSlowScriptSecondHalf) {
-    self->mSlowScriptCheckpoint = TimeStamp::NowLoRes();
     self->mSlowScriptSecondHalf = true;
+    return true;
+  }
+
+  int32_t limitWithoutImportantUserInput =
+      StaticPrefs::dom_max_script_run_time_without_important_user_input();
+  if (runningContentJS && XRE_IsContentProcess() && limit &&
+      limitWithoutImportantUserInput > limit &&
+      limitWithoutImportantUserInput >
+          self->mSlowScriptActualWait.ToSeconds()) {
+    // Call possibly slow PeekMessages after the other common early returns in
+    // this method.
+    ContentChild* contentChild = ContentChild::GetSingleton();
+    mozilla::ipc::MessageChannel* channel =
+        contentChild ? contentChild->GetIPCChannel() : nullptr;
+    if (channel) {
+      bool foundInputEvent = false;
+      channel->PeekMessages(
+          [&foundInputEvent](const IPC::Message& aMsg) -> bool {
+            if (nsContentUtils::IsMessageCriticalInputEvent(aMsg)) {
+              foundInputEvent = true;
+              return false;
+            }
+            return true;
+          });
+      if (!foundInputEvent) {
+        return true;
+      }
+    }
+  }
+
+  // We use a fixed value of 2 from browser_parent_process_hang_telemetry.js
+  // to check if the telemetry events work. Do not interrupt it with a dialog.
+  if (chrome && limit == 2 && xpc::IsInAutomation()) {
     return true;
   }
 
@@ -700,8 +738,8 @@ bool XPCJSContext::InterruptCallback(JSContext* cx) {
   }
 
   // Show the prompt to the user, and kill if requested.
-  nsGlobalWindowInner::SlowScriptResponse response =
-      win->ShowSlowScriptDialog(cx, addonId);
+  nsGlobalWindowInner::SlowScriptResponse response = win->ShowSlowScriptDialog(
+      cx, addonId, self->mSlowScriptActualWait.ToMilliseconds());
   if (response == nsGlobalWindowInner::KillSlowScript) {
     if (Preferences::GetBool("dom.global_stop_script", true)) {
       xpc::Scriptability::Get(global).Block();
@@ -735,7 +773,7 @@ bool XPCJSContext::InterruptCallback(JSContext* cx) {
   }
 
   // The user chose to continue the script. Reset the timer, and disable this
-  // machinery with a pref of the user opted out of future slow-script dialogs.
+  // machinery with a pref if the user opted out of future slow-script dialogs.
   if (response != nsGlobalWindowInner::ContinueSlowScriptAndKeepNotifying) {
     self->mSlowScriptCheckpoint = TimeStamp::NowLoRes();
   }
@@ -842,12 +880,14 @@ static void LoadStartupJSPrefs(XPCJSContext* xpccx) {
   bool disableWasmHugeMemory =
       Preferences::GetBool(JS_OPTIONS_DOT_STR "wasm_disable_huge_memory");
 
+  bool useOffThreadParseGlobal =
+      Preferences::GetBool(JS_OPTIONS_DOT_STR "off_thread_parse_global");
+
   nsCOMPtr<nsIXULRuntime> xr = do_GetService("@mozilla.org/xre/runtime;1");
   if (xr) {
     bool safeMode = false;
     xr->GetInSafeMode(&safeMode);
     if (safeMode) {
-      useBaselineInterp = false;
       useBaselineJit = false;
       useIon = false;
       useJitForTrustedPrincipals = false;
@@ -903,6 +943,8 @@ static void LoadStartupJSPrefs(XPCJSContext* xpccx) {
     bool disabledHugeMemory = JS::DisableWasmHugeMemory();
     MOZ_RELEASE_ASSERT(disabledHugeMemory);
   }
+
+  JS::SetUseOffThreadParseGlobal(useOffThreadParseGlobal);
 }
 
 static void ReloadPrefsCallback(const char* pref, void* aXpccx) {
@@ -915,15 +957,16 @@ static void ReloadPrefsCallback(const char* pref, void* aXpccx) {
   bool useWasm = Preferences::GetBool(JS_OPTIONS_DOT_STR "wasm");
   bool useWasmTrustedPrincipals =
       Preferences::GetBool(JS_OPTIONS_DOT_STR "wasm_trustedprincipals");
-  bool useWasmIon = Preferences::GetBool(JS_OPTIONS_DOT_STR "wasm_ionjit");
+  bool useWasmOptimizing =
+      Preferences::GetBool(JS_OPTIONS_DOT_STR "wasm_optimizingjit");
   bool useWasmBaseline =
       Preferences::GetBool(JS_OPTIONS_DOT_STR "wasm_baselinejit");
-#ifdef ENABLE_WASM_CRANELIFT
-  bool useWasmCranelift =
-      Preferences::GetBool(JS_OPTIONS_DOT_STR "wasm_cranelift");
-#endif
   bool useWasmReftypes =
       Preferences::GetBool(JS_OPTIONS_DOT_STR "wasm_reftypes");
+#ifdef ENABLE_WASM_FUNCTION_REFERENCES
+  bool useWasmFunctionReferences =
+      Preferences::GetBool(JS_OPTIONS_DOT_STR "wasm_function_references");
+#endif
 #ifdef ENABLE_WASM_GC
   bool useWasmGc = Preferences::GetBool(JS_OPTIONS_DOT_STR "wasm_gc");
 #endif
@@ -964,9 +1007,17 @@ static void ReloadPrefsCallback(const char* pref, void* aXpccx) {
   sWeakRefsEnabled = Preferences::GetBool(JS_OPTIONS_DOT_STR "weakrefs");
   sWeakRefsExposeCleanupSome = Preferences::GetBool(
       JS_OPTIONS_DOT_STR "experimental.weakrefs.expose_cleanupSome");
+
+  // Require private fields disabled outside of nightly.
+  bool privateFieldsEnabled = false;
+  bool privateMethodsEnabled = false;
 #ifdef NIGHTLY_BUILD
   sIteratorHelpersEnabled =
       Preferences::GetBool(JS_OPTIONS_DOT_STR "experimental.iterator_helpers");
+  privateFieldsEnabled =
+      Preferences::GetBool(JS_OPTIONS_DOT_STR "experimental.private_fields");
+  privateMethodsEnabled =
+      Preferences::GetBool(JS_OPTIONS_DOT_STR "experimental.private_methods");
 #endif
 
 #ifdef JS_GC_ZEAL
@@ -989,11 +1040,15 @@ static void ReloadPrefsCallback(const char* pref, void* aXpccx) {
 #endif
       .setWasm(useWasm)
       .setWasmForTrustedPrinciples(useWasmTrustedPrincipals)
-      .setWasmIon(useWasmIon)
+#ifdef ENABLE_WASM_CRANELIFT
+      .setWasmCranelift(useWasmOptimizing)
+#else
+      .setWasmIon(useWasmOptimizing)
+#endif
       .setWasmBaseline(useWasmBaseline)
       .setWasmReftypes(useWasmReftypes)
-#ifdef ENABLE_WASM_CRANELIFT
-      .setWasmCranelift(useWasmCranelift)
+#ifdef ENABLE_WASM_FUNCTION_REFERENCES
+      .setWasmFunctionReferences(useWasmFunctionReferences)
 #endif
 #ifdef ENABLE_WASM_GC
       .setWasmGc(useWasmGc)
@@ -1010,7 +1065,9 @@ static void ReloadPrefsCallback(const char* pref, void* aXpccx) {
       .setAsyncStack(useAsyncStack)
       .setAsyncStackCaptureDebuggeeOnly(useAsyncStackCaptureDebuggeeOnly)
       .setThrowOnDebuggeeWouldRun(throwOnDebuggeeWouldRun)
-      .setDumpStackOnDebuggeeWouldRun(dumpStackOnDebuggeeWouldRun);
+      .setDumpStackOnDebuggeeWouldRun(dumpStackOnDebuggeeWouldRun)
+      .setPrivateClassFields(privateFieldsEnabled)
+      .setPrivateClassMethods(privateMethodsEnabled);
 
   nsCOMPtr<nsIXULRuntime> xr = do_GetService("@mozilla.org/xre/runtime;1");
   if (xr) {
@@ -1070,6 +1127,7 @@ XPCJSContext::XPCJSContext()
       mWatchdogManager(GetWatchdogManager()),
       mSlowScriptSecondHalf(false),
       mTimeoutAccumulated(false),
+      mExecutedChromeScript(false),
       mHasScriptActivity(false),
       mPendingResult(NS_OK),
       mActive(CONTEXT_INACTIVE),
@@ -1293,6 +1351,12 @@ nsresult XPCJSContext::Initialize() {
   Preferences::RegisterCallback(ReloadPrefsCallback, "fuzzing.enabled", this);
 #endif
 
+  // Initialize the MIME type used for the bytecode cache, after calling
+  // SetProcessBuildIdOp and loading JS prefs.
+  if (!nsContentUtils::InitJSBytecodeMimeType()) {
+    NS_ABORT_OOM(0);  // Size is unknown.
+  }
+
   if (!JS::InitSelfHostedCode(cx)) {
     // Note: If no exception is pending, failure is due to OOM.
     if (!JS_IsExceptionPending(cx) || JS_IsThrowingOutOfMemory(cx)) {
@@ -1349,10 +1413,41 @@ void XPCJSContext::BeforeProcessTask(bool aMightBlock) {
   mSlowScriptSecondHalf = false;
   mSlowScriptActualWait = mozilla::TimeDuration();
   mTimeoutAccumulated = false;
+  mExecutedChromeScript = false;
   CycleCollectedJSContext::BeforeProcessTask(aMightBlock);
 }
 
 void XPCJSContext::AfterProcessTask(uint32_t aNewRecursionDepth) {
+  // Record hangs in the parent process for telemetry.
+  if (mSlowScriptSecondHalf && XRE_IsE10sParentProcess()) {
+    double hangDuration = (mozilla::TimeStamp::NowLoRes() -
+                           mSlowScriptCheckpoint + mSlowScriptActualWait)
+                              .ToSeconds();
+    // We use the pref to test this code.
+    double limit = sChromeSlowScriptTelemetryCutoff;
+    if (xpc::IsInAutomation()) {
+      double prefLimit = StaticPrefs::dom_max_chrome_script_run_time();
+      if (prefLimit > 0) {
+        limit = std::min(prefLimit, sChromeSlowScriptTelemetryCutoff);
+      }
+    }
+    if (hangDuration > limit) {
+      if (!sTelemetryEventEnabled) {
+        sTelemetryEventEnabled = true;
+        Telemetry::SetEventRecordingEnabled("slow_script_warning"_ns, true);
+      }
+
+      auto uriType = mExecutedChromeScript ? "browser"_ns : "content"_ns;
+      auto extra = Some<nsTArray<Telemetry::EventExtraEntry>>(
+          {Telemetry::EventExtraEntry{"hang_duration"_ns,
+                                      nsPrintfCString("%.2f", hangDuration)},
+           Telemetry::EventExtraEntry{"uri_type"_ns, uriType}});
+      Telemetry::RecordEvent(
+          Telemetry::EventID::Slow_script_warning_Shown_Browser, Nothing(),
+          extra);
+    }
+  }
+
   // Now that we're back to the event loop, reset the slow script checkpoint.
   mSlowScriptCheckpoint = mozilla::TimeStamp();
   mSlowScriptSecondHalf = false;

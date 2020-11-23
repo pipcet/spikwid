@@ -14,6 +14,7 @@
 #include "mozilla/dom/RegisterWorkletBindings.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/WorkletBinding.h"
+#include "mozilla/dom/WorkletGlobalScope.h"
 #include "nsGlobalWindowInner.h"
 
 namespace mozilla {
@@ -38,7 +39,8 @@ WorkletLoadInfo::WorkletLoadInfo(nsPIDOMWindowInner* aWindow)
 WorkletImpl::WorkletImpl(nsPIDOMWindowInner* aWindow, nsIPrincipal* aPrincipal)
     : mPrincipal(NullPrincipal::CreateWithInheritedAttributes(aPrincipal)),
       mWorkletLoadInfo(aWindow),
-      mTerminated(false) {
+      mTerminated(false),
+      mFinishedOnExecutionThread(false) {
   Unused << NS_WARN_IF(
       NS_FAILED(ipc::PrincipalToPrincipalInfo(mPrincipal, &mPrincipalInfo)));
 
@@ -66,6 +68,9 @@ dom::WorkletGlobalScope* WorkletImpl::GetGlobalScope() {
 
   if (mGlobalScope) {
     return mGlobalScope;
+  }
+  if (mFinishedOnExecutionThread) {
+    return nullptr;
   }
 
   dom::AutoJSAPI jsapi;
@@ -97,9 +102,12 @@ void WorkletImpl::NotifyWorkletFinished() {
   }
 
   // Release global scope on its thread.
-  SendControlMessage(NS_NewRunnableFunction(
-      "WorkletImpl::NotifyWorkletFinished",
-      [self = RefPtr<WorkletImpl>(this)]() { self->mGlobalScope = nullptr; }));
+  SendControlMessage(
+      NS_NewRunnableFunction("WorkletImpl::NotifyWorkletFinished",
+                             [self = RefPtr<WorkletImpl>(this)]() {
+                               self->mFinishedOnExecutionThread = true;
+                               self->mGlobalScope = nullptr;
+                             }));
 
   mTerminated = true;
   if (mWorkletThread) {

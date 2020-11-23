@@ -151,14 +151,6 @@ void nsFrameLoaderOwner::ChangeRemotenessCommon(
     }
   }
 
-  // If we're switching process for an in progress load, then suppress
-  // progress events from the new BrowserParent to prevent duplicate
-  // events for the new initial about:blank and the new 'start' event.
-  if (aSwitchingInProgressLoad && mFrameLoader->GetBrowserParent()) {
-    mFrameLoader->GetBrowserParent()
-        ->SuspendProgressEventsUntilAfterNextLoadStarts();
-  }
-
   // Now that we've got a new FrameLoader, we need to reset our
   // nsSubDocumentFrame to use the new FrameLoader.
   if (nsSubDocumentFrame* ourFrame = do_QueryFrame(owner->GetPrimaryFrame())) {
@@ -169,7 +161,8 @@ void nsFrameLoaderOwner::ChangeRemotenessCommon(
   // we need to update that state for the new BrowserParent too.
   if (nsFocusManager* fm = nsFocusManager::GetFocusManager()) {
     if (fm->GetFocusedElement() == owner) {
-      fm->ActivateRemoteFrameIfNeeded(*owner);
+      fm->ActivateRemoteFrameIfNeeded(*owner,
+                                      nsFocusManager::GenerateFocusActionId());
     }
   }
 
@@ -247,15 +240,6 @@ void nsFrameLoaderOwner::ChangeRemotenessToProcess(
       mFrameLoader->ConfigRemoteProcess(aContentParent->GetRemoteType(),
                                         aContentParent);
     }
-
-    // FIXME(bug 1644779): We'd like to stop triggering a load here, as this
-    // reads the attributes, such as `src`, on the <browser> element, and could
-    // start another load which will be clobbered shortly.
-    //
-    // This is OK for now, as we're mimicing the existing process switching
-    // behaviour, and <browser> elements created by tabbrowser don't have the
-    // `src` attribute specified.
-    mFrameLoader->LoadFrame(false);
   };
 
   auto shouldPreserve =

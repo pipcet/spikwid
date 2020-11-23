@@ -22,13 +22,6 @@
 // This must be included last:
 #include "nsObjCExceptions.h"
 
-enum { mozNSScrollerStyleLegacy = 0, mozNSScrollerStyleOverlay = 1 };
-typedef NSInteger mozNSScrollerStyle;
-
-@interface NSScroller (AvailableSinceLion)
-+ (mozNSScrollerStyle)preferredScrollerStyle;
-@end
-
 // Available from 10.12 onwards; test availability at runtime before using
 @interface NSWorkspace (AvailableSinceSierra)
 @property(readonly) BOOL accessibilityDisplayShouldReduceMotion;
@@ -426,14 +419,19 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, nscolor& aColor) {
   return res;
 }
 
-nsresult nsLookAndFeel::GetIntImpl(IntID aID, int32_t& aResult) {
+nsresult nsLookAndFeel::NativeGetInt(IntID aID, int32_t& aResult) {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
 
-  nsresult res = nsXPLookAndFeel::GetIntImpl(aID, aResult);
-  if (NS_SUCCEEDED(res)) return res;
-  res = NS_OK;
+  nsresult res = NS_OK;
 
   switch (aID) {
+    case IntID::ScrollButtonLeftMouseButtonAction:
+      aResult = 0;
+      break;
+    case IntID::ScrollButtonMiddleMouseButtonAction:
+    case IntID::ScrollButtonRightMouseButtonAction:
+      aResult = 3;
+      break;
     case IntID::CaretBlinkTime:
       aResult = 567;
       break;
@@ -473,7 +471,7 @@ nsresult nsLookAndFeel::GetIntImpl(IntID aID, int32_t& aResult) {
       break;
     case IntID::UseOverlayScrollbars:
       if (!mUseOverlayScrollbarsCached) {
-        mUseOverlayScrollbars = SystemWantsOverlayScrollbars() ? 1 : 0;
+        mUseOverlayScrollbars = NSScroller.preferredScrollerStyle == NSScrollerStyleOverlay ? 1 : 0;
         mUseOverlayScrollbarsCached = true;
       }
       aResult = mUseOverlayScrollbars;
@@ -521,8 +519,8 @@ nsresult nsLookAndFeel::GetIntImpl(IntID aID, int32_t& aResult) {
     case IntID::MacGraphiteTheme:
       aResult = [NSColor currentControlTint] == NSGraphiteControlTint;
       break;
-    case IntID::MacYosemiteTheme:
-      aResult = nsCocoaFeatures::OnYosemiteOrLater();
+    case IntID::MacBigSurTheme:
+      aResult = nsCocoaFeatures::OnBigSurOrLater();
       break;
     case IntID::AlertNotificationOrigin:
       aResult = NS_ALERT_TOP;
@@ -592,10 +590,8 @@ nsresult nsLookAndFeel::GetIntImpl(IntID aID, int32_t& aResult) {
   NS_OBJC_END_TRY_ABORT_BLOCK_NSRESULT;
 }
 
-nsresult nsLookAndFeel::GetFloatImpl(FloatID aID, float& aResult) {
-  nsresult res = nsXPLookAndFeel::GetFloatImpl(aID, aResult);
-  if (NS_SUCCEEDED(res)) return res;
-  res = NS_OK;
+nsresult nsLookAndFeel::NativeGetFloat(FloatID aID, float& aResult) {
+  nsresult res = NS_OK;
 
   switch (aID) {
     case FloatID::IMEUnderlineRelativeSize:
@@ -614,11 +610,6 @@ nsresult nsLookAndFeel::GetFloatImpl(FloatID aID, float& aResult) {
 
 bool nsLookAndFeel::UseOverlayScrollbars() { return GetInt(IntID::UseOverlayScrollbars) != 0; }
 
-bool nsLookAndFeel::SystemWantsOverlayScrollbars() {
-  return ([NSScroller respondsToSelector:@selector(preferredScrollerStyle)] &&
-          [NSScroller preferredScrollerStyle] == mozNSScrollerStyleOverlay);
-}
-
 bool nsLookAndFeel::AllowOverlayScrollbarsOverlap() { return (UseOverlayScrollbars()); }
 
 bool nsLookAndFeel::SystemWantsDarkTheme() {
@@ -630,7 +621,7 @@ bool nsLookAndFeel::SystemWantsDarkTheme() {
   return !![[NSUserDefaults standardUserDefaults] stringForKey:@"AppleInterfaceStyle"];
 }
 
-bool nsLookAndFeel::GetFontImpl(FontID aID, nsString& aFontName, gfxFontStyle& aFontStyle) {
+bool nsLookAndFeel::NativeGetFont(FontID aID, nsString& aFontName, gfxFontStyle& aFontStyle) {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK_RETURN;
 
   // hack for now
@@ -654,49 +645,49 @@ bool nsLookAndFeel::GetFontImpl(FontID aID, nsString& aFontName, gfxFontStyle& a
   NS_OBJC_END_TRY_ABORT_BLOCK_RETURN(false);
 }
 
-nsTArray<LookAndFeelInt> nsLookAndFeel::GetIntCacheImpl() {
-  nsTArray<LookAndFeelInt> lookAndFeelIntCache = nsXPLookAndFeel::GetIntCacheImpl();
+mozilla::widget::LookAndFeelCache nsLookAndFeel::GetCacheImpl() {
+  LookAndFeelCache cache = nsXPLookAndFeel::GetCacheImpl();
 
   LookAndFeelInt useOverlayScrollbars;
-  useOverlayScrollbars.id = IntID::UseOverlayScrollbars;
-  useOverlayScrollbars.value = GetInt(IntID::UseOverlayScrollbars);
-  lookAndFeelIntCache.AppendElement(useOverlayScrollbars);
+  useOverlayScrollbars.id() = IntID::UseOverlayScrollbars;
+  useOverlayScrollbars.value() = GetInt(IntID::UseOverlayScrollbars);
+  cache.mInts().AppendElement(useOverlayScrollbars);
 
   LookAndFeelInt allowOverlayScrollbarsOverlap;
-  allowOverlayScrollbarsOverlap.id = IntID::AllowOverlayScrollbarsOverlap;
-  allowOverlayScrollbarsOverlap.value = GetInt(IntID::AllowOverlayScrollbarsOverlap);
-  lookAndFeelIntCache.AppendElement(allowOverlayScrollbarsOverlap);
+  allowOverlayScrollbarsOverlap.id() = IntID::AllowOverlayScrollbarsOverlap;
+  allowOverlayScrollbarsOverlap.value() = GetInt(IntID::AllowOverlayScrollbarsOverlap);
+  cache.mInts().AppendElement(allowOverlayScrollbarsOverlap);
 
   LookAndFeelInt prefersReducedMotion;
-  prefersReducedMotion.id = IntID::PrefersReducedMotion;
-  prefersReducedMotion.value = GetInt(IntID::PrefersReducedMotion);
-  lookAndFeelIntCache.AppendElement(prefersReducedMotion);
+  prefersReducedMotion.id() = IntID::PrefersReducedMotion;
+  prefersReducedMotion.value() = GetInt(IntID::PrefersReducedMotion);
+  cache.mInts().AppendElement(prefersReducedMotion);
 
   LookAndFeelInt systemUsesDarkTheme;
-  systemUsesDarkTheme.id = IntID::SystemUsesDarkTheme;
-  systemUsesDarkTheme.value = GetInt(IntID::SystemUsesDarkTheme);
-  lookAndFeelIntCache.AppendElement(systemUsesDarkTheme);
+  systemUsesDarkTheme.id() = IntID::SystemUsesDarkTheme;
+  systemUsesDarkTheme.value() = GetInt(IntID::SystemUsesDarkTheme);
+  cache.mInts().AppendElement(systemUsesDarkTheme);
 
-  return lookAndFeelIntCache;
+  return cache;
 }
 
-void nsLookAndFeel::SetIntCacheImpl(const nsTArray<LookAndFeelInt>& aLookAndFeelIntCache) {
-  for (auto entry : aLookAndFeelIntCache) {
-    switch (entry.id) {
+void nsLookAndFeel::SetCacheImpl(const LookAndFeelCache& aCache) {
+  for (auto entry : aCache.mInts()) {
+    switch (entry.id()) {
       case IntID::UseOverlayScrollbars:
-        mUseOverlayScrollbars = entry.value;
+        mUseOverlayScrollbars = entry.value();
         mUseOverlayScrollbarsCached = true;
         break;
       case IntID::AllowOverlayScrollbarsOverlap:
-        mAllowOverlayScrollbarsOverlap = entry.value;
+        mAllowOverlayScrollbarsOverlap = entry.value();
         mAllowOverlayScrollbarsOverlapCached = true;
         break;
       case IntID::SystemUsesDarkTheme:
-        mSystemUsesDarkTheme = entry.value;
+        mSystemUsesDarkTheme = entry.value();
         mSystemUsesDarkThemeCached = true;
         break;
       case IntID::PrefersReducedMotion:
-        mPrefersReducedMotion = entry.value;
+        mPrefersReducedMotion = entry.value();
         mPrefersReducedMotionCached = true;
         break;
       default:
@@ -731,10 +722,8 @@ void nsLookAndFeel::EnsureInit() {
 
   mColorMenuHoverText = GetColorFromNSColor([NSColor alternateSelectedControlTextColor]);
 
-  if (nsCocoaFeatures::OnYosemiteOrLater()) {
-    mColorButtonText = NS_RGB(0xFF, 0xFF, 0xFF);
-    mHasColorButtonText = true;
-  }
+  mColorButtonText = NS_RGB(0xFF, 0xFF, 0xFF);
+  mHasColorButtonText = true;
 
   mColorButtonHoverText = GetColorFromNSColor([NSColor controlTextColor]);
   mColorText = GetColorFromNSColor([NSColor textColor]);

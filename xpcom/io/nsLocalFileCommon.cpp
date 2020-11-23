@@ -28,6 +28,10 @@
 /* static */
 const char* const sExecutableExts[] = {
     // clang-format off
+  ".accda",       // MS Access database
+  ".accdb",       // MS Access database
+  ".accde",       // MS Access database
+  ".accdr",       // MS Access database
   ".ad",
   ".ade",         // access project extension
   ".adp",
@@ -37,6 +41,7 @@ const char* const sExecutableExts[] = {
   ".asp",
   ".bas",
   ".bat",
+  ".cer",         // Signed certificate file
   ".chm",
   ".cmd",
   ".com",
@@ -44,6 +49,7 @@ const char* const sExecutableExts[] = {
   ".crt",
   ".der",
   ".exe",
+  ".fileloc",     // Apple finder internet location data file
   ".fxp",         // FoxPro compiled app
   ".hlp",
   ".hta",
@@ -114,6 +120,7 @@ const char* const sExecutableExts[] = {
   ".vsw",
   ".vsx",
   ".vtx",
+  ".webloc",       // MacOS website location file
   ".ws",
   ".wsc",
   ".wsf",

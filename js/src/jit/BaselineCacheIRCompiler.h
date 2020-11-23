@@ -19,7 +19,8 @@ namespace jit {
 class ICFallbackStub;
 class ICStub;
 
-enum class BaselineCacheIRStubKind { Regular, Monitored, Updated };
+// TODO(no-TI): remove.
+enum class BaselineCacheIRStubKind { Regular };
 
 ICStub* AttachBaselineCacheIRStub(JSContext* cx, const CacheIRWriter& writer,
                                   CacheKind kind,
@@ -66,6 +67,8 @@ class MOZ_RAII BaselineCacheIRCompiler : public CacheIRCompiler {
                         Register scratch2, bool isJitCall);
   void createThis(Register argcReg, Register calleeReg, Register scratch,
                   CallFlags flags);
+  template <typename T>
+  void storeThis(const T& newThis, Register argcReg, CallFlags flags);
   void updateReturnValue();
 
   enum class NativeCallType { Native, ClassHook };
@@ -74,13 +77,18 @@ class MOZ_RAII BaselineCacheIRCompiler : public CacheIRCompiler {
                             mozilla::Maybe<bool> ignoresReturnValue,
                             mozilla::Maybe<uint32_t> targetOffset);
 
-  MOZ_MUST_USE bool emitCallScriptedGetterResultShared(
-      TypedOrValueRegister receiver, uint32_t getterOffset, bool sameRealm);
+  enum class StringCode { CodeUnit, CodePoint };
+  bool emitStringFromCodeResult(Int32OperandId codeId, StringCode stringCode);
 
-  template <typename T, typename CallVM>
-  MOZ_MUST_USE bool emitCallNativeGetterResultShared(T receiver,
-                                                     uint32_t getterOffset,
-                                                     const CallVM& emitCallVM);
+  bool emitCallScriptedGetterShared(ValOperandId receiverId,
+                                    uint32_t getterOffset, bool sameRealm,
+                                    uint32_t nargsAndFlagsOffset,
+                                    mozilla::Maybe<uint32_t> icScriptOffset);
+  bool emitCallScriptedSetterShared(ObjOperandId receiverId,
+                                    uint32_t setterOffset, ValOperandId rhsId,
+                                    bool sameRealm,
+                                    uint32_t nargsAndFlagsOffset,
+                                    mozilla::Maybe<uint32_t> icScriptOffset);
 
  public:
   friend class AutoStubFrame;

@@ -28,8 +28,6 @@
 
 extern mozilla::LazyLogModule gPageCacheLog;
 
-namespace dom = mozilla::dom;
-
 static uint32_t gEntryID = 0;
 
 nsSHEntry::nsSHEntry()
@@ -209,6 +207,18 @@ nsSHEntry::SetTitle(const nsAString& aTitle) {
 }
 
 NS_IMETHODIMP
+nsSHEntry::GetName(nsAString& aName) {
+  aName = mName;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsSHEntry::SetName(const nsAString& aName) {
+  mName = aName;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 nsSHEntry::GetPostData(nsIInputStream** aResult) {
   *aResult = mPostData;
   NS_IF_ADDREF(*aResult);
@@ -290,13 +300,14 @@ nsSHEntry::SetIsSubFrame(bool aFlag) {
 
 NS_IMETHODIMP
 nsSHEntry::GetHasUserInteraction(bool* aFlag) {
-  // We can't assert that this getter isn't accessed only on root
-  // entries because there's JS code that will iterate over entries
-  // for serialization etc., so let's assert the next best thing.
-  MOZ_ASSERT(!mParent || !mHasUserInteraction,
-             "User interaction can only be set on root entries");
-
-  *aFlag = mHasUserInteraction;
+  // The back button and menulist deal with root/top-level
+  // session history entries, thus we annotate only the root entry.
+  if (!mParent) {
+    *aFlag = mHasUserInteraction;
+  } else {
+    nsCOMPtr<nsISHEntry> root = nsSHistory::GetRootSHEntry(this);
+    root->GetHasUserInteraction(aFlag);
+  }
   return NS_OK;
 }
 
@@ -917,6 +928,9 @@ NS_IMETHODIMP_(void)
 nsSHEntry::SyncTreesForSubframeNavigation(
     nsISHEntry* aEntry, mozilla::dom::BrowsingContext* aTopBC,
     mozilla::dom::BrowsingContext* aIgnoreBC) {
+  // XXX Keep this in sync with
+  // SessionHistoryEntry::SyncTreesForSubframeNavigation
+  //
   // We need to sync up the browsing context and session history trees for
   // subframe navigation.  If the load was in a subframe, we forward up to
   // the top browsing context, which will then recursively sync up all browsing
@@ -949,12 +963,6 @@ void nsSHEntry::EvictContentViewer() {
     SyncPresentationState();
     viewer->Destroy();
   }
-}
-
-NS_IMETHODIMP
-nsSHEntry::SynchronizeLayoutHistoryState() {
-  // No-op on purpose. See nsISHEntry.idl
-  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -1063,6 +1071,6 @@ nsSHEntry::AbandonBFCacheEntry() {
 
 NS_IMETHODIMP
 nsSHEntry::GetBfcacheID(uint64_t* aBFCacheID) {
-  *aBFCacheID = mShared->GetID();
+  *aBFCacheID = mShared->GetId();
   return NS_OK;
 }

@@ -48,7 +48,7 @@ XPCOMUtils.defineLazyGetter(this, "strBundle", function() {
   );
 });
 
-var { ExtensionError } = ExtensionUtils;
+var { DefaultMap, ExtensionError } = ExtensionUtils;
 
 const TABHIDE_PREFNAME = "extensions.webextensions.tabhide.enabled";
 
@@ -803,8 +803,29 @@ this.tabs = class extends ExtensionAPI {
         },
 
         async remove(tabIds) {
-          for (let nativeTab of getNativeTabsFromIDArray(tabIds)) {
-            nativeTab.ownerGlobal.gBrowser.removeTab(nativeTab);
+          let nativeTabs = getNativeTabsFromIDArray(tabIds);
+
+          if (nativeTabs.length === 1) {
+            nativeTabs[0].ownerGlobal.gBrowser.removeTab(nativeTabs[0]);
+            return;
+          }
+
+          // Or for multiple tabs, first group them by window
+          let windowTabMap = new DefaultMap(() => []);
+          for (let nativeTab of nativeTabs) {
+            windowTabMap.get(nativeTab.ownerGlobal).push(nativeTab);
+          }
+
+          // Then make one call to removeTabs() for each window, to keep the
+          // count accurate for SessionStore.getLastClosedTabCount().
+          // Note: always pass options to disable animation and the warning
+          // dialogue box, so that way all tabs are actually closed when the
+          // browser.tabs.remove() promise resolves
+          for (let [eachWindow, tabsToClose] of windowTabMap.entries()) {
+            eachWindow.gBrowser.removeTabs(tabsToClose, {
+              animate: false,
+              suppressWarnAboutClosingWindow: true,
+            });
           }
         },
 
@@ -948,8 +969,12 @@ this.tabs = class extends ExtensionAPI {
           let nativeTab = getTabOrActive(tabId);
           await tabListener.awaitTabReady(nativeTab);
 
+          let browser = nativeTab.linkedBrowser;
+          let window = browser.ownerGlobal;
+          let zoom = window.ZoomManager.getZoomForBrowser(browser);
+
           let tab = tabManager.wrapTab(nativeTab);
-          return tab.capture(context, options);
+          return tab.capture(context, zoom, options);
         },
 
         async captureVisibleTab(windowId, options) {
@@ -961,7 +986,10 @@ this.tabs = class extends ExtensionAPI {
           let tab = tabManager.wrapTab(window.gBrowser.selectedTab);
           await tabListener.awaitTabReady(tab.nativeTab);
 
-          return tab.capture(context, options);
+          let zoom = window.ZoomManager.getZoomForBrowser(
+            tab.nativeTab.linkedBrowser
+          );
+          return tab.capture(context, zoom, options);
         },
 
         async detectLanguage(tabId) {
@@ -1256,32 +1284,23 @@ this.tabs = class extends ExtensionAPI {
         print() {
           let activeTab = getTabOrActive(null);
           let { PrintUtils } = activeTab.ownerGlobal;
-          PrintUtils.printWindow(activeTab.linkedBrowser.browsingContext);
+          PrintUtils.startPrintWindow(
+            "ext_tabs_print",
+            activeTab.linkedBrowser.browsingContext
+          );
         },
 
-        printPreview() {
+        async printPreview() {
           let activeTab = getTabOrActive(null);
           let { PrintUtils, PrintPreviewListener } = activeTab.ownerGlobal;
-
-          return new Promise((resolve, reject) => {
-            let ppBrowser = PrintUtils.shouldSimplify
-              ? PrintPreviewListener.getSimplifiedPrintPreviewBrowser()
-              : PrintPreviewListener.getPrintPreviewBrowser();
-
-            let mm = ppBrowser.messageManager;
-
-            let onEntered = message => {
-              mm.removeMessageListener("Printing:Preview:Entered", onEntered);
-              if (message.data.failed) {
-                reject({ message: "Print preview failed" });
-              }
-              resolve();
-            };
-
-            mm.addMessageListener("Printing:Preview:Entered", onEntered);
-
-            PrintUtils.printPreview(PrintPreviewListener);
-          });
+          try {
+            await PrintUtils.printPreview(
+              "ext_tabs_printpreview",
+              PrintPreviewListener
+            );
+          } catch (ex) {
+            return Promise.reject({ message: "Print preview failed" });
+          }
         },
 
         saveAsPDF(pageSettings) {
@@ -1292,11 +1311,6 @@ this.tabs = class extends ExtensionAPI {
           let title = strBundle.GetStringFromName(
             "saveaspdf.saveasdialog.title"
           );
-
-          if (AppConstants.platform === "macosx") {
-            return Promise.reject({ message: "Not supported on Mac OS X" });
-          }
-
           let filename;
           if (
             pageSettings.toFileName !== null &&
@@ -1426,46 +1440,12 @@ this.tabs = class extends ExtensionAPI {
                   printSettings.footerStrRight = pageSettings.footerRight;
                 }
 
-                let printProgressListener = {
-                  onLocationChange(webProgress, request, location, flags) {},
-                  onProgressChange(
-                    webProgress,
-                    request,
-                    curSelfProgress,
-                    maxSelfProgress,
-                    curTotalProgress,
-                    maxTotalProgress
-                  ) {},
-                  onSecurityChange(webProgress, request, state) {},
-                  onContentBlockingEvent(webProgress, request, event) {},
-                  onStateChange(webProgress, request, flags, status) {
-                    if (
-                      flags & Ci.nsIWebProgressListener.STATE_STOP &&
-                      flags & Ci.nsIWebProgressListener.STATE_IS_DOCUMENT
-                    ) {
-                      resolve(retval == 0 ? "saved" : "replaced");
-                    }
-                  },
-                  onStatusChange: function(
-                    webProgress,
-                    request,
-                    status,
-                    message
-                  ) {
-                    if (status != 0) {
-                      resolve(retval == 0 ? "not_saved" : "not_replaced");
-                    }
-                  },
-                  QueryInterface: ChromeUtils.generateQI([
-                    "nsIWebProgressListener",
-                  ]),
-                };
-
-                activeTab.linkedBrowser.print(
-                  activeTab.linkedBrowser.outerWindowID,
-                  printSettings,
-                  printProgressListener
-                );
+                activeTab.linkedBrowser
+                  .print(activeTab.linkedBrowser.outerWindowID, printSettings)
+                  .then(() => resolve(retval == 0 ? "saved" : "replaced"))
+                  .catch(() =>
+                    resolve(retval == 0 ? "not_saved" : "not_replaced")
+                  );
               } else {
                 // Cancel clicked (retval == 1)
                 resolve("canceled");

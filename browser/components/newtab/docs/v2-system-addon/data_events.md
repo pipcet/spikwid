@@ -513,57 +513,6 @@ A user event ping includes some basic metadata (tab id, addon version, etc.) as 
 }
 ```
 
-### Onboarding user events on about:welcome
-
-#### Form Submit Events
-
-```js
-{
-  "event": ["SUBMIT_EMAIL" | "SUBMIT_SIGNIN" | "SKIPPED_SIGNIN"],
-  "value": {
-    "has_flow_params": false,
-  }
-
-  // Basic metadata
-  "action": "activity_stream_event",
-  "page": "about:welcome",
-  "client_id": "26288a14-5cc4-d14f-ae0a-bb01ef45be9c",
-  "session_id": "005deed0-e3e4-4c02-a041-17405fd703f6",
-  "browser_session_id": "e7e52665-7db3-f348-9918-e93160eb2ef3",
-  "addon_version": "20180710100040",
-  "locale": "en-US",
-  "experiments": {
-    "experiment_1": {"branch": "control"},
-    "experiment_2": {"branch": "treatment"}
-  },
-  "user_prefs": 7
-}
-```
-
-#### Firefox Accounts Metrics flow errors
-
-```js
-{
-  "event": ["FXA_METRICS_FETCH_ERROR" | "FXA_METRICS_ERROR"],
-  "value": 500, // Only FXA_METRICS_FETCH_ERROR provides this value, this value is any valid HTTP status code except 200.
-
-  // Basic metadata
-  "action": "activity_stream_event",
-  "page": "about:welcome",
-  "client_id": "26288a14-5cc4-d14f-ae0a-bb01ef45be9c",
-  "session_id": "005deed0-e3e4-4c02-a041-17405fd703f6",
-  "browser_session_id": "e7e52665-7db3-f348-9918-e93160eb2ef3",
-  "addon_version": "20180710100040",
-  "locale": "en-US",
-  "experiments": {
-    "experiment_1": {"branch": "control"},
-    "experiment_2": {"branch": "treatment"}
-  },
-  "user_prefs": 7
-}
-```
-
-
 ## Session end pings
 
 When a session ends, the browser will send a `"activity_stream_session"` ping to our metrics servers. This ping contains the length of the session, a unique reason for why the session ended, and some additional metadata.
@@ -720,6 +669,27 @@ This reports the user's interaction with those Pocket tiles.
 
   // A 0-based index to record which tile in the "tiles" list that the user just interacted with.
   "click|block|pocket": 0
+}
+```
+
+## Save to Pocket button pings
+
+Right now the save to Pocket button, while technically outside of newtab, has some similarities with the newtab telemetry.
+
+These pings record user interaction with the save to Pocket button.
+
+### Click/impression ping
+
+```js
+{
+  "locale": "en-US",
+  "version": "83.0a1",
+  "release_channel": "default",
+  "model": "",
+  "events": [{"action":"click|impression|unpin","position":0,"source":"save_button|on_save_recs|learn_more|sign_up_1|sign_up_2|log_in"}],
+  "pocket_logged_in_state": true|false,
+  "impression_id": "{005deed0-e3e4-4c02-a041-17405fd703f6}",
+  "profile_creation_date": 18550
 }
 ```
 
@@ -1174,26 +1144,6 @@ CFR impression ping has two forms, in which the message_id could be of different
 }
 ```
 
-#### Onboarding impression
-```js
-{
-  "client_id": "26288a14-5cc4-d14f-ae0a-bb01ef45be9c",
-  "action": "onboarding_user_event",
-  "impression_id": "n/a",
-  "source": "FIRST_RUN",
-  "addon_version": "20180710100040",
-  "locale": "en-US",
-  "experiments": {
-    "experiment_1": {"branch": "control"},
-    "experiment_2": {"branch": "treatment"}
-  },
-  "message_id": "EXTENDED_TRIPLETS_1",
-  "event": "IMPRESSION",
-  "browser_session_id": "e7e52665-7db3-f348-9918-e93160eb2ef3",
-  "event_context": { "page": ["about:welcome" | "about:home" | "about:newtab"] }
-}
-```
-
 #### Onboarding Simplified Welcome impression
 ```js
 {
@@ -1206,9 +1156,44 @@ CFR impression ping has two forms, in which the message_id could be of different
   "message_id": "ABOUT_WELCOME",
   "event": "IMPRESSION",
   "browser_session_id": "e7e52665-7db3-f348-9918-e93160eb2ef3",
-  "event_context": { "page": "about:welcome" }
+  "event_context": { "page": "about:welcome" },
+  "attribution": {
+    "source": "mozilla.org",
+    "medium": "referral",
+    "campaign": "Firefox-Brand-US-Mozilla-Org",
+    "content": "test-addon@github.io",
+    "experiment": "ua-onboarding",
+    "variation": "chrome",
+    "ua": "firefox"
+  }
 }
 ```
+
+#### Onboarding Simplified Welcome click button ping
+```js
+{
+  "client_id": "26288a14-5cc4-d14f-ae0a-bb01ef45be9c",
+  "version": "76.0a1",
+  "locale": "en-US",
+  "experiments": {},
+  "release_channel": "default",
+  "addon_version": "20200330194034"
+  "message_id": "ABOUT_WELCOME",
+  "event": "CLICK_BUTTION",
+  "browser_session_id": "e7e52665-7db3-f348-9918-e93160eb2ef3",
+  "event_context": { "page": "about:welcome", "source": ["primary_button", "secondary_button" },
+  "attribution": {
+    "source": "mozilla.org",
+    "medium": "referral",
+    "campaign": "Firefox-Brand-US-Mozilla-Org",
+    "content": "test-addon@github.io",
+    "experiment": "ua-onboarding",
+    "variation": "chrome",
+    "ua": "firefox"
+  }
+}
+```
+
 #### Onboarding Simplified Welcome Session End ping
 ```js
 {
@@ -1223,7 +1208,16 @@ CFR impression ping has two forms, in which the message_id could be of different
   "event": "SESSION_END",
   "browser_session_id": "e7e52665-7db3-f348-9918-e93160eb2ef3",
   "event_context": { "page": "about:welcome", "reason":
-    ["welcome-window-closed" | "welcome-tab-closed" | "app-shut-down" | "address-bar-navigated" | "unknown"]}
+    ["welcome-window-closed" | "welcome-tab-closed" | "app-shut-down" | "address-bar-navigated" | "unknown"]},
+  "attribution": {
+    "source": "mozilla.org",
+    "medium": "referral",
+    "campaign": "Firefox-Brand-US-Mozilla-Org",
+    "content": "test-addon@github.io",
+    "experiment": "ua-onboarding",
+    "variation": "chrome",
+    "ua": "firefox"
+  }
 }
 ```
 
@@ -1246,26 +1240,6 @@ This reports the user's interaction with Activity Stream Router.
   "source": "NEWTAB_FOOTER_BAR",
   "message_id": "some_snippet_id",
   "event": ["CLICK_BUTTION" | "BLOCK"]
-}
-```
-
-#### Onboarding interaction pings
-```js
-{
-  "client_id": "26288a14-5cc4-d14f-ae0a-bb01ef45be9c",
-  "action": "onboarding_user_event",
-  "addon_version": "20180710100040",
-  "impression_id": "n/a",
-  "locale": "en-US",
-  "experiments": {
-    "experiment_1": {"branch": "control"},
-    "experiment_2": {"branch": "treatment"}
-  },
-  "source": "ONBOARDING",
-  "message_id": "onboarding_message_1",
-  "event": ["IMPRESSION" | "CLICK_BUTTION" | "INSTALL" | "BLOCK"],
-  "browser_session_id": "e7e52665-7db3-f348-9918-e93160eb2ef3",
-  "event_context": { "page": ["about:welcome" | "about:home" | "about:newtab"] }
 }
 ```
 
@@ -1353,23 +1327,6 @@ This reports a failure in the Remote Settings loader to load messages for Activi
 }
 ```
 
-## Trailhead experiment enrollment ping
-
-This reports an enrollment ping when a user gets enrolled in a Trailhead experiment. Note that this ping is only collected through the Mozilla Events telemetry pipeline.
-
-```js
-{
-  "category": "activity_stream",
-  "method": "enroll",
-  "object": "preference_study"
-  "value": "activity-stream-firstup-trailhead-interrupts",
-  "extra_keys": {
-    "experimentType": "as-firstrun",
-    "branch": ["supercharge" | "join" | "sync" | "privacy" ...]
-  }
-}
-```
-
 ## Feature Callouts interaction pings
 
 This reports when a user has seen or clicked a badge/notification in the browser toolbar in a non-PBM window
@@ -1413,6 +1370,18 @@ For message impressions we concatenate the ids of all messages in the panel.
   "message_id": "WHATS_NEW_70",
   "event": ["CLICK" | "IMPRESSION"],
   "value": { "view": ["application_menu" | "toolbar_dropdown"] }
+}
+```
+
+We also report when the panel checkbox (used to allow users to opt out of
+notifications) is checked or unchecked.
+
+```
+{
+  ...
+  "message_id": "n/a",
+  "event": "WNP_PREF_TOGGLE",
+  "value": { "prefValue": true }
 }
 ```
 
@@ -1481,4 +1450,24 @@ Unlike other Activity Stream pings, this is a Firefox Events telemetry event, an
     "branches": "control;variant_1;variant_2"
   }
 }
+```
+
+### Experiment attribute errors
+
+This records whether issues were encountered with any of the targeting attributes used in the experiment enrollment or message targeting.
+Two different types of events are sent: `attribute_error` and `attribute_timeout` along with the attribute that caused it.
+
+```js
+[
+  "messaging_experiments",
+  "targeting",
+  "attribute_error", // event
+  "foo" // attribute
+],
+[
+  "messaging_experiments",
+  "targeting",
+  "attribute_timeout", // event
+  "bar" // attribute
+]
 ```

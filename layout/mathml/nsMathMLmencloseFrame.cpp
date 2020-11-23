@@ -85,10 +85,8 @@ nsresult nsMathMLmencloseFrame::AllocateMathMLChar(nsMencloseNotation mask) {
     mRadicalCharIndex = i;
   }
 
-  nsPresContext* presContext = PresContext();
   mMathMLChar[i].SetData(Char);
-  ResolveMathMLCharStyle(presContext, mContent, mComputedStyle,
-                         &mMathMLChar[i]);
+  mMathMLChar[i].SetComputedStyle(Style());
 
   return NS_OK;
 }
@@ -369,9 +367,9 @@ nsresult nsMathMLmencloseFrame::PlaceInternal(DrawTarget* aDrawTarget,
   if (delta) padding += onePixel - delta;  // round up
 
   if (IsToDraw(NOTATION_LONGDIV) || IsToDraw(NOTATION_RADICAL)) {
-    GetRadicalParameters(
-        fm, StyleFont()->mMathDisplay == NS_MATHML_DISPLAYSTYLE_BLOCK,
-        mRadicalRuleThickness, leading, psi);
+    GetRadicalParameters(fm,
+                         StyleFont()->mMathStyle == NS_STYLE_MATH_STYLE_NORMAL,
+                         mRadicalRuleThickness, leading, psi);
 
     // make sure that the rule appears on on screen
     if (mRadicalRuleThickness < onePixel) {
@@ -694,24 +692,14 @@ nsresult nsMathMLmencloseFrame::AttributeChanged(int32_t aNameSpaceID,
                                                   aModType);
 }
 
-//////////////////
-// the Style System will use these to pass the proper ComputedStyle to our
-// MathMLChar
-ComputedStyle* nsMathMLmencloseFrame::GetAdditionalComputedStyle(
-    int32_t aIndex) const {
-  int32_t len = mMathMLChar.Length();
-  if (aIndex >= 0 && aIndex < len)
-    return mMathMLChar[aIndex].GetComputedStyle();
-  else
-    return nullptr;
+void nsMathMLmencloseFrame::DidSetComputedStyle(ComputedStyle* aOldStyle) {
+  nsMathMLContainerFrame::DidSetComputedStyle(aOldStyle);
+  for (auto& ch : mMathMLChar) {
+    ch.SetComputedStyle(Style());
+  }
 }
 
-void nsMathMLmencloseFrame::SetAdditionalComputedStyle(
-    int32_t aIndex, ComputedStyle* aComputedStyle) {
-  int32_t len = mMathMLChar.Length();
-  if (aIndex >= 0 && aIndex < len)
-    mMathMLChar[aIndex].SetComputedStyle(aComputedStyle);
-}
+//////////////////
 
 class nsDisplayNotation final : public nsPaintedDisplayItem {
  public:

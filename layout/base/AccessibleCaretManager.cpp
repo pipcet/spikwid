@@ -1275,7 +1275,7 @@ nsRect AccessibleCaretManager::GetAllChildFrameRectsUnion(
     for (const auto& childList : frame->ChildLists()) {
       // Loop all children to union their scrollable overflow rect.
       for (nsIFrame* child : childList.mList) {
-        nsRect childRect = child->GetScrollableOverflowRectRelativeToSelf();
+        nsRect childRect = child->ScrollableOverflowRectRelativeToSelf();
         nsLayoutUtils::TransformRect(child, frame, childRect);
 
         // A TextFrame containing only '\n' has positive height and width 0, or
@@ -1437,12 +1437,6 @@ void AccessibleCaretManager::DispatchCaretStateChangedEvent(
   } else {
     init.mSelectionVisible = true;
   }
-
-  // The rect computed above is relative to rootFrame, which is the (layout)
-  // viewport frame. However, the consumers of this event expect the bounds
-  // of the selection relative to the screen (visual viewport origin), so
-  // translate between the two.
-  rect -= mPresShell->GetVisualViewportOffsetRelativeToLayoutViewport();
 
   domRect->SetLayoutRect(rect);
 

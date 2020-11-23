@@ -13,7 +13,8 @@
 #include "nsDOMNavigationTiming.h"
 #include "nsIChannel.h"
 #include "nsIChildChannel.h"
-#include "nsITraceableChannel.h"
+
+class nsDocShell;
 
 #define DOCUMENT_CHANNEL_IID                         \
   {                                                  \
@@ -25,6 +26,8 @@
 namespace mozilla {
 namespace net {
 
+uint64_t InnerWindowIDForExtantDoc(nsDocShell* docShell);
+
 /**
  * DocumentChannel is a protocol agnostic placeholder nsIChannel implementation
  * that we use so that nsDocShell knows about a connecting load. It transfers
@@ -35,13 +38,12 @@ namespace net {
  * channel with the real one, otherwise the originating docshell will be removed
  * during the process switch.
  */
-class DocumentChannel : public nsIIdentChannel, public nsITraceableChannel {
+class DocumentChannel : public nsIIdentChannel {
  public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSIREQUEST
   NS_DECL_NSICHANNEL
   NS_DECL_NSIIDENTCHANNEL
-  NS_DECL_NSITRACEABLECHANNEL
 
   NS_DECLARE_STATIC_IID_ACCESSOR(DOCUMENT_CHANNEL_IID)
 
@@ -59,12 +61,15 @@ class DocumentChannel : public nsIIdentChannel, public nsITraceableChannel {
    * a ParentProcessDocumentChannel if called from the parent process.
    * This operation is infallible.
    */
-  static already_AddRefed<DocumentChannel> CreateDocumentChannel(
+  static already_AddRefed<DocumentChannel> CreateForDocument(
       nsDocShellLoadState* aLoadState, class LoadInfo* aLoadInfo,
       nsLoadFlags aLoadFlags, nsIInterfaceRequestor* aNotificationCallbacks,
       uint32_t aCacheKey, bool aUriModified, bool aIsXFOError);
+  static already_AddRefed<DocumentChannel> CreateForObject(
+      nsDocShellLoadState* aLoadState, class LoadInfo* aLoadInfo,
+      nsLoadFlags aLoadFlags, nsIInterfaceRequestor* aNotificationCallbacks);
 
-  static bool CanUseDocumentChannel(nsDocShellLoadState* aLoadState);
+  static bool CanUseDocumentChannel(nsIURI* aURI);
 
  protected:
   DocumentChannel(nsDocShellLoadState* aLoadState, class LoadInfo* aLoadInfo,

@@ -708,8 +708,6 @@ mozilla::Maybe<nsUXThemeClass> nsNativeThemeWin::GetThemeClass(
     case StyleAppearance::Tabpanel:
     case StyleAppearance::Tabpanels:
       return Some(eUXTab);
-    case StyleAppearance::Scrollbar:
-    case StyleAppearance::ScrollbarSmall:
     case StyleAppearance::ScrollbarVertical:
     case StyleAppearance::ScrollbarHorizontal:
     case StyleAppearance::ScrollbarbuttonUp:
@@ -1112,8 +1110,6 @@ nsresult nsNativeThemeWin::GetThemePartAndState(nsIFrame* aFrame,
     case StyleAppearance::MozWinCommunicationsToolbox:
     case StyleAppearance::MozWinBrowsertabbarToolbox:
     case StyleAppearance::Statusbar:
-    case StyleAppearance::Scrollbar:
-    case StyleAppearance::ScrollbarSmall:
     case StyleAppearance::Scrollcorner: {
       aState = 0;
       aPart = RP_BACKGROUND;
@@ -2317,7 +2313,6 @@ nsNativeThemeWin::GetMinimumWidgetSize(nsPresContext* aPresContext,
       return rv;
     }
 
-    case StyleAppearance::Scrollbar:
     case StyleAppearance::Scrollcorner: {
       if (nsLookAndFeel::GetInt(nsLookAndFeel::IntID::UseOverlayScrollbars) !=
           0) {
@@ -2601,7 +2596,7 @@ nsITheme::Transparency nsNativeThemeWin::GetWidgetTransparency(
           ui->mScrollbarColor.AsColors().track.MaybeTransparent()) {
         return eTransparent;
       }
-      // DrawCustomScrollbarPart doesn't draw the track background for
+      // MayDrawCustomScrollbarPart doesn't draw the track background for
       // widgets on it, and these widgets are thinner than the track,
       // so we need to return transparent for them.
       switch (aAppearance) {
@@ -2619,8 +2614,8 @@ nsITheme::Transparency nsNativeThemeWin::GetWidgetTransparency(
   }
 
   switch (aAppearance) {
-    case StyleAppearance::ScrollbarSmall:
-    case StyleAppearance::Scrollbar:
+    case StyleAppearance::ScrollbarHorizontal:
+    case StyleAppearance::ScrollbarVertical:
     case StyleAppearance::Scrollcorner:
     case StyleAppearance::Statusbar:
       // Knowing that scrollbars and statusbars are opaque improves
@@ -2878,8 +2873,8 @@ nsresult nsNativeThemeWin::ClassicGetMinimumWidgetSize(
       //      (*aResult).height = ::GetSystemMetrics(SM_CYVTHUMB) << 1;
       break;
     case StyleAppearance::ScrollbarNonDisappearing: {
-      aResult->SizeTo(::GetSystemMetrics(SM_CXHSCROLL),
-                      ::GetSystemMetrics(SM_CYVSCROLL));
+      aResult->SizeTo(::GetSystemMetrics(SM_CXVSCROLL),
+                      ::GetSystemMetrics(SM_CYHSCROLL));
       break;
     }
     case StyleAppearance::RangeThumb: {
@@ -4047,12 +4042,11 @@ bool nsNativeThemeWin::MayDrawCustomScrollbarPart(gfxContext* aContext,
 
   gfxContextAutoSaveRestore autoSave(aContext);
   RefPtr<gfxContext> ctx = aContext;
+  DrawTarget* dt = ctx->GetDrawTarget();
   gfxFloat p2a = gfxFloat(aFrame->PresContext()->AppUnitsPerDevPixel());
-  gfxRect clipRect = ThebesRect(
-      LayoutDevicePixel::FromAppUnits(aClipRect, p2a).ToUnknownRect());
+  gfxRect rect = ThebesRect(NSRectToSnappedRect(aRect, p2a, *dt));
+  gfxRect clipRect = ThebesRect(NSRectToSnappedRect(aClipRect, p2a, *dt));
   ctx->Clip(clipRect);
-  gfxRect rect =
-      ThebesRect(LayoutDevicePixel::FromAppUnits(aRect, p2a).ToUnknownRect());
 
   const nsStyleUI* ui = style->StyleUI();
   auto* customColors =

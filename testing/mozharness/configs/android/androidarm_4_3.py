@@ -1,3 +1,7 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
 # mozharness configuration for Android 4.3 unit tests
 #
 # This configuration should be combined with suite definitions and other
@@ -21,7 +25,7 @@ config = {
     "emulator_process_name": "emulator64-arm",
     "emulator_extra_args": "-show-kernel -debug init,console,gles,memcheck,adbserver,adbclient,adb,avd_config,socket",
     "exes": {
-        'adb': '%(abs_work_dir)s/android-sdk-linux/platform-tools/adb',
+        "adb": "%(abs_work_dir)s/android-sdk-linux/platform-tools/adb",
     },
     "env": {
         "DISPLAY": ":0.0",

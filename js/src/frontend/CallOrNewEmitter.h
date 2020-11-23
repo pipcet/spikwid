@@ -25,14 +25,6 @@ namespace frontend {
 
 struct BytecodeEmitter;
 
-class MOZ_RAII AutoEmittingRunOnceLambda {
-  BytecodeEmitter* bce_;
-
- public:
-  explicit AutoEmittingRunOnceLambda(BytecodeEmitter* bce);
-  ~AutoEmittingRunOnceLambda();
-};
-
 // Class for emitting bytecode for call or new expression.
 //
 // Usage: (check for the return value is omitted for simplicity)
@@ -170,8 +162,6 @@ class MOZ_STACK_CLASS CallOrNewEmitter {
   // The branch for spread call optimization.
   mozilla::Maybe<InternalIfEmitter> ifNotOptimizable_;
 
-  mozilla::Maybe<AutoEmittingRunOnceLambda> autoEmittingRunOnceLambda_;
-
   mozilla::Maybe<PropOpEmitter> poe_;
   mozilla::Maybe<ElemOpEmitter> eoe_;
 
@@ -290,7 +280,7 @@ class MOZ_STACK_CLASS CallOrNewEmitter {
   }
 
  public:
-  MOZ_MUST_USE bool emitNameCallee(Handle<JSAtom*> name);
+  MOZ_MUST_USE bool emitNameCallee(const ParserAtom* name);
   MOZ_MUST_USE PropOpEmitter& prepareForPropCallee(bool isSuperProp);
   MOZ_MUST_USE ElemOpEmitter& prepareForElemCallee(bool isSuperElem,
                                                    bool isPrivateElem);

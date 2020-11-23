@@ -133,7 +133,7 @@ XPCOMUtils.defineLazyGetter(this, "newLinesRegex", () => /[\r\n]/g);
 XPCOMUtils.defineLazyGetter(
   this,
   "possibleProtocolRegex",
-  () => /^([a-z][a-z0-9.+\t-]*):/i
+  () => /^([a-z][a-z0-9.+\t-]*)(:|;)?(\/\/)?/i
 );
 
 // Regex used to match IPs. Note that these are not made to validate IPs, but
@@ -256,11 +256,7 @@ URIFixup.prototype = {
     return FIXUP_FLAG_FIX_SCHEME_TYPOS;
   },
 
-  createFixupURI(uriString, fixupFlags = FIXUP_FLAG_NONE, postData) {
-    return this.getFixupURIInfo(uriString, fixupFlags, postData).preferredURI;
-  },
-
-  getFixupURIInfo(uriString, fixupFlags = FIXUP_FLAG_NONE, postData) {
+  getFixupURIInfo(uriString, fixupFlags = FIXUP_FLAG_NONE) {
     let isPrivateContext = fixupFlags & FIXUP_FLAG_PRIVATE_CONTEXT;
 
     // Eliminate embedded newlines, which single-line text fields now allow,
@@ -276,13 +272,18 @@ URIFixup.prototype = {
 
     let info = new URIFixupInfo(uriString);
 
-    let scheme = extractScheme(uriString);
+    const {
+      scheme,
+      fixedSchemeUriString,
+      fixupChangedProtocol,
+    } = extractScheme(uriString, fixupFlags);
+    uriString = fixedSchemeUriString;
+    info.fixupChangedProtocol = fixupChangedProtocol;
+
     if (scheme == "view-source") {
-      info.preferredURI = info.fixedURI = fixupViewSource(
-        uriString,
-        fixupFlags,
-        postData
-      );
+      let { preferredURI, postData } = fixupViewSource(uriString, fixupFlags);
+      info.preferredURI = info.fixedURI = preferredURI;
+      info.postData = postData;
       return info;
     }
 
@@ -297,34 +298,7 @@ URIFixup.prototype = {
       }
     }
 
-    // Fix up common scheme typos.
-    // TODO: Use levenshtein distance here?
-    let isCommonProtocol = COMMON_PROTOCOLS.includes(scheme);
-    if (
-      fixupSchemeTypos &&
-      fixupFlags & FIXUP_FLAG_FIX_SCHEME_TYPOS &&
-      scheme &&
-      !isCommonProtocol
-    ) {
-      info.fixupChangedProtocol = [
-        ["ttp", "http"],
-        ["htp", "http"],
-        ["ttps", "https"],
-        ["tps", "https"],
-        ["ps", "https"],
-        ["htps", "https"],
-        ["ile", "file"],
-        ["le", "file"],
-      ].some(([typo, fixed]) => {
-        if (uriString.startsWith(typo + ":")) {
-          scheme = fixed;
-          uriString = scheme + uriString.substring(typo.length);
-          isCommonProtocol = true;
-          return true;
-        }
-        return false;
-      });
-    }
+    const isCommonProtocol = COMMON_PROTOCOLS.includes(scheme);
 
     let canHandleProtocol =
       scheme &&
@@ -363,7 +337,7 @@ URIFixup.prototype = {
       scheme &&
       !canHandleProtocol
     ) {
-      tryKeywordFixupForURIInfo(uriString, info, isPrivateContext, postData);
+      tryKeywordFixupForURIInfo(uriString, info, isPrivateContext);
     }
 
     if (info.fixedURI) {
@@ -403,6 +377,16 @@ URIFixup.prototype = {
       }
     }
 
+    // Handle "www.<something>" as a URI.
+    const asciiHost = info.fixedURI?.asciiHost;
+    if (
+      asciiHost?.length > 4 &&
+      asciiHost?.startsWith("www.") &&
+      asciiHost?.lastIndexOf(".") == 3
+    ) {
+      return info;
+    }
+
     // Memoize the public suffix check, since it may be expensive and should
     // only run once when necessary.
     let suffixInfo;
@@ -419,7 +403,7 @@ URIFixup.prototype = {
       fixupFlags & FIXUP_FLAG_ALLOW_KEYWORD_LOOKUP &&
       !inputHadDuffProtocol &&
       !checkSuffix(info).suffix &&
-      keywordURIFixup(uriString, info, isPrivateContext, postData)
+      keywordURIFixup(uriString, info, isPrivateContext)
     ) {
       return info;
     }
@@ -434,12 +418,7 @@ URIFixup.prototype = {
     // If we still haven't been able to construct a valid URI, try to force a
     // keyword match.
     if (keywordEnabled && fixupFlags & FIXUP_FLAG_ALLOW_KEYWORD_LOOKUP) {
-      tryKeywordFixupForURIInfo(
-        info.originalInput,
-        info,
-        isPrivateContext,
-        postData
-      );
+      tryKeywordFixupForURIInfo(info.originalInput, info, isPrivateContext);
     }
 
     if (!info.preferredURI) {
@@ -473,7 +452,7 @@ URIFixup.prototype = {
     return fixupFlags;
   },
 
-  keywordToURI(keyword, isPrivateContext, postData) {
+  keywordToURI(keyword, isPrivateContext) {
     if (Services.appinfo.processType == Ci.nsIXULRuntime.PROCESS_TYPE_CONTENT) {
       // There's no search service in the content process, thus all the calls
       // from it that care about keywords conversion should go through the
@@ -518,20 +497,7 @@ URIFixup.prototype = {
     }
     let submissionPostDataStream = submission.postData;
     if (submissionPostDataStream) {
-      if (postData) {
-        // TODO (Bug 1626016): instead of having postData as an optional out
-        // argument, it could be part of URIFixupInfo.
-        postData.value = submissionPostDataStream;
-      } else {
-        // The submission specifies POST data (i.e. the search
-        // engine's "method" is POST), but our caller didn't allow
-        // passing post data back. No point passing back a URL that
-        // won't load properly.
-        throw new Components.Exception(
-          "Didn't request POST data",
-          Cr.NS_ERROR_NOT_AVAILABLE
-        );
-      }
+      info.postData = submissionPostDataStream;
     }
 
     info.keywordProviderName = engine.name;
@@ -606,6 +572,13 @@ URIFixupInfo.prototype = {
   },
   get originalInput() {
     return this._originalInput || "";
+  },
+
+  set postData(postData) {
+    this._postData = postData;
+  },
+  get postData() {
+    return this._postData || null;
   },
 
   classID: Components.ID("{33d75835-722f-42c0-89cc-44f328e56a86}"),
@@ -734,17 +707,11 @@ function checkAndFixPublicSuffix(info) {
   return { suffix: "", hasUnknownSuffix: true };
 }
 
-function tryKeywordFixupForURIInfo(
-  uriString,
-  fixupInfo,
-  isPrivateContext,
-  postData
-) {
+function tryKeywordFixupForURIInfo(uriString, fixupInfo, isPrivateContext) {
   try {
     let keywordInfo = Services.uriFixup.keywordToURI(
       uriString,
-      isPrivateContext,
-      postData
+      isPrivateContext
     );
     fixupInfo.keywordProviderName = keywordInfo.keywordProviderName;
     fixupInfo.keywordAsSent = keywordInfo.keywordAsSent;
@@ -799,9 +766,9 @@ function maybeSetAlternateFixedURI(info, fixupFlags) {
   if (numDots == 0) {
     newHost = prefix + oldHost + suffix;
   } else if (numDots == 1) {
-    if (prefix && oldHost.toLowerCase() == prefix) {
+    if (prefix && oldHost == prefix) {
       newHost = oldHost + suffix;
-    } else if (suffix) {
+    } else if (suffix && !oldHost.startsWith(prefix)) {
       newHost = prefix + oldHost;
     }
   }
@@ -891,7 +858,7 @@ function fixupURIProtocol(uriString) {
  * @param {nsIInputStream} postData optional POST data for the search
  * @returns {boolean} Whether the keyword fixup was succesful.
  */
-function keywordURIFixup(uriString, fixupInfo, isPrivateContext, postData) {
+function keywordURIFixup(uriString, fixupInfo, isPrivateContext) {
   // Here is a few examples of strings that should be searched:
   // "what is mozilla"
   // "what is mozilla?"
@@ -913,8 +880,7 @@ function keywordURIFixup(uriString, fixupInfo, isPrivateContext, postData) {
     return tryKeywordFixupForURIInfo(
       fixupInfo.originalInput,
       fixupInfo,
-      isPrivateContext,
-      postData
+      isPrivateContext
     );
   }
 
@@ -951,8 +917,7 @@ function keywordURIFixup(uriString, fixupInfo, isPrivateContext, postData) {
     return tryKeywordFixupForURIInfo(
       fixupInfo.originalInput,
       fixupInfo,
-      isPrivateContext,
-      postData
+      isPrivateContext
     );
   }
 
@@ -961,12 +926,73 @@ function keywordURIFixup(uriString, fixupInfo, isPrivateContext, postData) {
 
 /**
  * Mimics the logic in Services.io.extractScheme, but avoids crossing XPConnect.
+ * This also tries to fixup the scheme if it was clearly mistyped.
  * @param {string} uriString the string to examine
- * @returns {string} a scheme or empty string if one could not be identified
+ * @param {integer} fixupFlags The original fixup flags
+ * @returns {object}
+ *          scheme: a typo fixed scheme or empty string if one could not be identified
+ *          fixedSchemeUriString: uri string with a typo fixed scheme
+ *          fixupChangedProtocol: true if the scheme is fixed up
  */
-function extractScheme(uriString) {
-  let matches = uriString.match(possibleProtocolRegex);
-  return matches ? matches[1].replace("\t", "").toLowerCase() : "";
+function extractScheme(uriString, fixupFlags = FIXUP_FLAG_NONE) {
+  const matches = uriString.match(possibleProtocolRegex);
+  const hasColon = matches?.[2] === ":";
+  const hasSlash2 = matches?.[3] === "//";
+
+  const isFixupSchemeTypos =
+    fixupSchemeTypos && fixupFlags & FIXUP_FLAG_FIX_SCHEME_TYPOS;
+
+  if (
+    !matches ||
+    (!hasColon && !hasSlash2) ||
+    (!hasColon && !isFixupSchemeTypos)
+  ) {
+    return {
+      scheme: "",
+      fixedSchemeUriString: uriString,
+      fixupChangedProtocol: false,
+    };
+  }
+
+  let scheme = matches[1].replace("\t", "").toLowerCase();
+  let fixedSchemeUriString = uriString;
+
+  if (isFixupSchemeTypos && hasSlash2) {
+    // Fix up typos for string that user would have intented as protocol.
+    const afterProtocol = uriString.substring(matches[0].length);
+    fixedSchemeUriString = `${scheme}://${afterProtocol}`;
+  }
+
+  let fixupChangedProtocol = false;
+
+  if (isFixupSchemeTypos) {
+    // Fix up common scheme typos.
+    // TODO: Use levenshtein distance here?
+    fixupChangedProtocol = [
+      ["ttp", "http"],
+      ["htp", "http"],
+      ["ttps", "https"],
+      ["tps", "https"],
+      ["ps", "https"],
+      ["htps", "https"],
+      ["ile", "file"],
+      ["le", "file"],
+    ].some(([typo, fixed]) => {
+      if (scheme === typo) {
+        scheme = fixed;
+        fixedSchemeUriString =
+          scheme + fixedSchemeUriString.substring(typo.length);
+        return true;
+      }
+      return false;
+    });
+  }
+
+  return {
+    scheme,
+    fixedSchemeUriString,
+    fixupChangedProtocol,
+  };
 }
 
 /**
@@ -976,10 +1002,10 @@ function extractScheme(uriString) {
  * @param {string} uriString The original string to fixup
  * @param {integer} fixupFlags The original fixup flags
  * @param {nsIInputStream} postData Optional POST data for the search
- * @returns {nsIURI} a fixed URI
+ * @returns {object} {preferredURI, postData} The fixed URI and relative postData
  * @throws if it's not possible to fixup the url
  */
-function fixupViewSource(uriString, fixupFlags, postData) {
+function fixupViewSource(uriString, fixupFlags) {
   // We disable keyword lookup and alternate URIs so that small typos don't
   // cause us to look at very different domains.
   let newFixupFlags =
@@ -990,7 +1016,7 @@ function fixupViewSource(uriString, fixupFlags, postData) {
   let innerURIString = uriString.substring(12).trim();
 
   // Prevent recursion.
-  let innerScheme = extractScheme(innerURIString);
+  const { scheme: innerScheme } = extractScheme(innerURIString);
   if (innerScheme == "view-source") {
     throw new Components.Exception(
       "Prevent view-source recursion",
@@ -998,16 +1024,15 @@ function fixupViewSource(uriString, fixupFlags, postData) {
     );
   }
 
-  let info = Services.uriFixup.getFixupURIInfo(
-    innerURIString,
-    newFixupFlags,
-    postData
-  );
+  let info = Services.uriFixup.getFixupURIInfo(innerURIString, newFixupFlags);
   if (!info.preferredURI) {
     throw new Components.Exception(
       "Couldn't build a valid uri",
       Cr.NS_ERROR_MALFORMED_URI
     );
   }
-  return Services.io.newURI("view-source:" + info.preferredURI.spec);
+  return {
+    preferredURI: Services.io.newURI("view-source:" + info.preferredURI.spec),
+    postData: info.postData,
+  };
 }

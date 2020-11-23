@@ -11,7 +11,6 @@
 /* :::::::::: button :::::::::: */
 
 button {
-  appearance: button;
   margin: 1px 5px 2px;
   min-width: 6.3em;
   color: ButtonText;
@@ -23,24 +22,21 @@ button {
   -moz-default-appearance: button-focus;
 }
 
-.button-icon {
-  margin-inline-end: 2px;
-}
-
 .button-text {
   margin: 0;
+  margin-inline-start: 2px;
   text-align: center;
 }
 
 /* .......... hover state .......... */
 
-button:hover:not(:-moz-any(:active,[disabled="true"],[open="true"],[checked="true"],[default="true"])) {
+button:hover:not(:is(:active,[disabled="true"],[open="true"],[checked="true"],[default="true"])) {
   color: -moz-buttonhovertext;
 }
 
 /* .......... active state .......... */
 
-button:-moz-any(:hover:active,[open="true"]):not([default="true"]):not([disabled="true"]) {
+button:is(:hover:active,[open="true"]):not([default="true"]):not([disabled="true"]) {
   color: -moz-gtk-buttonactivetext;
 }
 

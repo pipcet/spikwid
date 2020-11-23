@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 // Undefine windows version of LoadImage because our code uses that name.
+#include "mozilla/ScopeExit.h"
 #undef LoadImage
 
 #include "imgLoader.h"
@@ -50,6 +51,7 @@
 #include "nsIProgressEventSink.h"
 #include "nsIProtocolHandler.h"
 #include "nsImageModule.h"
+#include "nsMediaSniffer.h"
 #include "nsMimeTypes.h"
 #include "nsNetCID.h"
 #include "nsNetUtil.h"
@@ -523,8 +525,8 @@ class imgMemoryReporter final : public nsIMemoryReporter {
     nsAutoCString path(aPathPrefix);
     path.Append(aPathSuffix);
 
-    aHandleReport->Callback(EmptyCString(), path, aKind, UNITS_BYTES, aValue,
-                            desc, aData);
+    aHandleReport->Callback(""_ns, path, aKind, UNITS_BYTES, aValue, desc,
+                            aData);
   }
 
   static void RecordCounterForRequest(imgRequest* aRequest,
@@ -671,7 +673,7 @@ static bool ShouldLoadCachedImage(imgRequest* aImgRequest,
   /* Call content policies on cached images - Bug 1082837
    * Cached images are keyed off of the first uri in a redirect chain.
    * Hence content policies don't get a chance to test the intermediate hops
-   * or the final desitnation.  Here we test the final destination using
+   * or the final destination.  Here we test the final destination using
    * mFinalURI off of the imgRequest and passing it into content policies.
    * For Mixed Content Blocker, we do an additional check to determine if any
    * of the intermediary hops went through an insecure redirect with the
@@ -700,7 +702,7 @@ static bool ShouldLoadCachedImage(imgRequest* aImgRequest,
 
   int16_t decision = nsIContentPolicy::REJECT_REQUEST;
   rv = NS_CheckContentLoadPolicy(contentLocation, secCheckLoadInfo,
-                                 EmptyCString(),  // mime guess
+                                 ""_ns,  // mime guess
                                  &decision, nsContentUtils::GetContentPolicy());
   if (NS_FAILED(rv) || !NS_CP_ACCEPTED(decision)) {
     return false;
@@ -729,8 +731,8 @@ static bool ShouldLoadCachedImage(imgRequest* aImgRequest,
       decision = nsIContentPolicy::REJECT_REQUEST;
       rv = nsMixedContentBlocker::ShouldLoad(insecureRedirect, contentLocation,
                                              secCheckLoadInfo,
-                                             EmptyCString(),  // mime guess
-                                             true,            // aReportError
+                                             ""_ns,  // mime guess
+                                             true,   // aReportError
                                              &decision);
       if (NS_FAILED(rv) || !NS_CP_ACCEPTED(decision)) {
         return false;
@@ -1697,7 +1699,7 @@ bool imgLoader::ValidateRequestWithNewChannel(
       validator->AddProxy(proxy);
     }
 
-    return NS_SUCCEEDED(rv);
+    return true;
   }
   // We will rely on Necko to cache this request when it's possible, and to
   // tell imgCacheValidator::OnStartRequest whether the request came from its
@@ -1844,18 +1846,7 @@ bool imgLoader::ValidateEntry(
 
   bool validateRequest = false;
 
-  // If the request's loadId is the same as the aLoadingDocument, then it is ok
-  // to use this one because it has already been validated for this context.
-  //
-  // XXX: nullptr seems to be a 'special' key value that indicates that NO
-  //      validation is required.
-  // XXX: we also check the window ID because the loadID() can return a reused
-  //      pointer of a document. This can still happen for non-document image
-  //      cache entries.
-  void* key = (void*)aLoadingDocument;
-  uint64_t innerWindowID =
-      aLoadingDocument ? aLoadingDocument->InnerWindowID() : 0;
-  if (request->LoadId() != key || request->InnerWindowID() != innerWindowID) {
+  if (!request->CanReuseWithoutValidation(aLoadingDocument)) {
     // If we would need to revalidate this entry, but we're being told to
     // bypass the cache, we don't allow this entry to be used.
     if (aLoadFlags & nsIRequest::LOAD_BYPASS_CACHE) {
@@ -1875,10 +1866,10 @@ bool imgLoader::ValidateEntry(
             ("imgLoader::ValidateEntry validating cache entry. "
              "validateRequest = %d",
              validateRequest));
-  } else if (!key && MOZ_LOG_TEST(gImgLog, LogLevel::Debug)) {
+  } else if (!aLoadingDocument && MOZ_LOG_TEST(gImgLog, LogLevel::Debug)) {
     MOZ_LOG(gImgLog, LogLevel::Debug,
             ("imgLoader::ValidateEntry BYPASSING cache validation for %s "
-             "because of NULL LoadID",
+             "because of NULL loading document",
              aURI->GetSpecOrDefault().get()));
   }
 
@@ -1953,6 +1944,8 @@ bool imgLoader::ValidateEntry(
   if (validateRequest && aCanMakeNewChannel) {
     LOG_SCOPE(gImgLog, "imgLoader::ValidateRequest |cache hit| must validate");
 
+    uint64_t innerWindowID =
+        aLoadingDocument ? aLoadingDocument->InnerWindowID() : 0;
     return ValidateRequestWithNewChannel(
         request, aURI, aInitialDocumentURI, aReferrerInfo, aLoadGroup,
         aObserver, aLoadingDocument, innerWindowID, aLoadFlags, aLoadPolicyType,
@@ -2119,10 +2112,32 @@ imgLoader::LoadImageXPCOM(
   nsresult rv = LoadImage(
       aURI, aInitialDocumentURI, aReferrerInfo, aTriggeringPrincipal, 0,
       aLoadGroup, aObserver, aLoadingDocument, aLoadingDocument, aLoadFlags,
-      aCacheKey, aContentPolicyType, EmptyString(),
+      aCacheKey, aContentPolicyType, u""_ns,
       /* aUseUrgentStartForChannel */ false, /* aListPreload */ false, &proxy);
   *_retval = proxy;
   return rv;
+}
+
+static void MakeRequestStaticIfNeeded(
+    Document* aLoadingDocument, imgRequestProxy** aProxyAboutToGetReturned) {
+  if (!aLoadingDocument || !aLoadingDocument->IsStaticDocument()) {
+    return;
+  }
+
+  if (!*aProxyAboutToGetReturned) {
+    return;
+  }
+
+  RefPtr<imgRequestProxy> proxy = dont_AddRef(*aProxyAboutToGetReturned);
+  *aProxyAboutToGetReturned = nullptr;
+
+  RefPtr<imgRequestProxy> staticProxy =
+      proxy->GetStaticRequest(aLoadingDocument);
+  if (staticProxy != proxy) {
+    proxy->CancelAndForgetObserver(NS_BINDING_ABORTED);
+    proxy = std::move(staticProxy);
+  }
+  proxy.forget(aProxyAboutToGetReturned);
 }
 
 nsresult imgLoader::LoadImage(
@@ -2140,6 +2155,9 @@ nsresult imgLoader::LoadImage(
   if (!aURI) {
     return NS_ERROR_NULL_POINTER;
   }
+
+  auto makeStaticIfNeeded = mozilla::MakeScopeExit(
+      [&] { MakeRequestStaticIfNeeded(aLoadingDocument, _retval); });
 
 #ifdef MOZ_GECKO_PROFILER
   AUTO_PROFILER_LABEL_DYNAMIC_NSCSTRING("imgLoader::LoadImage", NETWORK,
@@ -2499,6 +2517,9 @@ nsresult imgLoader::LoadImageWithChannel(nsIChannel* channel,
 
   MOZ_ASSERT(NS_UsePrivateBrowsing(channel) == mRespectPrivacy);
 
+  auto makeStaticIfNeeded = mozilla::MakeScopeExit(
+      [&] { MakeRequestStaticIfNeeded(aLoadingDocument, _retval); });
+
   LOG_SCOPE(gImgLog, "imgLoader::LoadImageWithChannel");
   RefPtr<imgRequest> request;
 
@@ -2708,6 +2729,8 @@ imgLoader::GetMIMETypeFromContent(nsIRequest* aRequest,
 nsresult imgLoader::GetMimeTypeFromContent(const char* aContents,
                                            uint32_t aLength,
                                            nsACString& aContentType) {
+  nsAutoCString detected;
+
   /* Is it a GIF? */
   if (aLength >= 6 &&
       (!strncmp(aContents, "GIF87a", 6) || !strncmp(aContents, "GIF89a", 6))) {
@@ -2759,6 +2782,10 @@ nsresult imgLoader::GetMimeTypeFromContent(const char* aContents,
              !memcmp(aContents + 8, "WEBP", 4)) {
     aContentType.AssignLiteral(IMAGE_WEBP);
 
+  } else if (MatchesMP4(reinterpret_cast<const uint8_t*>(aContents), aLength,
+                        detected) &&
+             detected.Equals(IMAGE_AVIF)) {
+    aContentType.AssignLiteral(IMAGE_AVIF);
   } else {
     /* none of the above?  I give up */
     return NS_ERROR_NOT_AVAILABLE;

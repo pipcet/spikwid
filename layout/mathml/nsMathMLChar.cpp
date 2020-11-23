@@ -528,9 +528,7 @@ already_AddRefed<gfxTextRun> nsOpenTypeTable::MakeTextRun(
   detailedGlyph.mAdvance = NSToCoordRound(
       aAppUnitsPerDevPixel * aFontGroup->GetFirstValidFont()->GetGlyphHAdvance(
                                  aDrawTarget, aGlyph.glyphID));
-  textRun->SetGlyphs(0,
-                     gfxShapedText::CompressedGlyph::MakeComplex(true, true, 1),
-                     &detailedGlyph);
+  textRun->SetDetailedGlyphs(0, 1, &detailedGlyph);
 
   return textRun.forget();
 }
@@ -1806,41 +1804,17 @@ void nsDisplayMathMLCharDebug::Paint(nsDisplayListBuilder* aBuilder,
 void nsMathMLChar::Display(nsDisplayListBuilder* aBuilder, nsIFrame* aForFrame,
                            const nsDisplayListSet& aLists, uint32_t aIndex,
                            const nsRect* aSelectedRect) {
-  bool usingParentStyle = false;
   ComputedStyle* computedStyle = mComputedStyle;
-
-  if (mDraw == DRAW_NORMAL) {
-    // normal drawing if there is nothing special about this char
-    // Use our parent element's style
-    usingParentStyle = true;
-    computedStyle = aForFrame->Style();
-  }
-
   if (!computedStyle->StyleVisibility()->IsVisible()) {
     return;
   }
 
   const bool isSelected = aSelectedRect && !aSelectedRect->IsEmpty();
 
-  // if the leaf computed style that we use for stretchy chars has a background
-  // color we use it -- this feature is mostly used for testing and debugging
-  // purposes. Normally, users will set the background on the container frame.
-  // paint the selection background -- beware MathML frames overlap a lot
   if (isSelected) {
     aLists.BorderBackground()->AppendNewToTop<nsDisplayMathMLSelectionRect>(
         aBuilder, aForFrame, *aSelectedRect);
   } else if (mRect.width && mRect.height) {
-    if (!usingParentStyle &&
-        NS_GET_A(computedStyle->StyleBackground()->BackgroundColor(
-            computedStyle)) > 0) {
-      nsDisplayBackgroundImage::AppendBackgroundItemsToTop(
-          aBuilder, aForFrame, mRect + aBuilder->ToReferenceFrame(aForFrame),
-          aLists.BorderBackground(),
-          /* aAllowWillPaintBorderOptimization */ true, computedStyle);
-    }
-    // else
-    //  our container frame will take care of painting its background
-
 #if defined(DEBUG) && defined(SHOW_BOUNDING_BOX)
     // for visual debug
     aLists.BorderBackground()->AppendNewToTop<nsDisplayMathMLCharDebug>(

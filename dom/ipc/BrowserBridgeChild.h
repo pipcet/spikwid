@@ -49,9 +49,9 @@ class BrowserBridgeChild : public PBrowserBridgeChild {
 
   void NavigateByKey(bool aForward, bool aForDocumentNavigation);
 
-  void Activate();
+  void Activate(uint64_t aActionId);
 
-  void Deactivate(bool aWindowLowering);
+  void Deactivate(bool aWindowLowering, uint64_t aActionId);
 
   void SetIsUnderHiddenEmbedderElement(bool aIsUnderHiddenEmbedderElement);
 
@@ -85,6 +85,10 @@ class BrowserBridgeChild : public PBrowserBridgeChild {
 
   mozilla::ipc::IPCResult RecvMaybeFireEmbedderLoadEvents(
       EmbedderElementEventType aFireEventAtEmbeddingElement);
+
+  mozilla::ipc::IPCResult RecvIntrinsicSizeOrRatioChanged(
+      const Maybe<IntrinsicSize>& aIntrinsicSize,
+      const Maybe<AspectRatio>& aIntrinsicRatio);
 
   MOZ_CAN_RUN_SCRIPT_BOUNDARY
   mozilla::ipc::IPCResult RecvScrollRectIntoView(

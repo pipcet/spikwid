@@ -1,7 +1,11 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 use crate::android::AndroidHandler;
 use crate::command::{
     AddonInstallParameters, AddonUninstallParameters, GeckoContextParameters,
-    GeckoExtensionCommand, GeckoExtensionRoute, XblLocatorParameters, CHROME_ELEMENT_KEY,
+    GeckoExtensionCommand, GeckoExtensionRoute, CHROME_ELEMENT_KEY,
 };
 use marionette_rs::common::{
     Cookie as MarionetteCookie, Date as MarionetteDate, Frame as MarionetteFrame,
@@ -17,6 +21,7 @@ use marionette_rs::webdriver::{
     ScreenshotOptions, Script as MarionetteScript, Selector as MarionetteSelector,
     Url as MarionetteUrl, WindowRect as MarionetteWindowRect,
 };
+use mozdevice::AndroidStorageInput;
 use mozprofile::preferences::Pref;
 use mozprofile::profile::Profile;
 use mozrunner::runner::{FirefoxProcess, FirefoxRunner, Runner, RunnerProcess};
@@ -95,6 +100,8 @@ pub struct MarionetteSettings {
     /// Brings up the Browser Toolbox when starting Firefox,
     /// letting you debug internals.
     pub jsdebugger: bool,
+
+    pub android_storage: AndroidStorageInput,
 }
 
 #[derive(Default)]
@@ -131,6 +138,7 @@ impl MarionetteHandler {
 
             let options = FirefoxOptions::from_capabilities(
                 fx_capabilities.chosen_binary,
+                self.settings.android_storage,
                 &mut capabilities,
             )?;
             (options, capabilities)
@@ -188,10 +196,7 @@ impl MarionetteHandler {
     fn start_android(&mut self, port: u16, options: FirefoxOptions) -> WebDriverResult<()> {
         let android_options = options.android.unwrap();
 
-        let mut handler = AndroidHandler::new(&android_options);
-        handler
-            .connect(port)
-            .map_err(|e| WebDriverError::new(ErrorStatus::UnknownError, e.to_string()))?;
+        let handler = AndroidHandler::new(&android_options, port)?;
 
         // Profile management.
         let is_custom_profile = options.profile.is_some();
@@ -252,10 +257,9 @@ impl MarionetteHandler {
 
         let mut runner = FirefoxRunner::new(&binary, profile);
 
-        // double-dashed flags are not accepted on Windows systems
-        runner.arg("-marionette");
+        runner.arg("--marionette");
         if self.settings.jsdebugger {
-            runner.arg("-jsdebugger");
+            runner.arg("--jsdebugger");
         }
         if let Some(args) = options.args.as_ref() {
             runner.args(args);
@@ -331,7 +335,7 @@ impl WebDriverHandler<GeckoExtensionRoute> for MarionetteHandler {
             let mut capabilities_options = None;
             // First handle the status message which doesn't actually require a marionette
             // connection or message
-            if msg.command == Status {
+            if let Status = msg.command {
                 let (ready, message) = self
                     .connection
                     .lock()
@@ -863,27 +867,6 @@ impl MarionetteSession {
             Extension(ref extension) => match extension {
                 GetContext => WebDriverResponse::Generic(resp.into_value_response(true)?),
                 SetContext(_) => WebDriverResponse::Void,
-                XblAnonymousChildren(_) => {
-                    let els_vec = try_opt!(
-                        resp.result.as_array(),
-                        ErrorStatus::UnknownError,
-                        "Failed to interpret body as array"
-                    );
-                    let els = els_vec
-                        .iter()
-                        .map(|x| self.to_web_element(x))
-                        .collect::<Result<Vec<_>, _>>()?;
-
-                    WebDriverResponse::Generic(ValueResponse(serde_json::to_value(els)?))
-                }
-                XblAnonymousByAttribute(_, _) => {
-                    let el = self.to_web_element(try_opt!(
-                        resp.result.get("value"),
-                        ErrorStatus::UnknownError,
-                        "Failed to find value field"
-                    ))?;
-                    WebDriverResponse::Generic(ValueResponse(serde_json::to_value(el)?))
-                }
                 InstallAddon(_) => WebDriverResponse::Generic(resp.into_value_response(true)?),
                 UninstallAddon(_) => WebDriverResponse::Void,
                 TakeFullScreenshot => WebDriverResponse::Generic(resp.into_value_response(true)?),
@@ -1166,18 +1149,6 @@ impl MarionetteCommand {
                     InstallAddon(x) => (Some("Addon:Install"), Some(x.to_marionette())),
                     SetContext(x) => (Some("Marionette:SetContext"), Some(x.to_marionette())),
                     UninstallAddon(x) => (Some("Addon:Uninstall"), Some(x.to_marionette())),
-                    XblAnonymousByAttribute(e, x) => {
-                        let mut data = x.to_marionette()?;
-                        data.insert("element".to_string(), Value::String(e.to_string()));
-                        (Some("WebDriver:FindElement"), Some(Ok(data)))
-                    }
-                    XblAnonymousChildren(e) => {
-                        let mut data = Map::new();
-                        data.insert("using".to_owned(), serde_json::to_value("anon")?);
-                        data.insert("value".to_owned(), Value::Null);
-                        data.insert("element".to_string(), serde_json::to_value(e.to_string())?);
-                        (Some("WebDriver:FindElements"), Some(Ok(data)))
-                    }
                     _ => (None, None),
                 },
                 _ => (None, None),
@@ -1579,21 +1550,6 @@ impl ToMarionette<MarionettePrintMargins> for PrintMargins {
             left: self.left,
             right: self.right,
         })
-    }
-}
-
-impl ToMarionette<Map<String, Value>> for XblLocatorParameters {
-    fn to_marionette(&self) -> WebDriverResult<Map<String, Value>> {
-        let mut value = Map::new();
-        value.insert(self.name.to_owned(), Value::String(self.value.clone()));
-
-        let mut data = Map::new();
-        data.insert(
-            "using".to_owned(),
-            Value::String("anon attribute".to_string()),
-        );
-        data.insert("value".to_owned(), Value::Object(value));
-        Ok(data)
     }
 }
 

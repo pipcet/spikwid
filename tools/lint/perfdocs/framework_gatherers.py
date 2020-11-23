@@ -3,11 +3,14 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 from __future__ import absolute_import
 
+import collections
 import os
+import pathlib
 import re
 
-from perfdocs.utils import read_yaml
 from manifestparser import TestManifest
+from mozperftest.script import ScriptInfo
+from perfdocs.utils import read_yaml
 
 """
 This file is for framework specific gatherers since manifests
@@ -29,8 +32,10 @@ class FrameworkGatherer(object):
         self._yaml_path = yaml_path
         self._suite_list = {}
         self._test_list = {}
+        self._urls = {}
         self._manifest_path = ""
         self._manifest = None
+        self.script_infos = {}
 
     def get_manifest_path(self):
         """
@@ -69,11 +74,10 @@ class FrameworkGatherer(object):
         and paragraph as content mentioned.
         :param title: title of the section
         :param content: content of section paragraph
-        :param documentation: documentation object to add section to
-        :param type: type of the title heading
+        :param header_type: type of the title heading
         """
-        heading_map = {"H4": "-", "H5": "^"}
-        return [title, heading_map.get(type, "^") * len(title), content, ""]
+        heading_map = {"H3": "=", "H4": "-", "H5": "^"}
+        return [title, heading_map.get(header_type, "^") * len(title), content, ""]
 
 
 class RaptorGatherer(FrameworkGatherer):
@@ -117,7 +121,7 @@ class RaptorGatherer(FrameworkGatherer):
 
         return self._suite_list
 
-    def _get_subtests_from_ini(self, manifest_path):
+    def _get_subtests_from_ini(self, manifest_path, suite_name):
         """
         Returns a list of (sub)tests from an ini file containing the test definitions.
 
@@ -126,7 +130,17 @@ class RaptorGatherer(FrameworkGatherer):
         """
         test_manifest = TestManifest([manifest_path], strict=False)
         test_list = test_manifest.active_tests(exists=False, disabled=False)
-        subtest_list = {subtest["name"]: subtest["manifest"] for subtest in test_list}
+        subtest_list = {}
+        for subtest in test_list:
+            subtest_list[subtest["name"]] = subtest["manifest"]
+            self._urls[subtest["name"]] = {
+                "type": suite_name,
+                "url": subtest["test_url"],
+            }
+
+        self._urls = collections.OrderedDict(
+            sorted(self._urls.items(), key=lambda t: len(t[0]))
+        )
 
         return subtest_list
 
@@ -135,10 +149,10 @@ class RaptorGatherer(FrameworkGatherer):
         Returns a dictionary containing the tests in every suite ini file.
 
         :return dict: A dictionary with the following structure: {
-                "suite_name": [
+                "suite_name": {
                     'raptor_test1',
                     'raptor_test2'
-                ]
+                },
             }
         """
         if self._test_list:
@@ -152,18 +166,81 @@ class RaptorGatherer(FrameworkGatherer):
             if not self._test_list.get(suite_name):
                 self._test_list[suite_name] = {}
             for i, manifest_path in enumerate(manifest_paths, 1):
-                subtest_list = self._get_subtests_from_ini(manifest_path)
+                subtest_list = self._get_subtests_from_ini(manifest_path, suite_name)
                 self._test_list[suite_name].update(subtest_list)
 
         return self._test_list
 
-    def build_test_description(self, title, test_description=""):
-        return ["* " + title + " (" + test_description + ")"]
+    def build_test_description(self, title, test_description="", suite_name=""):
+        matcher = set()
+        for name, val in self._urls.items():
+            if title == name and suite_name == val["type"]:
+                matcher.add(val["url"])
+                break
+
+        if len(matcher) == 0:
+            for name, val in self._urls.items():
+                if title in name and suite_name == val["type"]:
+                    matcher.add(val["url"])
+                    break
+
+        return [
+            "* `"
+            + title
+            + " ("
+            + test_description
+            + ") "
+            + "<"
+            + matcher.pop()
+            + ">`__"
+        ]
+
+    def build_suite_section(self, title, content):
+        return self._build_section_with_header(
+            title.capitalize(), content, header_type="H4"
+        )
 
 
 class MozperftestGatherer(FrameworkGatherer):
     """
     Gatherer for the Mozperftest framework.
+    """
+
+    def get_test_list(self):
+        """
+        Returns a dictionary containing the tests that are in perftest.ini manifest.
+
+        :return dict: A dictionary with the following structure: {
+                "suite_name": {
+                    'perftest_test1',
+                    'perftest_test2',
+                },
+            }
+        """
+        for path in pathlib.Path(self.workspace_dir).rglob("perftest.ini"):
+            suite_name = re.sub(self.workspace_dir, "", os.path.dirname(path))
+
+            # Get the tests from perftest.ini
+            test_manifest = TestManifest([str(path)], strict=False)
+            test_list = test_manifest.active_tests(exists=False, disabled=False)
+            for test in test_list:
+                si = ScriptInfo(test["path"])
+                self.script_infos[si["name"]] = si
+                self._test_list.setdefault(suite_name, {}).update({si["name"]: ""})
+
+        return self._test_list
+
+    def build_test_description(self, title, test_description="", suite_name=""):
+        return [str(self.script_infos[title])]
+
+    def build_suite_section(self, title, content):
+        return self._build_section_with_header(title, content, header_type="H4")
+
+
+class TalosGatherer(FrameworkGatherer):
+    """
+    Gatherer for the Talos framework.
+    TODO - Bug 1674220
     """
 
     pass

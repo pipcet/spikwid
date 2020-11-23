@@ -97,29 +97,44 @@ class ChangesView {
       changesApp
     );
 
-    this.resourceWatcher.watchResources(
-      [
-        this.resourceWatcher.TYPES.CSS_CHANGE,
-        this.resourceWatcher.TYPES.DOCUMENT_EVENT,
-      ],
+    this.watchResources();
+  }
+
+  async watchResources() {
+    await this.resourceWatcher.watchResources(
+      [this.resourceWatcher.TYPES.DOCUMENT_EVENT],
+      {
+        onAvailable: this.onResourceAvailable,
+        // Ignore any DOCUMENT_EVENT resources that have occured in the past
+        // and are cached by the resource watcher, otherwise the Changes panel will
+        // react to them erroneously and interpret that the document is reloading *now*
+        // which leads to clearing all stored changes.
+        ignoreExistingResources: true,
+      }
+    );
+
+    await this.resourceWatcher.watchResources(
+      [this.resourceWatcher.TYPES.CSS_CHANGE],
       { onAvailable: this.onResourceAvailable }
     );
   }
 
-  onResourceAvailable({ resource }) {
-    if (resource.resourceType === this.resourceWatcher.TYPES.CSS_CHANGE) {
-      this.onAddChange(resource);
-      return;
-    }
+  onResourceAvailable(resources) {
+    for (const resource of resources) {
+      if (resource.resourceType === this.resourceWatcher.TYPES.CSS_CHANGE) {
+        this.onAddChange(resource);
+        continue;
+      }
 
-    if (resource.name === "dom-loading" && resource.targetFront.isTopLevel) {
-      // will-navigate doesn't work when we navigate to a new process,
-      // and for now, onTargetAvailable/onTargetDestroyed doesn't fire on navigation and
-      // only when navigating to another process.
-      // So we fallback on DOCUMENT_EVENTS to be notified when we navigates. When we
-      // navigate within the same process as well as when we navigate to a new process.
-      // (We would probably revisit that in bug 1632141)
-      this.onClearChanges();
+      if (resource.name === "dom-loading" && resource.targetFront.isTopLevel) {
+        // will-navigate doesn't work when we navigate to a new process,
+        // and for now, onTargetAvailable/onTargetDestroyed doesn't fire on navigation and
+        // only when navigating to another process.
+        // So we fallback on DOCUMENT_EVENTS to be notified when we navigate. When we
+        // navigate within the same process as well as when we navigate to a new process.
+        // (We would probably revisit that in bug 1632141)
+        this.onClearChanges();
+      }
     }
   }
 

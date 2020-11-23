@@ -1907,15 +1907,15 @@ nsresult nsLocalFile::CopyMove(nsIFile* aParentDir, const nsAString& aNewName,
           return NS_ERROR_FAILURE;
         }
 
-        rv = file->MoveTo(target, EmptyString());
+        rv = file->MoveTo(target, u""_ns);
         if (NS_FAILED(rv)) {
           return rv;
         }
       } else {
         if (followSymlinks) {
-          rv = file->CopyToFollowingLinks(target, EmptyString());
+          rv = file->CopyToFollowingLinks(target, u""_ns);
         } else {
-          rv = file->CopyTo(target, EmptyString());
+          rv = file->CopyTo(target, u""_ns);
         }
         if (NS_FAILED(rv)) {
           return rv;
@@ -1976,6 +1976,12 @@ nsLocalFile::CopyToFollowingLinks(nsIFile* aNewParentDir,
 NS_IMETHODIMP
 nsLocalFile::MoveTo(nsIFile* aNewParentDir, const nsAString& aNewName) {
   return CopyMove(aNewParentDir, aNewName, Move);
+}
+
+NS_IMETHODIMP
+nsLocalFile::MoveToFollowingLinks(nsIFile* aNewParentDir,
+                                  const nsAString& aNewName) {
+  return CopyMove(aNewParentDir, aNewName, Move | FollowSymlinks);
 }
 
 NS_IMETHODIMP
@@ -3167,7 +3173,7 @@ nsLocalFile::CopyToNative(nsIFile* aNewParentDir, const nsACString& aNewName) {
   CHECK_mWorkingPath();
 
   if (aNewName.IsEmpty()) {
-    return CopyTo(aNewParentDir, EmptyString());
+    return CopyTo(aNewParentDir, u""_ns);
   }
 
   nsAutoString tmp;
@@ -3183,7 +3189,7 @@ NS_IMETHODIMP
 nsLocalFile::CopyToFollowingLinksNative(nsIFile* aNewParentDir,
                                         const nsACString& aNewName) {
   if (aNewName.IsEmpty()) {
-    return CopyToFollowingLinks(aNewParentDir, EmptyString());
+    return CopyToFollowingLinks(aNewParentDir, u""_ns);
   }
 
   nsAutoString tmp;
@@ -3201,13 +3207,32 @@ nsLocalFile::MoveToNative(nsIFile* aNewParentDir, const nsACString& aNewName) {
   CHECK_mWorkingPath();
 
   if (aNewName.IsEmpty()) {
-    return MoveTo(aNewParentDir, EmptyString());
+    return MoveTo(aNewParentDir, u""_ns);
   }
 
   nsAutoString tmp;
   nsresult rv = NS_CopyNativeToUnicode(aNewName, tmp);
   if (NS_SUCCEEDED(rv)) {
     return MoveTo(aNewParentDir, tmp);
+  }
+
+  return rv;
+}
+
+NS_IMETHODIMP
+nsLocalFile::MoveToFollowingLinksNative(nsIFile* aNewParentDir,
+                                        const nsACString& aNewName) {
+  // Check we are correctly initialized.
+  CHECK_mWorkingPath();
+
+  if (aNewName.IsEmpty()) {
+    return MoveToFollowingLinks(aNewParentDir, u""_ns);
+  }
+
+  nsAutoString tmp;
+  nsresult rv = NS_CopyNativeToUnicode(aNewName, tmp);
+  if (NS_SUCCEEDED(rv)) {
+    return MoveToFollowingLinks(aNewParentDir, tmp);
   }
 
   return rv;

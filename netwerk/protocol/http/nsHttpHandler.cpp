@@ -18,6 +18,7 @@
 #include "nsStandardURL.h"
 #include "LoadContextInfo.h"
 #include "nsCategoryManagerUtils.h"
+#include "nsDirectoryServiceDefs.h"
 #include "nsSocketProviderService.h"
 #include "nsISocketProvider.h"
 #include "nsPrintfCString.h"
@@ -121,8 +122,6 @@
 #define TCP_FAST_OPEN_STALLS_TIMEOUT \
   "network.tcp.tcp_fastopen_http_stalls_timeout"
 
-#define ACCEPT_HEADER_NAVIGATION \
-  "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
 #define ACCEPT_HEADER_STYLE "text/css,*/*;q=0.1"
 #define ACCEPT_HEADER_ALL "*/*"
 
@@ -205,6 +204,14 @@ static nsCString ImageAcceptHeader() {
   return mimeTypes;
 }
 
+static nsCString DocumentAcceptHeader(const nsCString& aImageAcceptHeader) {
+  nsPrintfCString mimeTypes(
+      "text/html,application/xhtml+xml,application/xml;q=0.9,%s;q=0.8",
+      aImageAcceptHeader.get());
+
+  return std::move(mimeTypes);
+}
+
 nsHttpHandler::nsHttpHandler()
     : mHttpVersion(HttpVersion::v1_1),
       mProxyHttpVersion(HttpVersion::v1_1),
@@ -245,6 +252,7 @@ nsHttpHandler::nsHttpHandler()
       mQoSBits(0x00),
       mEnforceAssocReq(false),
       mImageAcceptHeader(ImageAcceptHeader()),
+      mDocumentAcceptHeader(DocumentAcceptHeader(ImageAcceptHeader())),
       mLastUniqueID(NowInSeconds()),
       mSessionStartTime(0),
       mLegacyAppName("Mozilla"),
@@ -287,7 +295,6 @@ nsHttpHandler::nsHttpHandler()
       mRequestTokenBucketHz(100),
       mRequestTokenBucketBurst(32),
       mCriticalRequestPrioritization(true),
-      mRespectDocumentNoSniff(true),
       mTCPKeepaliveShortLivedEnabled(false),
       mTCPKeepaliveShortLivedTimeS(60),
       mTCPKeepaliveShortLivedIdleTimeS(10),
@@ -316,7 +323,7 @@ nsHttpHandler::nsHttpHandler()
       mNextChannelId(1),
       mLastActiveTabLoadOptimizationLock(
           "nsHttpConnectionMgr::LastActiveTabLoadOptimization"),
-      mSpdyBlacklistLock("nsHttpHandler::SpdyBlacklist"),
+      mHttpExclusionLock("nsHttpHandler::HttpExclusion"),
       mThroughCaptivePortal(false) {
   LOG(("Creating nsHttpHandler [this=%p].\n", this));
 
@@ -479,12 +486,31 @@ nsresult nsHttpHandler::Init() {
         Preferences::GetBool(HTTP_PREF("active_tab_priority"), true);
   }
 
+  auto initQLogDir = [&]() {
+    nsCOMPtr<nsIFile> qlogDir;
+    nsresult rv =
+        NS_GetSpecialDirectory(NS_OS_TEMP_DIR, getter_AddRefs(qlogDir));
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return EmptyCString();
+    }
+
+    nsAutoCString dirName("qlog_");
+    dirName.AppendInt(mProcessId);
+    rv = qlogDir->AppendNative(dirName);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return EmptyCString();
+    }
+
+    return qlogDir->HumanReadablePath();
+  };
+  mHttp3QlogDir = initQLogDir();
+
   // monitor some preference changes
   Preferences::RegisterPrefixCallbacks(nsHttpHandler::PrefsChanged,
                                        gCallbackPrefs, this);
   PrefsChanged(nullptr);
-  Telemetry::ScalarSet(
-      Telemetry::ScalarID::NETWORKING_HTTP3_ENABLED, mHttp3Enabled);
+  Telemetry::ScalarSet(Telemetry::ScalarID::NETWORKING_HTTP3_ENABLED,
+                       mHttp3Enabled);
 
   mMisc.AssignLiteral("rv:" MOZILLA_UAVERSION);
 
@@ -569,6 +595,7 @@ nsresult nsHttpHandler::Init() {
     obsService->AddObserver(this, "intl:app-locales-changed", true);
     obsService->AddObserver(this, "browser-delayed-startup-finished", true);
     obsService->AddObserver(this, "network:captive-portal-connectivity", true);
+    obsService->AddObserver(this, "network:reset-http3-excluded-list", true);
 
     if (!IsNeckoChild()) {
       obsService->AddObserver(
@@ -593,7 +620,16 @@ nsresult nsHttpHandler::Init() {
   if (pc) {
     pc->GetParentalControlsEnabled(&mParentalControlEnabled);
   }
+
   return NS_OK;
+}
+
+const nsCString& nsHttpHandler::Http3QlogDir() {
+  if (StaticPrefs::network_http_http3_enable_qlog()) {
+    return mHttp3QlogDir;
+  }
+
+  return EmptyCString();
 }
 
 void nsHttpHandler::MakeNewRequestTokenBucket() {
@@ -669,7 +705,7 @@ nsresult nsHttpHandler::AddStandardRequestHeaders(
   nsAutoCString accept;
   if (aContentPolicyType == nsIContentPolicy::TYPE_DOCUMENT ||
       aContentPolicyType == nsIContentPolicy::TYPE_SUBDOCUMENT) {
-    accept.Assign(ACCEPT_HEADER_NAVIGATION);
+    accept.Assign(mDocumentAcceptHeader);
   } else if (aContentPolicyType == nsIContentPolicy::TYPE_IMAGE ||
              aContentPolicyType == nsIContentPolicy::TYPE_IMAGESET) {
     accept.Assign(mImageAcceptHeader);
@@ -1061,15 +1097,13 @@ void nsHttpHandler::InitUserAgentComponents() {
     }
   }
 #  elif defined(XP_MACOSX)
-#    if defined(__ppc__)
-  mOscpu.AssignLiteral("PPC Mac OS X");
-#    elif defined(__i386__) || defined(__x86_64__)
-  mOscpu.AssignLiteral("Intel Mac OS X");
-#    endif
   SInt32 majorVersion = nsCocoaFeatures::macOSVersionMajor();
   SInt32 minorVersion = nsCocoaFeatures::macOSVersionMinor();
-  mOscpu += nsPrintfCString(" %d.%d", static_cast<int>(majorVersion),
-                            static_cast<int>(minorVersion));
+
+  // Always return an "Intel" UA string, even on ARM64 macOS like Safari does.
+  mOscpu =
+      nsPrintfCString("Intel Mac OS X %d.%d", static_cast<int>(majorVersion),
+                      static_cast<int>(minorVersion));
 #  elif defined(XP_UNIX)
   struct utsname name;
   int ret = uname(&name);
@@ -1183,7 +1217,7 @@ void nsHttpHandler::PrefsChanged(const char* pref) {
         }
       }
     } else {
-      mDeviceModelId = EmptyCString();
+      mDeviceModelId.Truncate();
     }
     mUserAgentIsDirty = true;
   }
@@ -1603,14 +1637,6 @@ void nsHttpHandler::PrefsChanged(const char* pref) {
     if (NS_SUCCEEDED(rv)) mCriticalRequestPrioritization = cVar;
   }
 
-  // Whether to respect X-Content-Type nosniff on Page loads
-  if (PREF_CHANGED("dom.security.respect_document_nosniff")) {
-    rv = Preferences::GetBool("dom.security.respect_document_nosniff", &cVar);
-    if (NS_SUCCEEDED(rv)) {
-      mRespectDocumentNoSniff = cVar;
-    }
-  }
-
   // on transition of network.http.diagnostics to true print
   // a bunch of information to the console
   if (pref && PREF_CHANGED(HTTP_PREF("diagnostics"))) {
@@ -1976,8 +2002,11 @@ void nsHttpHandler::PrefsChanged(const char* pref) {
     }
   }
 
-  if (PREF_CHANGED("image.http.accept") || PREF_CHANGED("image.avif.enabled") ||
-      PREF_CHANGED("image.webp.enabled")) {
+  const bool imageAcceptPrefChanged = PREF_CHANGED("image.http.accept") ||
+                                      PREF_CHANGED("image.avif.enabled") ||
+                                      PREF_CHANGED("image.webp.enabled");
+
+  if (imageAcceptPrefChanged) {
     nsAutoCString userSetImageAcceptHeader;
 
     if (Preferences::HasUserValue("image.http.accept")) {
@@ -1992,6 +2021,57 @@ void nsHttpHandler::PrefsChanged(const char* pref) {
       mImageAcceptHeader.Assign(ImageAcceptHeader());
     } else {
       mImageAcceptHeader.Assign(userSetImageAcceptHeader);
+    }
+  }
+
+  if (PREF_CHANGED("network.http.accept") || imageAcceptPrefChanged) {
+    nsAutoCString userSetDocumentAcceptHeader;
+
+    if (Preferences::HasUserValue("network.http.accept")) {
+      rv = Preferences::GetCString("network.http.accept",
+                                   userSetDocumentAcceptHeader);
+      if (NS_FAILED(rv)) {
+        userSetDocumentAcceptHeader.Truncate();
+      }
+    }
+
+    if (userSetDocumentAcceptHeader.IsEmpty()) {
+      mDocumentAcceptHeader.Assign(DocumentAcceptHeader(mImageAcceptHeader));
+    } else {
+      mDocumentAcceptHeader.Assign(userSetDocumentAcceptHeader);
+    }
+  }
+
+  if (PREF_CHANGED(HTTP_PREF("http3.alt-svc-mapping-for-testing"))) {
+    nsAutoCString altSvcMappings;
+    rv = Preferences::GetCString(HTTP_PREF("http3.alt-svc-mapping-for-testing"),
+                                 altSvcMappings);
+    if (NS_SUCCEEDED(rv)) {
+      nsCCharSeparatedTokenizer tokenizer(altSvcMappings, ',');
+      while (tokenizer.hasMoreTokens()) {
+        nsAutoCString token(tokenizer.nextToken());
+        int32_t index = token.Find(";");
+        if (index != kNotFound) {
+          auto* map = new nsCString(Substring(token, index + 1));
+          mAltSvcMappingTemptativeMap.Put(Substring(token, 0, index), map);
+        }
+      }
+    }
+  }
+
+  if (PREF_CHANGED(HTTP_PREF("http3.enable_qlog"))) {
+    // Initialize the directory.
+    nsCOMPtr<nsIFile> qlogDir;
+    if (Preferences::GetBool(HTTP_PREF("http3.enable_qlog")) &&
+        !mHttp3QlogDir.IsEmpty() &&
+        NS_SUCCEEDED(NS_NewNativeLocalFile(mHttp3QlogDir, false,
+                                           getter_AddRefs(qlogDir)))) {
+      // Here we do main thread IO, but since this only happens
+      // when enabling a developer feature it's not a problem for users.
+      rv = qlogDir->Create(nsIFile::DIRECTORY_TYPE, 0755);
+      if (NS_FAILED(rv) && rv != NS_ERROR_FILE_ALREADY_EXISTS) {
+        NS_WARNING("Creating qlog dir failed");
+      }
     }
   }
 
@@ -2423,6 +2503,9 @@ nsHttpHandler::Observe(nsISupports* subject, const char* topic,
   } else if (!strcmp(topic, "network:captive-portal-connectivity")) {
     nsAutoCString data8 = NS_ConvertUTF16toUTF8(data);
     mThroughCaptivePortal = data8.EqualsLiteral("captive");
+  } else if (!strcmp(topic, "network:reset-http3-excluded-list")) {
+    MutexAutoLock lock(mHttpExclusionLock);
+    mExcludedHttp3Origins.Clear();
   }
 
   return NS_OK;
@@ -2565,13 +2648,13 @@ nsresult nsHttpHandler::SpeculativeConnectInternal(
   nsAutoCString username;
   aURI->GetUsername(username);
 
-  // TODO For now pass EmptyCString() for topWindowOrigin for all speculative
+  // TODO For now pass ""_ns for topWindowOrigin for all speculative
   // connection attempts, but ideally we should pass the accurate top window
   // origin here.  This would require updating the nsISpeculativeConnect API
   // and all of its consumers.
-  RefPtr<nsHttpConnectionInfo> ci = new nsHttpConnectionInfo(
-      host, port, EmptyCString(), username, EmptyCString(), nullptr,
-      originAttributes, aURI->SchemeIs("https"));
+  RefPtr<nsHttpConnectionInfo> ci =
+      new nsHttpConnectionInfo(host, port, ""_ns, username, ""_ns, nullptr,
+                               originAttributes, aURI->SchemeIs("https"));
   ci->SetAnonymous(anonymous);
 
   return SpeculativeConnect(ci, aCallbacks);
@@ -2745,7 +2828,11 @@ void nsHttpHandler::ShutdownConnectionManager() {
 
 nsresult nsHttpHandler::NewChannelId(uint64_t& channelId) {
   channelId =
-      ((static_cast<uint64_t>(mProcessId) << 32) & 0xFFFFFFFF00000000LL) |
+      // channelId is sometimes passed to JavaScript code (e.g. devtools),
+      // and since on Linux PID_MAX_LIMIT is 2^22 we cannot
+      // shift PID more than 31 bits left. Otherwise resulting values
+      // will be exceed safe JavaScript integer range.
+      ((static_cast<uint64_t>(mProcessId) << 31) & 0xFFFFFFFF80000000LL) |
       mNextChannelId++;
   return NS_OK;
 }
@@ -2777,19 +2864,34 @@ bool nsHttpHandler::IsBeforeLastActiveTabLoadOptimization(
          when <= mLastActiveTabLoadOptimizationHit;
 }
 
-void nsHttpHandler::BlacklistSpdy(const nsHttpConnectionInfo* ci) {
+void nsHttpHandler::ExcludeHttp2(const nsHttpConnectionInfo* ci) {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
-  mConnMgr->BlacklistSpdy(ci);
-  if (!mBlacklistedSpdyOrigins.Contains(ci->GetOrigin())) {
-    MutexAutoLock lock(mSpdyBlacklistLock);
-    mBlacklistedSpdyOrigins.PutEntry(ci->GetOrigin());
+  mConnMgr->ExcludeHttp2(ci);
+  if (!mExcludedHttp2Origins.Contains(ci->GetOrigin())) {
+    MutexAutoLock lock(mHttpExclusionLock);
+    mExcludedHttp2Origins.PutEntry(ci->GetOrigin());
   }
 }
 
-bool nsHttpHandler::IsSpdyBlacklisted(const nsHttpConnectionInfo* ci) {
-  MutexAutoLock lock(mSpdyBlacklistLock);
-  return mBlacklistedSpdyOrigins.Contains(ci->GetOrigin());
+bool nsHttpHandler::IsHttp2Excluded(const nsHttpConnectionInfo* ci) {
+  MutexAutoLock lock(mHttpExclusionLock);
+  return mExcludedHttp2Origins.Contains(ci->GetOrigin());
+}
+
+void nsHttpHandler::ExcludeHttp3(const nsHttpConnectionInfo* ci) {
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
+
+  mConnMgr->ExcludeHttp3(ci);
+  if (!mExcludedHttp3Origins.Contains(ci->GetRoutedHost())) {
+    MutexAutoLock lock(mHttpExclusionLock);
+    mExcludedHttp3Origins.PutEntry(ci->GetRoutedHost());
+  }
+}
+
+bool nsHttpHandler::IsHttp3Excluded(const nsACString& aRoutedHost) {
+  MutexAutoLock lock(mHttpExclusionLock);
+  return mExcludedHttp3Origins.Contains(aRoutedHost);
 }
 
 HttpTrafficAnalyzer* nsHttpHandler::GetHttpTrafficAnalyzer() {
@@ -2910,6 +3012,56 @@ void nsHttpHandler::SetHttpHandlerInitArgs(const HttpHandlerInitArgs& aArgs) {
 void nsHttpHandler::SetDeviceModelId(const nsCString& aModelId) {
   MOZ_ASSERT(XRE_IsSocketProcess());
   mDeviceModelId = aModelId;
+}
+
+void nsHttpHandler::MaybeAddAltSvcForTesting(
+    nsIURI* aUri, const nsACString& aUsername,
+    const nsACString& aTopWindowOrigin, bool aPrivateBrowsing, bool aIsolated,
+    nsIInterfaceRequestor* aCallbacks,
+    const OriginAttributes& aOriginAttributes) {
+  if (!IsHttp3Enabled() || mAltSvcMappingTemptativeMap.IsEmpty()) {
+    return;
+  }
+
+  bool isHttps = false;
+  if (NS_FAILED(aUri->SchemeIs("https", &isHttps)) || !isHttps) {
+    // Only set forr HTTPS.
+    return;
+  }
+
+  nsAutoCString originHost;
+  if (NS_FAILED(aUri->GetAsciiHost(originHost))) {
+    return;
+  }
+
+  nsCString* map = mAltSvcMappingTemptativeMap.Get(originHost);
+  if (map) {
+    int32_t originPort = 80;
+    aUri->GetPort(&originPort);
+    LOG(("nsHttpHandler::MaybeAddAltSvcForTesting for %s map: %s",
+         originHost.get(), PromiseFlatCString(*map).get()));
+    AltSvcMapping::ProcessHeader(*map, nsCString("https"), originHost,
+                                 originPort, aUsername, aTopWindowOrigin,
+                                 aPrivateBrowsing, aIsolated, aCallbacks,
+                                 nullptr, 0, aOriginAttributes, true);
+  }
+}
+
+bool nsHttpHandler::UseHTTPSRRAsAltSvcEnabled() const {
+  return StaticPrefs::network_dns_use_https_rr_as_altsvc();
+}
+
+bool nsHttpHandler::EchConfigEnabled() const {
+  return StaticPrefs::network_dns_echconfig_enabled();
+}
+
+bool nsHttpHandler::FallbackToOriginIfConfigsAreECHAndAllFailed() const {
+  return StaticPrefs::
+      network_dns_echconfig_fallback_to_origin_when_all_failed();
+}
+
+bool nsHttpHandler::UseHTTPSRRForSpeculativeConnection() const {
+  return StaticPrefs::network_dns_use_https_rr_for_speculative_connection();
 }
 
 }  // namespace mozilla::net

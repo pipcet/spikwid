@@ -43,6 +43,7 @@
 #include "mozilla/StaticPrefs_layout.h"
 #include "mozilla/StaticPrefs_widget.h"
 #include "nsWindow.h"
+#include "nsLayoutUtils.h"
 #include "nsNativeBasicTheme.h"
 
 #ifdef MOZ_X11
@@ -219,6 +220,9 @@ bool nsNativeThemeGTK::GetGtkWidgetAndState(StyleAppearance aAppearance,
                                             WidgetNodeType& aGtkWidgetType,
                                             GtkWidgetState* aState,
                                             gint* aWidgetFlags) {
+  if (aWidgetFlags) {
+    *aWidgetFlags = 0;
+  }
   if (aState) {
     memset(aState, 0, sizeof(GtkWidgetState));
 
@@ -1860,8 +1864,6 @@ nsNativeThemeGTK::ThemeSupportsWidget(nsPresContext* aPresContext,
     case StyleAppearance::SpinnerUpbutton:
     case StyleAppearance::SpinnerDownbutton:
     case StyleAppearance::SpinnerTextfield:
-      // case StyleAppearance::Scrollbar:  (n/a for gtk)
-      // case StyleAppearance::ScrollbarSmall: (n/a for gtk)
     case StyleAppearance::ScrollbarbuttonUp:
     case StyleAppearance::ScrollbarbuttonDown:
     case StyleAppearance::ScrollbarbuttonLeft:
@@ -1893,8 +1895,6 @@ nsNativeThemeGTK::ThemeSupportsWidget(nsPresContext* aPresContext,
     case StyleAppearance::Window:
     case StyleAppearance::Dialog:
     case StyleAppearance::MozGtkInfoBar:
-      return !IsWidgetStyled(aPresContext, aFrame, aAppearance);
-
     case StyleAppearance::MozWindowButtonBox:
     case StyleAppearance::MozWindowButtonClose:
     case StyleAppearance::MozWindowButtonMinimize:
@@ -1902,10 +1902,7 @@ nsNativeThemeGTK::ThemeSupportsWidget(nsPresContext* aPresContext,
     case StyleAppearance::MozWindowButtonRestore:
     case StyleAppearance::MozWindowTitlebar:
     case StyleAppearance::MozWindowTitlebarMaximized:
-      // GtkHeaderBar is available on GTK 3.10+, which is used for styling
-      // title bars and title buttons.
-      return gtk_check_version(3, 10, 0) == nullptr &&
-             !IsWidgetStyled(aPresContext, aFrame, aAppearance);
+      return !IsWidgetStyled(aPresContext, aFrame, aAppearance);
 
     case StyleAppearance::MozMenulistArrowButton:
       if (aFrame && aFrame->GetWritingMode().IsVertical()) {

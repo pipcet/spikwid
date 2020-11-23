@@ -13,6 +13,8 @@
 namespace mozilla {
 namespace dom {
 
+class ArrayBufferBuilder;
+class BlobImpl;
 class DOMString;
 class XMLHttpRequestStringBuffer;
 class XMLHttpRequestStringSnapshot;
@@ -61,14 +63,15 @@ class XMLHttpRequestString final {
 class MOZ_STACK_CLASS XMLHttpRequestStringWriterHelper final {
  public:
   explicit XMLHttpRequestStringWriterHelper(XMLHttpRequestString& aString);
+  ~XMLHttpRequestStringWriterHelper();
 
   /**
    * The existing length of the string. Do not call during BulkWrite().
    */
   uint32_t Length() const;
 
-  mozilla::BulkWriteHandle<char16_t> BulkWrite(uint32_t aCapacity,
-                                               nsresult& aRv);
+  mozilla::Result<mozilla::BulkWriteHandle<char16_t>, nsresult> BulkWrite(
+      uint32_t aCapacity);
 
  private:
   XMLHttpRequestStringWriterHelper(const XMLHttpRequestStringWriterHelper&) =
@@ -126,6 +129,7 @@ class MOZ_STACK_CLASS XMLHttpRequestStringSnapshotReaderHelper final {
  public:
   explicit XMLHttpRequestStringSnapshotReaderHelper(
       XMLHttpRequestStringSnapshot& aSnapshot);
+  ~XMLHttpRequestStringSnapshotReaderHelper();
 
   const char16_t* Buffer() const;
 

@@ -11,11 +11,11 @@ const TEST_PATH = "browser/devtools/client/webconsole/test/browser/";
 const TEST_FILE = TEST_PATH + "test-trackingprotection-securityerrors.html";
 const TEST_FILE_THIRD_PARTY_ONLY =
   TEST_PATH + "test-trackingprotection-securityerrors-thirdpartyonly.html";
-const TEST_URI = "http://example.com/" + TEST_FILE;
+const TEST_URI = "https://example.com/" + TEST_FILE;
 const TEST_URI_THIRD_PARTY_ONLY =
-  "http://example.com/" + TEST_FILE_THIRD_PARTY_ONLY;
-const TRACKER_URL = "http://tracking.example.org/";
-const THIRD_PARTY_URL = "http://example.org/";
+  "https://example.com/" + TEST_FILE_THIRD_PARTY_ONLY;
+const TRACKER_URL = "https://tracking.example.org/";
+const THIRD_PARTY_URL = "https://example.org/";
 const BLOCKED_URL = `\u201c${TRACKER_URL +
   TEST_PATH +
   "cookieSetter.html"}\u201d`;
@@ -62,7 +62,7 @@ add_task(async function testContentBlockingMessage() {
   const message = await waitFor(() =>
     findMessage(
       hud,
-      `The resource at \u201chttp://tracking.example.com/\u201d was blocked because ` +
+      `The resource at \u201chttps://tracking.example.com/\u201d was blocked because ` +
         `content blocking is enabled`
     )
   );
@@ -94,6 +94,9 @@ add_task(async function testForeignCookieBlockedMessage() {
     message,
     getStorageErrorUrl("CookieBlockedForeign")
   );
+  // We explicitely destroy the toolbox in order to ensure waiting for its full destruction
+  // and avoid leak / pending requests
+  await hud.toolbox.destroy();
   win.close();
 });
 
@@ -124,6 +127,9 @@ add_task(async function testLimitForeignCookieBlockedMessage() {
     message,
     getStorageErrorUrl("CookieBlockedForeign")
   );
+  // We explicitely destroy the toolbox in order to ensure waiting for its full destruction
+  // and avoid leak / pending requests
+  await hud.toolbox.destroy();
   win.close();
 });
 
@@ -144,6 +150,9 @@ add_task(async function testAllCookieBlockedMessage() {
     message,
     getStorageErrorUrl("CookieBlockedAll")
   );
+  // We explicitely destroy the toolbox in order to ensure waiting for its full destruction
+  // and avoid leak / pending requests
+  await hud.toolbox.destroy();
   win.close();
 });
 
@@ -164,6 +173,9 @@ add_task(async function testTrackerCookieBlockedMessage() {
     message,
     getStorageErrorUrl("CookieBlockedTracker")
   );
+  // We explicitely destroy the toolbox in order to ensure waiting for its full destruction
+  // and avoid leak / pending requests
+  await hud.toolbox.destroy();
   win.close();
 });
 
@@ -184,6 +196,9 @@ add_task(async function testForeignCookiePartitionedMessage() {
     message,
     getStorageErrorUrl("CookiePartitionedForeign")
   );
+  // We explicitely destroy the toolbox in order to ensure waiting for its full destruction
+  // and avoid leak / pending requests
+  await hud.toolbox.destroy();
   win.close();
 });
 
@@ -212,6 +227,9 @@ add_task(async function testCookieBlockedByPermissionMessage() {
     message,
     getStorageErrorUrl("CookieBlockedByPermission")
   );
+  // We explicitely destroy the toolbox in order to ensure waiting for its full destruction
+  // and avoid leak / pending requests
+  await hud.toolbox.destroy();
   win.close();
 
   // Remove the custom permission.

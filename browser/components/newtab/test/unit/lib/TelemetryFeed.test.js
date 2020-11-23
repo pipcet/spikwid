@@ -17,6 +17,7 @@ import {
 import { FakePrefs, GlobalOverrider } from "test/unit/utils";
 import { ASRouterPreferences } from "lib/ASRouterPreferences.jsm";
 import injector from "inject!lib/TelemetryFeed.jsm";
+import { MESSAGE_TYPE_HASH as msg } from "common/ActorConstants.jsm";
 
 const FAKE_UUID = "{foo-123-foo}";
 const FAKE_ROUTER_MESSAGE_PROVIDER = [{ id: "cfr", enabled: true }];
@@ -36,7 +37,7 @@ describe("TelemetryFeed", () => {
   let fakeHomePageUrl;
   let fakeHomePage;
   let fakeExtensionSettingsStore;
-  let ExperimentAPI = { getExperiment: () => {} };
+  let ExperimentAPI = { getExperimentMetaData: () => {} };
   class PingCentre {
     sendPing() {}
     uninit() {}
@@ -45,7 +46,6 @@ describe("TelemetryFeed", () => {
   class UTEventReporting {
     sendUserEvent() {}
     sendSessionEndEvent() {}
-    sendTrailheadEnrollEvent() {}
     uninit() {}
   }
 
@@ -77,7 +77,6 @@ describe("TelemetryFeed", () => {
       getSetting() {},
     };
     sandbox.spy(global.Cu, "reportError");
-    globals.set("gUUIDGenerator", { generateUUID: () => FAKE_UUID });
     globals.set("AboutNewTab", {
       newTabURLOverridden: false,
       newTabURL: "",
@@ -103,6 +102,18 @@ describe("TelemetryFeed", () => {
     ASRouterPreferences.uninit();
   });
   describe("#init", () => {
+    it("should set preferences in parent process", () => {
+      const testInstance = new TelemetryFeed({ isParentProcess: true });
+      // unfortuntely testing gUUIDGenerator.generateUUID is not possible here
+      // but we still need test coverage
+      assert.isDefined(testInstance);
+    });
+    it("should not set preferences in content process", () => {
+      const testInstance = new TelemetryFeed({ isParentProcess: false });
+      // unfortuntely testing gUUIDGenerator.generateUUID is not possible here
+      // but we still need test coverage
+      assert.isDefined(testInstance);
+    });
     it("should add .pingCentre, a PingCentre instance", () => {
       assert.instanceOf(instance.pingCentre, PingCentre);
     });
@@ -804,7 +815,7 @@ describe("TelemetryFeed", () => {
           return "release";
         },
       });
-      sandbox.stub(ExperimentAPI, "getExperiment").returns({
+      sandbox.stub(ExperimentAPI, "getExperimentMetaData").returns({
         slug: "SOME-CFR-EXP",
       });
       const data = {
@@ -877,7 +888,7 @@ describe("TelemetryFeed", () => {
           return "release";
         },
       });
-      sandbox.stub(ExperimentAPI, "getExperiment").returns({
+      sandbox.stub(ExperimentAPI, "getExperimentMetaData").returns({
         slug: "SOME-CFR-EXP",
       });
       const data = {
@@ -1461,20 +1472,31 @@ describe("TelemetryFeed", () => {
       assert.calledWith(sendEvent, eventCreator.returnValue);
       assert.calledWith(utSendUserEvent, eventCreator.returnValue);
     });
-    it("should call handleASRouterUserEvent on TELEMETRY_USER_EVENT action", () => {
-      FakePrefs.prototype.prefs[TELEMETRY_PREF] = true;
-      FakePrefs.prototype.prefs[EVENTS_TELEMETRY_PREF] = true;
-      instance = new TelemetryFeed();
+    describe("should call handleASRouterUserEvent on x action", () => {
+      const actions = [
+        at.AS_ROUTER_TELEMETRY_USER_EVENT,
+        msg.TOOLBAR_BADGE_TELEMETRY,
+        msg.TOOLBAR_PANEL_TELEMETRY,
+        msg.MOMENTS_PAGE_TELEMETRY,
+        msg.DOORHANGER_TELEMETRY,
+      ];
+      actions.forEach(type => {
+        it(`${type} action`, () => {
+          FakePrefs.prototype.prefs[TELEMETRY_PREF] = true;
+          FakePrefs.prototype.prefs[EVENTS_TELEMETRY_PREF] = true;
+          instance = new TelemetryFeed();
 
-      const eventHandler = sandbox.spy(instance, "handleASRouterUserEvent");
-      const action = {
-        type: at.AS_ROUTER_TELEMETRY_USER_EVENT,
-        data: { event: "CLICK" },
-      };
+          const eventHandler = sandbox.spy(instance, "handleASRouterUserEvent");
+          const action = {
+            type,
+            data: { event: "CLICK" },
+          };
 
-      instance.onAction(action);
+          instance.onAction(action);
 
-      assert.calledWith(eventHandler, action);
+          assert.calledWith(eventHandler, action);
+        });
+      });
     });
     it("should send an event on a TELEMETRY_PERFORMANCE_EVENT action", () => {
       const sendEvent = sandbox.stub(instance, "sendEvent");
@@ -1545,15 +1567,6 @@ describe("TelemetryFeed", () => {
 
       assert.calledWith(eventCreator, action.data);
       assert.calledWith(sendEvent, eventCreator.returnValue);
-    });
-    it("should call .handleTrailheadEnrollEvent on a TRAILHEAD_ENROLL_EVENT action", () => {
-      const data = { experiment: "foo", type: "bar", branch: "baz" };
-      const action = { type: at.TRAILHEAD_ENROLL_EVENT, data };
-      sandbox.spy(instance, "handleTrailheadEnrollEvent");
-
-      instance.onAction(action);
-
-      assert.calledWith(instance.handleTrailheadEnrollEvent, action);
     });
   });
   describe("#handleNewTabInit", () => {
@@ -1839,28 +1852,6 @@ describe("TelemetryFeed", () => {
       );
     });
   });
-  describe("#handleTrailheadEnrollEvent", () => {
-    it("should send a TRAILHEAD_ENROLL_EVENT if the telemetry is enabled", () => {
-      FakePrefs.prototype.prefs[TELEMETRY_PREF] = true;
-      const data = { experiment: "foo", type: "bar", branch: "baz" };
-      instance = new TelemetryFeed();
-      sandbox.stub(instance.utEvents, "sendTrailheadEnrollEvent");
-
-      instance.handleTrailheadEnrollEvent({ data });
-
-      assert.calledWith(instance.utEvents.sendTrailheadEnrollEvent, data);
-    });
-    it("should not send TRAILHEAD_ENROLL_EVENT if the telemetry is disabled", () => {
-      FakePrefs.prototype.prefs[TELEMETRY_PREF] = false;
-      const data = { experiment: "foo", type: "bar", branch: "baz" };
-      instance = new TelemetryFeed();
-      sandbox.stub(instance.utEvents, "sendTrailheadEnrollEvent");
-
-      instance.handleTrailheadEnrollEvent({ data });
-
-      assert.notCalled(instance.utEvents.sendTrailheadEnrollEvent);
-    });
-  });
   describe("#handleASRouterUserEvent", () => {
     it("should call sendStructuredIngestionEvent on known pingTypes", async () => {
       const data = {
@@ -1894,17 +1885,22 @@ describe("TelemetryFeed", () => {
     it("should return false if there is no CFR experiment registered", () => {
       assert.ok(!instance.isInCFRCohort);
     });
-    it("should return false if getExperiment throws", () => {
-      sandbox.stub(ExperimentAPI, "getExperiment").throws();
+    it("should return false if getExperimentMetaData throws", () => {
+      sandbox.stub(ExperimentAPI, "getExperimentMetaData").throws();
 
       assert.ok(!instance.isInCFRCohort);
     });
     it("should return true if there is a CFR experiment registered", () => {
-      sandbox.stub(ExperimentAPI, "getExperiment").returns({
+      sandbox.stub(ExperimentAPI, "getExperimentMetaData").returns({
         slug: "SOME-CFR-EXP",
       });
 
       assert.ok(instance.isInCFRCohort);
+      assert.propertyVal(
+        ExperimentAPI.getExperimentMetaData.firstCall.args[0],
+        "featureId",
+        "cfr"
+      );
     });
   });
 });

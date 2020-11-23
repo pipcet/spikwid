@@ -9,6 +9,7 @@
 #include "builtin/Array.h"
 
 #include "builtin/Promise.h"  // js::AsyncFromSyncIteratorMethod, js::AsyncGeneratorEnqueue
+#include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
 #include "js/PropertySpec.h"
 #include "vm/FunctionFlags.h"  // js::FunctionFlags
 #include "vm/GeneratorObject.h"
@@ -384,9 +385,9 @@ MOZ_MUST_USE bool js::AsyncGeneratorResume(
   // 25.5.3.5, steps 12-14, 16-20.
   HandlePropertyName funName = completionKind == CompletionKind::Normal
                                    ? cx->names().AsyncGeneratorNext
-                                   : completionKind == CompletionKind::Throw
-                                         ? cx->names().AsyncGeneratorThrow
-                                         : cx->names().AsyncGeneratorReturn;
+                               : completionKind == CompletionKind::Throw
+                                   ? cx->names().AsyncGeneratorThrow
+                                   : cx->names().AsyncGeneratorReturn;
   FixedInvokeArgs<1> args(cx);
   args[0].set(argument);
   RootedValue thisOrRval(cx, ObjectValue(*asyncGenObj));
@@ -674,8 +675,8 @@ bool GlobalObject::initAsyncIteratorHelperProto(JSContext* cx,
   }
 
   RootedObject asyncIteratorHelperProto(
-      cx, GlobalObject::createBlankPrototypeInheriting(cx, &PlainObject::class_,
-                                                       asyncIterProto));
+      cx, GlobalObject::createBlankPrototypeInheriting(
+              cx, &AsyncIteratorHelperPrototypeClass, asyncIterProto));
   if (!asyncIteratorHelperProto) {
     return false;
   }

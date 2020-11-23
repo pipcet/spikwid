@@ -122,7 +122,7 @@ class nsITheme : public nsISupports {
    * This overflow area is used to determine what area needs to be
    * repainted when the widget changes.  However, it does not affect the
    * widget's size or what area is reachable by scrollbars.  (In other
-   * words, in layout terms, it affects visual overflow but not
+   * words, in layout terms, it affects ink overflow but not
    * scrollable overflow.)
    */
   virtual bool GetWidgetOverflow(nsDeviceContext* aContext, nsIFrame* aFrame,
@@ -223,6 +223,8 @@ class nsITheme : public nsISupports {
    * Should we insert a dropmarker inside of combobox button?
    */
   virtual bool ThemeNeedsComboboxDropmarker() = 0;
+
+  virtual bool ThemeSupportsScrollbarButtons() { return true; }
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsITheme, NS_ITHEME_IID)

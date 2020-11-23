@@ -37,10 +37,6 @@
 using namespace mozilla::tasktracer;
 #endif
 
-#ifdef MOZ_GECKO_PROFILER
-#  include "ProfilerMarkerPayload.h"
-#endif
-
 // Undo the damage done by mozzconf.h
 #undef compress
 
@@ -157,9 +153,9 @@ class MessageChannel::InterruptFrame {
   InterruptFrame(Direction direction, const Message* msg)
       : mMessageName(msg->name()),
         mMessageRoutingId(msg->routing_id()),
-        mMesageSemantics(msg->is_interrupt()
-                             ? INTR_SEMS
-                             : msg->is_sync() ? SYNC_SEMS : ASYNC_SEMS),
+        mMesageSemantics(msg->is_interrupt() ? INTR_SEMS
+                         : msg->is_sync()    ? SYNC_SEMS
+                                             : ASYNC_SEMS),
         mDirection(direction),
         mMoved(false) {
     MOZ_RELEASE_ASSERT(mMessageName);
@@ -203,9 +199,9 @@ class MessageChannel::InterruptFrame {
                 const char** name) const {
     *id = mMessageRoutingId;
     *dir = (IN_MESSAGE == mDirection) ? "in" : "out";
-    *sems = (INTR_SEMS == mMesageSemantics)
-                ? "intr"
-                : (SYNC_SEMS == mMesageSemantics) ? "sync" : "async";
+    *sems = (INTR_SEMS == mMesageSemantics)   ? "intr"
+            : (SYNC_SEMS == mMesageSemantics) ? "sync"
+                                              : "async";
     *name = mMessageName;
   }
 
@@ -516,9 +512,9 @@ class ChannelCountReporter final : public nsIMemoryReporter {
           " top-level actor type %s",
           iter.Key());
 
-      aHandleReport->Callback(EmptyCString(), pathNow, KIND_OTHER, UNITS_COUNT,
+      aHandleReport->Callback(""_ns, pathNow, KIND_OTHER, UNITS_COUNT,
                               iter.Data().mNow, descNow, aData);
-      aHandleReport->Callback(EmptyCString(), pathMax, KIND_OTHER, UNITS_COUNT,
+      aHandleReport->Callback(""_ns, pathMax, KIND_OTHER, UNITS_COUNT,
                               iter.Data().mMax, descMax, aData);
     }
     return NS_OK;
@@ -2784,14 +2780,21 @@ void MessageChannel::DumpInterruptStack(const char* const pfx) const {
 
 void MessageChannel::AddProfilerMarker(const IPC::Message& aMessage,
                                        MessageDirection aDirection) {
+  mMonitor->AssertCurrentThreadOwns();
 #ifdef MOZ_GECKO_PROFILER
   if (profiler_feature_active(ProfilerFeature::IPCMessages)) {
-    // If mPeerPid is -1, messages are being sent to the current process.
-    int32_t pid = mPeerPid == -1 ? base::GetCurrentProcId() : mPeerPid;
-    PROFILER_ADD_MARKER_WITH_PAYLOAD(
-        "IPC", IPC, IPCMarkerPayload,
-        (pid, aMessage.seqno(), aMessage.type(), mSide, aDirection,
-         MessagePhase::Endpoint, aMessage.is_sync(), TimeStamp::NowUnfuzzed()));
+    int32_t pid = mListener->OtherPidMaybeInvalid();
+    // Only record markers for IPCs with a valid pid.
+    // And if one of the profiler mutexes is locked on this thread, don't record
+    // markers, because we don't want to expose profiler IPCs due to the
+    // profiler itself, and also to avoid possible re-entrancy issues.
+    if (pid != kInvalidProcessId && !profiler_is_locked_on_current_thread()) {
+      // The current timestamp must be given to the `IPCMarker` payload.
+      const TimeStamp now = TimeStamp::NowUnfuzzed();
+      PROFILER_MARKER("IPC", IPC, MarkerTiming::InstantAt(now), IPCMarker, now,
+                      now, pid, aMessage.seqno(), aMessage.type(), mSide,
+                      aDirection, MessagePhase::Endpoint, aMessage.is_sync());
+    }
   }
 #endif
 }
@@ -2907,11 +2910,6 @@ void MessageChannel::CancelTransaction(int transaction) {
   }
 
   AssertMaybeDeferredCountCorrect();
-}
-
-bool MessageChannel::IsInTransaction() const {
-  MonitorAutoLock lock(*mMonitor);
-  return !!mTransactionStack;
 }
 
 void MessageChannel::CancelCurrentTransaction() {

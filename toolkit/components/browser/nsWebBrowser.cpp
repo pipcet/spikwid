@@ -691,24 +691,23 @@ nsWebBrowser::SetProgressListener(nsIWebProgressListener* aProgressListener) {
 NS_IMETHODIMP
 nsWebBrowser::SaveURI(nsIURI* aURI, nsIPrincipal* aPrincipal,
                       uint32_t aCacheKey, nsIReferrerInfo* aReferrerInfo,
+                      nsICookieJarSettings* aCookieJarSettings,
                       nsIInputStream* aPostData, const char* aExtraHeaders,
                       nsISupports* aFile,
                       nsContentPolicyType aContentPolicyType,
                       nsILoadContext* aPrivacyContext) {
   return SavePrivacyAwareURI(
-      aURI, aPrincipal, aCacheKey, aReferrerInfo, aPostData, aExtraHeaders,
-      aFile, aContentPolicyType,
+      aURI, aPrincipal, aCacheKey, aReferrerInfo, aCookieJarSettings, aPostData,
+      aExtraHeaders, aFile, aContentPolicyType,
       aPrivacyContext && aPrivacyContext->UsePrivateBrowsing());
 }
 
 NS_IMETHODIMP
-nsWebBrowser::SavePrivacyAwareURI(nsIURI* aURI, nsIPrincipal* aPrincipal,
-                                  uint32_t aCacheKey,
-                                  nsIReferrerInfo* aReferrerInfo,
-                                  nsIInputStream* aPostData,
-                                  const char* aExtraHeaders, nsISupports* aFile,
-                                  nsContentPolicyType aContentPolicyType,
-                                  bool aIsPrivate) {
+nsWebBrowser::SavePrivacyAwareURI(
+    nsIURI* aURI, nsIPrincipal* aPrincipal, uint32_t aCacheKey,
+    nsIReferrerInfo* aReferrerInfo, nsICookieJarSettings* aCookieJarSettings,
+    nsIInputStream* aPostData, const char* aExtraHeaders, nsISupports* aFile,
+    nsContentPolicyType aContentPolicyType, bool aIsPrivate) {
   if (mPersist) {
     uint32_t currentState;
     mPersist->GetCurrentState(&currentState);
@@ -738,9 +737,9 @@ nsWebBrowser::SavePrivacyAwareURI(nsIURI* aURI, nsIPrincipal* aPrincipal,
   mPersist->SetPersistFlags(mPersistFlags);
   mPersist->GetCurrentState(&mPersistCurrentState);
 
-  rv = mPersist->SavePrivacyAwareURI(uri, aPrincipal, aCacheKey, aReferrerInfo,
-                                     aPostData, aExtraHeaders, aFile,
-                                     aContentPolicyType, aIsPrivate);
+  rv = mPersist->SavePrivacyAwareURI(
+      uri, aPrincipal, aCacheKey, aReferrerInfo, aCookieJarSettings, aPostData,
+      aExtraHeaders, aFile, aContentPolicyType, aIsPrivate);
   if (NS_FAILED(rv)) {
     mPersist = nullptr;
   }
@@ -1170,7 +1169,7 @@ void nsWebBrowser::WindowActivated() {
   printf("nsWebBrowser::NS_ACTIVATE %p %s\n", (void*)this,
          NS_ConvertUTF16toUTF8(documentURI).get());
 #endif
-  FocusActivate();
+  FocusActivate(nsFocusManager::GenerateFocusActionId());
 }
 
 void nsWebBrowser::WindowDeactivated() {
@@ -1181,7 +1180,7 @@ void nsWebBrowser::WindowDeactivated() {
   printf("nsWebBrowser::NS_DEACTIVATE %p %s\n", (void*)this,
          NS_ConvertUTF16toUTF8(documentURI).get());
 #endif
-  FocusDeactivate();
+  FocusDeactivate(nsFocusManager::GenerateFocusActionId());
 }
 
 bool nsWebBrowser::PaintWindow(nsIWidget* aWidget,
@@ -1201,19 +1200,19 @@ bool nsWebBrowser::PaintWindow(nsIWidget* aWidget,
   return true;
 }
 
-void nsWebBrowser::FocusActivate() {
+void nsWebBrowser::FocusActivate(uint64_t aActionId) {
   nsFocusManager* fm = nsFocusManager::GetFocusManager();
   nsCOMPtr<nsPIDOMWindowOuter> window = GetWindow();
   if (fm && window) {
-    fm->WindowRaised(window);
+    fm->WindowRaised(window, aActionId);
   }
 }
 
-void nsWebBrowser::FocusDeactivate() {
+void nsWebBrowser::FocusDeactivate(uint64_t aActionId) {
   nsFocusManager* fm = nsFocusManager::GetFocusManager();
   nsCOMPtr<nsPIDOMWindowOuter> window = GetWindow();
   if (fm && window) {
-    fm->WindowLowered(window);
+    fm->WindowLowered(window, aActionId);
   }
 }
 

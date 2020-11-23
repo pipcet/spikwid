@@ -471,6 +471,10 @@ int32_t nsTreeBodyFrame::GetHorizontalPosition() const {
 }
 
 Maybe<CSSIntRegion> nsTreeBodyFrame::GetSelectionRegion() {
+  if (!mView) {
+    return Nothing();
+  }
+
   nsCOMPtr<nsITreeSelection> selection;
   mView->GetSelection(getter_AddRefs(selection));
   if (!selection) {
@@ -1594,10 +1598,17 @@ nsresult nsTreeBodyFrame::RowCountChanged(int32_t aIndex, int32_t aCount) {
   }
 #endif  // #ifdef ACCESSIBILITY
 
+  AutoWeakFrame weakFrame(this);
+
   // Adjust our selection.
+  nsCOMPtr<nsITreeView> view = mView;
   nsCOMPtr<nsITreeSelection> sel;
-  mView->GetSelection(getter_AddRefs(sel));
-  if (sel) sel->AdjustSelection(aIndex, aCount);
+  view->GetSelection(getter_AddRefs(sel));
+  if (sel) {
+    sel->AdjustSelection(aIndex, aCount);
+  }
+
+  NS_ENSURE_STATE(weakFrame.IsAlive());
 
   if (mUpdateBatchNest) return NS_OK;
 
@@ -1923,7 +1934,7 @@ nsresult nsTreeBodyFrame::GetImage(int32_t aRowIndex, nsTreeColumn* aCol,
       // view?  I guess we should assume that it's the node's principal...
       nsresult rv = nsContentUtils::LoadImage(
           srcURI, mContent, doc, mContent->NodePrincipal(), 0, referrerInfo,
-          imgNotificationObserver, nsIRequest::LOAD_NORMAL, EmptyString(),
+          imgNotificationObserver, nsIRequest::LOAD_NORMAL, u""_ns,
           getter_AddRefs(imageRequest));
       NS_ENSURE_SUCCESS(rv, rv);
 
@@ -1968,7 +1979,7 @@ nsRect nsTreeBodyFrame::GetImageSize(int32_t aRowIndex, nsTreeColumn* aCol,
   bool needHeight = false;
 
   // We have to load image even though we already have a size.
-  // Don't change this, otherwise things start to go crazy.
+  // Don't change this, otherwise things start to go awry.
   bool useImageRegion = true;
   nsCOMPtr<imgIContainer> image;
   GetImage(aRowIndex, aCol, aUseContext, aComputedStyle, useImageRegion,

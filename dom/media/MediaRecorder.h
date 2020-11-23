@@ -25,7 +25,7 @@ class GlobalObject;
 namespace dom {
 
 class AudioNode;
-class Blob;
+class BlobImpl;
 class Document;
 class DOMException;
 
@@ -167,6 +167,7 @@ class MediaRecorder final : public DOMEventTargetHelper,
   // DOMExceptions that are created early and possibly thrown in NotifyError.
   // Creating them early allows us to capture the JS stack for which cannot be
   // done at the time the error event is fired.
+  RefPtr<DOMException> mInvalidModificationDomException;
   RefPtr<DOMException> mSecurityDomException;
   RefPtr<DOMException> mUnknownDomException;
 

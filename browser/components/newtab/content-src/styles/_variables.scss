@@ -158,11 +158,14 @@ $context-menu-item-padding: 3px 12px;
 $error-fallback-font-size: 12px;
 $error-fallback-line-height: 1.5;
 
-$image-path: '../data/content/assets/';
+$image-path: 'chrome://activity-stream/content/data/content/assets/';
 
 $snippets-container-height: 120px;
 
 $textbox-shadow-size: 4px;
+
+$customize-menu-first-shadow: rgba(9, 32, 77, 0.12);
+$customize-menu-second-shadow: rgba(29, 17, 51, 0.12);
 
 @mixin fade-in {
   box-shadow: inset $inner-box-shadow, $shadow-primary;
@@ -195,7 +198,7 @@ $textbox-shadow-size: 4px;
     transition-property: transform, opacity;
     width: $context-menu-button-size;
 
-    &:-moz-any(:active, :focus) {
+    &:is(:active, :focus) {
       opacity: 1;
       transform: scale(1);
     }

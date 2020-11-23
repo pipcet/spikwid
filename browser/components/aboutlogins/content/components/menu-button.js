@@ -77,8 +77,11 @@ export default class MenuButton extends HTMLElement {
               detail: linkTrackingSource,
             })
           );
+
+          // Bug 1645365: Only hide the menu when the buttons are clicked
+          // So that the menu isn't closed when non-buttons (e.g. separators, paddings) are clicked
+          this._hideMenu();
         }
-        this._hideMenu();
         break;
       }
       case "keydown": {
@@ -126,6 +129,13 @@ export default class MenuButton extends HTMLElement {
     if (this._menu.hidden) {
       this._showMenu();
     }
+    if (successor.disabled) {
+      if (next) {
+        successor = items[activeItemIndex + 2];
+      } else {
+        successor = items[activeItemIndex - 2];
+      }
+    }
     successor.focus();
   }
 
@@ -135,6 +145,9 @@ export default class MenuButton extends HTMLElement {
   }
 
   _showMenu() {
+    this._menu.querySelector(".menuitem-import-file").hidden = !window
+      .AboutLoginsUtils.fileImportEnabled;
+
     this._menu.hidden = false;
 
     // Add a catch-all event listener to close the menu.

@@ -306,8 +306,11 @@ static void DestroyRange(JSObject* iterator, Range* range) {
   }
 }
 
-bool MapIteratorObject::next(Handle<MapIteratorObject*> mapIterator,
-                             HandleArrayObject resultPairObj, JSContext* cx) {
+bool MapIteratorObject::next(MapIteratorObject* mapIterator,
+                             ArrayObject* resultPairObj) {
+  // IC code calls this directly.
+  AutoUnsafeCallWithABI unsafe;
+
   // Check invariants for inlined _GetNextMapEntryForIterator.
 
   // The array should be tenured, so that post-barrier can be done simply.
@@ -329,18 +332,20 @@ bool MapIteratorObject::next(Handle<MapIteratorObject*> mapIterator,
     return true;
   }
 
+  // Note: we don't need to call setDenseElementWithType because
+  // MapIteratorObject::createResultPair gave the elements unknown-types.
   switch (mapIterator->kind()) {
     case MapObject::Keys:
-      resultPairObj->setDenseElementWithType(cx, 0, range->front().key.get());
+      resultPairObj->setDenseElement(0, range->front().key.get());
       break;
 
     case MapObject::Values:
-      resultPairObj->setDenseElementWithType(cx, 1, range->front().value);
+      resultPairObj->setDenseElement(1, range->front().value);
       break;
 
     case MapObject::Entries: {
-      resultPairObj->setDenseElementWithType(cx, 0, range->front().key.get());
-      resultPairObj->setDenseElementWithType(cx, 1, range->front().value);
+      resultPairObj->setDenseElement(0, range->front().key.get());
+      resultPairObj->setDenseElement(1, range->front().value);
       break;
     }
   }
@@ -367,9 +372,6 @@ JSObject* MapIteratorObject::createResultPair(JSContext* cx) {
   resultPairObj->setDenseInitializedLength(2);
   resultPairObj->initDenseElement(0, NullValue());
   resultPairObj->initDenseElement(1, NullValue());
-
-  // See comments in MapIteratorObject::next.
-  AddTypePropertyId(cx, resultPairObj, JSID_VOID, TypeSet::UnknownType());
 
   return resultPairObj;
 }
@@ -463,6 +465,9 @@ static void TraceKey(Range& r, const HashableValue& key, JSTracer* trc) {
     // other types the hash function only uses the bits of the Value.
     r.rekeyFront(newKey);
   }
+
+  // Clear newKey to avoid the barrier in ~PreBarriered.
+  newKey.unbarrieredClear();
 }
 
 void MapObject::trace(JSTracer* trc, JSObject* obj) {
@@ -541,7 +546,7 @@ class js::OrderedHashTableRef : public gc::BufferableRef {
 };
 
 template <typename ObjectT>
-inline static MOZ_MUST_USE bool WriteBarrierPostImpl(ObjectT* obj,
+inline static MOZ_MUST_USE bool PostWriteBarrierImpl(ObjectT* obj,
                                                      const Value& keyValue) {
   if (MOZ_LIKELY(!keyValue.isObject() && !keyValue.isBigInt())) {
     MOZ_ASSERT_IF(keyValue.isGCThing(), !IsInsideNursery(keyValue.toGCThing()));
@@ -570,14 +575,14 @@ inline static MOZ_MUST_USE bool WriteBarrierPostImpl(ObjectT* obj,
   return keys->append(keyValue);
 }
 
-inline static MOZ_MUST_USE bool WriteBarrierPost(MapObject* map,
+inline static MOZ_MUST_USE bool PostWriteBarrier(MapObject* map,
                                                  const Value& key) {
-  return WriteBarrierPostImpl(map, key);
+  return PostWriteBarrierImpl(map, key);
 }
 
-inline static MOZ_MUST_USE bool WriteBarrierPost(SetObject* set,
+inline static MOZ_MUST_USE bool PostWriteBarrier(SetObject* set,
                                                  const Value& key) {
-  return WriteBarrierPostImpl(set, key);
+  return PostWriteBarrierImpl(set, key);
 }
 
 bool MapObject::getKeysAndValuesInterleaved(
@@ -609,7 +614,7 @@ bool MapObject::set(JSContext* cx, HandleObject obj, HandleValue k,
     return false;
   }
 
-  if (!WriteBarrierPost(&obj->as<MapObject>(), key.value()) ||
+  if (!PostWriteBarrier(&obj->as<MapObject>(), key.value()) ||
       !map->put(key, v)) {
     ReportOutOfMemory(cx);
     return false;
@@ -808,7 +813,7 @@ bool MapObject::set_impl(JSContext* cx, const CallArgs& args) {
 
   ValueMap& map = extract(args);
   ARG0_KEY(cx, args, key);
-  if (!WriteBarrierPost(&args.thisv().toObject().as<MapObject>(),
+  if (!PostWriteBarrier(&args.thisv().toObject().as<MapObject>(),
                         key.value()) ||
       !map.put(key, args.get(1))) {
     ReportOutOfMemory(cx);
@@ -1099,8 +1104,11 @@ size_t SetIteratorObject::objectMoved(JSObject* obj, JSObject* old) {
   return sizeof(ValueSet::Range);
 }
 
-bool SetIteratorObject::next(Handle<SetIteratorObject*> setIterator,
-                             HandleArrayObject resultObj, JSContext* cx) {
+bool SetIteratorObject::next(SetIteratorObject* setIterator,
+                             ArrayObject* resultObj) {
+  // IC code calls this directly.
+  AutoUnsafeCallWithABI unsafe;
+
   // Check invariants for inlined _GetNextSetEntryForIterator.
 
   // The array should be tenured, so that post-barrier can be done simply.
@@ -1122,7 +1130,9 @@ bool SetIteratorObject::next(Handle<SetIteratorObject*> setIterator,
     return true;
   }
 
-  resultObj->setDenseElementWithType(cx, 0, range->front().get());
+  // Note: we don't need to call setDenseElementWithType because
+  // SetIteratorObject::createResult gave the elements unknown-types.
+  resultObj->setDenseElement(0, range->front().get());
   range->popFront();
   return false;
 }
@@ -1145,9 +1155,6 @@ JSObject* SetIteratorObject::createResult(JSContext* cx) {
 
   resultObj->setDenseInitializedLength(1);
   resultObj->initDenseElement(0, NullValue());
-
-  // See comments in SetIteratorObject::next.
-  AddTypePropertyId(cx, resultObj, JSID_VOID, TypeSet::UnknownType());
 
   return resultObj;
 }
@@ -1266,7 +1273,7 @@ bool SetObject::add(JSContext* cx, HandleObject obj, HandleValue k) {
     return false;
   }
 
-  if (!WriteBarrierPost(&obj->as<SetObject>(), key.value()) || !set->put(key)) {
+  if (!PostWriteBarrier(&obj->as<SetObject>(), key.value()) || !set->put(key)) {
     ReportOutOfMemory(cx);
     return false;
   }
@@ -1379,7 +1386,7 @@ bool SetObject::construct(JSContext* cx, unsigned argc, Value* vp) {
         if (!key.setValue(cx, keyVal)) {
           return false;
         }
-        if (!WriteBarrierPost(obj, key.value()) || !set->put(key)) {
+        if (!PostWriteBarrier(obj, key.value()) || !set->put(key)) {
           ReportOutOfMemory(cx);
           return false;
         }
@@ -1477,7 +1484,7 @@ bool SetObject::add_impl(JSContext* cx, const CallArgs& args) {
 
   ValueSet& set = extract(args);
   ARG0_KEY(cx, args, key);
-  if (!WriteBarrierPost(&args.thisv().toObject().as<SetObject>(),
+  if (!PostWriteBarrier(&args.thisv().toObject().as<SetObject>(),
                         key.value()) ||
       !set.put(key)) {
     ReportOutOfMemory(cx);

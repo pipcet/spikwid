@@ -28,14 +28,9 @@
 #include "mozilla/dom/WorkerPrivate.h"
 #include "mozilla/dom/WorkerRunnable.h"
 
-#ifdef MOZ_GECKO_PROFILER
-#  include "ProfilerMarkerPayload.h"
-#endif
-
 #define PERFLOG(msg, ...) printf_stderr(msg, ##__VA_ARGS__)
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(Performance)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
@@ -69,8 +64,9 @@ already_AddRefed<Performance> Performance::CreateForWorker(
   return performance.forget();
 }
 
-Performance::Performance(bool aSystemPrincipal)
-    : mResourceTimingBufferSize(kDefaultResourceTimingBufferSize),
+Performance::Performance(nsIGlobalObject* aGlobal, bool aSystemPrincipal)
+    : DOMEventTargetHelper(aGlobal),
+      mResourceTimingBufferSize(kDefaultResourceTimingBufferSize),
       mPendingNotificationObserversTask(false),
       mPendingResourceTimingBufferFullEvent(false),
       mSystemPrincipal(aSystemPrincipal) {
@@ -87,6 +83,19 @@ Performance::Performance(nsPIDOMWindowInner* aWindow, bool aSystemPrincipal)
 }
 
 Performance::~Performance() = default;
+
+DOMHighResTimeStamp Performance::TimeStampToDOMHighResForRendering(
+    TimeStamp aTimeStamp) const {
+  DOMHighResTimeStamp stamp = GetDOMTiming()->TimeStampToDOMHighRes(aTimeStamp);
+  if (!IsSystemPrincipal()) {
+    // 0 is an inappropriate mixin for this this area; however CSS Animations
+    // needs to have it's Time Reduction Logic refactored, so it's currently
+    // only clamping for RFP mode. RFP mode gives a much lower time precision,
+    // so we accept the security leak here for now.
+    return nsRFPService::ReduceTimePrecisionAsMSecsRFPOnly(stamp, 0);
+  }
+  return stamp;
+}
 
 DOMHighResTimeStamp Performance::Now() {
   DOMHighResTimeStamp rawTime = NowUnclamped();
@@ -204,6 +213,53 @@ void Performance::ClearUserEntries(const Optional<nsAString>& aEntryName,
 
 void Performance::ClearResourceTimings() { mResourceEntries.Clear(); }
 
+#ifdef MOZ_GECKO_PROFILER
+struct UserTimingMarker {
+  static constexpr Span<const char> MarkerTypeName() {
+    return MakeStringSpan("UserTiming");
+  }
+  static void StreamJSONMarkerData(
+      baseprofiler::SpliceableJSONWriter& aWriter,
+      const ProfilerString16View& aName, bool aIsMeasure,
+      const Maybe<ProfilerString16View>& aStartMark,
+      const Maybe<ProfilerString16View>& aEndMark) {
+    aWriter.StringProperty("name", NS_ConvertUTF16toUTF8(aName.Data()));
+    if (aIsMeasure) {
+      aWriter.StringProperty("entryType", "measure");
+    } else {
+      aWriter.StringProperty("entryType", "mark");
+    }
+
+    if (aStartMark.isSome()) {
+      aWriter.StringProperty("startMark",
+                             NS_ConvertUTF16toUTF8(aStartMark->Data()));
+    } else {
+      aWriter.NullProperty("startMark");
+    }
+    if (aEndMark.isSome()) {
+      aWriter.StringProperty("endMark",
+                             NS_ConvertUTF16toUTF8(aEndMark->Data()));
+    } else {
+      aWriter.NullProperty("endMark");
+    }
+  }
+  static MarkerSchema MarkerTypeDisplay() {
+    using MS = MarkerSchema;
+    MS schema{MS::Location::markerChart, MS::Location::markerTable};
+    schema.SetAllLabels("{marker.data.name}");
+    schema.AddStaticLabelValue("Marker", "UserTiming");
+    schema.AddKeyLabelFormat("entryType", "Entry Type", MS::Format::string);
+    schema.AddKeyLabelFormat("name", "Name", MS::Format::string);
+    schema.AddKeyLabelFormat("startMark", "Start Mark", MS::Format::string);
+    schema.AddKeyLabelFormat("endMark", "End Mark", MS::Format::string);
+    schema.AddStaticLabelValue("Description",
+                               "UserTimingMeasure is created using the DOM API "
+                               "performance.measure().");
+    return schema;
+  }
+};
+#endif
+
 void Performance::Mark(const nsAString& aName, ErrorResult& aRv) {
   // We add nothing when 'privacy.resistFingerprinting' is on.
   if (nsContentUtils::ShouldResistFingerprinting()) {
@@ -225,8 +281,9 @@ void Performance::Mark(const nsAString& aName, ErrorResult& aRv) {
     if (GetOwner()) {
       innerWindowId = Some(GetOwner()->WindowID());
     }
-    PROFILER_ADD_MARKER_WITH_PAYLOAD("UserTiming", DOM, UserTimingMarkerPayload,
-                                     (aName, TimeStamp::Now(), innerWindowId));
+    profiler_add_marker("UserTiming", geckoprofiler::category::DOM,
+                        MarkerInnerWindowId(innerWindowId), UserTimingMarker{},
+                        aName, /* aIsMeasure */ false, Nothing{}, Nothing{});
   }
 #endif
 }
@@ -320,9 +377,11 @@ void Performance::Measure(const nsAString& aName,
     if (GetOwner()) {
       innerWindowId = Some(GetOwner()->WindowID());
     }
-    PROFILER_ADD_MARKER_WITH_PAYLOAD("UserTiming", DOM, UserTimingMarkerPayload,
-                                     (aName, startMark, endMark, startTimeStamp,
-                                      endTimeStamp, innerWindowId));
+    profiler_add_marker("UserTiming", geckoprofiler::category::DOM,
+                        {MarkerTiming::Interval(startTimeStamp, endTimeStamp),
+                         MarkerInnerWindowId(innerWindowId)},
+                        UserTimingMarker{}, aName, /* aIsMeasure */ true,
+                        startMark, endMark);
   }
 #endif
 }
@@ -351,7 +410,7 @@ void Performance::TimingNotification(PerformanceEntry* aEntry,
   init.mStartTime = aEntry->StartTime();
   init.mDuration = aEntry->Duration();
   init.mEpoch = aEpoch;
-  init.mOrigin = NS_ConvertUTF8toUTF16(aOwner.BeginReading());
+  CopyUTF8toUTF16(aOwner, init.mOrigin);
 
   RefPtr<PerformanceEntryEvent> perfEntryEvent =
       PerformanceEntryEvent::Constructor(this, u"performanceentry"_ns, init);
@@ -631,5 +690,4 @@ size_t Performance::SizeOfResourceEntries(
   return resourceEntries;
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

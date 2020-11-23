@@ -97,6 +97,7 @@ class SVGBBox final {
   bool IsFinite() const { return mBBox.IsFinite(); }
 
   void Scale(float aScale) { mBBox.Scale(aScale); }
+  void MoveBy(float x, float y) { mBBox.MoveBy(x, y); }
 
   void UnionEdges(const SVGBBox& aSVGBBox) {
     if (aSVGBBox.mIsEmpty) {
@@ -131,8 +132,7 @@ class MOZ_RAII SVGAutoRenderState final {
   using DrawTarget = gfx::DrawTarget;
 
  public:
-  explicit SVGAutoRenderState(
-      DrawTarget* aDrawTarget MOZ_GUARD_OBJECT_NOTIFIER_PARAM);
+  explicit SVGAutoRenderState(DrawTarget* aDrawTarget);
   ~SVGAutoRenderState();
 
   void SetPaintingToWindow(bool aPaintingToWindow);
@@ -143,7 +143,6 @@ class MOZ_RAII SVGAutoRenderState final {
   DrawTarget* mDrawTarget;
   void* mOriginalRenderState;
   bool mPaintingToWindow;
-  MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
 };
 
 /**
@@ -165,12 +164,12 @@ class SVGUtils final {
   NS_DECLARE_FRAME_PROPERTY_DELETABLE(ObjectBoundingBoxProperty, gfxRect)
 
   /**
-   * Returns the frame's post-filter visual overflow rect when passed the
-   * frame's pre-filter visual overflow rect. If the frame is not currently
+   * Returns the frame's post-filter ink overflow rect when passed the
+   * frame's pre-filter ink overflow rect. If the frame is not currently
    * being filtered, this function simply returns aUnfilteredRect.
    */
-  static nsRect GetPostFilterVisualOverflowRect(nsIFrame* aFrame,
-                                                const nsRect& aPreFilterRect);
+  static nsRect GetPostFilterInkOverflowRect(nsIFrame* aFrame,
+                                             const nsRect& aPreFilterRect);
 
   /**
    * Schedules an update of the frame's bounds (which will in turn invalidate

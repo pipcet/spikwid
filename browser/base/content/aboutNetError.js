@@ -11,6 +11,8 @@ const TLS_ERROR_REPORT_TELEMETRY_AUTO_CHECKED = 2;
 const TLS_ERROR_REPORT_TELEMETRY_AUTO_UNCHECKED = 3;
 const TLS_ERROR_REPORT_TELEMETRY_UI_SHOWN = 0;
 
+const HOST_NAME = new URL(RPMGetInnerMostURI(document.location.href)).hostname;
+
 // Used to check if we have a specific localized message for an error.
 const KNOWN_ERROR_TITLE_IDS = new Set([
   // Error titles:
@@ -105,6 +107,11 @@ function showCertificateErrorReporting() {
   document.getElementById("certificateErrorReporting").style.display = "block";
 }
 
+function showBlockingErrorReporting() {
+  // Display blocking error reporting UI for XFO error and CSP error.
+  document.getElementById("blockingErrorReporting").style.display = "block";
+}
+
 function showPrefChangeContainer() {
   const panel = document.getElementById("prefChangeContainer");
   panel.style.display = "block";
@@ -133,7 +140,7 @@ function setupAdvancedButton() {
   // Get the hostname and add it to the panel
   var panel = document.getElementById("badCertAdvancedPanel");
   for (var span of panel.querySelectorAll("span.hostname")) {
-    span.textContent = document.location.hostname;
+    span.textContent = HOST_NAME;
   }
 
   // Register click handler for the weakCryptoAdvancedPanel
@@ -354,6 +361,8 @@ function initPage() {
     // Add a learn more link
     document.getElementById("learnMoreContainer").style.display = "block";
     learnMoreLink.setAttribute("href", baseURL + "xframe-neterror-page");
+
+    setupBlockingReportingUI();
   }
 
   setNetErrorMessageFromCode();
@@ -423,7 +432,7 @@ function initPage() {
 
     var container = document.getElementById("errorLongDesc");
     for (var span of container.querySelectorAll("span.hostname")) {
-      span.textContent = document.location.hostname;
+      span.textContent = HOST_NAME;
     }
   }
 }
@@ -452,6 +461,75 @@ function setupErrorUI() {
   }
 }
 
+function setupBlockingReportingUI() {
+  let checkbox = document.getElementById("automaticallyReportBlockingInFuture");
+
+  let reportingAutomatic = RPMGetBoolPref(
+    "security.xfocsp.errorReporting.automatic"
+  );
+  checkbox.checked = !!reportingAutomatic;
+
+  checkbox.addEventListener("change", function({ target: { checked } }) {
+    onSetBlockingReportAutomatic(checked);
+  });
+
+  let reportingEnabled = RPMGetBoolPref(
+    "security.xfocsp.errorReporting.enabled"
+  );
+
+  if (!reportingEnabled) {
+    return;
+  }
+
+  showBlockingErrorReporting();
+
+  if (reportingAutomatic) {
+    reportBlockingError();
+  }
+}
+
+function reportBlockingError() {
+  // We only report if we are in a frame.
+  if (window === window.top) {
+    return;
+  }
+
+  let err = getErrorCode();
+  // Ensure we only deal with XFO and CSP here.
+  if (!["xfoBlocked", "cspBlocked"].includes(err)) {
+    return;
+  }
+
+  let xfo_header = RPMGetHttpResponseHeader("X-Frame-Options");
+  let csp_header = RPMGetHttpResponseHeader("Content-Security-Policy");
+
+  // Extract the 'CSP: frame-ancestors' from the CSP header.
+  let reg = /(?:^|\s)frame-ancestors\s([^;]*)[$]*/i;
+  let match = reg.exec(csp_header);
+  csp_header = match ? match[1] : "";
+
+  // If it's the csp error page without the CSP: frame-ancestors, this means
+  // this error page is not triggered by CSP: frame-ancestors. So, we bail out
+  // early.
+  if (err === "cspBlocked" && !csp_header) {
+    return;
+  }
+
+  let xfoAndCspInfo = {
+    error_type: err === "xfoBlocked" ? "xfo" : "csp",
+    xfo_header,
+    csp_header,
+  };
+
+  RPMSendAsyncMessage("ReportBlockingError", {
+    scheme: document.location.protocol,
+    host: document.location.host,
+    port: parseInt(document.location.port) || -1,
+    path: document.location.pathname,
+    xfoAndCspInfo,
+  });
+}
+
 function onSetAutomatic(checked) {
   let bin = TLS_ERROR_REPORT_TELEMETRY_AUTO_UNCHECKED;
   if (checked) {
@@ -469,8 +547,18 @@ function onSetAutomatic(checked) {
   }
 }
 
+function onSetBlockingReportAutomatic(checked) {
+  RPMSetBoolPref("security.xfocsp.errorReporting.automatic", checked);
+
+  // If we're enabling reports, send a report for this failure.
+  if (checked) {
+    reportBlockingError();
+  }
+}
+
 async function setNetErrorMessageFromCode() {
-  let hostString = document.location.hostname;
+  let hostString = HOST_NAME;
+
   let port = document.location.port;
   if (port && port != 443) {
     hostString += ":" + port;
@@ -559,7 +647,7 @@ function initPageCaptivePortal() {
 function initPageCertError() {
   document.body.classList.add("certerror");
   for (let host of document.querySelectorAll(".hostname")) {
-    host.textContent = document.location.hostname;
+    host.textContent = HOST_NAME;
   }
 
   addAutofocus("#returnButton");
@@ -768,12 +856,11 @@ function setCertErrorDetails(event) {
     // without replicating the complex logic from certverifier code.
     case "MOZILLA_PKIX_ERROR_ADDITIONAL_POLICY_CONSTRAINT_FAILED":
       desc = document.getElementById("errorShortDescText2");
-      let hostname = document.location.hostname;
       document.l10n.setAttributes(
         desc,
         "cert-error-symantec-distrust-description",
         {
-          hostname,
+          HOST_NAME,
         }
       );
 
@@ -913,7 +1000,7 @@ function setCertErrorDetails(event) {
         sd.innerHTML = errDesc.innerHTML;
 
         let span = sd.querySelector(".hostname");
-        span.textContent = document.location.hostname;
+        span.textContent = HOST_NAME;
 
         // The secondary description mentions expired certificates explicitly
         // and should only be shown if the certificate has actually expired
@@ -969,7 +1056,10 @@ function setCertErrorDetails(event) {
   }
 }
 
-async function setTechnicalDetailsOnCertError() {
+// The optional argument is only here for testing purposes.
+async function setTechnicalDetailsOnCertError(
+  failedCertInfo = document.getFailedCertSecurityInfo()
+) {
   let technicalInfo = document.getElementById("badCertTechnicalInfo");
 
   function setL10NLabel(l10nId, args = {}, attrs = {}, rewrite = true) {
@@ -1000,7 +1090,7 @@ async function setTechnicalDetailsOnCertError() {
   let cssClass = getCSSClass();
   let error = getErrorCode();
 
-  let hostString = document.location.hostname;
+  let hostString = HOST_NAME;
   let port = document.location.port;
   if (port && port != 443) {
     hostString += ":" + port;
@@ -1010,7 +1100,6 @@ async function setTechnicalDetailsOnCertError() {
   let args = {
     hostname: hostString,
   };
-  let failedCertInfo = document.getFailedCertSecurityInfo();
   if (failedCertInfo.isUntrusted) {
     switch (failedCertInfo.errorCodeString) {
       case "MOZILLA_PKIX_ERROR_MITM_DETECTED":
@@ -1055,9 +1144,7 @@ async function setTechnicalDetailsOnCertError() {
         setL10NLabel("cert-error-intro", args);
         setL10NLabel("cert-error-untrusted-default", {}, {}, false);
     }
-  }
-
-  if (failedCertInfo.isDomainMismatch) {
+  } else if (failedCertInfo.isDomainMismatch) {
     let subjectAltNames = failedCertInfo.subjectAltNames.split(",");
     subjectAltNames = subjectAltNames.filter(name => !!name.length);
     let numSubjectAltNames = subjectAltNames.length;
@@ -1069,7 +1156,7 @@ async function setTechnicalDetailsOnCertError() {
         // Let's check if we want to make this a link.
         let okHost = failedCertInfo.subjectAltNames;
         let href = "";
-        let thisHost = document.location.hostname;
+        let thisHost = HOST_NAME;
         let proto = document.location.protocol + "//";
         // If okHost is a wildcard domain ("*.example.com") let's
         // use "www" instead.  "*.example.com" isn't going to
@@ -1135,9 +1222,7 @@ async function setTechnicalDetailsOnCertError() {
     } else {
       setL10NLabel("cert-error-domain-mismatch", { hostname: hostString });
     }
-  }
-
-  if (failedCertInfo.isNotValidAtThisTime) {
+  } else if (failedCertInfo.isNotValidAtThisTime) {
     let notBefore = failedCertInfo.validNotBefore;
     let notAfter = failedCertInfo.validNotAfter;
     args = {

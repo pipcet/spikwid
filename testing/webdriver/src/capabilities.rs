@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 use crate::common::MAX_SAFE_INTEGER;
 use crate::error::{ErrorStatus, WebDriverError, WebDriverResult};
 use serde_json::{Map, Value};
@@ -57,7 +61,7 @@ pub trait BrowserCapabilities {
     /// Check that custom properties containing ":" have the correct data types.
     /// Properties that are unrecognised must be ignored i.e. return without
     /// error.
-    fn validate_custom(&self, name: &str, value: &Value) -> WebDriverResult<()>;
+    fn validate_custom(&mut self, name: &str, value: &Value) -> WebDriverResult<()>;
 
     /// Check if custom properties are accepted capabilites
     ///
@@ -112,7 +116,7 @@ impl SpecNewSessionParameters {
     fn validate<T: BrowserCapabilities>(
         &self,
         mut capabilities: Capabilities,
-        browser_capabilities: &T,
+        browser_capabilities: &mut T,
     ) -> WebDriverResult<Capabilities> {
         // Filter out entries with the value `null`
         let null_entries = capabilities

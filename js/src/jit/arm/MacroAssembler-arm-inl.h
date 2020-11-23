@@ -619,7 +619,9 @@ void MacroAssembler::lshift32(Register src, Register dest) {
 }
 
 void MacroAssembler::flexibleLshift32(Register src, Register dest) {
-  lshift32(src, dest);
+  ScratchRegisterScope scratch(*this);
+  as_and(scratch, src, Imm8(0x1F));
+  lshift32(scratch, dest);
 }
 
 void MacroAssembler::lshift32(Imm32 imm, Register dest) {
@@ -639,7 +641,9 @@ void MacroAssembler::rshift32(Register src, Register dest) {
 }
 
 void MacroAssembler::flexibleRshift32(Register src, Register dest) {
-  rshift32(src, dest);
+  ScratchRegisterScope scratch(*this);
+  as_and(scratch, src, Imm8(0x1F));
+  rshift32(scratch, dest);
 }
 
 void MacroAssembler::rshift32(Imm32 imm, Register dest) {
@@ -709,7 +713,9 @@ void MacroAssembler::rshift32Arithmetic(Imm32 imm, Register dest) {
 }
 
 void MacroAssembler::flexibleRshift32Arithmetic(Register src, Register dest) {
-  rshift32Arithmetic(src, dest);
+  ScratchRegisterScope scratch(*this);
+  as_and(scratch, src, Imm8(0x1F));
+  rshift32Arithmetic(scratch, dest);
 }
 
 void MacroAssembler::rshift64(Imm32 imm, Register64 dest) {
@@ -2059,13 +2065,6 @@ void MacroAssembler::storeUncanonicalizedFloat32(FloatRegister src,
   uint32_t scale = Imm32::ShiftOf(addr.scale).value;
   ma_vstr(src.asSingle(), addr.base, addr.index, scratch, scratch2, scale,
           addr.offset);
-}
-
-void MacroAssembler::storeFloat32x3(FloatRegister src, const Address& dest) {
-  MOZ_CRASH("NYI");
-}
-void MacroAssembler::storeFloat32x3(FloatRegister src, const BaseIndex& dest) {
-  MOZ_CRASH("NYI");
 }
 
 void MacroAssembler::memoryBarrier(MemoryBarrierBits barrier) {

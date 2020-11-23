@@ -26,8 +26,7 @@
 #  include "nsFocusManager.h"
 #endif
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 HTMLObjectElement::HTMLObjectElement(
     already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo,
@@ -49,7 +48,7 @@ HTMLObjectElement::~HTMLObjectElement() {
   OnFocusBlurPlugin(this, false);
 #endif
   UnregisterActivityObserver();
-  DestroyImageLoadingContent();
+  nsImageLoadingContent::Destroy();
 }
 
 bool HTMLObjectElement::IsInteractiveHTMLContent() const {
@@ -290,6 +289,17 @@ bool HTMLObjectElement::IsHTMLFocusable(bool aWithMouse, bool* aIsFocusable,
     return false;
   }
 
+  // If we have decided that this is a blocked plugin then do not allow focus.
+  if ((Type() == eType_Null) &&
+      (PluginFallbackType() == eFallbackBlockAllPlugins)) {
+    if (aTabIndex) {
+      *aTabIndex = -1;
+    }
+
+    *aIsFocusable = false;
+    return false;
+  }
+
   const nsAttrValue* attrVal = mAttrs.GetAttr(nsGkAtoms::tabindex);
   bool isFocusable = attrVal && attrVal->Type() == nsAttrValue::eInteger;
 
@@ -447,7 +457,7 @@ uint32_t HTMLObjectElement::GetCapabilities() const {
 }
 
 void HTMLObjectElement::DestroyContent() {
-  nsObjectLoadingContent::DestroyContent();
+  nsObjectLoadingContent::Destroy();
   nsGenericHTMLFormElement::DestroyContent();
 }
 
@@ -473,7 +483,6 @@ JSObject* HTMLObjectElement::WrapNode(JSContext* aCx,
   return obj;
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 NS_IMPL_NS_NEW_HTML_ELEMENT_CHECK_PARSER(Object)

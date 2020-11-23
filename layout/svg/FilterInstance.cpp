@@ -70,7 +70,7 @@ void FilterInstance::PaintFilteredFrame(nsIFrame* aFilteredFrame,
       UserSpaceMetricsForFrame(aFilteredFrame);
 
   gfxContextMatrixAutoSaveRestore autoSR(aCtx);
-  gfxSize scaleFactors = aCtx->CurrentMatrixDouble().ScaleFactors(true);
+  gfxSize scaleFactors = aCtx->CurrentMatrixDouble().ScaleFactors();
   if (scaleFactors.IsEmpty()) {
     return;
   }
@@ -230,13 +230,9 @@ bool FilterInstance::BuildWebRenderFilters(nsIFrame* aFilteredFrame,
       const GaussianBlurAttributes& blur = attr.as<GaussianBlurAttributes>();
 
       const Size& stdDev = blur.mStdDeviation;
-      if (stdDev.width != stdDev.height) {
-        return false;
-      }
-
-      float radius = stdDev.width;
-      if (radius != 0.0) {
-        aWrFilters.filters.AppendElement(wr::FilterOp::Blur(radius));
+      if (stdDev.width != 0.0 || stdDev.height != 0.0) {
+        aWrFilters.filters.AppendElement(
+            wr::FilterOp::Blur(stdDev.width, stdDev.height));
       } else {
         filterIsNoop = true;
       }
@@ -411,7 +407,7 @@ nsRect FilterInstance::GetPostFilterBounds(nsIFrame* aFilteredFrame,
                                            const nsRect* aPreFilterBounds) {
   MOZ_ASSERT(!aFilteredFrame->HasAnyStateBits(NS_FRAME_SVG_LAYOUT) ||
                  !aFilteredFrame->HasAnyStateBits(NS_FRAME_IS_NONDISPLAY),
-             "Non-display SVG do not maintain visual overflow rects");
+             "Non-display SVG do not maintain ink overflow rects");
 
   nsRegion preFilterRegion;
   nsRegion* preFilterRegionPtr = nullptr;
@@ -443,7 +439,7 @@ FilterInstance::FilterInstance(
     bool aFilterInputIsTainted, SVGFilterPaintCallback* aPaintCallback,
     const gfxMatrix& aPaintTransform, const nsRegion* aPostFilterDirtyRegion,
     const nsRegion* aPreFilterDirtyRegion,
-    const nsRect* aPreFilterVisualOverflowRectOverride,
+    const nsRect* aPreFilterInkOverflowRectOverride,
     const gfxRect* aOverrideBBox)
     : mTargetFrame(aTargetFrame),
       mTargetContent(aTargetContent),
@@ -482,11 +478,10 @@ FilterInstance::FilterInstance(
   mFrameSpaceInCSSPxToFilterSpaceTransform.Invert();
 
   nsIntRect targetBounds;
-  if (aPreFilterVisualOverflowRectOverride) {
-    targetBounds =
-        FrameSpaceToFilterSpace(aPreFilterVisualOverflowRectOverride);
+  if (aPreFilterInkOverflowRectOverride) {
+    targetBounds = FrameSpaceToFilterSpace(aPreFilterInkOverflowRectOverride);
   } else if (mTargetFrame) {
-    nsRect preFilterVOR = mTargetFrame->GetPreEffectsVisualOverflowRect();
+    nsRect preFilterVOR = mTargetFrame->PreEffectsInkOverflowRect();
     targetBounds = FrameSpaceToFilterSpace(&preFilterVOR);
   }
   mTargetBounds.UnionRect(mTargetBBoxInFilterSpace, targetBounds);
@@ -514,7 +509,7 @@ bool FilterInstance::ComputeTargetBBoxInFilterSpace() {
 
 bool FilterInstance::ComputeUserSpaceToFilterSpaceScale() {
   if (mTargetFrame) {
-    mUserSpaceToFilterSpaceScale = mPaintTransform.ScaleFactors(true);
+    mUserSpaceToFilterSpaceScale = mPaintTransform.ScaleFactors();
     if (mUserSpaceToFilterSpaceScale.width <= 0.0f ||
         mUserSpaceToFilterSpaceScale.height <= 0.0f) {
       // Nothing should be rendered.
@@ -728,8 +723,17 @@ void FilterInstance::BuildSourceImage(DrawTarget* aDest,
   ctx->SetMatrixDouble(devPxToCssPxTM * mPaintTransform *
                        gfxMatrix::Translation(-neededRect.TopLeft()));
 
-  mPaintCallback->Paint(*ctx, mTargetFrame, mPaintTransform, &dirty,
-                        aImgParams);
+  auto imageFlags = aImgParams.imageFlags;
+  if (mTargetFrame->HasAnyStateBits(NS_FRAME_IS_NONDISPLAY)) {
+    // We're coming from a mask or pattern instance. Patterns
+    // are painted into a separate surface and it seems we can't
+    // handle the differently sized surface that might be returned
+    // with FLAG_HIGH_QUALITY_SCALING
+    imageFlags &= ~imgIContainer::FLAG_HIGH_QUALITY_SCALING;
+  }
+  imgDrawingParams imgParams(imageFlags);
+  mPaintCallback->Paint(*ctx, mTargetFrame, mPaintTransform, &dirty, imgParams);
+  aImgParams.result = imgParams.result;
 
   mSourceGraphic.mSourceSurface = offscreenDT->Snapshot();
   mSourceGraphic.mSurfaceRect = neededRect;

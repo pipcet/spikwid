@@ -182,8 +182,8 @@ toolkit/components/telemetry/export: layout/style/ServoCSSPropList.py
 toolkit/components/updateagent/target: toolkit/mozapps/update/common/target
 
 ifeq ($(TARGET_ENDIANNESS),big)
-config/external/icu/data/target-objects: config/external/icu/data/icudt$(MOZ_ICU_VERSION)b.dat
-config/external/icu/data/icudt$(MOZ_ICU_VERSION)b.dat: config/external/icu/icupkg/host
+config/external/icu/data/target-objects: config/external/icu/data/$(MDDEPDIR)/icudt$(MOZ_ICU_VERSION)b.dat.stub
+config/external/icu/data/$(MDDEPDIR)/icudt$(MOZ_ICU_VERSION)b.dat.stub: config/external/icu/icupkg/host
 endif
 
 ifdef ENABLE_CLANG_PLUGIN
@@ -206,7 +206,7 @@ endif
 # Interdependencies that moz.build world don't know about yet for compilation.
 # Note some others are hardcoded or "guessed" in recursivemake.py and emitter.py
 ifeq ($(MOZ_WIDGET_TOOLKIT),gtk)
-toolkit/library/target: widget/gtk/mozgtk/gtk3/target
+toolkit/library/build/target: widget/gtk/mozgtk/gtk3/target
 endif
 
 ifndef MOZ_FOLD_LIBS

@@ -197,10 +197,9 @@ function idleWait(time) {
 
 function busyWait(time) {
   const start = Date.now();
-  // eslint-disable-next-line
   let stack;
   while (Date.now() - start < time) {
-    stack = Components.stack;
+    stack = Components.stack; // eslint-disable-line no-unused-vars
   }
 }
 
@@ -237,33 +236,32 @@ function waitForMarkerType(
       return true;
     };
   let filteredMarkers = [];
-  const { promise, resolve } = defer();
 
-  info("Waiting for markers of type: " + types);
+  return new Promise(resolve => {
+    info("Waiting for markers of type: " + types);
 
-  function handler(name, data) {
-    if (typeof name === "string" && name !== "markers") {
-      return;
+    function handler(name, data) {
+      if (typeof name === "string" && name !== "markers") {
+        return;
+      }
+
+      const markers = unpackFun(name, data);
+      info("Got markers");
+
+      filteredMarkers = filteredMarkers.concat(
+        markers.filter(m => types.includes(m.name))
+      );
+
+      if (
+        types.every(t => filteredMarkers.some(m => m.name === t)) &&
+        predicate(filteredMarkers)
+      ) {
+        front.off(eventName, handler);
+        resolve(filteredMarkers);
+      }
     }
-
-    const markers = unpackFun(name, data);
-    info("Got markers");
-
-    filteredMarkers = filteredMarkers.concat(
-      markers.filter(m => types.includes(m.name))
-    );
-
-    if (
-      types.every(t => filteredMarkers.some(m => m.name === t)) &&
-      predicate(filteredMarkers)
-    ) {
-      front.off(eventName, handler);
-      resolve(filteredMarkers);
-    }
-  }
-  front.on(eventName, handler);
-
-  return promise;
+    front.on(eventName, handler);
+  });
 }
 
 function getCookieId(name, domain, path) {

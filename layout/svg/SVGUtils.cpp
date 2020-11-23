@@ -79,12 +79,10 @@ namespace mozilla {
 // we only take the address of this:
 static gfx::UserDataKey sSVGAutoRenderStateKey;
 
-SVGAutoRenderState::SVGAutoRenderState(
-    DrawTarget* aDrawTarget MOZ_GUARD_OBJECT_NOTIFIER_PARAM_IN_IMPL)
+SVGAutoRenderState::SVGAutoRenderState(DrawTarget* aDrawTarget)
     : mDrawTarget(aDrawTarget),
       mOriginalRenderState(nullptr),
       mPaintingToWindow(false) {
-  MOZ_GUARD_OBJECT_NOTIFIER_INIT;
   mOriginalRenderState = aDrawTarget->RemoveUserData(&sSVGAutoRenderStateKey);
   // We always remove ourselves from aContext before it dies, so
   // passing nullptr as the destroy function is okay.
@@ -112,8 +110,8 @@ bool SVGAutoRenderState::IsPaintingToWindow(DrawTarget* aDrawTarget) {
   return false;
 }
 
-nsRect SVGUtils::GetPostFilterVisualOverflowRect(nsIFrame* aFrame,
-                                                 const nsRect& aPreFilterRect) {
+nsRect SVGUtils::GetPostFilterInkOverflowRect(nsIFrame* aFrame,
+                                              const nsRect& aPreFilterRect) {
   MOZ_ASSERT(aFrame->HasAnyStateBits(NS_FRAME_SVG_LAYOUT),
              "Called on invalid frame type");
 
@@ -475,7 +473,7 @@ void SVGUtils::DetermineMaskUsage(nsIFrame* aFrame, bool aHandleOpacity,
 
 class MixModeBlender {
  public:
-  typedef mozilla::gfx::Factory Factory;
+  using Factory = gfx::Factory;
 
   MixModeBlender(nsIFrame* aFrame, gfxContext* aContext)
       : mFrame(aFrame), mSourceCtx(aContext) {
@@ -539,11 +537,11 @@ class MixModeBlender {
     gfxContextAutoSaveRestore saver(mSourceCtx);
 
     if (!mFrame->HasAnyStateBits(NS_FRAME_IS_NONDISPLAY)) {
-      // aFrame has a valid visual overflow rect, so clip to it before calling
+      // aFrame has a valid ink overflow rect, so clip to it before calling
       // PushGroup() to minimize the size of the surfaces we'll composite:
       gfxContextMatrixAutoSaveRestore matrixAutoSaveRestore(mSourceCtx);
       mSourceCtx->Multiply(aTransform);
-      nsRect overflowRect = mFrame->GetVisualOverflowRectRelativeToSelf();
+      nsRect overflowRect = mFrame->InkOverflowRectRelativeToSelf();
       if (mFrame->IsSVGGeometryFrameOrSubclass() ||
           SVGUtils::IsInSVGTextSubtree(mFrame)) {
         // Unlike containers, leaf frames do not include GetPosition() in
@@ -604,7 +602,7 @@ void SVGUtils::PaintFrameWithEffects(nsIFrame* aFrame, gfxContext& aContext,
     // compare it to aDirtyRect, and return early if they don't intersect.
     // We don't do this optimization for nondisplay SVG since nondisplay
     // SVG doesn't maintain bounds/overflow rects.
-    nsRect overflowRect = aFrame->GetVisualOverflowRectRelativeToSelf();
+    nsRect overflowRect = aFrame->InkOverflowRectRelativeToSelf();
     if (aFrame->IsSVGGeometryFrameOrSubclass() ||
         SVGUtils::IsInSVGTextSubtree(aFrame)) {
       // Unlike containers, leaf frames do not include GetPosition() in

@@ -110,7 +110,8 @@ add_task(async _ => {
       ["dom.serviceWorkers.enabled", true],
       ["dom.serviceWorkers.testing.enabled", true],
     ],
-    expectedBlockingNotifications: 0,
+    expectedBlockingNotifications:
+      Ci.nsIWebProgressListener.STATE_COOKIES_BLOCKED_TRACKER, // expect blocking notifications,
     runInPrivateWindow: false,
     iframeSandbox: "allow-scripts allow-same-origin",
     accessRemoval: null,
@@ -122,7 +123,7 @@ add_task(async _ => {
 
   AntiTracking._createTask({
     name:
-      "Test again to check if we cannot use service worker in a nested iframe without hit the assertion.",
+      "Test again to check if we can use service worker in a nested iframe without hit the assertion.",
     cookieBehavior: BEHAVIOR_REJECT_TRACKER,
     allowList: false,
     callback: async _ => {
@@ -130,10 +131,10 @@ add_task(async _ => {
         .register("empty.js")
         .then(
           _ => {
-            ok(false, "ServiceWorker cannot be used in nested iframe!");
+            ok(true, "ServiceWorker can be used in nested iframe!");
           },
           _ => {
-            ok(true, "ServiceWorker cannot be used in nested iframe!");
+            ok(false, "ServiceWorker can be used in nested iframe!");
           }
         )
         .catch(e => ok(false, "Promise rejected: " + e));
@@ -143,15 +144,7 @@ add_task(async _ => {
       ["dom.serviceWorkers.enabled", true],
       ["dom.serviceWorkers.testing.enabled", true],
     ],
-    expectedBlockingNotifications:
-      Ci.nsIWebProgressListener.STATE_COOKIES_BLOCKED_TRACKER,
-    // Due to the first-level iframe won't be considered as a third-party
-    // tracking iframe in this test since it is loaded with the origin of the
-    // top level. So, the test framework will reset the
-    // `expectedBlockingNotifications` to 0. However, we actually expect to see
-    // blocking notifications from the nested iframe where we do the test. So,
-    // we have to skip resetting the blocking notifications for this test.
-    dontResetExpectedBlockingNotifications: true,
+    expectedBlockingNotifications: 0,
     runInPrivateWindow: false,
     iframeSandbox: null,
     accessRemoval: null,

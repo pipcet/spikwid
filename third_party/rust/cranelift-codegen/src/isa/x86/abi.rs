@@ -108,6 +108,19 @@ impl Args {
 
 impl ArgAssigner for Args {
     fn assign(&mut self, arg: &AbiParam) -> ArgAction {
+        if let ArgumentPurpose::StructArgument(size) = arg.purpose {
+            if self.call_conv != CallConv::SystemV {
+                panic!(
+                    "The sarg argument purpose is not yet implemented for non-systemv call conv {:?}",
+                    self.call_conv,
+                );
+            }
+            let loc = ArgumentLoc::Stack(self.offset as i32);
+            self.offset += size;
+            debug_assert!(self.offset <= i32::MAX as u32);
+            return ArgAction::AssignAndChangeType(loc, types::SARG_T);
+        }
+
         let ty = arg.value_type;
 
         if ty.bits() > u16::from(self.pointer_bits) {
@@ -493,6 +506,7 @@ pub fn prologue_epilogue(func: &mut ir::Function, isa: &dyn TargetIsa) -> Codege
             baldrdash_prologue_epilogue(func, isa)
         }
         CallConv::Probestack => unimplemented!("probestack calling convention"),
+        CallConv::Baldrdash2020 => unimplemented!("Baldrdash ABI 2020"),
     }
 }
 
@@ -979,7 +993,7 @@ fn insert_common_epilogues(
         pos.goto_last_inst(block);
         if let Some(inst) = pos.current_inst() {
             if pos.func.dfg[inst].opcode().is_return() {
-                insert_common_epilogue(inst, stack_size, pos, reg_type, csrs, sp_arg_index);
+                insert_common_epilogue(inst, block, stack_size, pos, reg_type, csrs, sp_arg_index);
             }
         }
     }
@@ -989,6 +1003,7 @@ fn insert_common_epilogues(
 /// This is used by common calling conventions such as System V.
 fn insert_common_epilogue(
     inst: ir::Inst,
+    block: ir::Block,
     stack_size: i64,
     pos: &mut EncCursor,
     reg_type: ir::types::Type,
@@ -1048,12 +1063,13 @@ fn insert_common_epilogue(
         assert!(csrs.iter(FPR).len() == 0);
     }
 
-    pos.func.epilogues_start.push(
+    pos.func.epilogues_start.push((
         first_fpr_load
             .or(sp_adjust_inst)
             .or(first_csr_pop_inst)
             .unwrap_or(fp_pop_inst),
-    );
+        block,
+    ));
 }
 
 #[cfg(feature = "unwind")]
@@ -1067,8 +1083,7 @@ pub fn create_unwind_info(
     // In the future, we should be omitting frame pointer as an optimization, so this will change
     Ok(match func.signature.call_conv {
         CallConv::Fast | CallConv::Cold | CallConv::SystemV => {
-            super::unwind::systemv::create_unwind_info(func, isa, Some(RU::rbp.into()))?
-                .map(|u| UnwindInfo::SystemV(u))
+            super::unwind::systemv::create_unwind_info(func, isa)?.map(|u| UnwindInfo::SystemV(u))
         }
         CallConv::WindowsFastcall => {
             super::unwind::winx64::create_unwind_info(func, isa)?.map(|u| UnwindInfo::WindowsX64(u))

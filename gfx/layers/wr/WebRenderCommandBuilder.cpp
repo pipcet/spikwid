@@ -31,8 +31,8 @@
 #include "UnitTransforms.h"
 #include "gfxEnv.h"
 #include "nsDisplayListInvalidation.h"
+#include "nsLayoutUtils.h"
 #include "WebRenderCanvasRenderer.h"
-#include "LayersLogging.h"
 #include "LayerTreeInvalidation.h"
 
 namespace mozilla {
@@ -758,11 +758,12 @@ struct DIGroup {
     // cf. Bug 1455422.
     // wr::LayoutRect clip = wr::ToLayoutRect(bounds.Intersect(mVisibleRect));
 
-    aBuilder.SetHitTestInfo(mScrollId, hitInfo, SideBits::eNone);
+    aBuilder.PushHitTest(dest, dest, !backfaceHidden, mScrollId, hitInfo,
+                         SideBits::eNone);
+
     aBuilder.PushImage(dest, dest, !backfaceHidden,
                        wr::ToImageRendering(sampleFilter),
                        wr::AsImageKey(*mKey));
-    aBuilder.ClearHitTestInfo();
   }
 
   void PaintItemRange(Grouper* aGrouper, nsDisplayItem* aStartItem,
@@ -1338,10 +1339,10 @@ void Grouper::ConstructItemInsideInactive(
 
 /* This is just a copy of nsRect::ScaleToOutsidePixels with an offset added in.
  * The offset is applied just before the rounding. It's in the scaled space. */
-static mozilla::gfx::IntRect ScaleToOutsidePixelsOffset(
+static mozilla::LayerIntRect ScaleToOutsidePixelsOffset(
     nsRect aRect, float aXScale, float aYScale, nscoord aAppUnitsPerPixel,
     LayerPoint aOffset) {
-  mozilla::gfx::IntRect rect;
+  mozilla::LayerIntRect rect;
   rect.SetNonEmptyBox(
       NSToIntFloor(NSAppUnitsToFloatPixels(aRect.x, float(aAppUnitsPerPixel)) *
                        aXScale +
@@ -1430,17 +1431,16 @@ void WebRenderCommandBuilder::DoGroupingForDisplayList(
   // allocating much larger textures than necessary in webrender.
   //
   // Don't bother fixing this unless we run into this in the real world, though.
-  auto layerBounds = LayerIntRect::FromUnknownRect(
+  auto layerBounds =
       ScaleToOutsidePixelsOffset(groupBounds, scale.width, scale.height,
-                                 appUnitsPerDevPixel, residualOffset));
+                                 appUnitsPerDevPixel, residualOffset);
 
   const nsRect& untransformedPaintRect =
       aWrappingItem->GetUntransformedPaintRect();
 
-  auto visibleRect = LayerIntRect::FromUnknownRect(
-                         ScaleToOutsidePixelsOffset(
-                             untransformedPaintRect, scale.width, scale.height,
-                             appUnitsPerDevPixel, residualOffset))
+  auto visibleRect = ScaleToOutsidePixelsOffset(
+                         untransformedPaintRect, scale.width, scale.height,
+                         appUnitsPerDevPixel, residualOffset)
                          .Intersect(layerBounds);
 
   GP("LayerBounds: %d %d %d %d\n", layerBounds.x, layerBounds.y,
@@ -1552,7 +1552,7 @@ void WebRenderCommandBuilder::BuildWebRenderCommands(
   AUTO_PROFILER_LABEL_CATEGORY_PAIR(GRAPHICS_WRDisplayList);
 
   StackingContextHelper sc;
-  aScrollData = WebRenderScrollData(mManager);
+  aScrollData = WebRenderScrollData(mManager, aDisplayListBuilder);
   MOZ_ASSERT(mLayerScrollData.empty());
   mClipManager.BeginBuild(mManager, aBuilder);
   mBuilderDumpIndex = 0;
@@ -1856,17 +1856,11 @@ Maybe<wr::ImageKey> WebRenderCommandBuilder::CreateImageKey(
 
     LayoutDeviceRect rect = aAsyncImageBounds.value();
     LayoutDeviceRect scBounds(LayoutDevicePoint(0, 0), rect.Size());
-    gfx::MaybeIntSize scaleToSize;
-    if (!aContainer->GetScaleHint().IsEmpty()) {
-      scaleToSize = Some(aContainer->GetScaleHint());
-    }
-    gfx::Matrix4x4 transform =
-        gfx::Matrix4x4::From2D(aContainer->GetTransformHint());
     // TODO!
     // We appear to be using the image bridge for a lot (most/all?) of
     // layers-free image handling and that breaks frame consistency.
     imageData->CreateAsyncImageWebRenderCommands(
-        aBuilder, aContainer, aSc, rect, scBounds, transform, scaleToSize,
+        aBuilder, aContainer, aSc, rect, scBounds, aContainer->GetRotation(),
         aRendering, wr::MixBlendMode::Normal, !aItem->BackfaceIsHidden());
     return Nothing();
   }
@@ -2000,9 +1994,8 @@ static bool PaintByLayer(nsDisplayItem* aItem,
         aItem->Name(), aItem->Frame());
     std::stringstream stream;
     aManager->Dump(stream, "", gfxEnv::DumpPaintToFile());
-    fprint_stderr(
-        gfxUtils::sDumpPaintFile,
-        stream);  // not a typo, fprint_stderr declared in LayersLogging.h
+    fprint_stderr(gfxUtils::sDumpPaintFile,
+                  stream);  // not a typo, fprint_stderr declared in nsDebug.h
   }
 #endif
 
@@ -2179,14 +2172,12 @@ WebRenderCommandBuilder::GenerateFallbackData(
                           appUnitsPerDevPixel, residualOffset))
                       .Intersect(dtRect);
   } else {
-    dtRect = LayerIntRect::FromUnknownRect(
-        ScaleToOutsidePixelsOffset(paintBounds, scale.width, scale.height,
-                                   appUnitsPerDevPixel, residualOffset));
+    dtRect = ScaleToOutsidePixelsOffset(paintBounds, scale.width, scale.height,
+                                        appUnitsPerDevPixel, residualOffset);
 
-    visibleRect = LayerIntRect::FromUnknownRect(
-                      ScaleToOutsidePixelsOffset(
-                          aItem->GetBuildingRect(), scale.width, scale.height,
-                          appUnitsPerDevPixel, residualOffset))
+    visibleRect = ScaleToOutsidePixelsOffset(
+                      aItem->GetBuildingRect(), scale.width, scale.height,
+                      appUnitsPerDevPixel, residualOffset)
                       .Intersect(dtRect);
   }
 

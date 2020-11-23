@@ -1,26 +1,58 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 use crate::command::LogOptions;
 use crate::logging::Level;
 use base64;
+use mozdevice::AndroidStorageInput;
 use mozprofile::preferences::Pref;
 use mozprofile::profile::Profile;
 use mozrunner::runner::platform::firefox_default_path;
-use mozversion::{self, firefox_version, Version};
+use mozversion::{self, firefox_binary_version, firefox_version, Version};
 use regex::bytes::Regex;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::default::Default;
+use std::fmt::{self, Display};
 use std::fs;
 use std::io;
 use std::io::BufWriter;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::str::{self, FromStr};
 use webdriver::capabilities::{BrowserCapabilities, Capabilities};
 use webdriver::error::{ErrorStatus, WebDriverError, WebDriverResult};
 use zip;
 
-/// Provides matching of `moz:firefoxOptions` and resolution of which Firefox
+#[derive(Clone, Debug)]
+enum VersionError {
+    VersionError(mozversion::Error),
+    MissingBinary,
+}
+
+impl From<mozversion::Error> for VersionError {
+    fn from(err: mozversion::Error) -> VersionError {
+        VersionError::VersionError(err)
+    }
+}
+
+impl Display for VersionError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            VersionError::VersionError(ref x) => x.fmt(f),
+            VersionError::MissingBinary => "No binary provided".fmt(f),
+        }
+    }
+}
+
+impl From<VersionError> for WebDriverError {
+    fn from(err: VersionError) -> WebDriverError {
+        WebDriverError::new(ErrorStatus::SessionNotCreated, err.to_string())
+    }
+}
+
+/// Provides matching of `moz:firefoxOptions` and resolutionnized  of which Firefox
 /// binary to use.
 ///
 /// `FirefoxCapabilities` is constructed with the fallback binary, should
@@ -30,7 +62,7 @@ use zip;
 pub struct FirefoxCapabilities<'a> {
     pub chosen_binary: Option<PathBuf>,
     fallback_binary: Option<&'a PathBuf>,
-    version_cache: BTreeMap<PathBuf, String>,
+    version_cache: BTreeMap<PathBuf, Result<Version, VersionError>>,
 }
 
 impl<'a> FirefoxCapabilities<'a> {
@@ -49,59 +81,45 @@ impl<'a> FirefoxCapabilities<'a> {
             .and_then(|x| x.as_str())
             .map(PathBuf::from)
             .or_else(|| self.fallback_binary.cloned())
-            .or_else(firefox_default_path)
+            .or_else(firefox_default_path);
     }
 
-    fn version(&mut self) -> Option<String> {
-        if let Some(ref binary) = self.chosen_binary {
-            if let Some(value) = self.version_cache.get(binary) {
-                return Some((*value).clone());
+    fn version(&mut self, binary: Option<&Path>) -> Result<Version, VersionError> {
+        if let Some(binary) = binary {
+            if let Some(cache_value) = self.version_cache.get(binary) {
+                return cache_value.clone();
             }
-            debug!("Trying to read firefox version from ini files");
-            let rv = firefox_version(&*binary)
-                .ok()
-                .and_then(|x| x.version_string)
-                .or_else(|| {
-                    debug!("Trying to read firefox version from binary");
-                    self.version_from_binary(binary)
-                });
-            if let Some(ref version) = rv {
+            let rv = self
+                .version_from_ini(binary)
+                .or_else(|_| self.version_from_binary(binary));
+            if let Ok(ref version) = rv {
                 debug!("Found version {}", version);
-                self.version_cache.insert(binary.clone(), version.clone());
             } else {
                 debug!("Failed to get binary version");
             }
+            self.version_cache.insert(binary.to_path_buf(), rv.clone());
             rv
         } else {
-            None
+            Err(VersionError::MissingBinary)
         }
     }
 
-    fn version_from_binary(&self, binary: &PathBuf) -> Option<String> {
-        let version_regexp =
-            Regex::new(r#"\d+\.\d+(?:[a-z]\d+)?"#).expect("Error parsing version regexp");
-        let output = Command::new(binary)
-            .args(&["-version"])
-            .stdout(Stdio::piped())
-            .spawn()
-            .and_then(|child| child.wait_with_output())
-            .ok();
-
-        if let Some(x) = output {
-            version_regexp
-                .captures(&*x.stdout)
-                .and_then(|captures| captures.get(0))
-                .and_then(|m| str::from_utf8(m.as_bytes()).ok())
-                .map(|x| x.into())
+    fn version_from_ini(&self, binary: &Path) -> Result<Version, VersionError> {
+        debug!("Trying to read firefox version from ini files");
+        let version = firefox_version(binary)?;
+        if let Some(version_string) = version.version_string {
+            Version::from_str(&version_string).map_err(|err| err.into())
         } else {
-            None
+            Err(VersionError::VersionError(
+                mozversion::Error::MetadataError("Missing version string".into()),
+            ))
         }
     }
-}
 
-// TODO: put this in webdriver-rust
-fn convert_version_error(err: mozversion::Error) -> WebDriverError {
-    WebDriverError::new(ErrorStatus::SessionNotCreated, err.to_string())
+    fn version_from_binary(&self, binary: &Path) -> Result<Version, VersionError> {
+        debug!("Trying to read firefox version from binary");
+        Ok(firefox_binary_version(binary)?)
+    }
 }
 
 impl<'a> BrowserCapabilities for FirefoxCapabilities<'a> {
@@ -114,7 +132,10 @@ impl<'a> BrowserCapabilities for FirefoxCapabilities<'a> {
     }
 
     fn browser_version(&mut self, _: &Capabilities) -> WebDriverResult<Option<String>> {
-        Ok(self.version())
+        let binary = self.chosen_binary.clone();
+        self.version(binary.as_ref().map(|x| x.as_ref()))
+            .map_err(|err| err.into())
+            .map(|x| Some(x.to_string()))
     }
 
     fn platform_name(&mut self, _: &Capabilities) -> WebDriverResult<Option<String>> {
@@ -130,15 +151,7 @@ impl<'a> BrowserCapabilities for FirefoxCapabilities<'a> {
     }
 
     fn accept_insecure_certs(&mut self, _: &Capabilities) -> WebDriverResult<bool> {
-        let version_str = self.version();
-        if let Some(x) = version_str {
-            Ok(Version::from_str(&*x)
-                .or_else(|x| Err(convert_version_error(x)))?
-                .major
-                >= 52)
-        } else {
-            Ok(false)
-        }
+        Ok(true)
     }
 
     fn set_window_rect(&mut self, _: &Capabilities) -> WebDriverResult<bool> {
@@ -151,9 +164,9 @@ impl<'a> BrowserCapabilities for FirefoxCapabilities<'a> {
         comparison: &str,
     ) -> WebDriverResult<bool> {
         Version::from_str(version)
-            .or_else(|x| Err(convert_version_error(x)))?
+            .map_err(|err| VersionError::from(err))?
             .matches(comparison)
-            .or_else(|x| Err(convert_version_error(x)))
+            .map_err(|err| VersionError::from(err).into())
     }
 
     fn strict_file_interactability(&mut self, _: &Capabilities) -> WebDriverResult<bool> {
@@ -164,7 +177,7 @@ impl<'a> BrowserCapabilities for FirefoxCapabilities<'a> {
         Ok(true)
     }
 
-    fn validate_custom(&self, name: &str, value: &Value) -> WebDriverResult<()> {
+    fn validate_custom(&mut self, name: &str, value: &Value) -> WebDriverResult<()> {
         if !name.starts_with("moz:") {
             return Ok(());
         }
@@ -180,7 +193,6 @@ impl<'a> BrowserCapabilities for FirefoxCapabilities<'a> {
                         "androidActivity"
                         | "androidDeviceSerial"
                         | "androidPackage"
-                        | "binary"
                         | "profile" => {
                             if !value.is_string() {
                                 return Err(WebDriverError::new(
@@ -201,6 +213,23 @@ impl<'a> BrowserCapabilities for FirefoxCapabilities<'a> {
                                 return Err(WebDriverError::new(
                                     ErrorStatus::InvalidArgument,
                                     format!("{} entry is not a string", &**key),
+                                ));
+                            }
+                        }
+                        "binary" => {
+                            if let Some(binary) = value.as_str() {
+                                if !data.contains_key("androidPackage")
+                                    && self.version(Some(Path::new(binary))).is_err()
+                                {
+                                    return Err(WebDriverError::new(
+                                        ErrorStatus::InvalidArgument,
+                                        format!("{} is not a Firefox executable", &**key),
+                                    ));
+                                }
+                            } else {
+                                return Err(WebDriverError::new(
+                                    ErrorStatus::InvalidArgument,
+                                    format!("{} is not a string", &**key),
                                 ));
                             }
                         }
@@ -288,6 +317,14 @@ impl<'a> BrowserCapabilities for FirefoxCapabilities<'a> {
                     ));
                 }
             }
+            "moz:debuggerAddress" => {
+                if !value.is_boolean() {
+                    return Err(WebDriverError::new(
+                        ErrorStatus::InvalidArgument,
+                        "moz:debuggerAddress is not a boolean",
+                    ));
+                }
+            }
             _ => {
                 return Err(WebDriverError::new(
                     ErrorStatus::InvalidArgument,
@@ -312,12 +349,14 @@ pub struct AndroidOptions {
     pub device_serial: Option<String>,
     pub intent_arguments: Option<Vec<String>>,
     pub package: String,
+    pub storage: AndroidStorageInput,
 }
 
 impl AndroidOptions {
-    fn new(package: String) -> AndroidOptions {
+    pub fn new(package: String, storage: AndroidStorageInput) -> AndroidOptions {
         AndroidOptions {
             package,
+            storage,
             ..Default::default()
         }
     }
@@ -347,6 +386,7 @@ impl FirefoxOptions {
 
     pub fn from_capabilities(
         binary_path: Option<PathBuf>,
+        android_storage: AndroidStorageInput,
         matched: &mut Capabilities,
     ) -> WebDriverResult<FirefoxOptions> {
         let mut rv = FirefoxOptions::new();
@@ -361,12 +401,33 @@ impl FirefoxOptions {
                 )
             })?;
 
-            rv.android = FirefoxOptions::load_android(&options)?;
+            rv.android = FirefoxOptions::load_android(android_storage, &options)?;
             rv.args = FirefoxOptions::load_args(&options)?;
             rv.env = FirefoxOptions::load_env(&options)?;
             rv.log = FirefoxOptions::load_log(&options)?;
             rv.prefs = FirefoxOptions::load_prefs(&options)?;
             rv.profile = FirefoxOptions::load_profile(&options)?;
+        }
+
+        if let Some(json) = matched.remove("moz:debuggerAddress") {
+            let use_web_socket = json.as_bool().ok_or_else(|| {
+                WebDriverError::new(
+                    ErrorStatus::InvalidArgument,
+                    "moz:debuggerAddress is not a boolean",
+                )
+            })?;
+
+            if use_web_socket {
+                let mut remote_args = Vec::new();
+                remote_args.push("--remote-debugging-port".to_owned());
+                remote_args.push("0".to_owned());
+
+                if let Some(ref mut args) = rv.args {
+                    args.append(&mut remote_args);
+                } else {
+                    rv.args = Some(remote_args);
+                }
+            }
         }
 
         Ok(rv)
@@ -489,7 +550,10 @@ impl FirefoxOptions {
         }
     }
 
-    pub fn load_android(options: &Capabilities) -> WebDriverResult<Option<AndroidOptions>> {
+    pub fn load_android(
+        storage: AndroidStorageInput,
+        options: &Capabilities,
+    ) -> WebDriverResult<Option<AndroidOptions>> {
         if let Some(package_json) = options.get("androidPackage") {
             let package = package_json
                 .as_str()
@@ -511,7 +575,7 @@ impl FirefoxOptions {
                 ));
             }
 
-            let mut android = AndroidOptions::new(package);
+            let mut android = AndroidOptions::new(package, storage);
 
             android.activity = match options.get("androidActivity") {
                 Some(json) => {
@@ -650,10 +714,10 @@ fn unzip_buffer(buf: &[u8], dest_dir: &Path) -> WebDriverResult<()> {
 mod tests {
     extern crate mozprofile;
 
+    use self::mozprofile::preferences::Pref;
     use super::*;
     use crate::marionette::MarionetteHandler;
-
-    use self::mozprofile::preferences::Pref;
+    use mozdevice::AndroidStorageInput;
     use serde_json::json;
     use std::default::Default;
     use std::fs::File;
@@ -672,7 +736,7 @@ mod tests {
         let mut caps = Capabilities::new();
         caps.insert("moz:firefoxOptions".into(), Value::Object(firefox_opts));
 
-        FirefoxOptions::from_capabilities(None, &mut caps)
+        FirefoxOptions::from_capabilities(None, AndroidStorageInput::Auto, &mut caps)
     }
 
     #[test]
@@ -691,7 +755,8 @@ mod tests {
     fn fx_options_from_capabilities_no_binary_and_caps() {
         let mut caps = Capabilities::new();
 
-        let opts = FirefoxOptions::from_capabilities(None, &mut caps).unwrap();
+        let opts =
+            FirefoxOptions::from_capabilities(None, AndroidStorageInput::Auto, &mut caps).unwrap();
         assert_eq!(opts.android, None);
         assert_eq!(opts.args, None);
         assert_eq!(opts.binary, None);
@@ -709,7 +774,12 @@ mod tests {
 
         let binary = PathBuf::from("foo");
 
-        let opts = FirefoxOptions::from_capabilities(Some(binary.clone()), &mut caps).unwrap();
+        let opts = FirefoxOptions::from_capabilities(
+            Some(binary.clone()),
+            AndroidStorageInput::Auto,
+            &mut caps,
+        )
+        .unwrap();
         assert_eq!(opts.android, None);
         assert_eq!(opts.args, None);
         assert_eq!(opts.binary, Some(binary));
@@ -718,11 +788,57 @@ mod tests {
     }
 
     #[test]
+    fn fx_options_from_capabilities_with_debugger_address_not_set() {
+        let mut caps = Capabilities::new();
+
+        let opts = FirefoxOptions::from_capabilities(None, AndroidStorageInput::Auto, &mut caps)
+            .expect("Valid Firefox options");
+
+        assert!(
+            opts.args.is_none(),
+            "CLI arguments for Firefox unexpectedly found"
+        );
+    }
+
+    #[test]
+    fn fx_options_from_capabilities_with_debugger_address_false() {
+        let mut caps = Capabilities::new();
+        caps.insert("moz:debuggerAddress".into(), json!(false));
+
+        let opts = FirefoxOptions::from_capabilities(None, AndroidStorageInput::Auto, &mut caps)
+            .expect("Valid Firefox options");
+
+        assert!(
+            opts.args.is_none(),
+            "CLI arguments for remote protocol unexpectedly found"
+        );
+    }
+
+    #[test]
+    fn fx_options_from_capabilities_with_debugger_address_true() {
+        let mut caps = Capabilities::new();
+        caps.insert("moz:debuggerAddress".into(), json!(true));
+
+        let opts = FirefoxOptions::from_capabilities(None, AndroidStorageInput::Auto, &mut caps)
+            .expect("Valid Firefox options");
+
+        if let Some(args) = opts.args {
+            let mut iter = args.iter();
+            assert!(iter
+                .find(|&arg| arg == &"--remote-debugging-port".to_owned())
+                .is_some());
+            assert_eq!(iter.next(), Some(&"0".to_owned()));
+        } else {
+            assert!(false, "CLI arguments for remote protocol not found");
+        }
+    }
+
+    #[test]
     fn fx_options_from_capabilities_with_invalid_caps() {
         let mut caps = Capabilities::new();
         caps.insert("moz:firefoxOptions".into(), json!(42));
 
-        FirefoxOptions::from_capabilities(None, &mut caps)
+        FirefoxOptions::from_capabilities(None, AndroidStorageInput::Auto, &mut caps)
             .expect_err("Firefox options need to be of type object");
     }
 
@@ -742,7 +858,13 @@ mod tests {
             firefox_opts.insert("androidPackage".into(), json!(value));
 
             let opts = make_options(firefox_opts).expect("valid firefox options");
-            assert_eq!(opts.android, Some(AndroidOptions::new(value.to_string())));
+            assert_eq!(
+                opts.android,
+                Some(AndroidOptions::new(
+                    value.to_string(),
+                    AndroidStorageInput::Auto
+                ))
+            );
         }
     }
 

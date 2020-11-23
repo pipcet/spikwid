@@ -155,9 +155,16 @@ void nsAbsoluteContainingBlock::Reflow(nsContainerFrame* aDelegatingFrame,
                                        nsReflowStatus& aReflowStatus,
                                        const nsRect& aContainingBlock,
                                        AbsPosReflowFlags aFlags,
-                                       nsOverflowAreas* aOverflowAreas) {
-  nsReflowStatus reflowStatus;
+                                       OverflowAreas* aOverflowAreas) {
+  // PageContentFrame replicates fixed pos children so we really don't want
+  // them contributing to overflow areas because that means we'll create new
+  // pages ad infinitum if one of them overflows the page.
+  if (aDelegatingFrame->IsPageContentFrame()) {
+    MOZ_ASSERT(mChildListID == nsAtomicContainerFrame::kFixedList);
+    aOverflowAreas = nullptr;
+  }
 
+  nsReflowStatus reflowStatus;
   const bool reflowAll = aReflowInput.ShouldReflowAllKids();
   const bool isGrid = !!(aFlags & AbsPosReflowFlags::IsGridContainerCB);
   nsIFrame* kidFrame;
@@ -195,11 +202,12 @@ void nsAbsoluteContainingBlock::Reflow(nsContainerFrame* aDelegatingFrame,
         nscoord kidOverflowBEnd =
             LogicalRect(containerWM,
                         // Use ...RelativeToSelf to ignore transforms
-                        kidFrame->GetScrollableOverflowRectRelativeToSelf() +
+                        kidFrame->ScrollableOverflowRectRelativeToSelf() +
                             kidFrame->GetPosition(),
                         aContainingBlock.Size())
                 .BEnd(containerWM);
-        MOZ_ASSERT(kidOverflowBEnd >= kidBEnd);
+        NS_ASSERTION(kidOverflowBEnd >= kidBEnd,
+                     "overflow area should be at least as large as frame rect");
         if (kidOverflowBEnd > availBSize ||
             (kidBEnd < availBSize && kidFrame->GetNextInFlow())) {
           kidNeedsReflow = true;
@@ -642,7 +650,7 @@ void nsAbsoluteContainingBlock::ResolveSizeDependentOffsets(
           logicalCBSizeOuterWM.BSize(outerWM) -
           (aOffsets->BStart(outerWM) + aKidSize.BSize(outerWM));
     }
-    aKidReflowInput.SetComputedLogicalOffsets(aOffsets->ConvertTo(wm, outerWM));
+    aKidReflowInput.SetComputedLogicalOffsets(outerWM, *aOffsets);
   }
 }
 
@@ -658,7 +666,7 @@ void nsAbsoluteContainingBlock::ReflowAbsoluteFrame(
     nsIFrame* aDelegatingFrame, nsPresContext* aPresContext,
     const ReflowInput& aReflowInput, const nsRect& aContainingBlock,
     AbsPosReflowFlags aFlags, nsIFrame* aKidFrame, nsReflowStatus& aStatus,
-    nsOverflowAreas* aOverflowAreas) {
+    OverflowAreas* aOverflowAreas) {
   MOZ_ASSERT(aStatus.IsEmpty(), "Caller should pass a fresh reflow status!");
 
 #ifdef DEBUG
@@ -691,7 +699,7 @@ void nsAbsoluteContainingBlock::ReflowAbsoluteFrame(
     availISize = aReflowInput.ComputedSizeWithPadding(wm).ISize(wm);
   }
 
-  uint32_t rsFlags = 0;
+  ReflowInput::InitFlags initFlags;
   if (aFlags & AbsPosReflowFlags::IsGridContainerCB) {
     // When a grid container generates the abs.pos. CB for a *child* then
     // the static position is determined via CSS Box Alignment within the
@@ -701,19 +709,18 @@ void nsAbsoluteContainingBlock::ReflowAbsoluteFrame(
     // abs.pos. CB origin, and then we'll align & offset it from there.
     nsIFrame* placeholder = aKidFrame->GetPlaceholderFrame();
     if (placeholder && placeholder->GetParent() == aDelegatingFrame) {
-      rsFlags |= ReflowInput::STATIC_POS_IS_CB_ORIGIN;
+      initFlags += ReflowInput::InitFlag::StaticPosIsCBOrigin;
     }
   }
   ReflowInput kidReflowInput(aPresContext, aReflowInput, aKidFrame,
                              LogicalSize(wm, availISize, NS_UNCONSTRAINEDSIZE),
-                             Some(logicalCBSize), rsFlags);
+                             Some(logicalCBSize), initFlags);
 
   // Get the border values
   WritingMode outerWM = aReflowInput.GetWritingMode();
   const LogicalMargin border(outerWM, aDelegatingFrame->GetUsedBorder());
 
-  LogicalMargin margin =
-      kidReflowInput.ComputedLogicalMargin().ConvertTo(outerWM, wm);
+  LogicalMargin margin = kidReflowInput.ComputedLogicalMargin(outerWM);
 
   // If we're doing CSS Box Alignment in either axis, that will apply the
   // margin for us in that axis (since the thing that's aligned is the margin
@@ -748,10 +755,11 @@ void nsAbsoluteContainingBlock::ReflowAbsoluteFrame(
     kidReflowInput.AvailableBSize() =
         aReflowInput.AvailableBSize() -
         border.ConvertTo(wm, outerWM).BStart(wm) -
-        kidReflowInput.ComputedLogicalMargin().BStart(wm);
-    if (NS_AUTOOFFSET != kidReflowInput.ComputedLogicalOffsets().BStart(wm)) {
-      kidReflowInput.AvailableBSize() -=
-          kidReflowInput.ComputedLogicalOffsets().BStart(wm);
+        kidReflowInput.ComputedLogicalMargin(wm).BStart(wm);
+    const nscoord kidOffsetBStart =
+        kidReflowInput.ComputedLogicalOffsets(wm).BStart(wm);
+    if (NS_AUTOOFFSET != kidOffsetBStart) {
+      kidReflowInput.AvailableBSize() -= kidOffsetBStart;
     }
   }
 
@@ -759,10 +767,9 @@ void nsAbsoluteContainingBlock::ReflowAbsoluteFrame(
   ReflowOutput kidDesiredSize(kidReflowInput);
   aKidFrame->Reflow(aPresContext, kidDesiredSize, kidReflowInput, aStatus);
 
-  const LogicalSize kidSize = kidDesiredSize.Size(wm).ConvertTo(outerWM, wm);
+  const LogicalSize kidSize = kidDesiredSize.Size(outerWM);
 
-  LogicalMargin offsets =
-      kidReflowInput.ComputedLogicalOffsets().ConvertTo(outerWM, wm);
+  LogicalMargin offsets = kidReflowInput.ComputedLogicalOffsets(outerWM);
 
   // If we're solving for start in either inline or block direction,
   // then compute it now that we know the dimensions.
@@ -790,7 +797,7 @@ void nsAbsoluteContainingBlock::ReflowAbsoluteFrame(
     // Size and position the view and set its opacity, visibility, content
     // transparency, and clip
     nsContainerFrame::SyncFrameViewAfterReflow(aPresContext, aKidFrame, view,
-                                               kidDesiredSize.VisualOverflow());
+                                               kidDesiredSize.InkOverflow());
   } else {
     nsContainerFrame::PositionChildViews(aKidFrame);
   }

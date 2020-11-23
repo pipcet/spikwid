@@ -60,20 +60,12 @@ var gBlocklistManager = {
     },
   },
 
-  onWindowKeyPress(event) {
-    if (event.keyCode == KeyEvent.DOM_VK_ESCAPE) {
-      window.close();
-    } else if (event.keyCode == KeyEvent.DOM_VK_RETURN) {
-      gBlocklistManager.onApplyChanges();
-    }
-  },
-
   onLoad() {
-    let params = window.arguments[0];
-    this.init(params);
+    this.init();
+    document.addEventListener("dialogaccept", () => this.onApplyChanges());
   },
 
-  init(params) {
+  init() {
     if (this._type) {
       // reusing an open dialog, clear the old observer
       this.uninit();
@@ -125,8 +117,6 @@ var gBlocklistManager = {
         listmanager.forceUpdates(trackingTable);
       }
     }
-
-    window.close();
   },
 
   async _loadBlockLists() {
@@ -151,17 +141,18 @@ var gBlocklistManager = {
   async _createBlockList(id) {
     let branch = Services.prefs.getBranch(LISTS_PREF_BRANCH);
     let l10nKey = branch.getCharPref(id);
-    let [name, listName, description] = await document.l10n.formatValues([
-      {
-        id: "blocklist-item-list-template",
-        args: {
-          listName,
-          description,
-        },
-      },
+
+    // eslint-disable-next-line mozilla/prefer-formatValues
+    let [listName, description] = await document.l10n.formatValues([
       { id: `blocklist-item-${l10nKey}-listName` },
       { id: `blocklist-item-${l10nKey}-description` },
     ]);
+
+    // eslint-disable-next-line mozilla/prefer-formatValues
+    let name = await document.l10n.formatValue("blocklist-item-list-template", {
+      listName,
+      description,
+    });
 
     return {
       id,

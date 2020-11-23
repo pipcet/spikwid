@@ -7,9 +7,11 @@
 #ifndef mozilla_dom_quota_usageinfo_h__
 #define mozilla_dom_quota_usageinfo_h__
 
-#include "mozilla/dom/quota/QuotaCommon.h"
-
+#include <cstdint>
+#include <utility>
 #include "mozilla/CheckedInt.h"
+#include "mozilla/Maybe.h"
+#include "mozilla/dom/quota/QuotaCommon.h"
 
 BEGIN_QUOTA_NAMESPACE
 
@@ -54,6 +56,18 @@ using FileUsageType = detail::Usage<UsageKind::File>;
 
 class UsageInfo final {
  public:
+  UsageInfo() = default;
+
+  explicit UsageInfo(const DatabaseUsageType aUsage) : mDatabaseUsage(aUsage) {}
+
+  explicit UsageInfo(const FileUsageType aUsage) : mFileUsage(aUsage) {}
+
+  UsageInfo operator+(const UsageInfo& aUsageInfo) {
+    UsageInfo res = *this;
+    res += aUsageInfo;
+    return res;
+  }
+
   UsageInfo& operator+=(const UsageInfo& aUsageInfo) {
     mDatabaseUsage += aUsageInfo.mDatabaseUsage;
     mFileUsage += aUsageInfo.mFileUsage;
@@ -69,6 +83,8 @@ class UsageInfo final {
     mFileUsage += aUsage;
     return *this;
   }
+
+  Maybe<uint64_t> DatabaseUsage() const { return mDatabaseUsage.GetValue(); }
 
   Maybe<uint64_t> FileUsage() const { return mFileUsage.GetValue(); }
 

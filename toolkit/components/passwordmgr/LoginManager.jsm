@@ -436,10 +436,24 @@ LoginManager.prototype = {
   },
 
   /**
-   * Remove all stored logins.
+   * Remove all user facing stored logins.
+   *
+   * This will not remove the FxA Sync key, which is stored with the rest of a user's logins.
+   */
+  removeAllUserFacingLogins() {
+    log.debug("Removing all user facing logins");
+    this._storage.removeAllUserFacingLogins();
+  },
+
+  /**
+   * Remove all logins from data store, including the FxA Sync key.
+   *
+   * NOTE: You probably want `removeAllUserFacingLogins()` instead of this function.
+   * This function will remove the FxA Sync key, which will break syncing of saved user data
+   * e.g. bookmarks, history, open tabs, logins and passwords, add-ons, and options
    */
   removeAllLogins() {
-    log.debug("Removing all logins");
+    log.debug("Removing all logins from local store, including FxA key");
     this._storage.removeAllLogins();
   },
 
@@ -529,6 +543,23 @@ LoginManager.prototype = {
     );
 
     return this._storage.countLogins(origin, formActionOrigin, httpRealm);
+  },
+
+  /* Sync metadata functions - see nsILoginManagerStorage for details */
+  async getSyncID() {
+    return this._storage.getSyncID();
+  },
+
+  async setSyncID(id) {
+    await this._storage.setSyncID(id);
+  },
+
+  async getLastSync() {
+    return this._storage.getLastSync();
+  },
+
+  async setLastSync(timestamp) {
+    await this._storage.setLastSync(timestamp);
   },
 
   get uiBusy() {

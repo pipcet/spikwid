@@ -8,9 +8,6 @@
           href="chrome://mochikit/content/tests/SimpleTest/test.css" />
 </head>
 <body onload="setTimeout(runTests, 0);" style="ime-mode: disabled;">
-<script>
-setTestPluginEnabledState(SpecialPowers.Ci.nsIPluginTag.STATE_ENABLED);
-</script>
 <div id="display" style="ime-mode: disabled;">
   <!-- input elements -->
   <input type="text"     id="text"/><br/>
@@ -674,21 +671,24 @@ function runPluginTest() {
 
   var plugin = document.getElementById("plugin");
 
+  // Plugins are not supported and their elements should not accept focus;
+  // therefore, IME should not enable when we play with it.
+
   document.activeElement.blur();
   is(gUtils.IMEStatus, gUtils.IME_STATUS_DISABLED,
      "runPluginTest: unexpected enabled state when no element has focus");
 
   plugin.focus();
-  is(gUtils.IMEStatus, gUtils.IME_STATUS_PLUGIN,
-     "runPluginTest: unexpected enabled state when plugin has focus");
+  is(gUtils.IMEStatus, gUtils.IME_STATUS_DISABLED,
+     "runPluginTest: unexpected enabled state when attempting to give focus to plugin");
 
   plugin.blur();
   is(gUtils.IMEStatus, gUtils.IME_STATUS_DISABLED,
-     "runPluginTest: unexpected enabled state when plugin has focus");
+     "runPluginTest: unexpected enabled state after unfocusing plugin");
 
   plugin.focus();
-  is(gUtils.IMEStatus, gUtils.IME_STATUS_PLUGIN,
-     "runPluginTest: unexpected enabled state when plugin has focus #2");
+  is(gUtils.IMEStatus, gUtils.IME_STATUS_DISABLED,
+     "runPluginTest: unexpected enabled state when attempting to give focus to plugin #2");
 
   var parent = plugin.parentNode;
   parent.removeChild(plugin);
@@ -1308,7 +1308,7 @@ function runTestPasswordFieldOnDialog() {
 }
 
 // Bug 580388 and bug 808287
-function runEditorReframeTests(aCallback) {
+async function runEditorReframeTests() {
   if (document.activeElement) {
     document.activeElement.blur();
   }
@@ -1363,43 +1363,43 @@ function runEditorReframeTests(aCallback) {
   TIP.keydown(AKey);
   TIP.keyup(AKey);
 
-  hitEventLoop(function() {
-    is(IMEFocus, 0, "runEditorReframeTests(): IME shouldn't receive a focus notification during reframing");
-    is(IMEBlur, 0, "runEditorReframeTests(): IME shouldn't receive a blur notification during reframing");
-    ok(IMEHasFocus, "runEditorReframeTests(): IME must have focus even after reframing");
+  await new Promise(r => hitEventLoop(r, 20));
 
-    var onFocus = function(aEvent) {
-      // Perform a style change and query during focus to trigger reframing
-      input.style.overflow = "visible";
-      synthesizeQuerySelectedText();
-    };
-    input.addEventListener("focus", onFocus);
-    IMEFocus = IMEBlur = 0;
+  is(IMEFocus, 0, "runEditorReframeTests(): IME shouldn't receive a focus notification during reframing");
+  is(IMEBlur, 0, "runEditorReframeTests(): IME shouldn't receive a blur notification during reframing");
+  ok(IMEHasFocus, "runEditorReframeTests(): IME must have focus even after reframing");
 
-    input.blur();
-    input.focus();
-    TIP.keydown(AKey);
-    TIP.keyup(AKey);
+  var onFocus = function(aEvent) {
+    // Perform a style change and query during focus to trigger reframing
+    input.style.overflow = "visible";
+    synthesizeQuerySelectedText();
+  };
+  input.addEventListener("focus", onFocus);
+  IMEFocus = IMEBlur = 0;
 
-    hitEventLoop(function() {
-      is(IMEFocus, 1, "runEditorReframeTests(): IME should receive a focus notification at focus but shouldn't receive it during reframing");
-      is(IMEBlur, 1, "runEditorReframeTests(): IME should receive a blur notification at blur but shouldn't receive it during reframing");
-      ok(IMEHasFocus, "runEditorReframeTests(): IME sould have focus after reframing during focus");
+  input.blur();
+  input.focus();
+  TIP.keydown(AKey);
+  TIP.keyup(AKey);
 
-      input.removeEventListener("input", onInput, true);
-      input.removeEventListener("focus", onFocus);
+  await new Promise(r => hitEventLoop(r, 20));
 
-      input.style.overflow = "visible";
-      input.value = "";
+  is(IMEFocus, 1, "runEditorReframeTests(): IME should receive a focus notification at focus but shouldn't receive it during reframing");
+  is(IMEBlur, 1, "runEditorReframeTests(): IME should receive a blur notification at blur but shouldn't receive it during reframing");
+  ok(IMEHasFocus, "runEditorReframeTests(): IME sould have focus after reframing during focus");
 
-      TIP = null;
+  input.removeEventListener("input", onInput, true);
+  input.removeEventListener("focus", onFocus);
 
-      hitEventLoop(aCallback, 20);
-    }, 20);
-  }, 20);
+  input.style.overflow = "visible";
+  input.value = "";
+
+  TIP = null;
+
+  await new Promise(r => hitEventLoop(r, 20));
 }
 
-function runTests() {
+async function runTests() {
   if (!kIMEEnabledSupported && !kIMEOpenSupported)
     return;
 
@@ -1448,10 +1448,10 @@ function runTests() {
   // runTestPasswordFieldOnDialog();
 
   // Asynchronous tests
-  runEditorReframeTests(function() {
-    // This will call onFinish(), so, this test must be the last.
-    runEditableSubframeTests();
-  });
+  await runEditorReframeTests();
+
+  // This will call onFinish(), so, this test must be the last.
+  runEditableSubframeTests();
 }
 
 function onFinish() {

@@ -4,21 +4,23 @@
 
 "use strict";
 
-const { OS } = ChromeUtils.import("resource://gre/modules/osfile.jsm");
-const { clearInterval, setInterval } = ChromeUtils.import(
-  "resource://gre/modules/Timer.jsm"
-);
+const EXPORTED_SYMBOLS = ["print"];
+
 const { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
 );
 
-const { assert } = ChromeUtils.import("chrome://marionette/content/assert.js");
-const { pprint } = ChromeUtils.import("chrome://marionette/content/format.js");
-const { Log } = ChromeUtils.import("chrome://marionette/content/log.js");
+XPCOMUtils.defineLazyModuleGetters(this, {
+  clearInterval: "resource://gre/modules/Timer.jsm",
+  OS: "resource://gre/modules/osfile.jsm",
+  setInterval: "resource://gre/modules/Timer.jsm",
 
-XPCOMUtils.defineLazyGetter(this, "logger", Log.get);
+  assert: "chrome://marionette/content/assert.js",
+  Log: "chrome://marionette/content/log.js",
+  pprint: "chrome://marionette/content/format.js",
+});
 
-this.EXPORTED_SYMBOLS = ["print"];
+XPCOMUtils.defineLazyGetter(this, "logger", () => Log.get());
 
 this.print = {
   maxScaleValue: 2.0,
@@ -104,36 +106,22 @@ print.printToFile = async function(browser, outerWindowID, settings) {
 
   let printSettings = getPrintSettings(settings, filePath);
 
+  await browser.print(outerWindowID, printSettings);
+
+  // Bug 1603739 - With e10s enabled the promise returned by print() resolves
+  // too early, which means the file hasn't been completely written.
   await new Promise(resolve => {
-    // Bug 1603739 - With e10s enabled the WebProgressListener states
-    // STOP too early, which means the file hasn't been completely written.
-    const waitForFileWritten = () => {
-      const DELAY_CHECK_FILE_COMPLETELY_WRITTEN = 100;
+    const DELAY_CHECK_FILE_COMPLETELY_WRITTEN = 100;
 
-      let lastSize = 0;
-      const timerId = setInterval(async () => {
-        const fileInfo = await OS.File.stat(filePath);
-        if (lastSize > 0 && fileInfo.size == lastSize) {
-          clearInterval(timerId);
-          resolve();
-        }
-        lastSize = fileInfo.size;
-      }, DELAY_CHECK_FILE_COMPLETELY_WRITTEN);
-    };
-
-    const printProgressListener = {
-      onStateChange(webProgress, request, flags, status) {
-        if (
-          flags & Ci.nsIWebProgressListener.STATE_STOP &&
-          flags & Ci.nsIWebProgressListener.STATE_IS_NETWORK
-        ) {
-          waitForFileWritten();
-        }
-      },
-      QueryInterface: ChromeUtils.generateQI(["nsIWebProgressListener"]),
-    };
-
-    browser.print(outerWindowID, printSettings, printProgressListener);
+    let lastSize = 0;
+    const timerId = setInterval(async () => {
+      const fileInfo = await OS.File.stat(filePath);
+      if (lastSize > 0 && fileInfo.size == lastSize) {
+        clearInterval(timerId);
+        resolve();
+      }
+      lastSize = fileInfo.size;
+    }, DELAY_CHECK_FILE_COMPLETELY_WRITTEN);
   });
 
   logger.debug(`PDF output written to ${filePath}`);

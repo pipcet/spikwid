@@ -36,7 +36,7 @@
 #include "nsRegion.h"         // for nsIntRegion
 #include "nscore.h"           // for nsAString, etc
 #include "LayerTreeInvalidation.h"
-#include "mozilla/layers/CompositorScreenshotGrabber.h"
+#include "mozilla/layers/ScreenshotGrabber.h"
 
 class gfxContext;
 
@@ -170,6 +170,10 @@ class HostLayerManager : public LayerManager {
   void RecordPaintTimes(const PaintTiming& aTiming);
   void RecordUpdateTime(float aValue);
 
+  CompositionOpportunityId GetCompositionOpportunityId() const {
+    return mCompositionOpportunityId;
+  }
+
   TimeStamp GetCompositionTime() const { return mCompositionTime; }
   void SetCompositionTime(TimeStamp aTimeStamp) {
     mCompositionTime = aTimeStamp;
@@ -224,6 +228,9 @@ class HostLayerManager : public LayerManager {
 
   // Render time for the current composition.
   TimeStamp mCompositionTime;
+
+  // CompositionOpportunityId of the current composition.
+  CompositionOpportunityId mCompositionOpportunityId;
 
   // When nonnull, during rendering, some compositable indicated that it will
   // change its rendering at this time. In order not to miss it, we composite
@@ -484,7 +491,7 @@ class LayerManagerComposite final : public HostLayerManager {
   bool mIsCompositorReady;
 
   RefPtr<CompositingRenderTarget> mTwoPassTmpTarget;
-  CompositorScreenshotGrabber mProfilerScreenshotGrabber;
+  ScreenshotGrabber mProfilerScreenshotGrabber;
   RefPtr<TextRenderer> mTextRenderer;
   RefPtr<NativeLayerRoot> mNativeLayerRoot;
   RefPtr<SurfacePoolHandle> mSurfacePoolHandle;

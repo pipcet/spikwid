@@ -39,7 +39,7 @@
 #include "mozilla/StaticPtr.h"
 #include "mozilla/Telemetry.h"
 #ifdef MOZ_GECKO_PROFILER
-#  include "ProfilerMarkerPayload.h"
+#  include "mozilla/BaseProfilerMarkerTypes.h"
 #endif
 
 namespace mozilla {
@@ -237,8 +237,9 @@ ContentCompositorBridgeParent::AllocPWebRenderBridgeParent(
         nsPrintfCString("Created child without a matching parent? root %p",
                         root.get())
             .get());
+    nsCString error("NO_PARENT");
     WebRenderBridgeParent* parent =
-        WebRenderBridgeParent::CreateDestroyed(aPipelineId);
+        WebRenderBridgeParent::CreateDestroyed(aPipelineId, std::move(error));
     parent->AddRef();  // IPDL reference
     return parent;
   }
@@ -371,43 +372,10 @@ void ContentCompositorBridgeParent::ShadowLayersUpdated(
   auto endTime = TimeStamp::Now();
 #ifdef MOZ_GECKO_PROFILER
   if (profiler_can_accept_markers()) {
-    class ContentBuildPayload : public ProfilerMarkerPayload {
-     public:
-      ContentBuildPayload(const mozilla::TimeStamp& aStartTime,
-                          const mozilla::TimeStamp& aEndTime)
-          : ProfilerMarkerPayload(aStartTime, aEndTime) {}
-      mozilla::ProfileBufferEntryWriter::Length TagAndSerializationBytes()
-          const override {
-        return CommonPropsTagAndSerializationBytes();
-      }
-      void SerializeTagAndPayload(
-          mozilla::ProfileBufferEntryWriter& aEntryWriter) const override {
-        static const DeserializerTag tag = TagForDeserializer(Deserialize);
-        SerializeTagAndCommonProps(tag, aEntryWriter);
-      }
-      void StreamPayload(SpliceableJSONWriter& aWriter,
-                         const TimeStamp& aProcessStartTime,
-                         UniqueStacks& aUniqueStacks) const override {
-        StreamCommonProps("CONTENT_FULL_PAINT_TIME", aWriter, aProcessStartTime,
-                          aUniqueStacks);
-      }
-
-     private:
-      explicit ContentBuildPayload(CommonProps&& aCommonProps)
-          : ProfilerMarkerPayload(std::move(aCommonProps)) {}
-      static mozilla::UniquePtr<ProfilerMarkerPayload> Deserialize(
-          mozilla::ProfileBufferEntryReader& aEntryReader) {
-        ProfilerMarkerPayload::CommonProps props =
-            DeserializeCommonProps(aEntryReader);
-        return UniquePtr<ProfilerMarkerPayload>(
-            new ContentBuildPayload(std::move(props)));
-      }
-    };
-    AUTO_PROFILER_STATS(add_marker_with_ContentBuildPayload);
-    profiler_add_marker_for_thread(
-        profiler_current_thread_id(), JS::ProfilingCategoryPair::GRAPHICS,
-        "CONTENT_FULL_PAINT_TIME",
-        ContentBuildPayload(aInfo.transactionStart(), endTime));
+    profiler_add_marker(
+        "CONTENT_FULL_PAINT_TIME", geckoprofiler::category::GRAPHICS,
+        MarkerTiming::Interval(aInfo.transactionStart(), endTime),
+        baseprofiler::markers::ContentBuildMarker{});
   }
 #endif
   Telemetry::Accumulate(
@@ -559,9 +527,8 @@ void ContentCompositorBridgeParent::GetAPZTestData(const LayersId& aLayersId,
   state->mParent->GetAPZTestData(aLayersId, aOutData);
 }
 
-void ContentCompositorBridgeParent::SetConfirmedTargetAPZC(
-    const LayersId& aLayersId, const uint64_t& aInputBlockId,
-    const nsTArray<ScrollableLayerGuid>& aTargets) {
+void ContentCompositorBridgeParent::GetFrameUniformity(
+    const LayersId& aLayersId, FrameUniformityData* aOutData) {
   MOZ_ASSERT(aLayersId.IsValid());
   const CompositorBridgeParent::LayerTreeState* state =
       CompositorBridgeParent::GetIndirectShadowTree(aLayersId);
@@ -569,7 +536,21 @@ void ContentCompositorBridgeParent::SetConfirmedTargetAPZC(
     return;
   }
 
-  state->mParent->SetConfirmedTargetAPZC(aLayersId, aInputBlockId, aTargets);
+  state->mParent->GetFrameUniformity(aLayersId, aOutData);
+}
+
+void ContentCompositorBridgeParent::SetConfirmedTargetAPZC(
+    const LayersId& aLayersId, const uint64_t& aInputBlockId,
+    nsTArray<ScrollableLayerGuid>&& aTargets) {
+  MOZ_ASSERT(aLayersId.IsValid());
+  const CompositorBridgeParent::LayerTreeState* state =
+      CompositorBridgeParent::GetIndirectShadowTree(aLayersId);
+  if (!state || !state->mParent) {
+    return;
+  }
+
+  state->mParent->SetConfirmedTargetAPZC(aLayersId, aInputBlockId,
+                                         std::move(aTargets));
 }
 
 AsyncCompositionManager* ContentCompositorBridgeParent::GetCompositionManager(
@@ -652,10 +633,9 @@ ContentCompositorBridgeParent::RecvReleasePCanvasParent() {
 }
 
 UniquePtr<SurfaceDescriptor>
-ContentCompositorBridgeParent::LookupSurfaceDescriptorForClientDrawTarget(
-    const uintptr_t aDrawTarget) {
-  return mCanvasTranslator->WaitForSurfaceDescriptor(
-      reinterpret_cast<void*>(aDrawTarget));
+ContentCompositorBridgeParent::LookupSurfaceDescriptorForClientTexture(
+    const int64_t aTextureId) {
+  return mCanvasTranslator->WaitForSurfaceDescriptor(aTextureId);
 }
 
 bool ContentCompositorBridgeParent::IsSameProcess() const {

@@ -298,17 +298,17 @@ void nsTableColGroupFrame::RemoveFrame(ChildListID aListID,
 }
 
 nsIFrame::LogicalSides nsTableColGroupFrame::GetLogicalSkipSides(
-    const ReflowInput* aReflowInput) const {
+    const Maybe<SkipSidesDuringReflow>&) const {
   LogicalSides skip(mWritingMode);
   if (MOZ_UNLIKELY(StyleBorder()->mBoxDecorationBreak ==
                    StyleBoxDecorationBreak::Clone)) {
     return skip;
   }
 
-  if (nullptr != GetPrevInFlow()) {
+  if (GetPrevInFlow()) {
     skip |= eLogicalSideBitsBStart;
   }
-  if (nullptr != GetNextInFlow()) {
+  if (GetNextInFlow()) {
     skip |= eLogicalSideBitsBEnd;
   }
   return skip;
@@ -424,8 +424,8 @@ void nsTableColGroupFrame::InvalidateFrame(uint32_t aDisplayItemKey,
                                            bool aRebuildDisplayItems) {
   nsIFrame::InvalidateFrame(aDisplayItemKey, aRebuildDisplayItems);
   if (GetTableFrame()->IsBorderCollapse()) {
-    GetParent()->InvalidateFrameWithRect(
-        GetVisualOverflowRect() + GetPosition(), aDisplayItemKey, false);
+    GetParent()->InvalidateFrameWithRect(InkOverflowRect() + GetPosition(),
+                                         aDisplayItemKey, false);
   }
 }
 

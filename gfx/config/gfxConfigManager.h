@@ -7,6 +7,9 @@
 #define mozilla_gfx_config_gfxConfigManager_h
 
 #include "gfxFeature.h"
+#include "gfxTypes.h"
+
+class nsIGfxInfo;
 
 namespace mozilla {
 namespace gfx {
@@ -20,24 +23,23 @@ class gfxConfigManager {
         mFeatureWrAngle(nullptr),
         mFeatureWrDComp(nullptr),
         mFeatureWrPartial(nullptr),
+        mFeatureWrSoftware(nullptr),
         mFeatureHwCompositing(nullptr),
         mFeatureD3D11HwAngle(nullptr),
         mFeatureGPUProcess(nullptr),
         mWrForceEnabled(false),
         mWrForceDisabled(false),
+        mWrSoftwareForceEnabled(false),
         mWrCompositorForceEnabled(false),
-        mWrQualified(false),
         mWrForceAngle(false),
         mWrForceAngleNoGPUProcess(false),
         mWrDCompWinEnabled(false),
         mWrCompositorDCompRequired(false),
-        mWrPictureCaching(false),
         mWrPartialPresent(false),
         mGPUProcessAllowSoftware(false),
         mXRenderEnabled(false),
         mWrEnvForceEnabled(false),
         mWrEnvForceDisabled(false),
-        mHwStretchingSupport(false),
         mScaledResolution(false),
         mDisableHwCompositingNoWr(false),
         mIsNightly(false),
@@ -51,7 +53,8 @@ class gfxConfigManager {
 
  protected:
   void EmplaceUserPref(const char* aPrefName, Maybe<bool>& aValue);
-  bool ConfigureWebRenderQualified();
+  void ConfigureWebRenderQualified();
+  void ConfigureWebRenderSoftware();
 
   nsCOMPtr<nsIGfxInfo> mGfxInfo;
 
@@ -61,6 +64,7 @@ class gfxConfigManager {
   FeatureState* mFeatureWrAngle;
   FeatureState* mFeatureWrDComp;
   FeatureState* mFeatureWrPartial;
+  FeatureState* mFeatureWrSoftware;
 
   FeatureState* mFeatureHwCompositing;
   FeatureState* mFeatureD3D11HwAngle;
@@ -72,14 +76,12 @@ class gfxConfigManager {
   Maybe<bool> mWrCompositorEnabled;
   bool mWrForceEnabled;
   bool mWrForceDisabled;
+  bool mWrSoftwareForceEnabled;
   bool mWrCompositorForceEnabled;
-  bool mWrQualified;
-  Maybe<bool> mWrQualifiedOverride;
   bool mWrForceAngle;
   bool mWrForceAngleNoGPUProcess;
   bool mWrDCompWinEnabled;
   bool mWrCompositorDCompRequired;
-  bool mWrPictureCaching;
   bool mWrPartialPresent;
   bool mGPUProcessAllowSoftware;
   bool mXRenderEnabled;
@@ -93,7 +95,7 @@ class gfxConfigManager {
   /**
    * System support
    */
-  bool mHwStretchingSupport;
+  HwStretchingSupport mHwStretchingSupport;
   bool mScaledResolution;
   bool mDisableHwCompositingNoWr;
   bool mIsNightly;

@@ -35,7 +35,7 @@ class PromiseInit;
 class PromiseNativeHandler;
 class PromiseDebugging;
 
-class Promise : public SupportsWeakPtr<Promise> {
+class Promise : public SupportsWeakPtr {
   friend class PromiseTask;
   friend class PromiseWorkerProxy;
   friend class PromiseWorkerProxyRunnable;
@@ -43,7 +43,6 @@ class Promise : public SupportsWeakPtr<Promise> {
  public:
   NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(Promise)
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_NATIVE_CLASS(Promise)
-  MOZ_DECLARE_WEAKREFERENCE_TYPENAME(Promise)
 
   enum PropagateUserInteraction {
     eDontPropagateUserInteraction,
@@ -175,6 +174,7 @@ class Promise : public SupportsWeakPtr<Promise> {
   // Mark a settled promise as already handled so that rejections will not
   // be reported as unhandled.
   void SetSettledPromiseIsHandled() {
+    AutoAllowLegacyScriptExecution exemption;
     AutoEntryScript aes(mGlobal, "Set settled promise handled");
     JSContext* cx = aes.cx();
     JS::RootedObject promiseObj(cx, mPromiseObj);
@@ -316,6 +316,7 @@ class Promise : public SupportsWeakPtr<Promise> {
   void MaybeSomething(T&& aArgument, MaybeFunc aFunc) {
     MOZ_ASSERT(PromiseObj());  // It was preserved!
 
+    AutoAllowLegacyScriptExecution exemption;
     AutoEntryScript aes(mGlobal, "Promise resolution or rejection");
     JSContext* cx = aes.cx();
 

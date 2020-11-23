@@ -14,15 +14,14 @@ const TEST_URI = "data:text/html;charset=utf-8,getAllResources test";
 add_task(async function() {
   const tab = await addTab(TEST_URI);
 
-  const {
-    client,
-    resourceWatcher,
-    targetList,
-  } = await initResourceWatcherAndTarget(tab);
+  const { client, resourceWatcher, targetList } = await initResourceWatcher(
+    tab
+  );
 
   info("Check the resources gotten from getAllResources at initial");
   is(
-    resourceWatcher.getAllResources(ResourceWatcher.TYPES.CONSOLE_MESSAGE),
+    resourceWatcher.getAllResources(ResourceWatcher.TYPES.CONSOLE_MESSAGE)
+      .length,
     0,
     "There is no resources at initial"
   );
@@ -31,7 +30,7 @@ add_task(async function() {
     "Start to watch the available resources in order to compare with resources gotten from getAllResources"
   );
   const availableResources = [];
-  const onAvailable = ({ resource }) => availableResources.push(resource);
+  const onAvailable = resources => availableResources.push(...resources);
   await resourceWatcher.watchResources(
     [ResourceWatcher.TYPES.CONSOLE_MESSAGE],
     { onAvailable }
@@ -40,7 +39,7 @@ add_task(async function() {
   info("Check the resources after some resources are available");
   const messages = ["a", "b", "c"];
   await logMessages(tab.linkedBrowser, messages);
-  await waitUntil(() => availableResources.length === messages.length);
+  await waitUntil(() => availableResources.length >= messages.length);
   assertResources(
     resourceWatcher.getAllResources(ResourceWatcher.TYPES.CONSOLE_MESSAGE),
     availableResources
@@ -76,7 +75,7 @@ add_task(async function() {
     []
   );
 
-  await targetList.stopListening();
+  await targetList.destroy();
   await client.close();
 });
 

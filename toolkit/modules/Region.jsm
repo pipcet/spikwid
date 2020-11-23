@@ -37,6 +37,16 @@ XPCOMUtils.defineLazyPreferenceGetter(
   5000
 );
 
+// Retry the region lookup every hour on failure, a failure
+// is likely to be a service failure so this gives the
+// service some time to restore. Setting to 0 disabled retries.
+XPCOMUtils.defineLazyPreferenceGetter(
+  this,
+  "retryTimeout",
+  "browser.region.retry-timeout",
+  60 * 60 * 1000
+);
+
 XPCOMUtils.defineLazyPreferenceGetter(
   this,
   "loggingEnabled",
@@ -74,6 +84,8 @@ const UPDATE_PREFIX = "browser.region.update";
 // Currently set to 2 weeks.
 const UPDATE_INTERVAL = 60 * 60 * 24 * 14;
 
+const MAX_RETRIES = 3;
+
 /**
  * This module keeps track of the users current region (country).
  * so the SearchService and other consumers can apply region
@@ -88,6 +100,9 @@ class RegionDetector {
   _rsClient = null;
   // Keep track of the wifi data across listener events.
   _wifiDataPromise = null;
+  // Keep track of how many times we have tried to fetch
+  // the users region during failure.
+  _retryCount = 0;
   // Topic for Observer events fired by Region.jsm.
   REGION_TOPIC = "browser-region";
   // Verb for event fired when we update the region.
@@ -143,6 +158,9 @@ class RegionDetector {
    *   The country_code defining users current region.
    */
   async _fetchRegion() {
+    if (this._retryCount >= MAX_RETRIES) {
+      return null;
+    }
     let startTime = Date.now();
     let telemetryResult = this.TELEMETRY.SUCCESS;
     let result = null;
@@ -152,6 +170,12 @@ class RegionDetector {
     } catch (err) {
       telemetryResult = this.TELEMETRY[err.message] || this.TELEMETRY.ERROR;
       log.error("Failed to fetch region", err);
+      if (retryTimeout) {
+        this._retryCount++;
+        setTimeout(() => {
+          Services.tm.idleDispatchToMainThread(this._fetchRegion.bind(this));
+        }, retryTimeout);
+      }
     }
 
     let took = Date.now() - startTime;
@@ -282,6 +306,15 @@ class RegionDetector {
     }
   }
 
+  // Wrap a string as a nsISupports.
+  _createSupportsString(data) {
+    let string = Cc["@mozilla.org/supports-string;1"].createInstance(
+      Ci.nsISupportsString
+    );
+    string.data = data;
+    return string;
+  }
+
   /**
    * Save the updated home region and notify observers.
    *
@@ -300,10 +333,9 @@ class RegionDetector {
     Services.prefs.setCharPref("browser.search.region", region);
     if (notify) {
       Services.obs.notifyObservers(
-        null,
+        this._createSupportsString(region),
         this.REGION_TOPIC,
-        this.REGION_UPDATED,
-        region
+        this.REGION_UPDATED
       );
     }
   }
@@ -340,7 +372,8 @@ class RegionDetector {
       return res.country_code;
     } catch (err) {
       log.error("Error fetching region", err);
-      throw new Error("NO_RESULT");
+      let errCode = err.message in this.TELEMETRY ? err.message : "NO_RESULT";
+      throw new Error(errCode);
     }
   }
 
@@ -467,21 +500,34 @@ class RegionDetector {
   async _geoCode(location) {
     let plainMap = await this._getPlainMap();
     let polygons = this._getPolygonsContainingPoint(location, plainMap);
-    // The plain map doesnt have overlapping regions so return
-    // region straight away.
-    if (polygons.length) {
-      return polygons[0].region;
+    if (polygons.length == 1) {
+      log.info("Found in single exact region");
+      return polygons[0].properties.alpha2;
     }
+    if (polygons.length) {
+      log.info("Found in ", polygons.length, "overlapping exact regions");
+      return this._findFurthest(location, polygons);
+    }
+
+    // We haven't found a match in the exact map, use the buffered map
+    // to see if the point is close to a region.
     let bufferedMap = await this._getBufferedMap();
     polygons = this._getPolygonsContainingPoint(location, bufferedMap);
-    // Only found one matching region, return.
+
     if (polygons.length === 1) {
-      return polygons[0].region;
+      log.info("Found in single buffered region");
+      return polygons[0].properties.alpha2;
     }
-    // Matched more than one region, find the longest distance
-    // from a border and return that region.
-    if (polygons.length > 1) {
-      return this._findLargestDistance(location, polygons);
+
+    // Matched more than one region, which one of those regions
+    // is it closest to without the buffer.
+    if (polygons.length) {
+      log.info("Found in ", polygons.length, "overlapping buffered regions");
+      let regions = polygons.map(polygon => polygon.properties.alpha2);
+      let unBufferedRegions = plainMap.features.filter(feature =>
+        regions.includes(feature.properties.alpha2)
+      );
+      return this._findClosest(location, unBufferedRegions);
     }
     return null;
   }
@@ -507,18 +553,12 @@ class RegionDetector {
       let coords = feature.geometry.coordinates;
       if (feature.geometry.type === "Polygon") {
         if (this._polygonInPoint(point, coords[0])) {
-          polygons.push({
-            coords: coords[0],
-            region: feature.properties.alpha2,
-          });
+          polygons.push(feature);
         }
       } else if (feature.geometry.type === "MultiPolygon") {
         for (const innerCoords of coords) {
           if (this._polygonInPoint(point, innerCoords[0])) {
-            polygons.push({
-              coords: innerCoords[0],
-              region: feature.properties.alpha2,
-            });
+            polygons.push(feature);
           }
         }
       }
@@ -527,28 +567,74 @@ class RegionDetector {
   }
 
   /**
-   * Find the largest distance between a point and and a border
-   * that contains it.
+   * Find the largest distance between a point and any of the points that
+   * make up an array of regions.
    *
    * @param {Object} location
    *   A lat + lng coordinate.
-   * @param {Object} polygons
-   *   Array of polygons that define a border.
+   * @param {Array} regions
+   *   An array of GeoJSON region definitions.
    *
    * @returns {String}
    *   A 2 character string representing a region.
    */
-  _findLargestDistance(location, polygons) {
-    let maxDistance = { distance: 0, region: null };
-    for (const polygon of polygons) {
-      for (const [lng, lat] of polygon.coords) {
-        let distance = this._distanceBetween(location, { lng, lat });
-        if (distance > maxDistance.distance) {
-          maxDistance = { distance, region: polygon.region };
+  _findFurthest(location, regions) {
+    let max = { distance: 0, region: null };
+    this._traverse(regions, ({ lat, lng, region }) => {
+      let distance = this._distanceBetween(location, { lng, lat });
+      if (distance > max.distance) {
+        max = { distance, region };
+      }
+    });
+    return max.region;
+  }
+
+  /**
+   * Find the smallest distance between a point and any of the points that
+   * make up an array of regions.
+   *
+   * @param {Object} location
+   *   A lat + lng coordinate.
+   * @param {Array} regions
+   *   An array of GeoJSON region definitions.
+   *
+   * @returns {String}
+   *   A 2 character string representing a region.
+   */
+  _findClosest(location, regions) {
+    let min = { distance: Infinity, region: null };
+    this._traverse(regions, ({ lat, lng, region }) => {
+      let distance = this._distanceBetween(location, { lng, lat });
+      if (distance < min.distance) {
+        min = { distance, region };
+      }
+    });
+    return min.region;
+  }
+
+  /**
+   * Utility function to loop over all the coordinate points in an
+   * array of polygons and call a function on them.
+   *
+   * @param {Array} regions
+   *   An array of GeoJSON region definitions.
+   * @param {Function} fun
+   *   Function to call on individual coordinates.
+   */
+  _traverse(regions, fun) {
+    for (const region of regions) {
+      if (region.geometry.type === "Polygon") {
+        for (const [lng, lat] of region.geometry.coordinates[0]) {
+          fun({ lat, lng, region: region.properties.alpha2 });
+        }
+      } else if (region.geometry.type === "MultiPolygon") {
+        for (const innerCoords of region.geometry.coordinates) {
+          for (const [lng, lat] of innerCoords[0]) {
+            fun({ lat, lng, region: region.properties.alpha2 });
+          }
         }
       }
     }
-    return maxDistance.region;
   }
 
   /**
@@ -633,7 +719,9 @@ class RegionDetector {
   async _timeout(timeout, controller) {
     await new Promise(resolve => setTimeout(resolve, timeout));
     if (controller) {
-      controller.abort();
+      // Yield so it is the TIMEOUT that is returned and not
+      // the result of the abort().
+      setTimeout(() => controller.abort(), 0);
     }
     throw new Error("TIMEOUT");
   }

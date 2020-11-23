@@ -2,30 +2,22 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#define VECS_PER_LINEAR_GRADIENT_BRUSH 2
-#define VECS_PER_SPECIFIC_BRUSH VECS_PER_LINEAR_GRADIENT_BRUSH
-
-#define WR_BRUSH_VS_FUNCTION linear_gradient_brush_vs
-#define WR_BRUSH_FS_FUNCTION linear_gradient_brush_fs
+#define VECS_PER_SPECIFIC_BRUSH 2
 
 #include shared,prim_shared,brush
 
-#define V_GRADIENT_ADDRESS  flat_varying_highp_int_address_0
+flat varying HIGHP_FS_ADDRESS int v_gradient_address;
 
-#define V_START_POINT       flat_varying_vec4_0.xy
-#define V_SCALE_DIR         flat_varying_vec4_0.zw
-// Size of the gradient pattern's rectangle, used to compute horizontal and vertical
-// repetitions. Not to be confused with another kind of repetition of the pattern
-// which happens along the gradient stops.
-#define V_REPEATED_SIZE     flat_varying_vec4_1.xy
+flat varying vec2 v_start_point;
+flat varying vec2 v_scale_dir;
 // Repetition along the gradient stops.
-#define V_GRADIENT_REPEAT   flat_varying_vec4_1.z
+flat varying float v_gradient_repeat;
 
-#define V_POS               varying_vec4_0.zw
+varying vec2 v_pos;
 
 #ifdef WR_FEATURE_ALPHA_PASS
-#define V_LOCAL_POS         varying_vec4_0.xy
-#define V_TILE_REPEAT       flat_varying_vec4_2.xy
+varying vec2 v_local_pos;
+flat varying vec2 v_tile_repeat;
 #endif
 
 #ifdef WR_VERTEX_SHADER
@@ -45,7 +37,7 @@ Gradient fetch_gradient(int address) {
     );
 }
 
-void linear_gradient_brush_vs(
+void brush_vs(
     VertexInfo vi,
     int prim_address,
     RectWithSize local_rect,
@@ -60,78 +52,76 @@ void linear_gradient_brush_vs(
     Gradient gradient = fetch_gradient(prim_address);
 
     if ((brush_flags & BRUSH_FLAG_SEGMENT_RELATIVE) != 0) {
-        V_POS = (vi.local_pos - segment_rect.p0) / segment_rect.size;
-        V_POS = V_POS * (texel_rect.zw - texel_rect.xy) + texel_rect.xy;
-        V_POS = V_POS * local_rect.size;
+        v_pos = (vi.local_pos - segment_rect.p0) / segment_rect.size;
+        v_pos = v_pos * (texel_rect.zw - texel_rect.xy) + texel_rect.xy;
+        v_pos = v_pos * local_rect.size;
     } else {
-        V_POS = vi.local_pos - local_rect.p0;
+        v_pos = vi.local_pos - local_rect.p0;
     }
 
     vec2 start_point = gradient.start_end_point.xy;
     vec2 end_point = gradient.start_end_point.zw;
     vec2 dir = end_point - start_point;
 
-    V_START_POINT = start_point;
-    V_SCALE_DIR = dir / dot(dir, dir);
+    v_start_point = start_point;
+    v_scale_dir = dir / dot(dir, dir);
 
     vec2 tile_repeat = local_rect.size / gradient.stretch_size;
-    V_REPEATED_SIZE = gradient.stretch_size;
 
-    V_GRADIENT_ADDRESS = prim_user_data.x;
+    // Size of the gradient pattern's rectangle, used to compute horizontal and vertical
+    // repetitions. Not to be confused with another kind of repetition of the pattern
+    // which happens along the gradient stops.
+    vec2 repeated_size = gradient.stretch_size;
+
+    // Normalize UV and offsets to 0..1 scale.
+    v_pos /= repeated_size;
+    v_start_point /= repeated_size;
+    v_scale_dir *= repeated_size;
+
+    v_gradient_address = prim_user_data.x;
 
     // Whether to repeat the gradient along the line instead of clamping.
-    V_GRADIENT_REPEAT = float(gradient.extend_mode != EXTEND_MODE_CLAMP);
+    v_gradient_repeat = float(gradient.extend_mode != EXTEND_MODE_CLAMP);
 
 #ifdef WR_FEATURE_ALPHA_PASS
-    V_TILE_REPEAT = tile_repeat;
-    V_LOCAL_POS = vi.local_pos;
+    v_tile_repeat = tile_repeat;
+    v_local_pos = vi.local_pos;
 #endif
 }
 #endif
 
 #ifdef WR_FRAGMENT_SHADER
-Fragment linear_gradient_brush_fs() {
+Fragment brush_fs() {
 
 #ifdef WR_FEATURE_ALPHA_PASS
     // Handle top and left inflated edges (see brush_image).
-    vec2 local_pos = max(V_POS, vec2(0.0));
+    vec2 local_pos = max(v_pos, vec2(0.0));
 
     // Apply potential horizontal and vertical repetitions.
-    vec2 pos = mod(local_pos, V_REPEATED_SIZE);
+    vec2 pos = fract(local_pos);
 
-    vec2 prim_size = V_REPEATED_SIZE * V_TILE_REPEAT;
     // Handle bottom and right inflated edges (see brush_image).
-    if (local_pos.x >= prim_size.x) {
-        pos.x = V_REPEATED_SIZE.x;
+    if (local_pos.x >= v_tile_repeat.x) {
+        pos.x = 1.0;
     }
-    if (local_pos.y >= prim_size.y) {
-        pos.y = V_REPEATED_SIZE.y;
+    if (local_pos.y >= v_tile_repeat.y) {
+        pos.y = 1.0;
     }
 #else
     // Apply potential horizontal and vertical repetitions.
-    vec2 pos = mod(V_POS, V_REPEATED_SIZE);
+    vec2 pos = fract(v_pos);
 #endif
 
-    float offset = dot(pos - V_START_POINT, V_SCALE_DIR);
+    float offset = dot(pos - v_start_point, v_scale_dir);
 
-    vec4 color = sample_gradient(V_GRADIENT_ADDRESS,
+    vec4 color = sample_gradient(v_gradient_address,
                                  offset,
-                                 V_GRADIENT_REPEAT);
+                                 v_gradient_repeat);
 
 #ifdef WR_FEATURE_ALPHA_PASS
-    color *= init_transform_fs(V_LOCAL_POS);
+    color *= init_transform_fs(v_local_pos);
 #endif
 
     return Fragment(color);
 }
 #endif
-
-// Undef macro names that could be re-defined by other shaders.
-#undef V_GRADIENT_ADDRESS
-#undef V_START_POINT
-#undef V_SCALE_DIR
-#undef V_REPEATED_SIZE
-#undef V_GRADIENT_REPEAT
-#undef V_POS
-#undef V_LOCAL_POS
-#undef V_TILE_REPEAT

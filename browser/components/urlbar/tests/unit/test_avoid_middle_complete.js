@@ -152,9 +152,16 @@ add_task(async function test_searchEngine_www_noautofill() {
   await check_results({
     context,
     matches: [
+      makeVisitResult(context, {
+        source: UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
+        uri: "http://www.ham/",
+        title: "http://www.ham/",
+        displayUrl: "http://www.ham",
+        heuristic: true,
+      }),
       makeSearchResult(context, {
         engineName: ENGINE_NAME,
-        heuristic: true,
+        query: "www.ham",
       }),
     ],
   });
@@ -179,6 +186,7 @@ add_task(async function test_searchEngine_different_scheme_noautofill() {
     context,
     matches: [
       makeVisitResult(context, {
+        source: UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
         uri: "http://pie/",
         title: "http://pie/",
         iconUri: "",

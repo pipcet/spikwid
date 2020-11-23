@@ -744,12 +744,13 @@ bool EditorEventListener::NotifyIMEOfMouseButtonEvent(
     return false;
   }
 
-  nsPresContext* presContext = GetPresContext();
+  RefPtr<nsPresContext> presContext = GetPresContext();
   if (NS_WARN_IF(!presContext)) {
     return false;
   }
+  nsCOMPtr<nsIContent> focusedRootContent = GetFocusedRootContent();
   return IMEStateManager::OnMouseButtonEventInEditor(
-      presContext, GetFocusedRootContent(), aMouseEvent);
+      presContext, focusedRootContent, aMouseEvent);
 }
 
 nsresult EditorEventListener::MouseDown(MouseEvent* aMouseEvent) {
@@ -803,9 +804,10 @@ void EditorEventListener::RefuseToDropAndHideCaret(DragEvent* aDragEvent) {
 
   aDragEvent->PreventDefault();
   aDragEvent->StopImmediatePropagation();
-  MOZ_ASSERT(aDragEvent->GetDataTransfer());
-  aDragEvent->GetDataTransfer()->SetDropEffectInt(
-      nsIDragService::DRAGDROP_ACTION_NONE);
+  DataTransfer* dataTransfer = aDragEvent->GetDataTransfer();
+  if (dataTransfer) {
+    dataTransfer->SetDropEffectInt(nsIDragService::DRAGDROP_ACTION_NONE);
+  }
   if (mCaret) {
     mCaret->SetVisible(false);
   }
@@ -901,9 +903,9 @@ nsresult EditorEventListener::DragOverOrDrop(DragEvent* aDragEvent) {
   // because once DataTransfer is retrieved, DragEvent has initialized it
   // with nsContentUtils::SetDataTransferInEvent() but it does not check
   // whether the content is movable or not.
-  MOZ_ASSERT(aDragEvent->GetDataTransfer());
   DataTransfer* dataTransfer = aDragEvent->GetDataTransfer();
-  if (dataTransfer->DropEffectInt() == nsIDragService::DRAGDROP_ACTION_MOVE) {
+  if (dataTransfer &&
+      dataTransfer->DropEffectInt() == nsIDragService::DRAGDROP_ACTION_MOVE) {
     nsCOMPtr<nsINode> dragSource = dataTransfer->GetMozSourceNode();
     if (dragSource && !dragSource->IsEditable()) {
       // In this case, we shouldn't allow "move" because the drag source
@@ -964,6 +966,10 @@ bool EditorEventListener::DragEventHasSupportingData(
   // Plaintext editors only support dropping text. Otherwise, HTML and files
   // can be dropped as well.
   DataTransfer* dataTransfer = aDragEvent->GetDataTransfer();
+  if (!dataTransfer) {
+    NS_WARNING("No data transfer returned");
+    return false;
+  }
   return dataTransfer->HasType(NS_LITERAL_STRING_FROM_CSTRING(kTextMime)) ||
          dataTransfer->HasType(
              NS_LITERAL_STRING_FROM_CSTRING(kMozTextInternal)) ||
@@ -978,11 +984,15 @@ bool EditorEventListener::CanInsertAtDropPosition(DragEvent* aDragEvent) {
   MOZ_ASSERT(!mEditorBase->IsReadonly());
   MOZ_ASSERT(DragEventHasSupportingData(aDragEvent));
 
+  DataTransfer* dataTransfer = aDragEvent->GetDataTransfer();
+  if (NS_WARN_IF(!dataTransfer)) {
+    return false;
+  }
+
   // If there is no source node, this is probably an external drag and the
   // drop is allowed. The later checks rely on checking if the drag target
   // is the same as the drag source.
-  nsCOMPtr<nsINode> sourceNode =
-      aDragEvent->GetDataTransfer()->GetMozSourceNode();
+  nsCOMPtr<nsINode> sourceNode = dataTransfer->GetMozSourceNode();
   if (!sourceNode) {
     return true;
   }
@@ -1101,9 +1111,7 @@ nsresult EditorEventListener::Focus(InternalFocusEvent* aFocusEvent) {
 
   // Spell check a textarea the first time that it is focused.
   SpellCheckIfNeeded();
-  if (!editorBase) {
-    // In e10s, this can cause us to flush notifications, which can destroy
-    // the node we're about to focus.
+  if (DetachedFromEditor()) {
     return NS_OK;
   }
 
@@ -1160,7 +1168,7 @@ nsresult EditorEventListener::Focus(InternalFocusEvent* aFocusEvent) {
     return NS_OK;
   }
 
-  nsPresContext* presContext = GetPresContext();
+  RefPtr<nsPresContext> presContext = GetPresContext();
   if (NS_WARN_IF(!presContext)) {
     return NS_OK;
   }

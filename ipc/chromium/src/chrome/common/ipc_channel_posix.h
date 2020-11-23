@@ -11,7 +11,6 @@
 
 #include <sys/socket.h>  // for CMSG macros
 
-#include <queue>
 #include <string>
 #include <vector>
 #include <list>
@@ -21,6 +20,7 @@
 #include "chrome/common/file_descriptor_set_posix.h"
 
 #include "mozilla/Maybe.h"
+#include "mozilla/Queue.h"
 #include "mozilla/UniquePtr.h"
 
 namespace IPC {
@@ -29,8 +29,10 @@ namespace IPC {
 // socketpairs.  See the .cc file for an overview of the implementation.
 class Channel::ChannelImpl : public MessageLoopForIO::Watcher {
  public:
+  using ChannelId = Channel::ChannelId;
+
   // Mirror methods of Channel, see ipc_channel.h for description.
-  ChannelImpl(const std::wstring& channel_id, Mode mode, Listener* listener);
+  ChannelImpl(const ChannelId& channel_id, Mode mode, Listener* listener);
   ChannelImpl(int fd, Mode mode, Listener* listener);
   ~ChannelImpl() { Close(); }
   bool Connect();
@@ -55,7 +57,7 @@ class Channel::ChannelImpl : public MessageLoopForIO::Watcher {
 
  private:
   void Init(Mode mode, Listener* listener);
-  bool CreatePipe(const std::wstring& channel_id, Mode mode);
+  bool CreatePipe(Mode mode);
   bool EnqueueHelloMessage();
 
   bool ProcessIncomingMessages();
@@ -92,14 +94,10 @@ class Channel::ChannelImpl : public MessageLoopForIO::Watcher {
   int pipe_;
   int client_pipe_;  // The client end of our socketpair().
 
-  // The "name" of our pipe.  On Windows this is the global identifier for
-  // the pipe.  On POSIX it's used as a key in a local map of file descriptors.
-  std::string pipe_name_;
-
   Listener* listener_;
 
   // Messages to be sent are queued here.
-  std::queue<mozilla::UniquePtr<Message>> output_queue_;
+  mozilla::Queue<mozilla::UniquePtr<Message>, 64> output_queue_;
 
   // We read from the pipe into these buffers.
   size_t input_buf_offset_;
@@ -160,7 +158,7 @@ class Channel::ChannelImpl : public MessageLoopForIO::Watcher {
   uint32_t last_pending_fd_id_;
 #endif
 
-  // This variable is updated so it matches output_queue_.size(), except we can
+  // This variable is updated so it matches output_queue_.Count(), except we can
   // read output_queue_length_ from any thread (if we're OK getting an
   // occasional out-of-date or bogus value).  We use output_queue_length_ to
   // implement Unsound_NumQueuedMessages.

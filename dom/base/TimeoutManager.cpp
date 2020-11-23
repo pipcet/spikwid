@@ -22,9 +22,6 @@
 #include "TimeoutBudgetManager.h"
 #include "mozilla/net/WebSocketEventService.h"
 #include "mozilla/MediaManager.h"
-#ifdef MOZ_GECKO_PROFILER
-#  include "ProfilerMarkerPayload.h"
-#endif
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -154,10 +151,13 @@ void TimeoutManager::MoveIdleToActive() {
           int(elapsed.ToMilliseconds()), int(target.ToMilliseconds()),
           int(delta.ToMilliseconds()));
       // don't have end before start...
-      PROFILER_ADD_MARKER_WITH_PAYLOAD(
-          "setTimeout deferred release", DOM, TextMarkerPayload,
-          (marker, delta.ToMilliseconds() >= 0 ? timeout->When() : now, now,
-           Some(mWindow.WindowID())));
+      PROFILER_MARKER_TEXT(
+          "setTimeout deferred release", DOM,
+          MarkerOptions(
+              MarkerTiming::Interval(
+                  delta.ToMilliseconds() >= 0 ? timeout->When() : now, now),
+              MarkerInnerWindowId(mWindow.WindowID())),
+          marker);
     }
 #endif
     num++;
@@ -243,13 +243,18 @@ TimeDuration TimeoutManager::MinSchedulingDelay() const {
       isBackground ? TimeDuration::FromMilliseconds(
                          StaticPrefs::dom_min_background_timeout_value())
                    : TimeDuration();
-  if (BudgetThrottlingEnabled(isBackground) &&
-      mExecutionBudget < TimeDuration()) {
+  bool budgetThrottlingEnabled = BudgetThrottlingEnabled(isBackground);
+  if (budgetThrottlingEnabled && mExecutionBudget < TimeDuration()) {
     // Only throttle if execution budget is less than 0
     double factor = 1.0 / GetRegenerationFactor(mWindow.IsBackgroundInternal());
     return TimeDuration::Max(unthrottled, -mExecutionBudget.MultDouble(factor));
   }
-  //
+  if (!budgetThrottlingEnabled && isBackground) {
+    return TimeDuration::FromMilliseconds(
+        StaticPrefs::
+            dom_min_background_timeout_value_without_budget_throttling());
+  }
+
   return unthrottled;
 }
 
@@ -299,8 +304,7 @@ bool TimeoutManager::IsInvalidFiringId(uint32_t aFiringId) const {
   return !mFiringIdStack.Contains(aFiringId);
 }
 
-// The number of nested timeouts before we start clamping. HTML5 says 1, WebKit
-// uses 5.
+// The number of nested timeouts before we start clamping. HTML says 5.
 #define DOM_CLAMP_TIMEOUT_NESTING_LEVEL 5u
 
 TimeDuration TimeoutManager::CalculateDelay(Timeout* aTimeout) const {
@@ -396,27 +400,6 @@ void TimeoutManager::UpdateBudget(const TimeStamp& aNow,
   mLastBudgetUpdate = aNow;
 }
 
-size_t TimeoutManager::GetNumPendingInputs() {
-  ContentChild* contentChild = ContentChild::GetSingleton();
-  mozilla::ipc::MessageChannel* channel =
-      contentChild ? contentChild->GetIPCChannel() : nullptr;
-
-  if (channel) {
-    size_t count = 0;
-    channel->PeekMessages([&count](const IPC::Message& aMsg) -> bool {
-      if (nsContentUtils::IsMessageCriticalInputEvent(aMsg)) {
-        // The max number we can record in the telemetry is 80,
-        // so we don't need to continue the counting.
-        if (++count > 80) {
-          return false;
-        }
-      }
-      return true;
-    });
-    return count;
-  }
-  return 0;
-}
 // The longest interval (as PRIntervalTime) we permit, or that our
 // timer code can handle, really. See DELAY_INTERVAL_LIMIT in
 // nsTimerImpl.h for details.
@@ -592,7 +575,8 @@ bool TimeoutManager::ClearTimeoutInternal(int32_t aTimerId,
           ("%s(TimeoutManager=%p, timeout=%p, ID=%u)\n",
            timeout->mReason == Timeout::Reason::eIdleCallbackTimeout
                ? "CancelIdleCallback"
-               : timeout->mIsInterval ? "ClearInterval" : "ClearTimeout",
+           : timeout->mIsInterval ? "ClearInterval"
+                                  : "ClearTimeout",
            this, timeout, timeout->mTimeoutId));
 
   if (timeout->mRunning) {
@@ -907,8 +891,6 @@ void TimeoutManager::RunTimeout(const TimeStamp& aNow,
         mLastFiringIndex = timeout->mFiringIndex;
 #endif
         // This timeout is good to run.
-        Telemetry::Accumulate(Telemetry::PENDING_CRITICAL_INPUT_WHEN_TIMEOUT,
-                              GetNumPendingInputs());
         bool timeout_was_cleared = window->RunTimeoutHandler(timeout, scx);
 #if MOZ_GECKO_PROFILER
         if (profiler_can_accept_markers()) {
@@ -924,10 +906,13 @@ void TimeoutManager::RunTimeout(const TimeStamp& aNow,
               int(elapsed.ToMilliseconds()), int(target.ToMilliseconds()),
               int(delta.ToMilliseconds()), int(runtime.ToMilliseconds()));
           // don't have end before start...
-          PROFILER_ADD_MARKER_WITH_PAYLOAD(
-              "setTimeout", DOM, TextMarkerPayload,
-              (marker, delta.ToMilliseconds() >= 0 ? timeout->When() : now, now,
-               Some(mWindow.WindowID())));
+          PROFILER_MARKER_TEXT(
+              "setTimeout", DOM,
+              MarkerOptions(
+                  MarkerTiming::Interval(
+                      delta.ToMilliseconds() >= 0 ? timeout->When() : now, now),
+                  MarkerInnerWindowId(mWindow.WindowID())),
+              marker);
         }
 #endif
 

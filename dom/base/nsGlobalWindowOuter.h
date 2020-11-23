@@ -41,7 +41,6 @@
 #include "mozilla/dom/UnionTypes.h"
 #include "mozilla/ErrorResult.h"
 #include "mozilla/Attributes.h"
-#include "mozilla/GuardObjects.h"
 #include "mozilla/LinkedList.h"
 #include "nsWrapperCacheInlines.h"
 #include "mozilla/dom/Document.h"
@@ -69,6 +68,7 @@ class nsIScriptTimeoutHandler;
 class nsIBrowserChild;
 class nsITimeoutHandler;
 class nsIWebBrowserChrome;
+class nsIWebProgressListener;
 class mozIDOMWindowProxy;
 
 class nsDocShellLoadState;
@@ -105,6 +105,7 @@ class OwningExternalOrWindowProxy;
 class Promise;
 class PostMessageData;
 class PostMessageEvent;
+class PrintPreviewResultInfo;
 struct RequestInit;
 class RequestOrUSVString;
 class Selection;
@@ -166,6 +167,9 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
  public:
   typedef nsDataHashtable<nsUint64HashKey, nsGlobalWindowOuter*>
       OuterWindowByIdTable;
+
+  using PrintPreviewResolver =
+      std::function<void(const mozilla::dom::PrintPreviewResultInfo&)>;
 
   static void AssertIsOnMainThread()
 #ifdef DEBUG
@@ -286,9 +290,6 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
   virtual nsPIDOMWindowOuter* GetPrivateRoot() override;
 
   // Outer windows only.
-  virtual void ActivateOrDeactivate(bool aActivate) override;
-  virtual void SetActive(bool aActive) override;
-  virtual bool IsTopLevelWindowActive() override;
   virtual void SetIsBackground(bool aIsBackground) override;
   virtual void SetChromeEventHandler(
       mozilla::dom::EventTarget* aChromeEventHandler) override;
@@ -394,13 +395,10 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
 
   class MOZ_RAII TemporarilyDisableDialogs {
    public:
-    explicit TemporarilyDisableDialogs(
-        nsGlobalWindowOuter* aWindow MOZ_GUARD_OBJECT_NOTIFIER_PARAM);
+    explicit TemporarilyDisableDialogs(nsGlobalWindowOuter* aWindow);
     ~TemporarilyDisableDialogs();
 
    private:
-    MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
-
     // Always an inner window; this is the window whose dialog state we messed
     // with.  We just want to keep it alive, because we plan to poke at its
     // members in our destructor.
@@ -582,11 +580,16 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
   void PromptOuter(const nsAString& aMessage, const nsAString& aInitial,
                    nsAString& aReturn, nsIPrincipal& aSubjectPrincipal,
                    mozilla::ErrorResult& aError);
+
   void PrintOuter(mozilla::ErrorResult& aError);
+
+  enum class IsPreview : bool { No, Yes };
+  enum class IsForWindowDotPrint : bool { No, Yes };
+  mozilla::dom::Nullable<mozilla::dom::WindowProxyHolder> Print(
+      nsIPrintSettings*, nsIWebProgressListener*, nsIDocShell*, IsPreview,
+      IsForWindowDotPrint, PrintPreviewResolver&&, mozilla::ErrorResult&);
   mozilla::dom::Selection* GetSelectionOuter();
   already_AddRefed<mozilla::dom::Selection> GetSelection() override;
-  already_AddRefed<mozilla::dom::MediaQueryList> MatchMediaOuter(
-      const nsAString& aQuery, mozilla::dom::CallerType aCallerType);
   nsScreen* GetScreen();
   void MoveToOuter(int32_t aXPos, int32_t aYPos,
                    mozilla::dom::CallerType aCallerType,
@@ -679,20 +682,20 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
   }
 
  public:
-  int32_t GetInnerWidthOuter(mozilla::ErrorResult& aError);
+  double GetInnerWidthOuter(mozilla::ErrorResult& aError);
 
  protected:
-  nsresult GetInnerWidth(int32_t* aWidth) override;
-  void SetInnerWidthOuter(int32_t aInnerWidth,
+  nsresult GetInnerWidth(double* aWidth) override;
+  void SetInnerWidthOuter(double aInnerWidth,
                           mozilla::dom::CallerType aCallerType,
                           mozilla::ErrorResult& aError);
 
  public:
-  int32_t GetInnerHeightOuter(mozilla::ErrorResult& aError);
+  double GetInnerHeightOuter(mozilla::ErrorResult& aError);
 
  protected:
-  nsresult GetInnerHeight(int32_t* aHeight) override;
-  void SetInnerHeightOuter(int32_t aInnerHeight,
+  nsresult GetInnerHeight(double* aHeight) override;
+  void SetInnerHeightOuter(double aInnerHeight,
                            mozilla::dom::CallerType aCallerType,
                            mozilla::ErrorResult& aError);
   int32_t GetScreenXOuter(mozilla::dom::CallerType aCallerType,
@@ -713,8 +716,6 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
   void SetOuterHeightOuter(int32_t aOuterHeight,
                            mozilla::dom::CallerType aCallerType,
                            mozilla::ErrorResult& aError);
-
-  RefPtr<mozilla::dom::WakeLock> mWakeLock;
 
   friend class HashchangeCallback;
   friend class mozilla::dom::BarProp;
@@ -742,6 +743,8 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
 
  private:
   explicit nsGlobalWindowOuter(uint64_t aWindowID);
+
+  enum class PrintKind : uint8_t { None, InternalPrint, WindowDotPrint };
 
   /**
    * @param aUrl the URL we intend to load into the window.  If aNavigate is
@@ -786,6 +789,9 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
    *                       aOptions, but without affecting any other window
    *                       features.
    *
+   * @param aPrintKind     Whether this is a browser created for printing, and
+   *                       if so for which kind of print.
+   *
    * @param aReturn [out] The window that was opened, if any.  Will be null if
    *                      aForceNoOpener is true of if aOptions contains
    *                      "noopener".
@@ -798,12 +804,12 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
                         bool aDoJSFixups, bool aNavigate, nsIArray* argv,
                         nsISupports* aExtraArgument,
                         nsDocShellLoadState* aLoadState, bool aForceNoOpener,
+                        PrintKind aPrintKind,
                         mozilla::dom::BrowsingContext** aReturn);
 
  public:
   nsresult SecurityCheckURL(const char* aURL, nsIURI** aURI);
 
-  bool PopupWhitelisted();
   mozilla::dom::PopupBlocker::PopupControlState RevisePopupAbuseLevel(
       mozilla::dom::PopupBlocker::PopupControlState aState);
   void FireAbuseEvents(const nsAString& aPopupURL,
@@ -843,7 +849,7 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
   int32_t GetScrollBoundaryOuter(mozilla::Side aSide);
 
   // Outer windows only.
-  nsresult GetInnerSize(mozilla::CSSIntSize& aSize);
+  nsresult GetInnerSize(mozilla::CSSSize& aSize);
   nsIntSize GetOuterSize(mozilla::dom::CallerType aCallerType,
                          mozilla::ErrorResult& aError);
   void SetOuterSize(int32_t aLengthCSSPixels, bool aIsWidth,
@@ -1035,7 +1041,19 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
 
   bool IsOnlyTopLevelDocumentInSHistory();
 
+  void MaybeResetWindowName(Document* aNewDocument);
+
  public:
+  bool DelayedPrintUntilAfterLoad() const {
+    return mDelayedPrintUntilAfterLoad;
+  }
+
+  bool DelayedCloseForPrinting() const { return mDelayedCloseForPrinting; }
+
+  void StopDelayingPrintingUntilAfterLoad() {
+    mShouldDelayPrintUntilAfterLoad = false;
+  }
+
   // Dispatch a runnable related to the global.
   virtual nsresult Dispatch(mozilla::TaskCategory aCategory,
                             already_AddRefed<nsIRunnable>&& aRunnable) override;
@@ -1045,6 +1063,9 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
 
   virtual mozilla::AbstractThread* AbstractMainThreadFor(
       mozilla::TaskCategory aCategory) override;
+
+ private:
+  bool IsPopupAllowed();
 
  protected:
   bool mFullscreen : 1;
@@ -1079,6 +1100,14 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
 
   // whether storage access has been granted to this frame.
   bool mStorageAccessPermissionGranted : 1;
+
+  // Whether we've delayed a print until after load.
+  bool mDelayedPrintUntilAfterLoad : 1;
+  // Whether we've delayed a close() operation because there was a pending
+  // print() operation.
+  bool mDelayedCloseForPrinting : 1;
+  // Whether we should delay printing until after load.
+  bool mShouldDelayPrintUntilAfterLoad : 1;
 
   nsCOMPtr<nsIScriptContext> mContext;
   nsCOMPtr<nsIControllers> mControllers;

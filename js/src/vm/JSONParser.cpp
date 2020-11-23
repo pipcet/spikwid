@@ -14,6 +14,7 @@
 #include "jsnum.h"
 
 #include "builtin/Array.h"
+#include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
 #include "util/StringBuffer.h"
 #include "vm/Realm.h"
 
@@ -590,15 +591,6 @@ inline bool JSONParserBase::finishObject(MutableHandleValue vp,
     return false;
   }
   stack.popBack();
-
-  if (!stack.empty() && stack.back().state == FinishArrayElement) {
-    const ElementVector& elements = stack.back().elements();
-    if (!CombinePlainObjectPropertyTypes(cx, obj, elements.begin(),
-                                         elements.length())) {
-      return false;
-    }
-  }
-
   return true;
 }
 
@@ -617,15 +609,6 @@ inline bool JSONParserBase::finishArray(MutableHandleValue vp,
     return false;
   }
   stack.popBack();
-
-  if (!stack.empty() && stack.back().state == FinishArrayElement) {
-    const ElementVector& elements = stack.back().elements();
-    if (!CombineArrayElementTypes(cx, obj, elements.begin(),
-                                  elements.length())) {
-      return false;
-    }
-  }
-
   return true;
 }
 

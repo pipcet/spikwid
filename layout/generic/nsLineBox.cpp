@@ -255,10 +255,10 @@ void nsLineBox::List(FILE* out, const char* aPrefix,
         nsIFrame::ConvertToString(mBounds, mWritingMode, aFlags).c_str());
   }
   if (mData) {
-    const nsRect vo = mData->mOverflowAreas.VisualOverflow();
+    const nsRect vo = mData->mOverflowAreas.InkOverflow();
     const nsRect so = mData->mOverflowAreas.ScrollableOverflow();
     if (!vo.IsEqualEdges(bounds) || !so.IsEqualEdges(bounds)) {
-      str += nsPrintfCString("vis-overflow=%s scr-overflow=%s ",
+      str += nsPrintfCString("ink-overflow=%s scr-overflow=%s ",
                              nsIFrame::ConvertToString(vo, aFlags).c_str(),
                              nsIFrame::ConvertToString(so, aFlags).c_str());
     }
@@ -453,7 +453,7 @@ bool nsLineBox::SetCarriedOutBEndMargin(nsCollapsingMargin aValue) {
 
 void nsLineBox::MaybeFreeData() {
   nsRect bounds = GetPhysicalBounds();
-  if (mData && mData->mOverflowAreas == nsOverflowAreas(bounds, bounds)) {
+  if (mData && mData->mOverflowAreas == OverflowAreas(bounds, bounds)) {
     if (IsInline()) {
       if (mInlineData->mFloats.IsEmpty()) {
         delete mInlineData;
@@ -528,15 +528,18 @@ void nsLineBox::ClearFloatEdges() {
   }
 }
 
-void nsLineBox::SetOverflowAreas(const nsOverflowAreas& aOverflowAreas) {
-  NS_FOR_FRAME_OVERFLOW_TYPES(otype) {
+void nsLineBox::SetOverflowAreas(const OverflowAreas& aOverflowAreas) {
+#ifdef DEBUG
+  for (const auto otype : mozilla::AllOverflowTypes()) {
     NS_ASSERTION(aOverflowAreas.Overflow(otype).width >= 0,
-                 "illegal width for combined area");
+                 "Illegal width for an overflow area!");
     NS_ASSERTION(aOverflowAreas.Overflow(otype).height >= 0,
-                 "illegal height for combined area");
+                 "Illegal height for an overflow area!");
   }
+#endif
+
   nsRect bounds = GetPhysicalBounds();
-  if (!aOverflowAreas.VisualOverflow().IsEqualInterior(bounds) ||
+  if (!aOverflowAreas.InkOverflow().IsEqualInterior(bounds) ||
       !aOverflowAreas.ScrollableOverflow().IsEqualEdges(bounds)) {
     if (!mData) {
       if (IsInline()) {
@@ -617,6 +620,7 @@ Result<nsILineIterator::LineInfo, nsresult> nsLineIterator::GetLine(
   structure.mFirstFrameOnLine = line->mFirstChild;
   structure.mNumFramesOnLine = line->GetChildCount();
   structure.mLineBounds = line->GetPhysicalBounds();
+  structure.mIsWrapped = line->IsLineWrapped();
   return structure;
 }
 

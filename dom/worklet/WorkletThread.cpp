@@ -9,8 +9,11 @@
 #include "nsContentUtils.h"
 #include "nsCycleCollector.h"
 #include "mozilla/dom/AtomList.h"
+#include "mozilla/dom/WorkletGlobalScope.h"
+#include "mozilla/dom/WorkletPrincipals.h"
 #include "mozilla/ipc/BackgroundChild.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/CycleCollectedJSRuntime.h"
 #include "mozilla/EventQueue.h"
 #include "mozilla/ThreadEventQueue.h"
 #include "js/Exception.h"
@@ -249,9 +252,9 @@ class WorkletThread::TerminateRunnable final : public Runnable {
 };
 
 WorkletThread::WorkletThread(WorkletImpl* aWorkletImpl)
-    : nsThread(MakeNotNull<ThreadEventQueue<mozilla::EventQueue>*>(
-                   MakeUnique<mozilla::EventQueue>()),
-               nsThread::NOT_MAIN_THREAD, kWorkletStackSize),
+    : nsThread(
+          MakeNotNull<ThreadEventQueue*>(MakeUnique<mozilla::EventQueue>()),
+          nsThread::NOT_MAIN_THREAD, kWorkletStackSize),
       mWorkletImpl(aWorkletImpl),
       mExitLoop(false),
       mIsTerminating(false) {

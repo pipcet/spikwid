@@ -89,10 +89,6 @@ class nsObjectLoadingContent : public nsImageLoadingContent,
     eFallbackOutdated = nsIObjectLoadingContent::PLUGIN_OUTDATED,
     // The plugin has crashed
     eFallbackCrashed = nsIObjectLoadingContent::PLUGIN_CRASHED,
-    // Suppressed by security policy
-    eFallbackSuppressed = nsIObjectLoadingContent::PLUGIN_SUPPRESSED,
-    // Blocked by content policy
-    eFallbackUserDisabled = nsIObjectLoadingContent::PLUGIN_USER_DISABLED,
     /// ** All values >= eFallbackClickToPlay are plugin placeholder types
     ///    that would be replaced by a real plugin if activated (PlayPlugin())
     /// ** Furthermore, values >= eFallbackClickToPlay and
@@ -108,6 +104,8 @@ class nsObjectLoadingContent : public nsImageLoadingContent,
     // The plugin is click-to-play, but the user won't see overlays
     eFallbackClickToPlayQuiet =
         nsIObjectLoadingContent::PLUGIN_CLICK_TO_PLAY_QUIET,
+    // Plugins are no longer supported.  Content is just a transparent rect.
+    eFallbackBlockAllPlugins = nsIObjectLoadingContent::PLUGIN_BLOCK_ALL,
   };
 
   nsObjectLoadingContent();
@@ -306,7 +304,7 @@ class nsObjectLoadingContent : public nsImageLoadingContent,
   /**
    * Destroys all loaded documents/plugins and releases references
    */
-  void DestroyContent();
+  void Destroy();
 
   static void Traverse(nsObjectLoadingContent* tmp,
                        nsCycleCollectionTraversalCallback& cb);

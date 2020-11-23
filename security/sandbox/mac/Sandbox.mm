@@ -11,19 +11,23 @@
 
 #include "Sandbox.h"
 
+#include <CoreFoundation/CoreFoundation.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <CoreFoundation/CoreFoundation.h>
+#include <sys/sysctl.h>
+#include <sys/types.h>
+
 #include <iostream>
 #include <sstream>
 #include <vector>
 
-#include "mozilla/Assertions.h"
 #include "SandboxPolicyContent.h"
 #include "SandboxPolicyFlash.h"
 #include "SandboxPolicyGMP.h"
-#include "SandboxPolicyUtility.h"
+#include "SandboxPolicyRDD.h"
 #include "SandboxPolicySocket.h"
+#include "SandboxPolicyUtility.h"
+#include "mozilla/Assertions.h"
 
 // Undocumented sandbox setup routines.
 extern "C" int sandbox_init_with_parameters(const char* profile, uint64_t flags,
@@ -99,12 +103,19 @@ void OSXVersion::GetSystemVersion(int32_t& aMajor, int32_t& aMinor, int32_t& aBu
   CFRelease(sysVersionPlist);
   CFRelease(versions);
 
-  // If 'major' isn't what we expect, assume the oldest version of OS X we
-  // currently support (OS X 10.6).
-  if (major != 10) {
+  if (major < 10) {
+    // If 'major' isn't what we expect, assume 10.6.
     aMajor = 10;
     aMinor = 6;
     aBugFix = 0;
+  } else if ((major == 10) && (minor >= 16)) {
+    // Account for SystemVersionCompat.plist being used which is
+    // automatically used for builds using older SDK versions and
+    // results in 11.0 being reported as 10.16. Assume the compat
+    // version will increase in step with the correct version.
+    aMajor = 11;
+    aMinor = minor - 16;
+    aBugFix = bugfix;
   } else {
     aMajor = major;
     aMinor = minor;
@@ -124,6 +135,25 @@ bool GetRealPath(std::string& aOutputPath, const char* aInputPath) {
   return !aOutputPath.empty();
 }
 
+/*
+ * Returns true if the process is running under Rosetta translation. Returns
+ * false if running natively or if an error was encountered. To be called
+ * before enabling the sandbox therefore not requiring the sysctl be allowed
+ * by the sandbox policy. We use the `sysctl.proc_translated` sysctl which is
+ * documented by Apple to be used for this purpose.
+ */
+bool ProcessIsRosettaTranslated() {
+  int ret = 0;
+  size_t size = sizeof(ret);
+  if (sysctlbyname("sysctl.proc_translated", &ret, &size, NULL, 0) == -1) {
+    if (errno != ENOENT) {
+      fprintf(stderr, "Failed to check for translation environment\n");
+    }
+    return false;
+  }
+  return (ret == 1);
+}
+
 void MacSandboxInfo::AppendAsParams(std::vector<std::string>& aParams) const {
   this->AppendStartupParam(aParams);
   this->AppendLoggingParam(aParams);
@@ -139,8 +169,9 @@ void MacSandboxInfo::AppendAsParams(std::vector<std::string>& aParams) const {
       this->AppendDebugWriteDirParam(aParams);
 #endif
       break;
-    case MacSandboxType_Utility:
+    case MacSandboxType_RDD:
     case MacSandboxType_Socket:
+    case MacSandboxType_Utility:
       break;
     case MacSandboxType_GMP:
       this->AppendPluginPathParam(aParams);
@@ -244,6 +275,9 @@ bool StartMacSandbox(MacSandboxInfo const& aInfo, std::string& aErrorMessage) {
   MOZ_ASSERT(minor >= 0 && minor < 100);
   std::string combinedVersion = std::to_string((major * 100) + minor);
 
+  params.push_back("IS_ROSETTA_TRANSLATED");
+  params.push_back(ProcessIsRosettaTranslated() ? "TRUE" : "FALSE");
+
   // Used for the Flash sandbox. Declared here so that they
   // stay in scope until sandbox_init_with_parameters is called.
   std::string flashCacheDir, flashTempDir, flashPath;
@@ -297,6 +331,20 @@ bool StartMacSandbox(MacSandboxInfo const& aInfo, std::string& aErrorMessage) {
     params.push_back(aInfo.shouldLog ? "TRUE" : "FALSE");
     params.push_back("APP_PATH");
     params.push_back(aInfo.appPath.c_str());
+    if (!aInfo.crashServerPort.empty()) {
+      params.push_back("CRASH_PORT");
+      params.push_back(aInfo.crashServerPort.c_str());
+    }
+  } else if (aInfo.type == MacSandboxType_RDD) {
+    profile = const_cast<char*>(SandboxPolicyRDD);
+    params.push_back("SHOULD_LOG");
+    params.push_back(aInfo.shouldLog ? "TRUE" : "FALSE");
+    params.push_back("MAC_OS_VERSION");
+    params.push_back(combinedVersion.c_str());
+    params.push_back("APP_PATH");
+    params.push_back(aInfo.appPath.c_str());
+    params.push_back("HOME_PATH");
+    params.push_back(getenv("HOME"));
     if (!aInfo.crashServerPort.empty()) {
       params.push_back("CRASH_PORT");
       params.push_back(aInfo.crashServerPort.c_str());
@@ -681,6 +729,10 @@ bool GetPluginSandboxParamsFromArgs(int aArgc, char** aArgv, MacSandboxInfo& aIn
   return true;
 }
 
+bool GetRDDSandboxParamsFromArgs(int aArgc, char** aArgv, MacSandboxInfo& aInfo) {
+  return GetUtilitySandboxParamsFromArgs(aArgc, aArgv, aInfo);
+}
+
 /*
  * Returns true if no errors were encountered or if early sandbox startup is
  * not enabled for this process. Returns false if an error was encountered.
@@ -716,8 +768,13 @@ bool StartMacSandboxIfEnabled(const MacSandboxType aSandboxType, int aArgc, char
         return false;
       }
       break;
-    case MacSandboxType_Utility:
-      if (!GetUtilitySandboxParamsFromArgs(aArgc, aArgv, info)) {
+    case MacSandboxType_GMP:
+      if (!GetPluginSandboxParamsFromArgs(aArgc, aArgv, info)) {
+        return false;
+      }
+      break;
+    case MacSandboxType_RDD:
+      if (!GetRDDSandboxParamsFromArgs(aArgc, aArgv, info)) {
         return false;
       }
       break;
@@ -726,8 +783,8 @@ bool StartMacSandboxIfEnabled(const MacSandboxType aSandboxType, int aArgc, char
         return false;
       }
       break;
-    case MacSandboxType_GMP:
-      if (!GetPluginSandboxParamsFromArgs(aArgc, aArgv, info)) {
+    case MacSandboxType_Utility:
+      if (!GetUtilitySandboxParamsFromArgs(aArgc, aArgv, info)) {
         return false;
       }
       break;

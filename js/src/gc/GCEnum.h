@@ -38,26 +38,6 @@ enum class State {
 #undef MAKE_STATE
 };
 
-// Reasons we reset an ongoing incremental GC or perform a non-incremental GC.
-#define GC_ABORT_REASONS(D)      \
-  D(None, 0)                     \
-  D(NonIncrementalRequested, 1)  \
-  D(AbortRequested, 2)           \
-  D(Unused1, 3)                  \
-  D(IncrementalDisabled, 4)      \
-  D(ModeChange, 5)               \
-  D(MallocBytesTrigger, 6)       \
-  D(GCBytesTrigger, 7)           \
-  D(ZoneChange, 8)               \
-  D(CompartmentRevived, 9)       \
-  D(GrayRootBufferingFailed, 10) \
-  D(JitCodeBytesTrigger, 11)
-enum class AbortReason {
-#define MAKE_REASON(name, num) name = num,
-  GC_ABORT_REASONS(MAKE_REASON)
-#undef MAKE_REASON
-};
-
 #define JS_FOR_EACH_ZEAL_MODE(D)       \
   D(RootsChange, 1)                    \
   D(Alloc, 2)                          \
@@ -75,7 +55,6 @@ enum class AbortReason {
   D(YieldBeforeSweepingAtoms, 17)      \
   D(CheckGrayMarking, 18)              \
   D(YieldBeforeSweepingCaches, 19)     \
-  D(YieldBeforeSweepingTypes, 20)      \
   D(YieldBeforeSweepingObjects, 21)    \
   D(YieldBeforeSweepingNonObjects, 22) \
   D(YieldBeforeSweepingShapeTrees, 23) \
@@ -91,6 +70,26 @@ enum class ZealMode {
 };
 
 } /* namespace gc */
+
+// Reasons we reset an ongoing incremental GC or perform a non-incremental GC.
+#define GC_ABORT_REASONS(D)      \
+  D(None, 0)                     \
+  D(NonIncrementalRequested, 1)  \
+  D(AbortRequested, 2)           \
+  D(Unused1, 3)                  \
+  D(IncrementalDisabled, 4)      \
+  D(ModeChange, 5)               \
+  D(MallocBytesTrigger, 6)       \
+  D(GCBytesTrigger, 7)           \
+  D(ZoneChange, 8)               \
+  D(CompartmentRevived, 9)       \
+  D(GrayRootBufferingFailed, 10) \
+  D(JitCodeBytesTrigger, 11)
+enum class GCAbortReason {
+#define MAKE_REASON(name, num) name = num,
+  GC_ABORT_REASONS(MAKE_REASON)
+#undef MAKE_REASON
+};
 
 #define JS_FOR_EACH_INTERNAL_MEMORY_USE(_) \
   _(ArrayBufferContents)                   \
@@ -116,7 +115,6 @@ enum class ZealMode {
   _(TypeDescrTraceList)                    \
   _(NativeIterator)                        \
   _(JitScript)                             \
-  _(ObjectGroupAddendum)                   \
   _(ScriptDebugScript)                     \
   _(BreakpointSite)                        \
   _(Breakpoint)                            \
@@ -140,7 +138,6 @@ enum class ZealMode {
   _(RealmInstrumentation)                  \
   _(ICUObject)                             \
   _(FinalizationRegistryRecordVector)      \
-  _(FinalizationRegistryRecordSet)         \
   _(FinalizationRegistryRegistrations)     \
   _(FinalizationRecordVector)              \
   _(ZoneAllocPolicy)                       \

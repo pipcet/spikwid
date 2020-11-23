@@ -35,6 +35,11 @@ XPCOMUtils.defineLazyServiceGetter(
   "nsIUUIDGenerator"
 );
 
+XPCOMUtils.defineLazyModuleGetters(this, {
+  FXA_PWDMGR_HOST: "resource://gre/modules/FxAccountsCommon.js",
+  FXA_PWDMGR_REALM: "resource://gre/modules/FxAccountsCommon.js",
+});
+
 class LoginManagerStorage_json {
   constructor() {
     this.__crypto = null; // nsILoginManagerCrypto service
@@ -119,6 +124,62 @@ class LoginManagerStorage_json {
   terminate() {
     this._store._saver.disarm();
     return this._store._save();
+  }
+
+  /**
+   * Returns the "sync id" used by Sync to know whether the store is current with
+   * respect to the sync servers. It is stored encrypted, but only so we
+   * can detect failure to decrypt (for example, a "reset" of the master
+   * password will leave all logins alone, but they will fail to decrypt. We
+   * also want this metadata to be unavailable in that scenario)
+   *
+   * Returns null if the data doesn't exist or if the data can't be
+   * decrypted (including if the master-password prompt is cancelled). This is
+   * OK for Sync as it can't even begin syncing if the master-password is
+   * locked as the sync encrytion keys are stored in this login manager.
+   */
+  async getSyncID() {
+    await this._store.load();
+    if (!this._store.data.sync) {
+      return null;
+    }
+    let raw = this._store.data.sync.syncID;
+    try {
+      return raw ? this._crypto.decrypt(raw) : null;
+    } catch (e) {
+      if (e.result == Cr.NS_ERROR_FAILURE) {
+        this.log("Could not decrypt the syncID - returning null");
+        return null;
+      }
+      // any other errors get re-thrown.
+      throw e;
+    }
+  }
+
+  async setSyncID(syncID) {
+    await this._store.load();
+    if (!this._store.data.sync) {
+      this._store.data.sync = {};
+    }
+    this._store.data.sync.syncID = syncID ? this._crypto.encrypt(syncID) : null;
+    this._store.saveSoon();
+  }
+
+  async getLastSync() {
+    await this._store.load();
+    if (!this._store.data.sync) {
+      return 0;
+    }
+    return this._store.data.sync.lastSync || 0.0;
+  }
+
+  async setLastSync(timestamp) {
+    await this._store.load();
+    if (!this._store.data.sync) {
+      this._store.data.sync = {};
+    }
+    this._store.data.sync.lastSync = timestamp;
+    this._store.saveSoon();
   }
 
   addLogin(
@@ -583,19 +644,50 @@ class LoginManagerStorage_json {
   }
 
   /**
-   * Removes all logins from storage.
+   * Removes all logins from local storage, including FxA Sync key.
+   *
+   * NOTE: You probably want removeAllUserFacingLogins instead of this function.
+   *
    */
   removeAllLogins() {
     this._store.ensureDataReady();
-
-    this.log("Removing all logins");
     this._store.data.logins = [];
     this._store.data.potentiallyVulnerablePasswords = [];
     this.__decryptedPotentiallyVulnerablePasswords = null;
     this._store.data.dismissedBreachAlertsByLoginGUID = {};
     this._store.saveSoon();
 
-    LoginHelper.notifyStorageChanged("removeAllLogins", null);
+    LoginHelper.notifyStorageChanged("removeAllLogins", []);
+  }
+
+  /**
+   * Removes all user facing logins from storage. e.g. all logins except the FxA Sync key
+   *
+   * If you need to remove the FxA key, use `removeAllLogins` instead
+   */
+  removeAllUserFacingLogins() {
+    this._store.ensureDataReady();
+    this.log("Removing all logins");
+
+    let [allLogins, ids] = this._searchLogins({});
+
+    let fxaKey = this._store.data.logins.find(
+      login =>
+        login.hostname == FXA_PWDMGR_HOST && login.httpRealm == FXA_PWDMGR_REALM
+    );
+    if (fxaKey) {
+      this._store.data.logins = [fxaKey];
+      allLogins = allLogins.filter(item => item != fxaKey);
+    } else {
+      this._store.data.logins = [];
+    }
+
+    this._store.data.potentiallyVulnerablePasswords = [];
+    this.__decryptedPotentiallyVulnerablePasswords = null;
+    this._store.data.dismissedBreachAlertsByLoginGUID = {};
+    this._store.saveSoon();
+
+    LoginHelper.notifyStorageChanged("removeAllLogins", allLogins);
   }
 
   findLogins(origin, formActionOrigin, httpRealm) {

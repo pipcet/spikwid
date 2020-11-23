@@ -20,9 +20,6 @@ function test() {
       info("Starting test... ");
 
       const { document, store, windowRequire, connector } = monitor.panelWin;
-      const Actions = windowRequire(
-        "devtools/client/netmonitor/src/actions/index"
-      );
       const { EVENTS, TEST_EVENTS } = windowRequire(
         "devtools/client/netmonitor/src/constants"
       );
@@ -31,8 +28,6 @@ function test() {
         getSelectedRequest,
         getSortedRequests,
       } = windowRequire("devtools/client/netmonitor/src/selectors/index");
-
-      store.dispatch(Actions.batchEnable(false));
 
       const promiseList = [];
       promiseList.push(waitForNetworkEvents(monitor, 1));
@@ -50,7 +45,7 @@ function test() {
       expectEvent(TEST_EVENTS.NETWORK_EVENT, async () => {
         is(
           getSelectedRequest(store.getState()),
-          null,
+          undefined,
           "There shouldn't be any selected item in the requests menu."
         );
         is(
@@ -87,6 +82,13 @@ function test() {
           0,
           "The attached startedMs should not be zero."
         );
+
+        /*
+         * Bug 1666495: this is not possible to assert not yet set attributes
+         * because of throttling, which only updates the frontend after a few attributes
+         * are already retrieved via onResourceUpdates events.
+         * This test should be tweaked with slow responding requests in order to assert
+         * such behavior without disabling throttling.
 
         is(
           requestItem.requestHeaders,
@@ -159,6 +161,7 @@ function test() {
           undefined,
           "The eventTimings should not yet be set."
         );
+        */
 
         verifyRequestItemTarget(
           document,
@@ -348,12 +351,12 @@ function test() {
 
         is(
           requestItem.transferredSize,
-          "347",
+          347,
           "The transferredSize data has an incorrect value."
         );
         is(
           requestItem.contentSize,
-          "12",
+          12,
           "The contentSize data has an incorrect value."
         );
         is(

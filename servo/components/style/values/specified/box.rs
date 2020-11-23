@@ -40,7 +40,7 @@ fn flexbox_enabled() -> bool {
         return servo_config::prefs::pref_map()
             .get("layout.flexbox.enabled")
             .as_bool()
-            .unwrap_or(false)
+            .unwrap_or(false);
     }
 
     true
@@ -108,12 +108,6 @@ pub enum DisplayInside {
     WebkitBox,
     #[cfg(feature = "gecko")]
     MozBox,
-    #[cfg(feature = "gecko")]
-    MozGrid,
-    #[cfg(feature = "gecko")]
-    MozGridGroup,
-    #[cfg(feature = "gecko")]
-    MozGridLine,
     #[cfg(feature = "gecko")]
     MozStack,
     #[cfg(feature = "gecko")]
@@ -231,12 +225,6 @@ impl Display {
     pub const MozBox: Self = Self::new(DisplayOutside::Block, DisplayInside::MozBox);
     #[cfg(feature = "gecko")]
     pub const MozInlineBox: Self = Self::new(DisplayOutside::Inline, DisplayInside::MozBox);
-    #[cfg(feature = "gecko")]
-    pub const MozGrid: Self = Self::new(DisplayOutside::XUL, DisplayInside::MozGrid);
-    #[cfg(feature = "gecko")]
-    pub const MozGridGroup: Self = Self::new(DisplayOutside::XUL, DisplayInside::MozGridGroup);
-    #[cfg(feature = "gecko")]
-    pub const MozGridLine: Self = Self::new(DisplayOutside::XUL, DisplayInside::MozGridLine);
     #[cfg(feature = "gecko")]
     pub const MozStack: Self = Self::new(DisplayOutside::XUL, DisplayInside::MozStack);
     #[cfg(feature = "gecko")]
@@ -615,12 +603,6 @@ impl Parse for Display {
             "-moz-box" if moz_box_display_values_enabled(context) => Display::MozBox,
             #[cfg(feature = "gecko")]
             "-moz-inline-box" if moz_box_display_values_enabled(context) => Display::MozInlineBox,
-            #[cfg(feature = "gecko")]
-            "-moz-grid" if moz_display_values_enabled(context) => Display::MozGrid,
-            #[cfg(feature = "gecko")]
-            "-moz-grid-group" if moz_display_values_enabled(context) => Display::MozGridGroup,
-            #[cfg(feature = "gecko")]
-            "-moz-grid-line" if moz_display_values_enabled(context) => Display::MozGridLine,
             #[cfg(feature = "gecko")]
             "-moz-stack" if moz_display_values_enabled(context) => Display::MozStack,
             #[cfg(feature = "gecko")]
@@ -1641,12 +1623,6 @@ pub enum Appearance {
     /// The resizer itself.
     #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
     Resizer,
-    /// A scrollbar.
-    #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
-    Scrollbar,
-    /// A small scrollbar.
-    #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
-    ScrollbarSmall,
     /// The scrollbar slider
     #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
     ScrollbarHorizontal,
@@ -1845,31 +1821,6 @@ pub enum Appearance {
     Count,
 }
 
-/// The effect of `appearance: button` on an element.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    Hash,
-    MallocSizeOf,
-    Parse,
-    PartialEq,
-    SpecifiedValueInfo,
-    ToCss,
-    ToComputedValue,
-    ToResolvedValue,
-    ToShmem,
-)]
-#[repr(u8)]
-pub enum ButtonAppearance {
-    /// `appearance: button` means the element is rendered with button
-    /// appearance.
-    Allow,
-    /// `appearance: button` is treated like `appearance: auto`.
-    Disallow,
-}
-
 /// A kind of break between two boxes.
 ///
 /// https://drafts.csswg.org/css-break/#break-between
@@ -1992,5 +1943,25 @@ pub enum Overflow {
     Scroll,
     Auto,
     #[cfg(feature = "gecko")]
-    MozHiddenUnscrollable,
+    #[parse(aliases = "-moz-hidden-unscrollable")]
+    Clip,
+}
+
+impl Overflow {
+    /// Return true if the value will create a scrollable box.
+    #[inline]
+    pub fn is_scrollable(&self) -> bool {
+        matches!(*self, Self::Hidden | Self::Scroll | Self::Auto)
+    }
+    /// Convert the value to a scrollable value if it's not already scrollable.
+    /// This maps `visible` to `auto` and `clip` to `hidden`.
+    #[inline]
+    pub fn to_scrollable(&self) -> Self {
+        match *self {
+            Self::Hidden | Self::Scroll | Self::Auto => *self,
+            Self::Visible => Self::Auto,
+            #[cfg(feature = "gecko")]
+            Self::Clip => Self::Hidden,
+        }
+    }
 }

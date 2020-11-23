@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 use crate::actions::ActionSequence;
 use crate::capabilities::{
     BrowserCapabilities, Capabilities, CapabilitiesMatching, LegacyNewSessionParameters,
@@ -72,11 +76,11 @@ pub enum WebDriverCommand<T: WebDriverExtensionCommand> {
     Extension(T),
 }
 
-pub trait WebDriverExtensionCommand: Clone + Send + PartialEq {
+pub trait WebDriverExtensionCommand: Clone + Send {
     fn parameters_json(&self) -> Option<Value>;
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct VoidWebDriverExtensionCommand;
 
 impl WebDriverExtensionCommand for VoidWebDriverExtensionCommand {

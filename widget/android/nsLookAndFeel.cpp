@@ -304,13 +304,19 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, nscolor& aColor) {
   return rv;
 }
 
-nsresult nsLookAndFeel::GetIntImpl(IntID aID, int32_t& aResult) {
-  nsresult rv = nsXPLookAndFeel::GetIntImpl(aID, aResult);
-  if (NS_SUCCEEDED(rv)) return rv;
-
-  rv = NS_OK;
+nsresult nsLookAndFeel::NativeGetInt(IntID aID, int32_t& aResult) {
+  nsresult rv = NS_OK;
 
   switch (aID) {
+    case IntID::ScrollButtonLeftMouseButtonAction:
+      aResult = 0;
+      break;
+
+    case IntID::ScrollButtonMiddleMouseButtonAction:
+    case IntID::ScrollButtonRightMouseButtonAction:
+      aResult = 3;
+      break;
+
     case IntID::CaretBlinkTime:
       aResult = 500;
       break;
@@ -409,6 +415,12 @@ nsresult nsLookAndFeel::GetIntImpl(IntID aID, int32_t& aResult) {
       break;
     }
 
+    case IntID::DragThresholdX:
+    case IntID::DragThresholdY:
+      // Threshold where a tap becomes a drag, in 1/240" reference pixels.
+      aResult = 25;
+      break;
+
     default:
       aResult = 0;
       rv = NS_ERROR_FAILURE;
@@ -417,10 +429,8 @@ nsresult nsLookAndFeel::GetIntImpl(IntID aID, int32_t& aResult) {
   return rv;
 }
 
-nsresult nsLookAndFeel::GetFloatImpl(FloatID aID, float& aResult) {
-  nsresult rv = nsXPLookAndFeel::GetFloatImpl(aID, aResult);
-  if (NS_SUCCEEDED(rv)) return rv;
-  rv = NS_OK;
+nsresult nsLookAndFeel::NativeGetFloat(FloatID aID, float& aResult) {
+  nsresult rv = NS_OK;
 
   switch (aID) {
     case FloatID::IMEUnderlineRelativeSize:
@@ -440,8 +450,8 @@ nsresult nsLookAndFeel::GetFloatImpl(FloatID aID, float& aResult) {
 }
 
 /*virtual*/
-bool nsLookAndFeel::GetFontImpl(FontID aID, nsString& aFontName,
-                                gfxFontStyle& aFontStyle) {
+bool nsLookAndFeel::NativeGetFont(FontID aID, nsString& aFontName,
+                                  gfxFontStyle& aFontStyle) {
   aFontName.AssignLiteral("\"Roboto\"");
   aFontStyle.style = FontSlantStyle::Normal();
   aFontStyle.weight = FontWeight::Normal();
@@ -481,31 +491,28 @@ void nsLookAndFeel::EnsureInitShowPassword() {
   }
 }
 
-nsTArray<LookAndFeelInt> nsLookAndFeel::GetIntCacheImpl() {
-  nsTArray<LookAndFeelInt> lookAndFeelIntCache =
-      nsXPLookAndFeel::GetIntCacheImpl();
+widget::LookAndFeelCache nsLookAndFeel::GetCacheImpl() {
+  LookAndFeelCache cache = nsXPLookAndFeel::GetCacheImpl();
 
   const IntID kIdsToCache[] = {IntID::PrefersReducedMotion,
                                IntID::SystemUsesDarkTheme};
 
   for (IntID id : kIdsToCache) {
-    lookAndFeelIntCache.AppendElement(
-        LookAndFeelInt{.id = id, .value = GetInt(id)});
+    cache.mInts().AppendElement(LookAndFeelInt(id, GetInt(id)));
   }
 
-  return lookAndFeelIntCache;
+  return cache;
 }
 
-void nsLookAndFeel::SetIntCacheImpl(
-    const nsTArray<LookAndFeelInt>& aLookAndFeelIntCache) {
-  for (const auto& entry : aLookAndFeelIntCache) {
-    switch (entry.id) {
+void nsLookAndFeel::SetCacheImpl(const LookAndFeelCache& aCache) {
+  for (const auto& entry : aCache.mInts()) {
+    switch (entry.id()) {
       case IntID::PrefersReducedMotion:
-        mPrefersReducedMotion = entry.value;
+        mPrefersReducedMotion = entry.value();
         mPrefersReducedMotionCached = true;
         break;
       case IntID::SystemUsesDarkTheme:
-        mSystemUsesDarkTheme = !!entry.value;
+        mSystemUsesDarkTheme = !!entry.value();
         mSystemUsesDarkThemeCached = true;
         break;
       default:

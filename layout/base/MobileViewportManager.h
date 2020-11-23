@@ -126,6 +126,14 @@ class MobileViewportManager final : public nsIDOMEventListener,
    */
   void UpdateVisualViewportSizeForPotentialScrollbarChange();
 
+  /*
+   * Returns the composition size in CSS units when zoomed to the intrinsic
+   * scale.
+   */
+  mozilla::CSSSize GetIntrinsicCompositionSize() const;
+
+  mozilla::ParentLayerSize GetCompositionSizeWithoutDynamicToolbar() const;
+
  private:
   ~MobileViewportManager();
 

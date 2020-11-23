@@ -22,10 +22,12 @@
 #  include "nsDirectoryServiceDefs.h"
 #endif
 
+#include "nsAppRunner.h"
+#include "ProcessUtils.h"
+
 using mozilla::ipc::IOThreadChild;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 #if defined(XP_WIN) && defined(MOZ_SANDBOX)
 static void SetTmpEnvironmentVariable(nsIFile* aValue) {
@@ -84,8 +86,6 @@ bool ContentProcess::Init(int aArgc, char* aArgv[]) {
   char* prefMapHandle = nullptr;
   char* prefsLen = nullptr;
   char* prefMapSize = nullptr;
-  char* scacheHandle = nullptr;
-  char* scacheSize = nullptr;
 #if defined(XP_MACOSX) && defined(MOZ_SANDBOX)
   nsCOMPtr<nsIFile> profileDir;
 #endif
@@ -129,11 +129,6 @@ bool ContentProcess::Init(int aArgc, char* aArgv[]) {
         return false;
       }
       prefMapHandle = aArgv[i];
-    } else if (strcmp(aArgv[i], "-scacheHandle") == 0) {
-      if (++i == aArgc) {
-        return false;
-      }
-      scacheHandle = aArgv[i];
 #endif
 
     } else if (strcmp(aArgv[i], "-prefsLen") == 0) {
@@ -146,11 +141,6 @@ bool ContentProcess::Init(int aArgc, char* aArgv[]) {
         return false;
       }
       prefMapSize = aArgv[i];
-    } else if (strcmp(aArgv[i], "-scacheSize") == 0) {
-      if (++i == aArgc) {
-        return false;
-      }
-      scacheSize = aArgv[i];
     } else if (strcmp(aArgv[i], "-safeMode") == 0) {
       gSafeMode = true;
 
@@ -181,14 +171,11 @@ bool ContentProcess::Init(int aArgc, char* aArgv[]) {
     return false;
   }
 
-  SharedPreferenceDeserializer deserializer;
+  ::mozilla::ipc::SharedPreferenceDeserializer deserializer;
   if (!deserializer.DeserializeFromSharedMemory(prefsHandle, prefMapHandle,
                                                 prefsLen, prefMapSize)) {
     return false;
   }
-
-  Unused << mozilla::scache::StartupCache::InitChildSingleton(scacheHandle,
-                                                              scacheSize);
 
   mContent.Init(IOThreadChild::message_loop(), ParentPid(), *parentBuildID,
                 IOThreadChild::TakeChannel(), *childID, *isForBrowser);
@@ -214,5 +201,4 @@ bool ContentProcess::Init(int aArgc, char* aArgv[]) {
 // in ContentChild::ActorDestroy().
 void ContentProcess::CleanUp() { mXREEmbed.Stop(); }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

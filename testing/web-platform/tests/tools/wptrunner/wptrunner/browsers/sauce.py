@@ -17,10 +17,10 @@ from six.moves import cStringIO as StringIO
 from .base import Browser, ExecutorBrowser, require_arg
 from .base import get_timeout_multiplier   # noqa: F401
 from ..executors import executor_kwargs as base_executor_kwargs
-from ..executors.executorselenium import (SeleniumTestharnessExecutor,
-                                          SeleniumRefTestExecutor)
+from ..executors.executorselenium import (SeleniumTestharnessExecutor,  # noqa: F401
+                                          SeleniumRefTestExecutor)  # noqa: F401
 
-here = os.path.split(__file__)[0]
+here = os.path.dirname(__file__)
 # Number of seconds to wait between polling operations when detecting status of
 # Sauce Connect sub-process.
 sc_poll_period = 1
@@ -95,13 +95,13 @@ def check_args(**kwargs):
     require_arg(kwargs, "sauce_key")
 
 
-def browser_kwargs(test_type, run_info_data, config, **kwargs):
+def browser_kwargs(logger, test_type, run_info_data, config, **kwargs):
     sauce_config = get_sauce_config(**kwargs)
 
     return {"sauce_config": sauce_config}
 
 
-def executor_kwargs(test_type, server_config, cache_manager, run_info_data,
+def executor_kwargs(logger, test_type, server_config, cache_manager, run_info_data,
                     **kwargs):
     executor_kwargs = base_executor_kwargs(test_type, server_config,
                                            cache_manager, run_info_data, **kwargs)

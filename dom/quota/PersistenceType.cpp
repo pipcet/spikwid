@@ -6,9 +6,11 @@
 
 #include "PersistenceType.h"
 
-namespace mozilla {
-namespace dom {
-namespace quota {
+#include <utility>
+#include "nsLiteralString.h"
+#include "nsString.h"
+
+namespace mozilla::dom::quota {
 
 namespace {
 
@@ -158,6 +160,19 @@ bool IsValidPersistenceType(const PersistenceType aPersistenceType) {
   }
 }
 
+bool IsBestEffortPersistenceType(const PersistenceType aPersistenceType) {
+  switch (aPersistenceType) {
+    case PERSISTENCE_TYPE_TEMPORARY:
+    case PERSISTENCE_TYPE_DEFAULT:
+      return true;
+
+    case PERSISTENCE_TYPE_PERSISTENT:
+    case PERSISTENCE_TYPE_INVALID:
+    default:
+      return false;
+  }
+}
+
 nsLiteralCString PersistenceTypeToString(
     const PersistenceType aPersistenceType) {
   const auto maybeString = TypeTo_impl<nsLiteralCString>(aPersistenceType);
@@ -202,6 +217,4 @@ Maybe<PersistenceType> PersistenceTypeFromInt32(const int32_t aInt32,
   return TypeFrom_impl(aInt32);
 }
 
-}  // namespace quota
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom::quota

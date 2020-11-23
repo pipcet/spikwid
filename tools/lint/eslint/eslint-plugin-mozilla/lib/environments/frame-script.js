@@ -24,6 +24,7 @@ module.exports = {
     sendSyncMessage: false,
     tabEventTarget: false,
     RPMGetAppBuildID: false,
+    RPMGetInnerMostURI: false,
     RPMGetIntPref: false,
     RPMGetStringPref: false,
     RPMGetBoolPref: false,
@@ -37,5 +38,6 @@ module.exports = {
     RPMRecordTelemetryEvent: false,
     RPMAddToHistogram: false,
     RPMRemoveMessageListener: false,
+    RPMGetHttpResponseHeader: false,
   },
 };

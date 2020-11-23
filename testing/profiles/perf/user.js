@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 // Base preferences file used by performance harnesses
 /* globals user_pref */
 user_pref("app.normandy.api_url", "https://127.0.0.1/selfsupport-dummy/");
@@ -82,6 +86,6 @@ user_pref("privacy.trackingprotection.pbmode.enabled", false);
 user_pref("security.enable_java", false);
 user_pref("security.fileuri.strict_origin_policy", false);
 user_pref("toolkit.telemetry.server", "https://127.0.0.1/telemetry-dummy/");
+user_pref("telemetry.fog.test.localhost_port", -1);
 user_pref("startup.homepage_welcome_url", "");
 user_pref("startup.homepage_welcome_url.additional", "");
-user_pref("trailhead.firstrun.branches", "join");

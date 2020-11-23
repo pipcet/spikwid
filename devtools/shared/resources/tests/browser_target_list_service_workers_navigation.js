@@ -65,7 +65,7 @@ add_task(async function test_NavigationBetweenTwoDomains_NoDestroy() {
   });
 
   info("Go to .org page, wait for onAvailable to be called");
-  await BrowserTestUtils.loadURI(gBrowser.selectedBrowser, ORG_PAGE_URL);
+  BrowserTestUtils.loadURI(gBrowser.selectedBrowser, ORG_PAGE_URL);
   await checkHooks(hooks, {
     available: 2,
     destroyed: 0,
@@ -91,7 +91,7 @@ add_task(async function test_NavigationBetweenTwoDomains_NoDestroy() {
   });
 
   info("Go back to page 1");
-  await BrowserTestUtils.loadURI(gBrowser.selectedBrowser, COM_PAGE_URL);
+  BrowserTestUtils.loadURI(gBrowser.selectedBrowser, COM_PAGE_URL);
   await checkHooks(hooks, {
     available: 2,
     destroyed: 1,
@@ -103,7 +103,7 @@ add_task(async function test_NavigationBetweenTwoDomains_NoDestroy() {
   await checkHooks(hooks, { available: 2, destroyed: 2, targets: [] });
 
   // Stop listening to avoid worker related requests
-  targetList.stopListening();
+  targetList.destroy();
 
   await client.waitForRequestsToSettle();
   await client.close();
@@ -150,7 +150,7 @@ add_task(async function test_NavigationBetweenTwoDomains_WithDestroy() {
   });
 
   info("Go to .org page, wait for onAvailable to be called");
-  await BrowserTestUtils.loadURI(gBrowser.selectedBrowser, ORG_PAGE_URL);
+  BrowserTestUtils.loadURI(gBrowser.selectedBrowser, ORG_PAGE_URL);
   await checkHooks(hooks, {
     available: 2,
     destroyed: 1,
@@ -170,7 +170,7 @@ add_task(async function test_NavigationBetweenTwoDomains_WithDestroy() {
   await checkHooks(hooks, { available: 3, destroyed: 3, targets: [] });
 
   info("Go back to page 1, wait for onDestroyed and onAvailable to be called");
-  await BrowserTestUtils.loadURI(gBrowser.selectedBrowser, COM_PAGE_URL);
+  BrowserTestUtils.loadURI(gBrowser.selectedBrowser, COM_PAGE_URL);
   await checkHooks(hooks, {
     available: 4,
     destroyed: 3,
@@ -182,7 +182,7 @@ add_task(async function test_NavigationBetweenTwoDomains_WithDestroy() {
   await checkHooks(hooks, { available: 4, destroyed: 4, targets: [] });
 
   // Stop listening to avoid worker related requests
-  targetList.stopListening();
+  targetList.destroy();
 
   await client.waitForRequestsToSettle();
   await client.close();
@@ -241,7 +241,7 @@ async function testNavigationToPageWithExistingWorker({
   await waitForRegistrationReady(tab, COM_PAGE_URL);
 
   info("Navigate to another page");
-  await BrowserTestUtils.loadURI(gBrowser.selectedBrowser, ORG_PAGE_URL);
+  BrowserTestUtils.loadURI(gBrowser.selectedBrowser, ORG_PAGE_URL);
 
   // Avoid TV failures, where target list still starts thinking that the
   // current domain is .com .
@@ -267,7 +267,7 @@ async function testNavigationToPageWithExistingWorker({
   await checkHooks(hooks, { available: 1, destroyed: 1, targets: [] });
 
   info("Go back .com page, wait for onAvailable to be called");
-  await BrowserTestUtils.loadURI(gBrowser.selectedBrowser, COM_PAGE_URL);
+  BrowserTestUtils.loadURI(gBrowser.selectedBrowser, COM_PAGE_URL);
   await checkHooks(hooks, {
     available: 2,
     destroyed: 1,
@@ -279,7 +279,7 @@ async function testNavigationToPageWithExistingWorker({
   await checkHooks(hooks, { available: 2, destroyed: 2, targets: [] });
 
   // Stop listening to avoid worker related requests
-  targetList.stopListening();
+  targetList.destroy();
 
   await client.waitForRequestsToSettle();
   await client.close();
@@ -360,10 +360,14 @@ async function unregisterServiceWorker(tab, expectedPageUrl) {
 async function waitForRegistrationReady(tab, expectedPageUrl) {
   await asyncWaitUntil(() =>
     SpecialPowers.spawn(tab.linkedBrowser, [expectedPageUrl], function(_url) {
-      const win = content.wrappedJSObject;
-      const isExpectedUrl = win.location.href === _url;
-      const hasRegistration = !!win.registration;
-      return isExpectedUrl && hasRegistration;
+      try {
+        const win = content.wrappedJSObject;
+        const isExpectedUrl = win.location.href === _url;
+        const hasRegistration = !!win.registration;
+        return isExpectedUrl && hasRegistration;
+      } catch (e) {
+        return false;
+      }
     })
   );
 }

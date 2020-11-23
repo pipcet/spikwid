@@ -306,7 +306,7 @@ OCSPRequest::Run() {
   if (NS_FAILED(rv)) {
     return NotifyDone(rv, lock);
   }
-  // Do not use SPDY for internal security operations. It could result
+  // Do not use SPDY or HTTP3 for internal security operations. It could result
   // in the silent upgrade to ssl, which in turn could require an SSL
   // operation to fulfill something like an OCSP fetch, which is an
   // endless loop.
@@ -315,6 +315,10 @@ OCSPRequest::Run() {
     return NotifyDone(rv, lock);
   }
   rv = internalChannel->SetAllowSpdy(false);
+  if (NS_FAILED(rv)) {
+    return NotifyDone(rv, lock);
+  }
+  rv = internalChannel->SetAllowHttp3(false);
   if (NS_FAILED(rv)) {
     return NotifyDone(rv, lock);
   }
@@ -569,11 +573,11 @@ void PK11PasswordPromptRunnable::RunOnTargetThread() {
 
   nsAutoString promptString;
   if (PK11_IsInternal(mSlot)) {
-    rv = GetPIPNSSBundleString("CertPassPromptDefault", promptString);
+    rv = GetPIPNSSBundleString("CertPasswordPromptDefault", promptString);
   } else {
     AutoTArray<nsString, 1> formatStrings = {
         NS_ConvertUTF8toUTF16(PK11_GetTokenName(mSlot))};
-    rv = PIPBundleFormatStringFromName("CertPassPrompt", formatStrings,
+    rv = PIPBundleFormatStringFromName("CertPasswordPrompt", formatStrings,
                                        promptString);
   }
   if (NS_FAILED(rv)) {
@@ -835,48 +839,27 @@ SECStatus CanFalseStartCallback(PRFileDesc* fd, void* client_data,
 
 static void AccumulateNonECCKeySize(Telemetry::HistogramID probe,
                                     uint32_t bits) {
-  unsigned int value =
-      bits < 512
-          ? 1
-          : bits == 512
-                ? 2
-                : bits < 768
-                      ? 3
-                      : bits == 768
-                            ? 4
-                            : bits < 1024
-                                  ? 5
-                                  : bits == 1024
-                                        ? 6
-                                        : bits < 1280
-                                              ? 7
-                                              : bits == 1280
-                                                    ? 8
-                                                    : bits < 1536
-                                                          ? 9
-                                                          : bits == 1536
-                                                                ? 10
-                                                                : bits < 2048
-                                                                      ? 11
-                                                                      : bits == 2048
-                                                                            ? 12
-                                                                            : bits < 3072
-                                                                                  ? 13
-                                                                                  : bits == 3072
-                                                                                        ? 14
-                                                                                        : bits < 4096
-                                                                                              ? 15
-                                                                                              : bits == 4096
-                                                                                                    ? 16
-                                                                                                    : bits < 8192
-                                                                                                          ? 17
-                                                                                                          : bits == 8192
-                                                                                                                ? 18
-                                                                                                                : bits < 16384
-                                                                                                                      ? 19
-                                                                                                                      : bits == 16384
-                                                                                                                            ? 20
-                                                                                                                            : 0;
+  unsigned int value = bits < 512      ? 1
+                       : bits == 512   ? 2
+                       : bits < 768    ? 3
+                       : bits == 768   ? 4
+                       : bits < 1024   ? 5
+                       : bits == 1024  ? 6
+                       : bits < 1280   ? 7
+                       : bits == 1280  ? 8
+                       : bits < 1536   ? 9
+                       : bits == 1536  ? 10
+                       : bits < 2048   ? 11
+                       : bits == 2048  ? 12
+                       : bits < 3072   ? 13
+                       : bits == 3072  ? 14
+                       : bits < 4096   ? 15
+                       : bits == 4096  ? 16
+                       : bits < 8192   ? 17
+                       : bits == 8192  ? 18
+                       : bits < 16384  ? 19
+                       : bits == 16384 ? 20
+                                       : 0;
   Telemetry::Accumulate(probe, value);
 }
 
@@ -887,12 +870,11 @@ static void AccumulateNonECCKeySize(Telemetry::HistogramID probe,
 // named curves for a given size (e.g. secp256k1 vs. secp256r1). We punt on
 // that for now. See also NSS bug 323674.
 static void AccumulateECCCurve(Telemetry::HistogramID probe, uint32_t bits) {
-  unsigned int value =
-      bits == 255 ? 29                                            // Curve25519
-                  : bits == 256 ? 23                              // P-256
-                                : bits == 384 ? 24                // P-384
-                                              : bits == 521 ? 25  // P-521
-                                                            : 0;  // Unknown
+  unsigned int value = bits == 255   ? 29  // Curve25519
+                       : bits == 256 ? 23  // P-256
+                       : bits == 384 ? 24  // P-384
+                       : bits == 521 ? 25  // P-521
+                                     : 0;  // Unknown
   Telemetry::Accumulate(probe, value);
 }
 
@@ -1212,48 +1194,6 @@ nsresult IsCertificateDistrustImminent(
   return NS_OK;
 }
 
-static void RebuildCertificateInfoFromSSLTokenCache(
-    nsNSSSocketInfo* aInfoObject) {
-  MOZ_ASSERT(aInfoObject);
-
-  if (!aInfoObject) {
-    return;
-  }
-
-  nsAutoCString key;
-  aInfoObject->GetPeerId(key);
-  mozilla::net::SessionCacheInfo info;
-  if (!mozilla::net::SSLTokensCache::GetSessionCacheInfo(key, info)) {
-    MOZ_LOG(
-        gPIPNSSLog, LogLevel::Debug,
-        ("RebuildCertificateInfoFromSSLTokenCache cannot find cached info."));
-    return;
-  }
-
-  RefPtr<nsNSSCertificate> nssc = nsNSSCertificate::ConstructFromDER(
-      BitwiseCast<char*, uint8_t*>(info.mServerCertBytes.Elements()),
-      info.mServerCertBytes.Length());
-  if (!nssc) {
-    MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
-            ("RebuildCertificateInfoFromSSLTokenCache failed to construct "
-             "server cert"));
-    return;
-  }
-
-  aInfoObject->SetServerCert(nssc, info.mEVStatus);
-  aInfoObject->SetCertificateTransparencyStatus(
-      info.mCertificateTransparencyStatus);
-  if (info.mSucceededCertChainBytes) {
-    aInfoObject->SetSucceededCertChain(
-        std::move(*info.mSucceededCertChainBytes));
-  }
-
-  if (info.mIsBuiltCertChainRootBuiltInRoot) {
-    aInfoObject->SetIsBuiltCertChainRootBuiltInRoot(
-        *info.mIsBuiltCertChainRootBuiltInRoot);
-  }
-}
-
 void HandshakeCallback(PRFileDesc* fd, void* client_data) {
   SECStatus rv;
 
@@ -1392,7 +1332,7 @@ void HandshakeCallback(PRFileDesc* fd, void* client_data) {
             ("HandshakeCallback KEEPING existing cert\n"));
   } else {
     if (StaticPrefs::network_ssl_tokens_cache_enabled()) {
-      RebuildCertificateInfoFromSSLTokenCache(infoObject);
+      infoObject->RebuildCertificateInfoFromSSLTokenCache();
     } else {
       RebuildVerifiedCertificateInformation(fd, infoObject);
     }

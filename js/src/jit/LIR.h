@@ -1312,10 +1312,10 @@ class LRecoverInfo : public TempObject {
 // compressed and saved in the compiled script.
 class LSnapshot : public TempObject {
  private:
-  uint32_t numSlots_;
   LAllocation* slots_;
   LRecoverInfo* recoverInfo_;
   SnapshotOffset snapshotOffset_;
+  uint32_t numSlots_;
   BailoutId bailoutId_;
   BailoutKind bailoutKind_;
 
@@ -1840,9 +1840,6 @@ class LIRGraph {
   // Number of stack slots needed for argument construction for calls.
   uint32_t argumentSlotCount_;
 
-  // Snapshot taken before any LIR has been lowered.
-  LSnapshot* entrySnapshot_;
-
   MIRGraph& mir_;
 
  public:
@@ -1898,14 +1895,7 @@ class LIRGraph {
   MOZ_MUST_USE bool addConstantToPool(const Value& v, uint32_t* index);
   size_t numConstants() const { return constantPool_.length(); }
   Value* constantPool() { return &constantPool_[0]; }
-  void setEntrySnapshot(LSnapshot* snapshot) {
-    MOZ_ASSERT(!entrySnapshot_);
-    entrySnapshot_ = snapshot;
-  }
-  LSnapshot* entrySnapshot() const {
-    MOZ_ASSERT(entrySnapshot_);
-    return entrySnapshot_;
-  }
+
   bool noteNeedsSafepoint(LInstruction* ins);
   size_t numNonCallSafepoints() const { return nonCallSafepoints_.length(); }
   LInstruction* getNonCallSafepoint(size_t i) const {

@@ -9,7 +9,7 @@
  * preferences for the urlbar.
  */
 
-var EXPORTED_SYMBOLS = ["UrlbarPrefs"];
+var EXPORTED_SYMBOLS = ["UrlbarPrefs", "UrlbarPrefsObserver"];
 
 const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 const { XPCOMUtils } = ChromeUtils.import(
@@ -27,6 +27,10 @@ const PREF_URLBAR_BRANCH = "browser.urlbar.";
 // value, type]].  In the former case, the getter method name is inferred from
 // the typeof the default value.
 const PREF_URLBAR_DEFAULTS = new Map([
+  // Whether we announce to screen readers when tab-to-search results are
+  // inserted.
+  ["accessibility.tabToSearch.announceResults", true],
+
   // "Autofill" is the name of the feature that automatically completes domains
   // and URLs that the user has visited as the user is typing them in the urlbar
   // textbox.  If false, autofill will be disabled.
@@ -70,12 +74,22 @@ const PREF_URLBAR_DEFAULTS = new Map([
   // Whether telemetry events should be recorded.
   ["eventTelemetry.enabled", false],
 
+  // Used as an override to update2 that is only available in Firefox 83+.
+  // In Firefox 82 we'll set experiment.update2 to false for the holdback
+  // cohort, so that upgrading to Firefox 83 won't enable the update2 feature.
+  // We must do this because experiment rollout begins one week before the 83
+  // release, and we don't want to touch update2 in Firefox 82.
+  ["experiment.update2", true],
+
   // Whether we expand the font size when when the urlbar is
   // focused.
   ["experimental.expandTextOnFocus", false],
 
   // Whether the urlbar displays a permanent search button.
   ["experimental.searchButton", false],
+
+  // Whether we style the search mode indicator's close button on hover.
+  ["experimental.searchModeIndicatorHover", false],
 
   // When true, `javascript:` URLs are not included in search results.
   ["filter.javascript", true],
@@ -117,6 +131,11 @@ const PREF_URLBAR_DEFAULTS = new Map([
   // homepage is opened.
   ["searchTips.test.ignoreShowLimits", false],
 
+  // Whether to show each local search shortcut button in the view.
+  ["shortcuts.bookmarks", true],
+  ["shortcuts.tabs", true],
+  ["shortcuts.history", true],
+
   // Whether speculative connections should be enabled.
   ["speculativeConnect.enabled", true],
 
@@ -140,6 +159,10 @@ const PREF_URLBAR_DEFAULTS = new Map([
   // active window.
   ["switchTabs.adoptIntoActiveWindow", false],
 
+  // The number of remaining times the user can interact with tab-to-search
+  // onboarding results before we stop showing them.
+  ["tabToSearch.onboard.interactionsLeft", 3],
+
   // The number of times the user has been shown the onboarding search tip.
   ["tipShownCount.searchTip_onboard", 0],
 
@@ -158,19 +181,30 @@ const PREF_URLBAR_DEFAULTS = new Map([
 
   // Whether aliases are styled as a "chiclet" separated from the Urlbar.
   // Also controls the other urlbar.update2 prefs.
-  ["update2", false],
+  ["update2", true],
 
-  // Whether the urlbar displays one-offs to filter searches to history,
-  // bookmarks, or tabs.
-  ["update2.localOneOffs", false],
+  // Whether horizontal key navigation with left/right is disabled for urlbar's
+  // one-off buttons.
+  ["update2.disableOneOffsHorizontalKeyNavigation", true],
+
+  // Controls the empty search behavior in Search Mode:
+  //  0 - Show nothing
+  //  1 - Show search history
+  //  2 - Show search and browsing history
+  ["update2.emptySearchBehavior", 0],
 
   // Whether the urlbar one-offs act as search filters instead of executing a
   // search immediately.
-  ["update2.oneOffsRefresh", false],
+  ["update2.oneOffsRefresh", true],
+
+  // Whether browsing history that is recognized as a previous search should
+  // be restyled and deduped against form history. This only happens when
+  // search mode is active.
+  ["update2.restyleBrowsingHistoryAsSearch", true],
 
   // Whether we display a tab-to-complete result when the user types an engine
   // name.
-  ["update2.tabToComplete", false],
+  ["update2.tabToComplete", true],
 ]);
 const PREF_OTHER_DEFAULTS = new Map([
   ["keyword.enabled", true],
@@ -238,6 +272,8 @@ class Preferences {
     for (let pref of PREF_OTHER_DEFAULTS.keys()) {
       Services.prefs.addObserver(pref, this, true);
     }
+    this._observerWeakRefs = [];
+    this.addObserver(this);
   }
 
   /**
@@ -251,10 +287,12 @@ class Preferences {
    * @returns {*} The preference value.
    */
   get(pref) {
-    if (!this._map.has(pref)) {
-      this._map.set(pref, this._getPrefValue(pref));
+    let value = this._map.get(pref);
+    if (value === undefined) {
+      value = this._getPrefValue(pref);
+      this._map.set(pref, value);
     }
-    return this._map.get(pref);
+    return value;
   }
 
   /**
@@ -276,6 +314,20 @@ class Preferences {
   }
 
   /**
+   * Adds a preference observer.  Observers are held weakly.
+   *
+   * @param {object} observer
+   *        An object that must have a method named `onPrefChanged`, which will
+   *        be called when a urlbar preference changes.  It will be passed the
+   *        pref name.  For prefs in the `browser.urlbar.` branch, the name will
+   *        be relative to the branch.  For other prefs, the name will be the
+   *        full name.
+   */
+  addObserver(observer) {
+    this._observerWeakRefs.push(Cu.getWeakReference(observer));
+  }
+
+  /**
    * Observes preference changes.
    *
    * @param {nsISupports} subject
@@ -287,6 +339,26 @@ class Preferences {
     if (!PREF_URLBAR_DEFAULTS.has(pref) && !PREF_OTHER_DEFAULTS.has(pref)) {
       return;
     }
+    for (let i = 0; i < this._observerWeakRefs.length; ) {
+      let observer = this._observerWeakRefs[i].get();
+      if (!observer) {
+        // The observer has been GC'ed, so remove it from our list.
+        this._observerWeakRefs.splice(i, 1);
+      } else {
+        observer.onPrefChanged(pref);
+        ++i;
+      }
+    }
+  }
+
+  /**
+   * Called when a pref tracked by UrlbarPrefs changes.
+   *
+   * @param {string} pref
+   *        The name of the pref, relative to `browser.urlbar.` if the pref is
+   *        in that branch.
+   */
+  onPrefChanged(pref) {
     this._map.delete(pref);
     // Some prefs may influence others.
     if (pref == "matchBuckets") {
@@ -367,6 +439,16 @@ class Preferences {
             this.get("suggest." + type) && Ci.mozIPlacesAutoComplete[behavior];
         }
         return val;
+      }
+      case "update2": {
+        // The experiment.update2 pref is a partial override to update2. If it
+        // is false, it overrides update2. It was introduced for Firefox 83+ to
+        // run a holdback study on update2 and can be removed when the holdback
+        // study is complete. See bug 1674469.
+        if (!this._readPref("experiment.update2")) {
+          return false;
+        }
+        return this._readPref(pref);
       }
     }
     return this._readPref(pref);

@@ -15,6 +15,7 @@ const { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
 );
 XPCOMUtils.defineLazyModuleGetters(this, {
+  ObjectUtils: "resource://gre/modules/ObjectUtils.jsm",
   PlacesUtils: "resource://gre/modules/PlacesUtils.jsm",
   SkippableTimer: "resource:///modules/UrlbarUtils.jsm",
   UrlbarMuxer: "resource:///modules/UrlbarUtils.jsm",
@@ -45,6 +46,8 @@ var localProviderModules = {
   UrlbarProviderSearchTips: "resource:///modules/UrlbarProviderSearchTips.jsm",
   UrlbarProviderSearchSuggestions:
     "resource:///modules/UrlbarProviderSearchSuggestions.jsm",
+  UrlbarProviderTabToSearch:
+    "resource:///modules/UrlbarProviderTabToSearch.jsm",
   UrlbarProviderTokenAliasEngines:
     "resource:///modules/UrlbarProviderTokenAliasEngines.jsm",
   UrlbarProviderTopSites: "resource:///modules/UrlbarProviderTopSites.jsm",
@@ -193,7 +196,19 @@ class ProvidersManager {
     }
     // Providers can use queryContext.sources to decide whether they want to be
     // invoked or not.
-    updateSourcesIfEmpty(queryContext);
+    // The sources may be defined in the context, then the whole search string
+    // can be used for searching. Otherwise sources are extracted from prefs and
+    // restriction tokens, then restriction tokens must be filtered out of the
+    // search string.
+    let restrictToken = updateSourcesIfEmpty(queryContext);
+    if (restrictToken) {
+      queryContext.restrictToken = restrictToken;
+      // If the restriction token has an equivalent source, then set it as
+      // restrictSource.
+      if (UrlbarTokenizer.SEARCH_MODE_RESTRICT.has(restrictToken.value)) {
+        queryContext.restrictSource = queryContext.sources[0];
+      }
+    }
     logger.debug(`Context sources ${queryContext.sources}`);
 
     let query = new Query(queryContext, controller, muxer, providers);
@@ -302,6 +317,10 @@ class Query {
   constructor(queryContext, controller, muxer, providers) {
     this.context = queryContext;
     this.context.results = [];
+    // Clear any state in the context object, since it could be reused by the
+    // caller and we don't want to port previous query state over.
+    this.context.pendingHeuristicProviders.clear();
+    this.context.deferUserSelectionProviders.clear();
     this.muxer = muxer;
     this.controller = controller;
     this.providers = providers;
@@ -354,6 +373,9 @@ class Query {
                   maxPriority = priority;
                 }
                 activeProviders.push(provider);
+                if (provider.deferUserSelection) {
+                  this.context.deferUserSelectionProviders.add(provider.name);
+                }
               }
             }
           })
@@ -372,17 +394,19 @@ class Query {
     }
 
     // Start querying active providers.
-
-    let queryPromises = [];
-    let startQuery = provider => {
+    let startQuery = async provider => {
       provider.logger.info(`Starting query for "${this.context.searchString}"`);
-      return provider.tryMethod(
-        "startQuery",
-        this.context,
-        this.add.bind(this)
-      );
+      let addedResult = false;
+      await provider.tryMethod("startQuery", this.context, (...args) => {
+        addedResult = true;
+        this.add(...args);
+      });
+      if (!addedResult) {
+        this.context.deferUserSelectionProviders.delete(provider.name);
+      }
     };
 
+    let queryPromises = [];
     for (let provider of activeProviders) {
       if (provider.type == UrlbarUtils.PROVIDER_TYPE.HEURISTIC) {
         this.context.pendingHeuristicProviders.add(provider.name);
@@ -409,9 +433,14 @@ class Query {
     logger.info(`Queried ${queryPromises.length} providers`);
     await Promise.all(queryPromises);
 
-    if (!this.canceled && this._chunkTimer) {
-      // All the providers are done returning results, so we can stop chunking.
-      await this._chunkTimer.fire();
+    // All the providers are done returning results, so we can stop chunking.
+    if (!this.canceled) {
+      if (this._heuristicProviderTimer) {
+        await this._heuristicProviderTimer.fire();
+      }
+      if (this._chunkTimer) {
+        await this._chunkTimer.fire();
+      }
     }
 
     // Break cycles with the controller to avoid leaks.
@@ -427,6 +456,7 @@ class Query {
       return;
     }
     this.canceled = true;
+    this.context.deferUserSelectionProviders.clear();
     for (let provider of this.providers) {
       provider.logger.info(
         `Canceling query for "${this.context.searchString}"`
@@ -434,6 +464,9 @@ class Query {
       // Mark the instance as no more valid, see start() for details.
       provider.queryInstance = null;
       provider.tryMethod("cancelQuery", this.context);
+    }
+    if (this._heuristicProviderTimer) {
+      this._heuristicProviderTimer.cancel().catch(Cu.reportError);
     }
     if (this._chunkTimer) {
       this._chunkTimer.cancel().catch(Cu.reportError);
@@ -465,6 +498,19 @@ class Query {
       return;
     }
 
+    // In search mode, don't allow heuristic results in the following cases
+    // since they don't make sense:
+    //   * When the search string is empty, or
+    //   * In local search mode, except for autofill results
+    if (
+      result.heuristic &&
+      this.context.searchMode &&
+      (!this.context.trimmedSearchString ||
+        (!this.context.searchMode.engineName && !result.autofill))
+    ) {
+      return;
+    }
+
     // Check if the result source should be filtered out. Pay attention to the
     // heuristic result though, that is supposed to be added regardless.
     if (
@@ -493,9 +539,6 @@ class Query {
     result.providerName = provider.name;
     result.providerType = provider.type;
     this.context.results.push(result);
-    if (result.heuristic) {
-      this.context.allHeuristicResults.push(result);
-    }
 
     this._notifyResultsFromProvider(provider);
   }
@@ -574,6 +617,12 @@ class Query {
       }
     }
 
+    this.context.firstResultChanged = !ObjectUtils.deepEqual(
+      this.context.firstResult,
+      this.context.results[0]
+    );
+    this.context.firstResult = this.context.results[0];
+
     if (this.controller) {
       this.controller.receiveResults(this.context);
     }
@@ -583,10 +632,12 @@ class Query {
 /**
  * Updates in place the sources for a given UrlbarQueryContext.
  * @param {UrlbarQueryContext} context The query context to examine
+ * @returns {object} The restriction token that was used to set sources, or
+ *          undefined if there's no restriction token.
  */
 function updateSourcesIfEmpty(context) {
   if (context.sources && context.sources.length) {
-    return;
+    return false;
   }
   let acceptedSources = [];
   // There can be only one restrict token about sources.
@@ -659,4 +710,5 @@ function updateSourcesIfEmpty(context) {
     }
   }
   context.sources = acceptedSources;
+  return restrictToken;
 }

@@ -21,6 +21,7 @@ include ../../dom/jsurl/crashtests/crashtests.list
 include ../../dom/mathml/crashtests/crashtests.list
 include ../../dom/media/mediasource/test/crashtests/crashtests.list
 include ../../dom/media/test/crashtests/crashtests.list
+include ../../dom/media/webvtt/test/crashtests/crashtests.list
 skip-if(!webrtc) include ../../dom/media/tests/crashtests/crashtests.list
 include ../../dom/media/webspeech/synth/crashtests/crashtests.list
 include ../../dom/offline/crashtests/crashtests.list
@@ -58,7 +59,6 @@ include ../../layout/style/crashtests/crashtests.list
 include ../../layout/svg/crashtests/crashtests.list
 include ../../layout/tables/crashtests/crashtests.list
 include ../../layout/xul/crashtests/crashtests.list
-include ../../layout/xul/grid/crashtests/crashtests.list
 include ../../layout/xul/tree/crashtests/crashtests.list
 
 include ../../media/libpng/crashtests/crashtests.list

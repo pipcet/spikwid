@@ -46,6 +46,7 @@ class IMediaController {
   virtual uint64_t Id() const = 0;
   virtual bool IsAudible() const = 0;
   virtual bool IsPlaying() const = 0;
+  virtual bool IsActive() const = 0;
 };
 
 /**
@@ -87,7 +88,12 @@ class MediaController final : public DOMEventTargetHelper,
   JSObject* WrapObject(JSContext* aCx,
                        JS::Handle<JSObject*> aGivenProto) override;
   void GetSupportedKeys(nsTArray<MediaControlKey>& aRetVal) const;
+  void GetMetadata(MediaMetadataInit& aMetadata, ErrorResult& aRv);
+  IMPL_EVENT_HANDLER(activated);
+  IMPL_EVENT_HANDLER(deactivated);
+  IMPL_EVENT_HANDLER(metadatachange);
   IMPL_EVENT_HANDLER(supportedkeyschange);
+  IMPL_EVENT_HANDLER(playbackstatechange);
   IMPL_EVENT_HANDLER(positionstatechange);
 
   // IMediaController's methods
@@ -105,6 +111,7 @@ class MediaController final : public DOMEventTargetHelper,
   uint64_t Id() const override;
   bool IsAudible() const override;
   bool IsPlaying() const override;
+  bool IsActive() const override;
 
   // IMediaInfoUpdater's methods
   void NotifyMediaPlaybackChanged(uint64_t aBrowsingContextId,
@@ -115,10 +122,6 @@ class MediaController final : public DOMEventTargetHelper,
                                    bool aIsInPictureInPictureMode) override;
   void NotifyMediaFullScreenState(uint64_t aBrowsingContextId,
                                   bool aIsInFullScreen) override;
-
-  // Reture true if any of controlled media is being used in Picture-In-Picture
-  // mode.
-  bool IsInPictureInPictureMode() const;
 
   // Calling this method explicitly would mark this controller as deprecated,
   // then calling any its method won't take any effect.
@@ -140,15 +143,23 @@ class MediaController final : public DOMEventTargetHelper,
 
   CopyableTArray<MediaControlKey> GetSupportedMediaKeys() const;
 
+  bool IsBeingUsedInPIPModeOrFullscreen() const;
+
+  // These methods are used to select/unselect the media controller as a main
+  // controller.
+  void Select() const;
+  void Unselect() const;
+
  private:
   ~MediaController();
-  void HandleActualPlaybackStateChanged() override;
+  void HandleActualPlaybackStateChanged();
   void UpdateMediaControlActionToContentMediaIfNeeded(
       const MediaControlAction& aAction);
   void HandleSupportedMediaSessionActionsChanged(
       const nsTArray<MediaSessionAction>& aSupportedAction);
 
   void HandlePositionStateChanged(const PositionState& aState);
+  void HandleMetadataChanged(const MediaMetadataBase& aMetadata);
 
   // This would register controller to the media control service that takes a
   // responsibility to manage all active controllers.
@@ -163,10 +174,15 @@ class MediaController final : public DOMEventTargetHelper,
 
   void UpdateDeactivationTimerIfNeeded();
 
-  bool IsMediaBeingUsedInPIPModeOrFullScreen() const;
-
   void DispatchAsyncEvent(const nsAString& aName);
   void DispatchAsyncEvent(Event* aEvent);
+
+  bool IsMainController() const;
+  void ForceToBecomeMainControllerIfNeeded();
+  bool ShouldRequestForMainController() const;
+
+  bool ShouldPropagateActionToAllContexts(
+      const MediaControlAction& aAction) const;
 
   bool mIsActive = false;
   bool mShutdown = false;
@@ -178,7 +194,9 @@ class MediaController final : public DOMEventTargetHelper,
   MediaEventListener mSupportedActionsChangedListener;
   MediaEventProducer<nsTArray<MediaControlKey>> mSupportedKeysChangedEvent;
 
+  MediaEventListener mPlaybackChangedListener;
   MediaEventListener mPositionStateChangedListener;
+  MediaEventListener mMetadataChangedListener;
 
   MediaEventProducer<bool> mFullScreenChangedEvent;
   MediaEventProducer<bool> mPictureInPictureModeChangedEvent;

@@ -16,7 +16,7 @@ ChromeUtils.defineModuleGetter(
 
 async function openURLInWindow(window, url) {
   const { selectedBrowser } = window.gBrowser;
-  await BrowserTestUtils.loadURI(selectedBrowser, url);
+  BrowserTestUtils.loadURI(selectedBrowser, url);
   await BrowserTestUtils.browserLoaded(selectedBrowser, false, url);
 }
 
@@ -99,7 +99,7 @@ add_task(async function check_openURL_listener() {
   });
 
   // Initialise listener
-  await openURLListener.init(triggerHandler, ["example.com"]);
+  openURLListener.init(triggerHandler, ["example.com"]);
 
   await openURLInWindow(normalWindow, TEST_URL);
   await BrowserTestUtils.waitForCondition(

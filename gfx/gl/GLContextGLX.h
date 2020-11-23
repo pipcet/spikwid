@@ -53,9 +53,7 @@ class GLContextGLX : public GLContext {
 
   bool SwapBuffers() override;
 
-  void CopySubBuffer(int x, int y, int w, int h) override;
-
-  bool HasCopySubBuffer() const override;
+  GLint GetBufferAge() const override;
 
   void GetWSIInfo(nsCString* const out) const override;
 

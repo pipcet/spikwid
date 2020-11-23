@@ -630,26 +630,20 @@ add_test(function test_filterWhitespace() {
   Assert.equal(url.spec, "http://test.com/pa%0D%0A%09th?query#hash");
   url = url
     .mutate()
-    .setQuery("qu\r\n\tery")
+    .setQuery("que\r\n\try")
     .finalize();
-  Assert.equal(url.spec, "http://test.com/pa%0D%0A%09th?qu%0D%0A%09ery#hash");
+  Assert.equal(url.spec, "http://test.com/pa%0D%0A%09th?query#hash");
   url = url
     .mutate()
     .setRef("ha\r\n\tsh")
     .finalize();
-  Assert.equal(
-    url.spec,
-    "http://test.com/pa%0D%0A%09th?qu%0D%0A%09ery#ha%0D%0A%09sh"
-  );
+  Assert.equal(url.spec, "http://test.com/pa%0D%0A%09th?query#hash");
   url = url
     .mutate()
     .QueryInterface(Ci.nsIURLMutator)
     .setFileName("fi\r\n\tle.name")
     .finalize();
-  Assert.equal(
-    url.spec,
-    "http://test.com/fi%0D%0A%09le.name?qu%0D%0A%09ery#ha%0D%0A%09sh"
-  );
+  Assert.equal(url.spec, "http://test.com/fi%0D%0A%09le.name?query#hash");
 
   run_next_test();
 });
@@ -1104,70 +1098,9 @@ registerCleanupFunction(function() {
 
 add_test(function test_idna_host() {
   // See bug 945240 - this test makes sure that URLs return a punycode hostname
-  // when the pref is set, or unicode otherwise.
-
-  // First we test that the old behaviour still works properly for all methods
-  // that return strings containing the hostname
-
-  gPrefs.setBoolPref("network.standard-url.punycode-host", false);
   let url = stringToURL(
     "http://user:password@ält.example.org:8080/path?query#etc"
   );
-
-  equal(url.host, "ält.example.org");
-  equal(url.hostPort, "ält.example.org:8080");
-  equal(url.prePath, "http://user:password@ält.example.org:8080");
-  equal(url.spec, "http://user:password@ält.example.org:8080/path?query#etc");
-  equal(
-    url.specIgnoringRef,
-    "http://user:password@ält.example.org:8080/path?query"
-  );
-  equal(
-    url
-      .QueryInterface(Ci.nsISensitiveInfoHiddenURI)
-      .getSensitiveInfoHiddenSpec(),
-    "http://user:****@ält.example.org:8080/path?query#etc"
-  );
-
-  equal(url.displayHost, "ält.example.org");
-  equal(url.displayHostPort, "ält.example.org:8080");
-  equal(
-    url.displaySpec,
-    "http://user:password@ält.example.org:8080/path?query#etc"
-  );
-
-  equal(url.asciiHost, "xn--lt-uia.example.org");
-  equal(url.asciiHostPort, "xn--lt-uia.example.org:8080");
-  equal(
-    url.asciiSpec,
-    "http://user:password@xn--lt-uia.example.org:8080/path?query#etc"
-  );
-
-  url = url
-    .mutate()
-    .setRef("")
-    .finalize(); // SetRef calls InvalidateCache()
-  equal(url.spec, "http://user:password@ält.example.org:8080/path?query");
-  equal(
-    url.displaySpec,
-    "http://user:password@ält.example.org:8080/path?query"
-  );
-  equal(
-    url.asciiSpec,
-    "http://user:password@xn--lt-uia.example.org:8080/path?query"
-  );
-
-  url = stringToURL("http://user:password@www.ält.com:8080/path?query#etc");
-  url = url
-    .mutate()
-    .setRef("")
-    .finalize();
-  equal(url.spec, "http://user:password@www.ält.com:8080/path?query");
-
-  // We also check that the default behaviour changes once we filp the pref
-  gPrefs.setBoolPref("network.standard-url.punycode-host", true);
-
-  url = stringToURL("http://user:password@ält.example.org:8080/path?query#etc");
   equal(url.host, "xn--lt-uia.example.org");
   equal(url.hostPort, "xn--lt-uia.example.org:8080");
   equal(url.prePath, "http://user:password@xn--lt-uia.example.org:8080");
@@ -1337,4 +1270,30 @@ add_task(async function test_emptyHostWithURLType() {
     /NS_ERROR_UNEXPECTED/,
     "A pseudo-empty host is not allowed for URLTYPE_AUTHORITY"
   );
+});
+
+add_task(async function test_bug1648493() {
+  let url = stringToURL("https://example.com/");
+  url = url
+    .mutate()
+    .setScheme("file")
+    .finalize();
+  url = url
+    .mutate()
+    .setScheme("resource")
+    .finalize();
+  url = url
+    .mutate()
+    .setPassword("Ãª")
+    .finalize();
+  url = url
+    .mutate()
+    .setUsername("Ã§")
+    .finalize();
+  url = url
+    .mutate()
+    .setScheme("t")
+    .finalize();
+  equal(url.spec, "t://%C3%83%C2%A7:%C3%83%C2%AA@example.com/");
+  equal(url.username, "%C3%83%C2%A7");
 });

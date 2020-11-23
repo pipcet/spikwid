@@ -83,6 +83,22 @@ inline JSObject* GetDelegate(gc::Cell* const&) = delete;
 } /* namespace detail */
 } /* namespace gc */
 
+// Weakmap entry -> value edges are only visible if the map is traced, which
+// only happens if the map zone is being collected. If the map and the value
+// were in different zones, then we could have a case where the map zone is not
+// collecting but the value zone is, and incorrectly free a value that is
+// reachable solely through weakmaps.
+template <class K, class V>
+void WeakMap<K, V>::assertMapIsSameZoneWithValue(const V& v) {
+#ifdef DEBUG
+  gc::Cell* cell = gc::ToMarkable(v);
+  if (cell) {
+    Zone* cellZone = cell->zoneFromAnyThread();
+    MOZ_ASSERT(zone() == cellZone || cellZone->isAtomsZone());
+  }
+#endif
+}
+
 template <class K, class V>
 WeakMap<K, V>::WeakMap(JSContext* cx, JSObject* memOf)
     : Base(cx->zone()), WeakMapBase(memOf, cx->zone()) {
@@ -192,7 +208,7 @@ void WeakMap<K, V>::trace(JSTracer* trc) {
   TraceNullableEdge(trc, &memberOf, "WeakMap owner");
 
   if (trc->isMarkingTracer()) {
-    MOZ_ASSERT(trc->weakMapAction() == ExpandWeakMaps);
+    MOZ_ASSERT(trc->weakMapAction() == JS::WeakMapTraceAction::Expand);
     auto marker = GCMarker::fromTracer(trc);
 
     // Don't downgrade the map color from black to gray. This can happen when a
@@ -205,20 +221,19 @@ void WeakMap<K, V>::trace(JSTracer* trc) {
     return;
   }
 
-  if (trc->weakMapAction() == DoNotTraceWeakMaps) {
+  if (trc->weakMapAction() == JS::WeakMapTraceAction::Skip) {
     return;
   }
 
   // Trace keys only if weakMapAction() says to.
-  if (trc->weakMapAction() == TraceWeakMapKeysValues) {
+  if (trc->weakMapAction() == JS::WeakMapTraceAction::TraceKeysAndValues) {
     for (Enum e(*this); !e.empty(); e.popFront()) {
       TraceWeakMapKeyEdge(trc, zone(), &e.front().mutableKey(),
                           "WeakMap entry key");
     }
   }
 
-  // Always trace all values (unless weakMapAction() is
-  // DoNotTraceWeakMaps).
+  // Always trace all values (unless weakMapAction() is Skip).
   for (Range r = Base::all(); !r.empty(); r.popFront()) {
     TraceEdge(trc, &r.front().value(), "WeakMap entry value");
   }
@@ -289,7 +304,7 @@ bool WeakMap<K, V>::markEntries(GCMarker* marker) {
     // So we only need to populate the table if the key is less marked than the
     // map, to catch later updates in the key's mark color.
     if (keyColor < mapColor) {
-      MOZ_ASSERT(marker->weakMapAction() == ExpandWeakMaps);
+      MOZ_ASSERT(marker->weakMapAction() == JS::WeakMapTraceAction::Expand);
       // The final color of the key is not yet known. Record this weakmap and
       // the lookup key in the list of weak keys. If the key has a delegate,
       // then the lookup key is the delegate (because marking the key will end
@@ -308,13 +323,22 @@ bool WeakMap<K, V>::markEntries(GCMarker* marker) {
 }
 
 template <class K, class V>
-void WeakMap<K, V>::postSeverDelegate(GCMarker* marker, JSObject* key,
-                                      Compartment* comp) {
+void WeakMap<K, V>::postSeverDelegate(GCMarker* marker, JSObject* key) {
   if (mapColor) {
     // We only stored the delegate, not the key, and we're severing the
     // delegate from the key. So store the key.
     gc::WeakMarkable markable(this, key);
     addWeakEntry(marker, key, markable);
+  }
+}
+
+template <class K, class V>
+void WeakMap<K, V>::postRestoreDelegate(GCMarker* marker, JSObject* key,
+                                        JSObject* delegate) {
+  if (mapColor) {
+    // We had the key stored, but are removing it. Store the delegate instead.
+    gc::WeakMarkable markable(this, key);
+    addWeakEntry(marker, delegate, markable);
   }
 }
 

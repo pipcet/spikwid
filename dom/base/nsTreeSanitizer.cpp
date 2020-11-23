@@ -6,6 +6,7 @@
 
 #include "nsTreeSanitizer.h"
 
+#include "mozilla/Algorithm.h"
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/BindingStyleRule.h"
 #include "mozilla/DeclarationBlock.h"
@@ -26,6 +27,8 @@
 #include "nsIParserUtils.h"
 #include "mozilla/dom/Document.h"
 #include "nsQueryObject.h"
+
+#include <iterator>
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -380,7 +383,7 @@ const nsStaticAtom* const kElementsSVG[] = {
     // vkern
     nullptr};
 
-const nsStaticAtom* const kAttributesSVG[] = {
+constexpr const nsStaticAtom* const kAttributesSVG[] = {
     // accent-height
     nsGkAtoms::accumulate,          // accumulate
     nsGkAtoms::additive,            // additive
@@ -454,6 +457,7 @@ const nsStaticAtom* const kAttributesSVG[] = {
     nsGkAtoms::gradientTransform,  // gradientTransform
     nsGkAtoms::gradientUnits,      // gradientUnits
     nsGkAtoms::height,             // height
+    nsGkAtoms::href,
     // horiz-adv-x
     // horiz-origin-x
     // horiz-origin-y
@@ -613,7 +617,17 @@ const nsStaticAtom* const kAttributesSVG[] = {
     nsGkAtoms::zoomAndPan,        // zoomAndPan
     nullptr};
 
-const nsStaticAtom* const kURLAttributesSVG[] = {nsGkAtoms::href, nullptr};
+constexpr const nsStaticAtom* const kURLAttributesSVG[] = {nsGkAtoms::href,
+                                                           nullptr};
+
+static_assert(AllOf(std::begin(kURLAttributesSVG), std::end(kURLAttributesSVG),
+                    [](auto aURLAttributeSVG) {
+                      return AnyOf(std::begin(kAttributesSVG),
+                                   std::end(kAttributesSVG),
+                                   [&](auto aAttributeSVG) {
+                                     return aAttributeSVG == aURLAttributeSVG;
+                                   });
+                    }));
 
 const nsStaticAtom* const kElementsMathML[] = {
     nsGkAtoms::abs_,                  // abs
@@ -1218,8 +1232,7 @@ void nsTreeSanitizer::SanitizeAttributes(mozilla::dom::Element* aElement,
   // If we've got HTML audio or video, add the controls attribute, because
   // otherwise the content is unplayable with scripts removed.
   if (aElement->IsAnyOfHTMLElements(nsGkAtoms::video, nsGkAtoms::audio)) {
-    aElement->SetAttr(kNameSpaceID_None, nsGkAtoms::controls, EmptyString(),
-                      false);
+    aElement->SetAttr(kNameSpaceID_None, nsGkAtoms::controls, u""_ns, false);
   }
 }
 
@@ -1341,6 +1354,7 @@ void nsTreeSanitizer::SanitizeChildren(nsINode* aRoot) {
         nsAutoString sanitizedStyle;
         SanitizeStyleSheet(styleText, sanitizedStyle, aRoot->OwnerDoc(),
                            node->GetBaseURI());
+        RemoveAllAttributesFromDescendants(elt);
         nsContentUtils::SetNodeTextContent(node, sanitizedStyle, true);
 
         if (!mOnlyConditionalCSS) {
@@ -1424,6 +1438,18 @@ void nsTreeSanitizer::RemoveAllAttributes(Element* aElement) {
     int32_t attrNs = attrName->NamespaceID();
     RefPtr<nsAtom> attrLocal = attrName->LocalName();
     aElement->UnsetAttr(attrNs, attrLocal, false);
+  }
+}
+
+void nsTreeSanitizer::RemoveAllAttributesFromDescendants(
+    mozilla::dom::Element* aElement) {
+  nsIContent* node = aElement->GetFirstChild();
+  while (node) {
+    if (node->IsElement()) {
+      mozilla::dom::Element* elt = node->AsElement();
+      RemoveAllAttributes(elt);
+    }
+    node = node->GetNextNode(aElement);
   }
 }
 

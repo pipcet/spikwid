@@ -45,7 +45,7 @@
 #endif
 
 #ifdef MOZ_GECKO_PROFILER
-#  include "ProfilerMarkerPayload.h"
+#  include "mozilla/ProfilerMarkerTypes.h"
 #endif
 
 bool is_in_main_thread() { return NS_IsMainThread(); }
@@ -59,26 +59,20 @@ bool is_in_render_thread() {
 }
 
 void gecko_profiler_start_marker(const char* name) {
-#ifdef MOZ_GECKO_PROFILER
-  profiler_tracing_marker("WebRender", name,
-                          JS::ProfilingCategoryPair::GRAPHICS,
-                          TRACING_INTERVAL_START);
-#endif
+  PROFILER_MARKER(mozilla::ProfilerString8View::WrapNullTerminatedString(name),
+                  GRAPHICS, mozilla::MarkerTiming::IntervalStart(), Tracing,
+                  "WebRender");
 }
 
 void gecko_profiler_end_marker(const char* name) {
-#ifdef MOZ_GECKO_PROFILER
-  profiler_tracing_marker("WebRender", name,
-                          JS::ProfilingCategoryPair::GRAPHICS,
-                          TRACING_INTERVAL_END);
-#endif
+  PROFILER_MARKER(mozilla::ProfilerString8View::WrapNullTerminatedString(name),
+                  GRAPHICS, mozilla::MarkerTiming::IntervalEnd(), Tracing,
+                  "WebRender");
 }
 
 void gecko_profiler_event_marker(const char* name) {
-#ifdef MOZ_GECKO_PROFILER
-  profiler_tracing_marker("WebRender", name,
-                          JS::ProfilingCategoryPair::GRAPHICS, TRACING_EVENT);
-#endif
+  PROFILER_MARKER(mozilla::ProfilerString8View::WrapNullTerminatedString(name),
+                  GRAPHICS, {}, Tracing, "WebRender");
 }
 
 void gecko_profiler_add_text_marker(const char* name, const char* text_bytes,
@@ -87,8 +81,10 @@ void gecko_profiler_add_text_marker(const char* name, const char* text_bytes,
   if (profiler_thread_is_being_profiled()) {
     auto now = mozilla::TimeStamp::NowUnfuzzed();
     auto start = now - mozilla::TimeDuration::FromMicroseconds(microseconds);
-    profiler_add_text_marker(name, nsDependentCSubstring(text_bytes, text_len),
-                             JS::ProfilingCategoryPair::GRAPHICS, start, now);
+    PROFILER_MARKER_TEXT(
+        mozilla::ProfilerString8View::WrapNullTerminatedString(name), GRAPHICS,
+        mozilla::MarkerTiming::Interval(start, now),
+        mozilla::ProfilerString8View(text_bytes, text_len));
   }
 #endif
 }
@@ -224,45 +220,10 @@ class SceneBuiltNotification : public wr::NotificationHandler {
           auto endTime = TimeStamp::Now();
 #ifdef MOZ_GECKO_PROFILER
           if (profiler_can_accept_markers()) {
-            class ContentFullPaintPayload : public ProfilerMarkerPayload {
-             public:
-              ContentFullPaintPayload(const mozilla::TimeStamp& aStartTime,
-                                      const mozilla::TimeStamp& aEndTime)
-                  : ProfilerMarkerPayload(aStartTime, aEndTime) {}
-              mozilla::ProfileBufferEntryWriter::Length
-              TagAndSerializationBytes() const override {
-                return CommonPropsTagAndSerializationBytes();
-              }
-              void SerializeTagAndPayload(mozilla::ProfileBufferEntryWriter&
-                                              aEntryWriter) const override {
-                static const DeserializerTag tag =
-                    TagForDeserializer(Deserialize);
-                SerializeTagAndCommonProps(tag, aEntryWriter);
-              }
-              void StreamPayload(SpliceableJSONWriter& aWriter,
-                                 const TimeStamp& aProcessStartTime,
-                                 UniqueStacks& aUniqueStacks) const override {
-                StreamCommonProps("CONTENT_FULL_PAINT_TIME", aWriter,
-                                  aProcessStartTime, aUniqueStacks);
-              }
-
-             private:
-              explicit ContentFullPaintPayload(CommonProps&& aCommonProps)
-                  : ProfilerMarkerPayload(std::move(aCommonProps)) {}
-              static mozilla::UniquePtr<ProfilerMarkerPayload> Deserialize(
-                  mozilla::ProfileBufferEntryReader& aEntryReader) {
-                ProfilerMarkerPayload::CommonProps props =
-                    DeserializeCommonProps(aEntryReader);
-                return UniquePtr<ProfilerMarkerPayload>(
-                    new ContentFullPaintPayload(std::move(props)));
-              }
-            };
-
-            AUTO_PROFILER_STATS(add_marker_with_ContentFullPaintPayload);
-            profiler_add_marker_for_thread(
-                profiler_current_thread_id(),
-                JS::ProfilingCategoryPair::GRAPHICS, "CONTENT_FULL_PAINT_TIME",
-                ContentFullPaintPayload(startTime, endTime));
+            profiler_add_marker("CONTENT_FULL_PAINT_TIME",
+                                geckoprofiler::category::GRAPHICS,
+                                MarkerTiming::Interval(startTime, endTime),
+                                baseprofiler::markers::ContentBuildMarker{});
           }
 #endif
           Telemetry::Accumulate(
@@ -359,18 +320,20 @@ WebRenderBridgeParent::WebRenderBridgeParent(
     MOZ_ASSERT(!mCompositorScheduler);
     mCompositorScheduler = new CompositorVsyncScheduler(this, mWidget);
   }
-
   UpdateDebugFlags();
   UpdateQualitySettings();
+  UpdateProfilerUI();
 }
 
-WebRenderBridgeParent::WebRenderBridgeParent(const wr::PipelineId& aPipelineId)
+WebRenderBridgeParent::WebRenderBridgeParent(const wr::PipelineId& aPipelineId,
+                                             nsCString&& aError)
     : mCompositorBridge(nullptr),
       mPipelineId(aPipelineId),
       mChildLayersObserverEpoch{0},
       mParentLayersObserverEpoch{0},
       mWrEpoch{0},
       mIdNamespace{0},
+      mInitError(aError),
       mPaused(false),
       mDestroyed(true),
       mReceivedDisplayList(false),
@@ -383,17 +346,23 @@ WebRenderBridgeParent::~WebRenderBridgeParent() {}
 
 /* static */
 WebRenderBridgeParent* WebRenderBridgeParent::CreateDestroyed(
-    const wr::PipelineId& aPipelineId) {
-  return new WebRenderBridgeParent(aPipelineId);
+    const wr::PipelineId& aPipelineId, nsCString&& aError) {
+  return new WebRenderBridgeParent(aPipelineId, std::move(aError));
 }
 
 mozilla::ipc::IPCResult WebRenderBridgeParent::RecvEnsureConnected(
     TextureFactoryIdentifier* aTextureFactoryIdentifier,
-    MaybeIdNamespace* aMaybeIdNamespace) {
+    MaybeIdNamespace* aMaybeIdNamespace, nsCString* aError) {
   if (mDestroyed) {
     *aTextureFactoryIdentifier =
         TextureFactoryIdentifier(LayersBackend::LAYERS_NONE);
     *aMaybeIdNamespace = Nothing();
+    if (mInitError.IsEmpty()) {
+      // Got destroyed after we initialized but before the handshake finished?
+      aError->AssignLiteral("FEATURE_FAILURE_WEBRENDER_INITIALIZE_RACE");
+    } else {
+      *aError = std::move(mInitError);
+    }
     return IPC_OK();
   }
 
@@ -628,8 +597,12 @@ bool WebRenderBridgeParent::UpdateResources(
   }
 
   if (scheduleRelease) {
-    aUpdates.Notify(wr::Checkpoint::FrameTexturesUpdated,
-                    std::move(scheduleRelease));
+    // When software WR is enabled, shared surfaces are read during rendering
+    // rather than copied to the texture cache.
+    wr::Checkpoint when = mApi->GetBackendType() == WebRenderBackend::SOFTWARE
+                              ? wr::Checkpoint::FrameRendered
+                              : wr::Checkpoint::FrameTexturesUpdated;
+    aUpdates.Notify(when, std::move(scheduleRelease));
   }
   return true;
 }
@@ -692,10 +665,13 @@ bool WebRenderBridgeParent::AddSharedExternalImage(
 
   mSharedSurfaceIds.insert(std::make_pair(key, aExtId));
 
+  auto imageType =
+      mApi->GetBackendType() == WebRenderBackend::SOFTWARE
+          ? wr::ExternalImageType::TextureHandle(wr::ImageBufferKind::Texture2D)
+          : wr::ExternalImageType::Buffer();
   wr::ImageDescriptor descriptor(dSurf->GetSize(), dSurf->Stride(),
                                  dSurf->GetFormat());
-  aResources.AddExternalImage(aKey, descriptor, aExtId,
-                              wr::ExternalImageType::Buffer(), 0);
+  aResources.AddExternalImage(aKey, descriptor, aExtId, imageType, 0);
   return true;
 }
 
@@ -803,11 +779,14 @@ bool WebRenderBridgeParent::UpdateSharedExternalImage(
     it->second = aExtId;
   }
 
+  auto imageType =
+      mApi->GetBackendType() == WebRenderBackend::SOFTWARE
+          ? wr::ExternalImageType::TextureHandle(wr::ImageBufferKind::Texture2D)
+          : wr::ExternalImageType::Buffer();
   wr::ImageDescriptor descriptor(dSurf->GetSize(), dSurf->Stride(),
                                  dSurf->GetFormat());
   aResources.UpdateExternalImageWithDirtyRect(
-      aKey, descriptor, aExtId, wr::ExternalImageType::Buffer(),
-      wr::ToDeviceIntRect(aDirtyRect), 0);
+      aKey, descriptor, aExtId, imageType, wr::ToDeviceIntRect(aDirtyRect), 0);
 
   return true;
 }
@@ -835,10 +814,28 @@ mozilla::ipc::IPCResult WebRenderBridgeParent::RecvUpdateResources(
   wr::TransactionBuilder txn;
   txn.SetLowPriority(!IsRootWebRenderBridgeParent());
 
+  Unused << GetNextWrEpoch();
+
   bool success =
       UpdateResources(aResourceUpdates, aSmallShmems, aLargeShmems, txn);
   wr::IpcResourceUpdateQueue::ReleaseShmems(this, aSmallShmems);
   wr::IpcResourceUpdateQueue::ReleaseShmems(this, aLargeShmems);
+
+  // Even when txn.IsResourceUpdatesEmpty() is true, there could be resource
+  // updates. It is handled by WebRenderTextureHostWrapper. In this case
+  // txn.IsRenderedFrameInvalidated() becomes true.
+  if (!txn.IsResourceUpdatesEmpty() || txn.IsRenderedFrameInvalidated()) {
+    // There are resource updates, then we update Epoch of transaction.
+    txn.UpdateEpoch(mPipelineId, mWrEpoch);
+    mAsyncImageManager->SetWillGenerateFrame();
+    ScheduleGenerateFrame();
+  } else {
+    // If TransactionBuilder does not have resource updates nor display list,
+    // ScheduleGenerateFrame is not triggered via SceneBuilder and there is no
+    // need to update WrEpoch.
+    // Then we want to rollback WrEpoch. See Bug 1490117.
+    RollbackWrEpoch();
+  }
 
   if (!success) {
     return IPC_FAIL(this, "Invalid WebRender resource data shmem or address.");
@@ -873,9 +870,8 @@ bool WebRenderBridgeParent::IsRootWebRenderBridgeParent() const {
   return !!mWidget;
 }
 
-void WebRenderBridgeParent::SetCompositionRecorder(
-    UniquePtr<layers::WebRenderCompositionRecorder> aRecorder) {
-  mApi->SetCompositionRecorder(std::move(aRecorder));
+void WebRenderBridgeParent::BeginRecording(const TimeStamp& aRecordingStart) {
+  mApi->BeginRecording(aRecordingStart, mPipelineId);
 }
 
 RefPtr<wr::WebRenderAPI::WriteCollectedFramesPromise>
@@ -986,21 +982,25 @@ void WebRenderBridgeParent::SetAPZSampleTime() {
     return;
   }
   if (RefPtr<APZSampler> apz = cbp->GetAPZSampler()) {
-    TimeStamp animationTime = cbp->GetTestingTimeStamp().valueOr(
-        mCompositorScheduler->GetLastComposeTime());
+    SampleTime animationTime;
+    if (Maybe<TimeStamp> testTime = cbp->GetTestingTimeStamp()) {
+      animationTime = SampleTime::FromTest(*testTime);
+    } else {
+      animationTime = mCompositorScheduler->GetLastComposeTime();
+    }
     TimeDuration frameInterval = cbp->GetVsyncInterval();
     // As with the non-webrender codepath in AsyncCompositionManager, we want to
     // use the timestamp for the next vsync when advancing animations.
     if (frameInterval != TimeDuration::Forever()) {
-      animationTime += frameInterval;
+      animationTime = animationTime + frameInterval;
     }
     apz->SetSampleTime(animationTime);
   }
 }
 
 bool WebRenderBridgeParent::SetDisplayList(
-    const LayoutDeviceRect& aRect, const wr::LayoutSize& aContentSize,
-    ipc::ByteBuf&& aDL, const wr::BuiltDisplayListDescriptor& aDLDesc,
+    const LayoutDeviceRect& aRect, ipc::ByteBuf&& aDL,
+    const wr::BuiltDisplayListDescriptor& aDLDesc,
     const nsTArray<OpUpdateResource>& aResourceUpdates,
     const nsTArray<RefCountedShmem>& aSmallShmems,
     const nsTArray<ipc::Shmem>& aLargeShmems, const TimeStamp& aTxnStartTime,
@@ -1023,7 +1023,7 @@ bool WebRenderBridgeParent::SetDisplayList(
     gfx::DeviceColor clearColor(0.f, 0.f, 0.f, 0.f);
     aTxn.SetDisplayList(clearColor, aWrEpoch,
                         wr::ToLayoutSize(RoundedToInt(aRect).Size()),
-                        mPipelineId, aContentSize, aDLDesc, dlData);
+                        mPipelineId, aDLDesc, dlData);
 
     if (aObserveLayersUpdate) {
       aTxn.Notify(wr::Checkpoint::SceneBuilt,
@@ -1073,11 +1073,11 @@ bool WebRenderBridgeParent::ProcessDisplayListData(
   }
 
   if (aDisplayList.mDL &&
-      !SetDisplayList(aDisplayList.mRect, aDisplayList.mContentSize,
-                      std::move(aDisplayList.mDL.ref()), aDisplayList.mDLDesc,
-                      aDisplayList.mResourceUpdates, aDisplayList.mSmallShmems,
-                      aDisplayList.mLargeShmems, aTxnStartTime, txn, aWrEpoch,
-                      aValidTransaction, aObserveLayersUpdate)) {
+      !SetDisplayList(aDisplayList.mRect, std::move(aDisplayList.mDL.ref()),
+                      aDisplayList.mDLDesc, aDisplayList.mResourceUpdates,
+                      aDisplayList.mSmallShmems, aDisplayList.mLargeShmems,
+                      aTxnStartTime, txn, aWrEpoch, aValidTransaction,
+                      aObserveLayersUpdate)) {
     return false;
   }
   return true;
@@ -1110,8 +1110,6 @@ mozilla::ipc::IPCResult WebRenderBridgeParent::RecvSetDisplayList(
       this, &aToDestroy);
 
   wr::Epoch wrEpoch = GetNextWrEpoch();
-
-  mAsyncImageManager->SetCompositionTime(TimeStamp::Now());
 
   mReceivedDisplayList = true;
 
@@ -1181,7 +1179,6 @@ bool WebRenderBridgeParent::ProcessEmptyTransactionUpdates(
   }
 
   if (!aData.mCommands.IsEmpty()) {
-    mAsyncImageManager->SetCompositionTime(TimeStamp::Now());
     if (!ProcessWebRenderParentCommands(aData.mCommands, txn)) {
       return false;
     }
@@ -1355,8 +1352,8 @@ bool WebRenderBridgeParent::ProcessWebRenderParentCommands(
         const OpUpdateAsyncImagePipeline& op =
             cmd.get_OpUpdateAsyncImagePipeline();
         mAsyncImageManager->UpdateAsyncImagePipeline(
-            op.pipelineId(), op.scBounds(), op.scTransform(), op.scaleToSize(),
-            op.filter(), op.mixBlendMode(), op.scaleFromSize());
+            op.pipelineId(), op.scBounds(), op.rotation(), op.filter(),
+            op.mixBlendMode());
         mAsyncImageManager->ApplyAsyncImageForPipeline(op.pipelineId(), aTxn,
                                                        txnForImageBridge);
         break;
@@ -1479,6 +1476,11 @@ void WebRenderBridgeParent::UpdateDebugFlags() {
   mApi->UpdateDebugFlags(gfxVars::WebRenderDebugFlags());
 }
 
+void WebRenderBridgeParent::UpdateProfilerUI() {
+  nsCString uiString = gfxVars::GetWebRenderProfilerUIOrDefault();
+  mApi->SetProfilerUI(uiString);
+}
+
 void WebRenderBridgeParent::UpdateMultithreading() {
   mApi->EnableMultithreading(gfxVars::UseWebRenderMultithreading());
 }
@@ -1520,22 +1522,24 @@ void WebRenderBridgeParent::MaybeCaptureScreenPixels() {
 
   IntSize size(client_size.width, client_size.height);
 
+  bool needsYFlip = false;
   mApi->Readback(TimeStamp::Now(), size, format,
-                 Range<uint8_t>(mem.get<uint8_t>(), buffer_size));
+                 Range<uint8_t>(mem.get<uint8_t>(), buffer_size), &needsYFlip);
 
   Unused << mScreenPixelsTarget->SendScreenPixels(
-      std::move(mem), ScreenIntSize(client_size.width, client_size.height));
+      std::move(mem), ScreenIntSize(client_size.width, client_size.height),
+      needsYFlip);
 
   mScreenPixelsTarget = nullptr;
 }
 #endif
 
 mozilla::ipc::IPCResult WebRenderBridgeParent::RecvGetSnapshot(
-    PTextureParent* aTexture) {
-  if (mDestroyed) {
+    PTextureParent* aTexture, bool* aNeedsYFlip) {
+  *aNeedsYFlip = false;
+  if (mDestroyed || mPaused) {
     return IPC_OK();
   }
-  MOZ_ASSERT(!mPaused);
 
   // This function should only get called in the root WRBP. If this function
   // gets called in a non-root WRBP, we will set mForceRendering in this WRBP
@@ -1583,7 +1587,7 @@ mozilla::ipc::IPCResult WebRenderBridgeParent::RecvGetSnapshot(
   FlushSceneBuilds();
   FlushFrameGeneration();
   mApi->Readback(start, size, bufferTexture->GetFormat(),
-                 Range<uint8_t>(buffer, buffer_size));
+                 Range<uint8_t>(buffer, buffer_size), aNeedsYFlip);
 
   return IPC_OK();
 }
@@ -1844,7 +1848,8 @@ mozilla::ipc::IPCResult WebRenderBridgeParent::RecvSetConfirmedTargetAPZC(
   if (mDestroyed) {
     return IPC_OK();
   }
-  mCompositorBridge->SetConfirmedTargetAPZC(GetLayersId(), aBlockId, aTargets);
+  mCompositorBridge->SetConfirmedTargetAPZC(GetLayersId(), aBlockId,
+                                            std::move(aTargets));
   return IPC_OK();
 }
 
@@ -1919,6 +1924,12 @@ mozilla::ipc::IPCResult WebRenderBridgeParent::RecvGetAPZTestData(
   return IPC_OK();
 }
 
+mozilla::ipc::IPCResult WebRenderBridgeParent::RecvGetFrameUniformity(
+    FrameUniformityData* aOutData) {
+  mCompositorBridge->GetFrameUniformity(GetLayersId(), aOutData);
+  return IPC_OK();
+}
+
 void WebRenderBridgeParent::ActorDestroy(ActorDestroyReason aWhy) { Destroy(); }
 
 void WebRenderBridgeParent::ResetPreviousSampleTime() {
@@ -1938,14 +1949,16 @@ RefPtr<OMTASampler> WebRenderBridgeParent::GetOMTASampler() const {
 void WebRenderBridgeParent::SetOMTASampleTime() {
   MOZ_ASSERT(IsRootWebRenderBridgeParent());
   if (RefPtr<OMTASampler> sampler = GetOMTASampler()) {
-    sampler->SetSampleTime(mCompositorScheduler->GetLastComposeTime());
+    sampler->SetSampleTime(mCompositorScheduler->GetLastComposeTime().Time());
   }
 }
 
 void WebRenderBridgeParent::CompositeIfNeeded() {
   if (mSkippedComposite) {
     mSkippedComposite = false;
-    CompositeToTarget(mSkippedCompositeId, nullptr, nullptr);
+    if (mCompositorScheduler) {
+      mCompositorScheduler->ScheduleComposition();
+    }
   }
 }
 
@@ -1963,10 +1976,9 @@ void WebRenderBridgeParent::CompositeToTarget(VsyncId aId,
   AUTO_PROFILER_TRACING_MARKER("Paint", "CompositeToTarget", GRAPHICS);
   if (mPaused || !mReceivedDisplayList) {
     ResetPreviousSampleTime();
-    TimeStamp now = TimeStamp::Now();
-    PROFILER_ADD_TEXT_MARKER("SkippedComposite",
-                             mPaused ? "Paused"_ns : "No display list"_ns,
-                             JS::ProfilingCategoryPair::GRAPHICS, now, now);
+    mCompositionOpportunityId = mCompositionOpportunityId.Next();
+    PROFILER_MARKER_TEXT("SkippedComposite", GRAPHICS, {},
+                         mPaused ? "Paused"_ns : "No display list"_ns);
     return;
   }
 
@@ -1974,7 +1986,6 @@ void WebRenderBridgeParent::CompositeToTarget(VsyncId aId,
       wr::RenderThread::Get()->TooManyPendingFrames(mApi->GetId())) {
     // Render thread is busy, try next time.
     mSkippedComposite = true;
-    mSkippedCompositeId = aId;
     ResetPreviousSampleTime();
 
     // Record that we skipped presenting a frame for
@@ -1985,11 +1996,12 @@ void WebRenderBridgeParent::CompositeToTarget(VsyncId aId,
       }
     }
 
-    TimeStamp now = TimeStamp::Now();
-    PROFILER_ADD_TEXT_MARKER("SkippedComposite", "Too many pending frames"_ns,
-                             JS::ProfilingCategoryPair::GRAPHICS, now, now);
+    PROFILER_MARKER_TEXT("SkippedComposite", GRAPHICS, {},
+                         "Too many pending frames");
     return;
   }
+
+  mCompositionOpportunityId = mCompositionOpportunityId.Next();
   MaybeGenerateFrame(aId, /* aForceGenerateFrame */ false);
 }
 
@@ -2010,10 +2022,10 @@ void WebRenderBridgeParent::MaybeGenerateFrame(VsyncId aId,
   if (CompositorBridgeParent* cbp = GetRootCompositorBridgeParent()) {
     // Skip WR render during paused state.
     if (cbp->IsPaused()) {
-      TimeStamp now = TimeStamp::Now();
-      PROFILER_ADD_TEXT_MARKER("SkippedComposite",
-                               "CompositorBridgeParent is paused"_ns,
-                               JS::ProfilingCategoryPair::GRAPHICS, now, now);
+      TimeStamp now = TimeStamp::NowUnfuzzed();
+      PROFILER_MARKER_TEXT("SkippedComposite", GRAPHICS,
+                           MarkerTiming::InstantAt(now),
+                           "CompositorBridgeParent is paused");
       cbp->NotifyPipelineRendered(mPipelineId, mWrEpoch, VsyncId(), now, now,
                                   now);
       return;
@@ -2021,7 +2033,6 @@ void WebRenderBridgeParent::MaybeGenerateFrame(VsyncId aId,
   }
 
   TimeStamp start = TimeStamp::Now();
-  mAsyncImageManager->SetCompositionTime(start);
 
   // Ensure GenerateFrame is handled on the render backend thread rather
   // than going through the scene builder thread. That way we continue
@@ -2031,10 +2042,10 @@ void WebRenderBridgeParent::MaybeGenerateFrame(VsyncId aId,
   wr::TransactionBuilder sceneBuilderTxn;
   wr::AutoTransactionSender sender(mApi, &sceneBuilderTxn);
 
-  // Adding and updating wr::ImageKeys of ImageHosts that uses ImageBridge are
-  // done without using transaction of scene builder thread. With it, updating
-  // of video frame becomes faster.
+  mAsyncImageManager->SetCompositionInfo(start, mCompositionOpportunityId);
   mAsyncImageManager->ApplyAsyncImagesOfImageBridge(sceneBuilderTxn, fastTxn);
+  mAsyncImageManager->SetCompositionInfo(TimeStamp(),
+                                         CompositionOpportunityId{});
 
   if (!mAsyncImageManager->GetCompositeUntilTime().IsNull()) {
     // Trigger another CompositeToTarget() call because there might be another
@@ -2048,9 +2059,9 @@ void WebRenderBridgeParent::MaybeGenerateFrame(VsyncId aId,
 
   if (!generateFrame) {
     // Could skip generating frame now.
-    PROFILER_ADD_TEXT_MARKER("SkippedComposite",
-                             "No reason to generate frame"_ns,
-                             JS::ProfilingCategoryPair::GRAPHICS, start, start);
+    PROFILER_MARKER_TEXT("SkippedComposite", GRAPHICS,
+                         MarkerTiming::InstantAt(start),
+                         "No reason to generate frame");
     ResetPreviousSampleTime();
     return;
   }
@@ -2263,6 +2274,16 @@ void WebRenderBridgeParent::FlushRendering(bool aWaitForPresent) {
   }
 }
 
+void WebRenderBridgeParent::SetClearColor(const gfx::DeviceColor& aColor) {
+  MOZ_ASSERT(IsRootWebRenderBridgeParent());
+
+  if (!IsRootWebRenderBridgeParent() || mDestroyed) {
+    return;
+  }
+
+  mApi->SetClearColor(aColor);
+}
+
 void WebRenderBridgeParent::Pause() {
   MOZ_ASSERT(IsRootWebRenderBridgeParent());
 
@@ -2415,11 +2436,12 @@ mozilla::ipc::IPCResult WebRenderBridgeParent::RecvReleaseCompositable(
 TextureFactoryIdentifier WebRenderBridgeParent::GetTextureFactoryIdentifier() {
   MOZ_ASSERT(mApi);
 
-  return TextureFactoryIdentifier(
-      LayersBackend::LAYERS_WR, XRE_GetProcessType(), mApi->GetMaxTextureSize(),
-      false, mApi->GetUseANGLE(), mApi->GetUseDComp(),
-      mAsyncImageManager->UseCompositorWnd(), false, false, false,
-      mApi->GetSyncHandle());
+  TextureFactoryIdentifier ident(
+      mApi->GetBackendType(), mApi->GetCompositorType(), XRE_GetProcessType(),
+      mApi->GetMaxTextureSize(), false, mApi->GetUseANGLE(),
+      mApi->GetUseDComp(), mAsyncImageManager->UseCompositorWnd(), false, false,
+      false, mApi->GetSyncHandle());
+  return ident;
 }
 
 wr::Epoch WebRenderBridgeParent::GetNextWrEpoch() {

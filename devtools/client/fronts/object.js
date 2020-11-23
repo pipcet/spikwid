@@ -53,14 +53,6 @@ class ObjectFront extends FrontClassWithSpec(objectSpec) {
     return this._grip.extensible;
   }
 
-  getDefinitionSite() {
-    if (this._grip.class != "Function") {
-      console.error("getDefinitionSite is only valid for function grips.");
-      return null;
-    }
-    return super.definitionSite();
-  }
-
   /**
    * Request the names of a function's formal parameters.
    */
@@ -248,6 +240,43 @@ class ObjectFront extends FrontClassWithSpec(objectSpec) {
   }
 
   /**
+   * Request the state of a promise.
+   */
+  async getPromiseState() {
+    if (this._grip.class !== "Promise") {
+      console.error("getPromiseState is only valid for promise grips.");
+      return null;
+    }
+
+    let response, promiseState;
+    try {
+      response = await super.promiseState();
+      promiseState = response.promiseState;
+    } catch (error) {
+      // Before Firefox 85 (bug 1552648), the promiseState request didn't exist.
+      // The promise state was directly included in the grip.
+      if (error.message.includes("unrecognizedPacketType")) {
+        promiseState = this._grip.promiseState;
+        response = { promiseState };
+      } else {
+        throw error;
+      }
+    }
+
+    const { value, reason } = promiseState;
+
+    if (value) {
+      promiseState.value = getAdHocFrontOrPrimitiveGrip(value, this);
+    }
+
+    if (reason) {
+      promiseState.reason = getAdHocFrontOrPrimitiveGrip(reason, this);
+    }
+
+    return response;
+  }
+
+  /**
    * Request the target and handler internal slots of a proxy.
    */
   async getProxySlots() {
@@ -364,19 +393,6 @@ function getAdHocFrontOrPrimitiveGrip(packet, parentFront) {
  * @param {String|Number|Object} packet: The packet returned by the server
  */
 function createChildFronts(objectFront, packet) {
-  // Handle Promise fullfilled value
-  if (
-    packet.class == "Promise" &&
-    packet.promiseState &&
-    packet.promiseState.state == "fulfilled" &&
-    packet.promiseState.value
-  ) {
-    packet.promiseState.value = getAdHocFrontOrPrimitiveGrip(
-      packet.promiseState.value,
-      objectFront
-    );
-  }
-
   if (packet.preview) {
     const { message, entries } = packet.preview;
 

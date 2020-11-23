@@ -7,28 +7,24 @@
 const {
   ResourceWatcher,
 } = require("devtools/shared/resources/resource-watcher");
+const { MESSAGE_CATEGORY } = require("devtools/shared/constants");
 
-module.exports = async function({
-  targetList,
-  targetFront,
-  isFissionEnabledOnContentToolbox,
-  onAvailable,
-}) {
+module.exports = async function({ targetList, targetFront, onAvailable }) {
   // Allow the top level target if the targetFront has an `ensureCSSErrorREportingEnabled`
-  // function. Also allow frame in non-content toolbox and in content toolbox when the
-  // fission toolbox pref is set.
-  const isContentToolbox = targetList.targetFront.isLocalTab;
-  const listenForFrames = !isContentToolbox || isFissionEnabledOnContentToolbox;
+  // function. Also allow frame targets.
   const isAllowed =
     typeof targetFront.ensureCSSErrorReportingEnabled == "function" &&
     (targetFront.isTopLevel ||
-      (targetFront.targetType === targetList.TYPES.FRAME && listenForFrames));
+      targetFront.targetType === targetList.TYPES.FRAME);
 
   if (!isAllowed) {
     return;
   }
 
   const webConsoleFront = await targetFront.getFront("console");
+  if (webConsoleFront.isDestroyed()) {
+    return;
+  }
 
   // Request notifying about new CSS messages (they're emitted from the "PageError listener").
   await webConsoleFront.startListeners(["PageError"]);
@@ -39,7 +35,7 @@ module.exports = async function({
 
   const cachedMessages = [];
   for (let message of messages) {
-    if (message.pageError?.category !== "CSS Parser") {
+    if (message.pageError?.category !== MESSAGE_CATEGORY.CSS_PARSER) {
       continue;
     }
 
@@ -61,7 +57,7 @@ module.exports = async function({
   // CSS Messages are emited fron the PageError listener, which also send regular errors
   // that we need to filter out.
   webConsoleFront.on("pageError", message => {
-    if (message.pageError.category !== "CSS Parser") {
+    if (message.pageError.category !== MESSAGE_CATEGORY.CSS_PARSER) {
       return;
     }
 

@@ -16,7 +16,7 @@
 #include "nsAlgorithm.h"
 #include "nsExceptionHandler.h"
 #include "nsGkAtoms.h"
-#include "nsIIdleServiceInternal.h"
+#include "nsIUserIdleServiceInternal.h"
 #include "nsIWindowsRegKey.h"
 #include "nsMemory.h"
 #include "nsPrintfCString.h"
@@ -451,7 +451,7 @@ static const nsCString GetKeyLocationName(uint32_t aLocation) {
 static const nsCString GetCharacterCodeName(const char16_t* aChars,
                                             uint32_t aLength) {
   if (!aLength) {
-    return EmptyCString();
+    return ""_ns;
   }
   nsCString result;
   for (uint32_t i = 0; i < aLength; ++i) {
@@ -469,7 +469,7 @@ static const nsCString GetCharacterCodeName(const char16_t* aChars,
 static const nsCString GetCharacterCodeName(
     const UniCharsAndModifiers& aUniCharsAndModifiers) {
   if (aUniCharsAndModifiers.IsEmpty()) {
-    return EmptyCString();
+    return ""_ns;
   }
   nsCString result;
   for (uint32_t i = 0; i < aUniCharsAndModifiers.Length(); i++) {
@@ -3866,7 +3866,7 @@ void NativeKey::WillDispatchKeyboardEvent(WidgetKeyboardEvent& aKeyboardEvent,
  *****************************************************************************/
 
 KeyboardLayout* KeyboardLayout::sInstance = nullptr;
-nsIIdleServiceInternal* KeyboardLayout::sIdleService = nullptr;
+nsIUserIdleServiceInternal* KeyboardLayout::sIdleService = nullptr;
 
 // This log is very noisy if you don't want to retrieve the mapping table
 // of specific keyboard layout.  LogLevel::Debug and LogLevel::Verbose are
@@ -3878,8 +3878,8 @@ LazyLogModule sKeyboardLayoutLogger("KeyboardLayoutWidgets");
 KeyboardLayout* KeyboardLayout::GetInstance() {
   if (!sInstance) {
     sInstance = new KeyboardLayout();
-    nsCOMPtr<nsIIdleServiceInternal> idleService =
-        do_GetService("@mozilla.org/widget/idleservice;1");
+    nsCOMPtr<nsIUserIdleServiceInternal> idleService =
+        do_GetService("@mozilla.org/widget/useridleservice;1");
     // The refcount will be decreased at shut down.
     sIdleService = idleService.forget().take();
   }
@@ -4357,18 +4357,18 @@ nsCString KeyboardLayout::GetLayoutName(HKL aLayout) const {
   nsCOMPtr<nsIWindowsRegKey> regKey =
       do_CreateInstance("@mozilla.org/windows-registry-key;1");
   if (NS_WARN_IF(!regKey)) {
-    return EmptyCString();
+    return ""_ns;
   }
   nsresult rv =
       regKey->Open(nsIWindowsRegKey::ROOT_KEY_LOCAL_MACHINE,
                    nsString(kKeyboardLayouts), nsIWindowsRegKey::ACCESS_READ);
   if (NS_WARN_IF(NS_FAILED(rv))) {
-    return EmptyCString();
+    return ""_ns;
   }
   uint32_t childCount = 0;
   if (NS_WARN_IF(NS_FAILED(regKey->GetChildCount(&childCount))) ||
       NS_WARN_IF(!childCount)) {
-    return EmptyCString();
+    return ""_ns;
   }
   for (uint32_t i = 0; i < childCount; i++) {
     nsAutoString childName;
@@ -4407,7 +4407,7 @@ nsCString KeyboardLayout::GetLayoutName(HKL aLayout) const {
     }
     return NS_ConvertUTF16toUTF8(buf);
   }
-  return EmptyCString();
+  return ""_ns;
 }
 
 void KeyboardLayout::LoadLayout(HKL aLayout) {

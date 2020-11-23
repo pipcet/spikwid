@@ -1,11 +1,16 @@
+/* clang-format off */
 /* -*- Mode: Objective-C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:expandtab:shiftwidth=2:tabstop=2:
- */
+/* clang-format on */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #import "mozSelectableElements.h"
+#import "MacUtils.h"
+#include "Accessible-inl.h"
+#include "nsCocoaUtils.h"
+
+using namespace mozilla::a11y;
 
 @implementation mozSelectableAccessible
 
@@ -13,16 +18,18 @@
  * Return the mozAccessibles that are selectable.
  */
 - (NSArray*)selectableChildren {
-  return [[self moxChildren]
-      filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(mozAccessible* child,
-                                                                        NSDictionary* bindings) {
+  return [[self moxUnignoredChildren]
+      filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(
+                                                   mozAccessible* child,
+                                                   NSDictionary* bindings) {
         return [child isKindOfClass:[mozSelectableChildAccessible class]];
       }]];
 }
 
 - (void)moxSetSelectedChildren:(NSArray*)selectedChildren {
   for (id child in [self selectableChildren]) {
-    BOOL selected = [selectedChildren indexOfObjectIdenticalTo:child] != NSNotFound;
+    BOOL selected =
+        [selectedChildren indexOfObjectIdenticalTo:child] != NSNotFound;
     [child moxSetSelected:@(selected)];
   }
 }
@@ -31,10 +38,12 @@
  * Return the mozAccessibles that are actually selected.
  */
 - (NSArray*)moxSelectedChildren {
-  return [[self moxChildren]
-      filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(mozAccessible* child,
-                                                                        NSDictionary* bindings) {
-        // Return mozSelectableChildAccessibles that have are selected (truthy value).
+  return [[self moxUnignoredChildren]
+      filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(
+                                                   mozAccessible* child,
+                                                   NSDictionary* bindings) {
+        // Return mozSelectableChildAccessibles that have are selected (truthy
+        // value).
         return [child isKindOfClass:[mozSelectableChildAccessible class]] &&
                [[(mozSelectableChildAccessible*)child moxSelected] boolValue];
       }]];
@@ -50,7 +59,8 @@
 
 - (void)moxSetSelected:(NSNumber*)selected {
   // Get SELECTABLE and UNAVAILABLE state.
-  uint64_t state = [self stateWithMask:(states::SELECTABLE | states::UNAVAILABLE)];
+  uint64_t state =
+      [self stateWithMask:(states::SELECTABLE | states::UNAVAILABLE)];
   if ((state & states::SELECTABLE) == 0 || (state & states::UNAVAILABLE) != 0) {
     // The object is either not selectable or is unavailable. Don't do anything.
     return;
@@ -77,7 +87,7 @@
 }
 
 - (NSArray*)moxContents {
-  return [self moxChildren];
+  return [self moxUnignoredChildren];
 }
 
 - (id)moxValue {
@@ -103,12 +113,12 @@
 
 @implementation mozListboxAccessible
 
-- (BOOL)ignoreChild:(mozAccessible*)child {
+- (BOOL)moxIgnoreChild:(mozAccessible*)child {
   if (!child || child->mRole == roles::GROUPING) {
     return YES;
   }
 
-  return [super ignoreChild:child];
+  return [super moxIgnoreChild:child];
 }
 
 - (BOOL)disableChild:(mozAccessible*)child {
@@ -174,13 +184,15 @@
 
 - (NSString*)moxMenuItemMarkChar {
   Accessible* acc = mGeckoAccessible.AsAccessible();
-  if (acc && acc->IsContent() && acc->GetContent()->IsXULElement(nsGkAtoms::menuitem)) {
+  if (acc && acc->IsContent() &&
+      acc->GetContent()->IsXULElement(nsGkAtoms::menuitem)) {
     // We need to provide a marker character. This is the visible "√" you see
     // on dropdown menus. In our a11y tree this is a single child text node
     // of the menu item.
-    // We do this only with XUL menuitems that conform to the native theme, and not
-    // with aria menu items that might have a pseudo element or something.
-    if (acc->ChildCount() == 1 && acc->FirstChild()->Role() == roles::STATICTEXT) {
+    // We do this only with XUL menuitems that conform to the native theme, and
+    // not with aria menu items that might have a pseudo element or something.
+    if (acc->ChildCount() == 1 &&
+        acc->FirstChild()->Role() == roles::STATICTEXT) {
       nsAutoString marker;
       acc->FirstChild()->Name(marker);
       if (marker.Length() == 1) {
@@ -201,8 +213,9 @@
   switch (eventType) {
     case nsIAccessibleEvent::EVENT_FOCUS:
       // Our focused state is equivelent to native selected states for menus.
-      mozAccessible* parent = (mozAccessible*)[self moxParent];
-      [parent moxPostNotification:NSAccessibilitySelectedChildrenChangedNotification];
+      mozAccessible* parent = (mozAccessible*)[self moxUnignoredParent];
+      [parent moxPostNotification:
+                  NSAccessibilitySelectedChildrenChangedNotification];
       break;
   }
 

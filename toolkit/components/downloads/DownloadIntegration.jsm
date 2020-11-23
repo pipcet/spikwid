@@ -699,6 +699,21 @@ var DownloadIntegration = {
   },
 
   /**
+   * Decide whether a download of this type, opened from the downloads
+   * list, should open internally.
+   *
+   * @param aMimeType
+   *        The MIME type of the file, as a string
+   * @param [optional] aExtension
+   *        The file extension, which can match instead of the MIME type.
+   */
+  shouldViewDownloadInternally(aMimeType, aExtension) {
+    // Refuse all files by default, this is meant to be replaced with a check
+    // for specific types via Integration.downloads.register().
+    return false;
+  },
+
+  /**
    * Launches a file represented by the target of a download. This can
    * open the file with the default application for the target MIME type
    * or file extension, or with a custom application if
@@ -794,30 +809,47 @@ var DownloadIntegration = {
       return;
     }
 
-    const PDF_CONTENT_TYPE = "application/pdf";
-    if (
-      aDownload.handleInternally ||
-      (!useSystemDefault && // No explicit instruction was passed to launch this download using the default system viewer.
-        mimeInfo &&
-        (mimeInfo.type == PDF_CONTENT_TYPE ||
-          fileExtension?.toLowerCase() == "pdf") &&
-        !mimeInfo.alwaysAskBeforeHandling &&
-        mimeInfo.preferredAction === Ci.nsIHandlerInfo.handleInternally &&
-        !aDownload.launchWhenSucceeded)
-    ) {
-      DownloadUIHelper.loadFileIn(file, {
-        browsingContextId: aDownload.source.browsingContextId,
-        isPrivate: aDownload.source.isPrivate,
-        openWhere,
-        userContextId: aDownload.source.userContextId,
-      });
-      return;
+    if (!useSystemDefault && mimeInfo) {
+      useSystemDefault = mimeInfo.preferredAction == mimeInfo.useSystemDefault;
+    }
+    if (!useSystemDefault) {
+      // No explicit instruction was passed to launch this download using the default system viewer.
+      if (
+        aDownload.handleInternally ||
+        (mimeInfo &&
+          this.shouldViewDownloadInternally(mimeInfo.type, fileExtension) &&
+          !mimeInfo.alwaysAskBeforeHandling &&
+          mimeInfo.preferredAction === Ci.nsIHandlerInfo.handleInternally &&
+          !aDownload.launchWhenSucceeded)
+      ) {
+        DownloadUIHelper.loadFileIn(file, {
+          browsingContextId: aDownload.source.browsingContextId,
+          isPrivate: aDownload.source.isPrivate,
+          openWhere,
+          userContextId: aDownload.source.userContextId,
+        });
+        return;
+      }
     }
 
     // An attempt will now be made to launch the download, clear the
     // launchWhenSucceeded bit so future attempts to open the download can go
     // through Firefox when possible.
     aDownload.launchWhenSucceeded = false;
+
+    // When a file has no extension, and there's an executable file with the
+    // same name in the same folder, Windows shell can get confused.
+    // For this reason we show the file in the containing folder instead of
+    // trying to open it.
+    // We also don't trust mimeinfo, it could be a type we can forward to a
+    // system handler, but it could also be an executable type, and we
+    // don't have an exhaustive list with all of them.
+    if (!fileExtension && AppConstants.platform == "win") {
+      // We can't check for the existance of a same-name file with every
+      // possible executable extension, so this is a catch-all.
+      this.showContainingDirectory(aDownload.target.path);
+      return;
+    }
 
     // No custom application chosen, let's launch the file with the default
     // handler. First, let's try to launch it through the MIME service.
@@ -838,7 +870,10 @@ var DownloadIntegration = {
 
     // If our previous attempts failed, try sending it through
     // the system's external "file:" URL handler.
-    gExternalProtocolService.loadURI(NetUtil.newURI(file));
+    gExternalProtocolService.loadURI(
+      NetUtil.newURI(file),
+      Services.scriptSecurityManager.getSystemPrincipal()
+    );
   },
 
   /**
@@ -855,6 +890,8 @@ var DownloadIntegration = {
 
   /**
    * Launches the specified file, unless overridden by regression tests.
+   * @note Always use launchDownload() from the outside of this module, it is
+   *       both more powerful and safer.
    */
   launchFile(file, mimeInfo) {
     if (mimeInfo) {
@@ -904,7 +941,10 @@ var DownloadIntegration = {
 
     // If launch also fails (probably because it's not implemented), let
     // the OS handler try to open the parent.
-    gExternalProtocolService.loadURI(NetUtil.newURI(parent));
+    gExternalProtocolService.loadURI(
+      NetUtil.newURI(parent),
+      Services.scriptSecurityManager.getSystemPrincipal()
+    );
   },
 
   /**

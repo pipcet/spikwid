@@ -80,8 +80,6 @@ StoreBuffer::StoreBuffer(JSRuntime* rt, const Nursery& nursery)
       nursery_(nursery),
       aboutToOverflow_(false),
       enabled_(false),
-      cancelIonCompilations_(false),
-      hasTypeSetPointers_(false),
       mayHavePointersToDeadCells_(false)
 #ifdef DEBUG
       ,
@@ -134,8 +132,6 @@ void StoreBuffer::clear() {
   }
 
   aboutToOverflow_ = false;
-  cancelIonCompilations_ = false;
-  hasTypeSetPointers_ = false;
   mayHavePointersToDeadCells_ = false;
 
   bufferVal.clear();
@@ -228,3 +224,16 @@ void StoreBuffer::WholeCellBuffer::clear() {
 
 template struct StoreBuffer::MonoTypeBuffer<StoreBuffer::ValueEdge>;
 template struct StoreBuffer::MonoTypeBuffer<StoreBuffer::SlotsEdge>;
+
+void js::gc::PostWriteBarrierCell(Cell* cell, Cell* prev, Cell* next) {
+  if (!next || !cell->isTenured()) {
+    return;
+  }
+
+  StoreBuffer* buffer = next->storeBuffer();
+  if (!buffer || (prev && prev->storeBuffer())) {
+    return;
+  }
+
+  buffer->putWholeCell(cell);
+}

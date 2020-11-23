@@ -141,8 +141,7 @@
         innerStaticFrame = staticFrame.contentDocument.getElementById("staticFrame");
         opener.is(innerStaticFrame.contentDocument.location.href, BASE_URL + "frame1.html", "innerStaticFrame location");
         opener.ok(!staticFrame.contentDocument.getElementById("dynamicFrame"), "innerDynamicFrame should not exist");
-        opener.nextTest();
-        window.close();
+        opener.finishTest();
       },
     ];
 

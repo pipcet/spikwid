@@ -186,6 +186,11 @@ void LIRGeneratorARM64::lowerForBitAndAndBranch(LBitAndAndBranch* baab,
   add(baab, mir);
 }
 
+void LIRGeneratorARM64::lowerWasmBuiltinTruncateToInt32(
+    MWasmBuiltinTruncateToInt32* ins) {
+  MOZ_CRASH("NYI");
+}
+
 void LIRGeneratorARM64::lowerUntypedPhiInput(MPhi* phi, uint32_t inputPosition,
                                              LBlock* block, size_t lirIndex) {
   lowerTypedPhiInput(phi, inputPosition, block, lirIndex);
@@ -213,7 +218,7 @@ void LIRGeneratorARM64::lowerDivI(MDiv* div) {
     if (rhs != 0 && uint32_t(1) << shift == mozilla::Abs(rhs)) {
       LDivPowTwoI* lir = new (alloc()) LDivPowTwoI(lhs, shift, rhs < 0);
       if (div->fallible()) {
-        assignSnapshot(lir, BailoutKind::DoubleOutput);
+        assignSnapshot(lir, div->bailoutKind());
       }
       define(lir, div);
       return;
@@ -221,7 +226,7 @@ void LIRGeneratorARM64::lowerDivI(MDiv* div) {
     if (rhs != 0) {
       LDivConstantI* lir = new (alloc()) LDivConstantI(lhs, rhs, temp());
       if (div->fallible()) {
-        assignSnapshot(lir, BailoutKind::DoubleOutput);
+        assignSnapshot(lir, div->bailoutKind());
       }
       define(lir, div);
       return;
@@ -231,7 +236,7 @@ void LIRGeneratorARM64::lowerDivI(MDiv* div) {
   LDivI* lir = new (alloc())
       LDivI(useRegister(div->lhs()), useRegister(div->rhs()), temp());
   if (div->fallible()) {
-    assignSnapshot(lir, BailoutKind::DoubleOutput);
+    assignSnapshot(lir, div->bailoutKind());
   }
   define(lir, div);
 }
@@ -240,7 +245,7 @@ void LIRGeneratorARM64::lowerMulI(MMul* mul, MDefinition* lhs,
                                   MDefinition* rhs) {
   LMulI* lir = new (alloc()) LMulI;
   if (mul->fallible()) {
-    assignSnapshot(lir, BailoutKind::DoubleOutput);
+    assignSnapshot(lir, mul->bailoutKind());
   }
   lowerForALU(lir, mul, lhs, rhs);
 }
@@ -258,7 +263,7 @@ void LIRGeneratorARM64::lowerModI(MMod* mod) {
       LModPowTwoI* lir =
           new (alloc()) LModPowTwoI(useRegister(mod->lhs()), shift);
       if (mod->fallible()) {
-        assignSnapshot(lir, BailoutKind::DoubleOutput);
+        assignSnapshot(lir, mod->bailoutKind());
       }
       define(lir, mod);
       return;
@@ -266,23 +271,31 @@ void LIRGeneratorARM64::lowerModI(MMod* mod) {
       LModMaskI* lir = new (alloc())
           LModMaskI(useRegister(mod->lhs()), temp(), temp(), shift + 1);
       if (mod->fallible()) {
-        assignSnapshot(lir, BailoutKind::DoubleOutput);
+        assignSnapshot(lir, mod->bailoutKind());
       }
       define(lir, mod);
     }
   }
 
-  LModI* lir = new (alloc())
-      LModI(useRegister(mod->lhs()), useRegister(mod->rhs()), temp());
+  LModI* lir =
+      new (alloc()) LModI(useRegister(mod->lhs()), useRegister(mod->rhs()));
   if (mod->fallible()) {
-    assignSnapshot(lir, BailoutKind::DoubleOutput);
+    assignSnapshot(lir, mod->bailoutKind());
   }
   define(lir, mod);
 }
 
 void LIRGeneratorARM64::lowerDivI64(MDiv* div) { MOZ_CRASH("NYI"); }
 
+void LIRGeneratorARM64::lowerWasmBuiltinDivI64(MWasmBuiltinDivI64* div) {
+  MOZ_CRASH("We don't use runtime div for this architecture");
+}
+
 void LIRGeneratorARM64::lowerModI64(MMod* mod) { MOZ_CRASH("NYI"); }
+
+void LIRGeneratorARM64::lowerWasmBuiltinModI64(MWasmBuiltinModI64* mod) {
+  MOZ_CRASH("We don't use runtime mod for this architecture");
+}
 
 void LIRGenerator::visitPowHalf(MPowHalf* ins) {
   MDefinition* input = ins->input();
@@ -319,7 +332,7 @@ void LIRGeneratorARM64::lowerPowOfTwoI(MPow* mir) {
   MDefinition* power = mir->power();
 
   auto* lir = new (alloc()) LPowOfTwoI(base, useRegister(power));
-  assignSnapshot(lir, BailoutKind::PrecisionLoss);
+  assignSnapshot(lir, mir->bailoutKind());
   define(lir, mir);
 }
 
@@ -348,7 +361,7 @@ void LIRGeneratorARM64::lowerUDiv(MDiv* div) {
     if (rhs != 0 && uint32_t(1) << shift == mozilla::Abs(rhs)) {
       LDivPowTwoI* lir = new (alloc()) LDivPowTwoI(lhs, shift, false);
       if (div->fallible()) {
-        assignSnapshot(lir, BailoutKind::DoubleOutput);
+        assignSnapshot(lir, div->bailoutKind());
       }
       define(lir, div);
       return;
@@ -356,7 +369,7 @@ void LIRGeneratorARM64::lowerUDiv(MDiv* div) {
 
     LUDivConstantI* lir = new (alloc()) LUDivConstantI(lhs, rhs, temp());
     if (div->fallible()) {
-      assignSnapshot(lir, BailoutKind::DoubleOutput);
+      assignSnapshot(lir, div->bailoutKind());
     }
     define(lir, div);
     return;
@@ -371,7 +384,7 @@ void LIRGeneratorARM64::lowerUDiv(MDiv* div) {
 
   LUDiv* lir = new (alloc()) LUDiv(lhs, rhs, remainder);
   if (div->fallible()) {
-    assignSnapshot(lir, BailoutKind::DoubleOutput);
+    assignSnapshot(lir, div->bailoutKind());
   }
   define(lir, div);
 }
@@ -380,7 +393,7 @@ void LIRGeneratorARM64::lowerUMod(MMod* mod) {
   LUMod* lir = new (alloc())
       LUMod(useRegister(mod->getOperand(0)), useRegister(mod->getOperand(1)));
   if (mod->fallible()) {
-    assignSnapshot(lir, BailoutKind::DoubleOutput);
+    assignSnapshot(lir, mod->bailoutKind());
   }
   define(lir, mod);
 }
@@ -516,6 +529,16 @@ void LIRGenerator::visitSubstr(MSubstr* ins) {
 
 void LIRGenerator::visitWasmTruncateToInt64(MWasmTruncateToInt64* ins) {
   MOZ_CRASH("NYI");
+}
+
+void LIRGeneratorARM64::lowerWasmBuiltinTruncateToInt64(
+    MWasmBuiltinTruncateToInt64* ins) {
+  MOZ_CRASH("We don't use WasmBuiltinTruncateToInt64 for arm64");
+}
+
+void LIRGeneratorARM64::lowerBuiltinInt64ToFloatingPoint(
+    MBuiltinInt64ToFloatingPoint* ins) {
+  MOZ_CRASH("We don't use it for this architecture");
 }
 
 void LIRGenerator::visitWasmHeapBase(MWasmHeapBase* ins) { MOZ_CRASH("NYI"); }

@@ -10,28 +10,32 @@
 #include "mozilla/dom/HTMLUnknownElement.h"
 #include "mozilla/StaticPrefs_dom.h"
 
+#include "nsFocusManager.h"
+#include "nsIFrame.h"
+
 // Expand NS_IMPL_NS_NEW_HTML_ELEMENT(Dialog) with pref check
 nsGenericHTMLElement* NS_NewHTMLDialogElement(
     already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo,
     mozilla::dom::FromParser aFromParser) {
   RefPtr<mozilla::dom::NodeInfo> nodeInfo(aNodeInfo);
   auto* nim = nodeInfo->NodeInfoManager();
-  if (!mozilla::dom::HTMLDialogElement::IsDialogEnabled()) {
-    return new (nim) mozilla::dom::HTMLUnknownElement(nodeInfo.forget());
+  bool isChromeDocument = nsContentUtils::IsChromeDoc(nodeInfo->GetDocument());
+  if (mozilla::StaticPrefs::dom_dialog_element_enabled() || isChromeDocument) {
+    return new (nim) mozilla::dom::HTMLDialogElement(nodeInfo.forget());
   }
-
-  return new (nim) mozilla::dom::HTMLDialogElement(nodeInfo.forget());
+  return new (nim) mozilla::dom::HTMLUnknownElement(nodeInfo.forget());
 }
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 HTMLDialogElement::~HTMLDialogElement() = default;
 
 NS_IMPL_ELEMENT_CLONE(HTMLDialogElement)
 
-bool HTMLDialogElement::IsDialogEnabled() {
-  return StaticPrefs::dom_dialog_element_enabled();
+bool HTMLDialogElement::IsDialogEnabled(JSContext* aCx,
+                                        JS::Handle<JSObject*> aObj) {
+  return StaticPrefs::dom_dialog_element_enabled() ||
+         nsContentUtils::IsSystemCaller(aCx);
 }
 
 void HTMLDialogElement::Close(
@@ -64,15 +68,28 @@ bool HTMLDialogElement::IsInTopLayer() const {
   return State().HasState(NS_EVENT_STATE_MODAL_DIALOG);
 }
 
+void HTMLDialogElement::AddToTopLayerIfNeeded() {
+  if (IsInTopLayer()) {
+    return;
+  }
+
+  Document* doc = OwnerDoc();
+  doc->TopLayerPush(this);
+  doc->SetBlockedByModalDialog(*this);
+  AddStates(NS_EVENT_STATE_MODAL_DIALOG);
+}
+
 void HTMLDialogElement::RemoveFromTopLayerIfNeeded() {
   if (!IsInTopLayer()) {
     return;
   }
   auto predictFunc = [&](Element* element) { return element == this; };
 
-  DebugOnly<Element*> removedElement = OwnerDoc()->TopLayerPop(predictFunc);
+  Document* doc = OwnerDoc();
+  DebugOnly<Element*> removedElement = doc->TopLayerPop(predictFunc);
   MOZ_ASSERT(removedElement == this);
   RemoveStates(NS_EVENT_STATE_MODAL_DIALOG);
+  doc->UnsetBlockedByModalDialog(*this);
 }
 
 void HTMLDialogElement::UnbindFromTree(bool aNullParent) {
@@ -92,11 +109,10 @@ void HTMLDialogElement::ShowModal(ErrorResult& aError) {
     return;
   }
 
-  if (!IsInTopLayer() && OwnerDoc()->TopLayerPush(this)) {
-    AddStates(NS_EVENT_STATE_MODAL_DIALOG);
-  }
+  AddToTopLayerIfNeeded();
 
   SetOpen(true, aError);
+
   FocusDialog();
 
   aError.SuppressException();
@@ -147,7 +163,7 @@ void HTMLDialogElement::FocusDialog() {
       return;
     }
   } else {
-    nsIFocusManager* fm = nsFocusManager::GetFocusManager();
+    nsFocusManager* fm = nsFocusManager::GetFocusManager();
     if (fm) {
       // Clear the focus which ends up making the body gets focused
       fm->ClearFocus(OwnerDoc()->GetWindow());
@@ -201,5 +217,4 @@ JSObject* HTMLDialogElement::WrapNode(JSContext* aCx,
   return HTMLDialogElement_Binding::Wrap(aCx, this, aGivenProto);
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

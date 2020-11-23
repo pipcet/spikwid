@@ -10,6 +10,7 @@ const {
   getWindowDimensions,
   getViewportDimensions,
   loadSheet,
+  removeSheet,
 } = require("devtools/shared/layout/utils");
 const EventEmitter = require("devtools/shared/event-emitter");
 const InspectorUtils = require("InspectorUtils");
@@ -22,6 +23,13 @@ loader.lazyRequireGetter(
   "devtools/server/actors/inspector/css-logic",
   true
 );
+loader.lazyRequireGetter(
+  this,
+  "isDocumentReady",
+  "devtools/server/actors/inspector/utils",
+  true
+);
+
 exports.getComputedStyle = node =>
   lazyContainer.CssLogic.getComputedStyle(node);
 
@@ -40,6 +48,22 @@ exports.removePseudoClassLock = (...args) =>
 const SVG_NS = "http://www.w3.org/2000/svg";
 const XHTML_NS = "http://www.w3.org/1999/xhtml";
 const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
+// Highlighter in parent process will create an iframe relative to its target
+// window. We need to make sure that the iframe is styled correctly. Note:
+// this styles are taken from browser/base/content/browser.css
+// iframe.devtools-highlighter-renderer rules.
+const XUL_HIGHLIGHTER_STYLES_SHEET = `data:text/css;charset=utf-8,
+:root > iframe.devtools-highlighter-renderer {
+  border: none;
+  pointer-events: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 2;
+}`;
+
 const STYLESHEET_URI =
   "resource://devtools/server/actors/" + "highlighters.css";
 
@@ -155,66 +179,6 @@ function isNodeValid(node, nodeType = Node.ELEMENT_NODE) {
 exports.isNodeValid = isNodeValid;
 
 /**
- * Helper function that creates SVG DOM nodes.
- * @param {Window} This window's document will be used to create the element
- * @param {Object} Options for the node include:
- * - nodeType: the type of node, defaults to "box".
- * - attributes: a {name:value} object to be used as attributes for the node.
- * - prefix: a string that will be used to prefix the values of the id and class
- *   attributes.
- * - parent: if provided, the newly created element will be appended to this
- *   node.
- */
-function createSVGNode(win, options) {
-  if (!options.nodeType) {
-    options.nodeType = "box";
-  }
-  options.namespace = SVG_NS;
-  return createNode(win, options);
-}
-exports.createSVGNode = createSVGNode;
-
-/**
- * Helper function that creates DOM nodes.
- * @param {Window} This window's document will be used to create the element
- * @param {Object} Options for the node include:
- * - nodeType: the type of node, defaults to "div".
- * - namespace: the namespace to use to create the node, defaults to XHTML namespace.
- * - attributes: a {name:value} object to be used as attributes for the node.
- * - prefix: a string that will be used to prefix the values of the id and class
- *   attributes.
- * - parent: if provided, the newly created element will be appended to this
- *   node.
- * - text: if provided, set the text content of the element.
- */
-function createNode(win, options) {
-  const type = options.nodeType || "div";
-  const namespace = options.namespace || XHTML_NS;
-  const doc = win.document;
-
-  const node = doc.createElementNS(namespace, type);
-
-  for (const name in options.attributes || {}) {
-    let value = options.attributes[name];
-    if (options.prefix && (name === "class" || name === "id")) {
-      value = options.prefix + value;
-    }
-    node.setAttribute(name, value);
-  }
-
-  if (options.parent) {
-    options.parent.appendChild(node);
-  }
-
-  if (options.text) {
-    node.appendChild(doc.createTextNode(options.text));
-  }
-
-  return node;
-}
-exports.createNode = createNode;
-
-/**
  * Every highlighters should insert their markup content into the document's
  * canvasFrame anonymous content container (see dom/webidl/Document.webidl).
  *
@@ -253,7 +217,10 @@ CanvasFrameAnonymousContentHelper.prototype = {
     // Only try to create the highlighter when the document is loaded,
     // otherwise, wait for the window-ready event to fire.
     const doc = this.highlighterEnv.document;
-    if (doc.documentElement && doc.readyState != "uninitialized") {
+    if (
+      doc.documentElement &&
+      (isDocumentReady(doc) || doc.readyState !== "uninitialized")
+    ) {
       this._insert();
     }
 
@@ -263,7 +230,17 @@ CanvasFrameAnonymousContentHelper.prototype = {
   destroy() {
     this._remove();
     if (this._iframe) {
-      this._iframe.remove();
+      // If iframe is used, remove one ref count from its numberOfHighlighters
+      // data attribute.
+      const numberOfHighlighters =
+        parseInt(this._iframe.dataset.numberOfHighlighters, 10) - 1;
+      this._iframe.dataset.numberOfHighlighters = numberOfHighlighters;
+      // If we reached 0, we can now remove the iframe and its styling from
+      // target window.
+      if (numberOfHighlighters === 0) {
+        this._iframe.remove();
+        removeSheet(this.highlighterEnv.window, XUL_HIGHLIGHTER_STYLES_SHEET);
+      }
       this._iframe = null;
     }
 
@@ -279,9 +256,11 @@ CanvasFrameAnonymousContentHelper.prototype = {
 
   async _insert() {
     await waitForContentLoaded(this.highlighterEnv.window);
-    const chromeWindow = this.highlighterEnv.window.browsingContext
-      .topChromeWindow;
-    if (isXUL(this.highlighterEnv.window) && chromeWindow) {
+    if (!this.highlighterEnv) {
+      // CanvasFrameAnonymousContentHelper was already destroyed.
+      return;
+    }
+    if (isXUL(this.highlighterEnv.window)) {
       // In order to use anonymous content, we need to create and use an IFRAME
       // inside a XUL document first and use its window/document the same way we
       // would normally use highlighter environment's window/document. See
@@ -291,18 +270,34 @@ CanvasFrameAnonymousContentHelper.prototype = {
       // case with about:devtools-toolbox). We need to ensure that we use the
       // top chrome window to look up or create the iframe.
       if (!this._iframe) {
-        const { documentElement } = chromeWindow.document;
+        const { documentElement } = this.highlighterEnv.window.document;
         this._iframe = documentElement.querySelector(
           ":scope > .devtools-highlighter-renderer"
         );
-        if (!this._iframe) {
-          this._iframe = chromeWindow.document.createElement("iframe");
+        if (this._iframe) {
+          // If iframe is used and already exists, add one ref count to its
+          // numberOfHighlighters data attribute.
+          const numberOfHighlighters =
+            parseInt(this._iframe.dataset.numberOfHighlighters, 10) + 1;
+          this._iframe.dataset.numberOfHighlighters = numberOfHighlighters;
+        } else {
+          this._iframe = this.highlighterEnv.window.document.createElement(
+            "iframe"
+          );
           this._iframe.classList.add("devtools-highlighter-renderer");
+          // If iframe is used for the first time, add ref count of one to its
+          // numberOfHighlighters data attribute.
+          this._iframe.dataset.numberOfHighlighters = 1;
           documentElement.append(this._iframe);
+          loadSheet(this.highlighterEnv.window, XUL_HIGHLIGHTER_STYLES_SHEET);
         }
       }
 
-      await waitForContentLoaded(this._iframe.contentWindow);
+      await waitForContentLoaded(this._iframe);
+      if (!this.highlighterEnv) {
+        // CanvasFrameAnonymousContentHelper was already destroyed.
+        return;
+      }
 
       // If it's a XUL window anonymous content will be inserted inside a newly
       // created IFRAME in the chrome window.
@@ -383,6 +378,15 @@ CanvasFrameAnonymousContentHelper.prototype = {
     if (isTopLevel) {
       this._removeAllListeners();
       this.elements.clear();
+      if (this._iframe) {
+        // When we are switching top level targets, we can remove the iframe and
+        // its styling as well, since it will be re-created for the new top
+        // level target document.
+        this._iframe.remove();
+        removeSheet(this.highlighterEnv.window, XUL_HIGHLIGHTER_STYLES_SHEET);
+        this._iframe = null;
+      }
+
       this._insert();
     }
   },
@@ -635,25 +639,91 @@ CanvasFrameAnonymousContentHelper.prototype = {
 
     this.setAttributeForElement(id, "style", value);
   },
+
+  /**
+   * Helper function that creates SVG DOM nodes.
+   * @param {Object} Options for the node include:
+   * - nodeType: the type of node, defaults to "box".
+   * - attributes: a {name:value} object to be used as attributes for the node.
+   * - prefix: a string that will be used to prefix the values of the id and class
+   *   attributes.
+   * - parent: if provided, the newly created element will be appended to this
+   *   node.
+   */
+  createSVGNode(options) {
+    if (!options.nodeType) {
+      options.nodeType = "box";
+    }
+
+    options.namespace = SVG_NS;
+
+    return this.createNode(options);
+  },
+
+  /**
+   * Helper function that creates DOM nodes.
+   * @param {Object} Options for the node include:
+   * - nodeType: the type of node, defaults to "div".
+   * - namespace: the namespace to use to create the node, defaults to XHTML namespace.
+   * - attributes: a {name:value} object to be used as attributes for the node.
+   * - prefix: a string that will be used to prefix the values of the id and class
+   *   attributes.
+   * - parent: if provided, the newly created element will be appended to this
+   *   node.
+   * - text: if provided, set the text content of the element.
+   */
+  createNode(options) {
+    const type = options.nodeType || "div";
+    const namespace = options.namespace || XHTML_NS;
+    const doc = this.anonymousContentDocument;
+
+    const node = doc.createElementNS(namespace, type);
+
+    for (const name in options.attributes || {}) {
+      let value = options.attributes[name];
+      if (options.prefix && (name === "class" || name === "id")) {
+        value = options.prefix + value;
+      }
+      node.setAttribute(name, value);
+    }
+
+    if (options.parent) {
+      options.parent.appendChild(node);
+    }
+
+    if (options.text) {
+      node.appendChild(doc.createTextNode(options.text));
+    }
+
+    return node;
+  },
 };
 exports.CanvasFrameAnonymousContentHelper = CanvasFrameAnonymousContentHelper;
 
 /**
  * Wait for document readyness.
- * @param {Object} win
- *        Window for which the content should be loaded.
+ * @param {Object} iframeOrWindow
+ *        IFrame or Window for which the content should be loaded.
  */
-function waitForContentLoaded(win) {
-  const { document } = win;
+function waitForContentLoaded(iframeOrWindow) {
+  let loadEvent = "DOMContentLoaded";
+  // If we are waiting for an iframe to load and it is for a XUL window
+  // highlighter that is not browser toolbox, we must wait for IFRAME's "load".
   if (
-    document.readyState == "interactive" ||
-    document.readyState == "complete"
+    iframeOrWindow.contentWindow &&
+    iframeOrWindow.ownerGlobal !==
+      iframeOrWindow.contentWindow.browsingContext.topChromeWindow
   ) {
+    loadEvent = "load";
+  }
+
+  const doc = iframeOrWindow.contentDocument || iframeOrWindow.document;
+  if (isDocumentReady(doc)) {
     return Promise.resolve();
   }
 
   return new Promise(resolve => {
-    win.addEventListener("DOMContentLoaded", resolve, { once: true });
+    iframeOrWindow.addEventListener(loadEvent, resolve, { once: true });
   });
 }
 

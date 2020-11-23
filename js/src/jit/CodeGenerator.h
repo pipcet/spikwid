@@ -7,12 +7,11 @@
 #ifndef jit_CodeGenerator_h
 #define jit_CodeGenerator_h
 
-#include "jsfriendapi.h"
-
 #include "jit/CacheIR.h"
 #if defined(JS_ION_PERF)
 #  include "jit/PerfSpewer.h"
 #endif
+#include "js/ScalarType.h"  // js::Scalar::Type
 
 #if defined(JS_CODEGEN_X86)
 #  include "jit/x86/CodeGenerator-x86.h"
@@ -67,9 +66,9 @@ class OutOfLineRegExpInstanceOptimizable;
 class OutOfLineNaNToZero;
 class OutOfLineZeroIfNaN;
 class OutOfLineTypedArrayIndexToInt32;
+class OutOfLineBoxNonStrictThis;
 
 class CodeGenerator final : public CodeGeneratorSpecific {
-  void generateArgumentsChecks(bool assert = false);
   MOZ_MUST_USE bool generateBody();
 
   ConstantOrRegister toConstantOrRegister(LInstruction* lir, size_t n,
@@ -105,12 +104,13 @@ class CodeGenerator final : public CodeGeneratorSpecific {
                                  wasm::FuncOffsets* offsets,
                                  wasm::StackMaps* stackMaps);
 
-  MOZ_MUST_USE bool link(JSContext* cx, CompilerConstraintList* constraints,
-                         const WarpSnapshot* snapshot);
+  MOZ_MUST_USE bool link(JSContext* cx, const WarpSnapshot* snapshot);
 
   void emitOOLTestObject(Register objreg, Label* ifTruthy, Label* ifFalsy,
                          Register scratch);
   void emitIntToString(Register input, Register output, Label* ool);
+
+  void emitTypeOfObject(Register obj, Register output, Label* done);
 
   template <typename Fn, Fn fn, class ArgSeq, class StoreOutputTo>
   void visitOutOfLineCallVM(
@@ -139,6 +139,8 @@ class CodeGenerator final : public CodeGeneratorSpecific {
 
   void visitOutOfLineUnboxFloatingPoint(OutOfLineUnboxFloatingPoint* ool);
   void visitOutOfLineStoreElementHole(OutOfLineStoreElementHole* ool);
+
+  void visitOutOfLineBoxNonStrictThis(OutOfLineBoxNonStrictThis* ool);
 
   void visitOutOfLineICFallback(OutOfLineICFallback* ool);
 
@@ -194,8 +196,6 @@ class CodeGenerator final : public CodeGeneratorSpecific {
                                   const ConstantOrRegister& value);
   void emitCompareS(LInstruction* lir, JSOp op, Register left, Register right,
                     Register output);
-  void emitSameValue(FloatRegister left, FloatRegister right,
-                     FloatRegister temp, Register output);
 
   void emitConcat(LInstruction* lir, Register lhs, Register rhs,
                   Register output);
@@ -218,7 +218,7 @@ class CodeGenerator final : public CodeGeneratorSpecific {
                 Register temp0, Register temp1, unsigned numFormals,
                 JSObject* templateObject, bool saveAndRestore,
                 Register resultreg);
-  void emitInstanceOf(LInstruction* ins, JSObject* prototypeObject);
+  void emitInstanceOf(LInstruction* ins, const LAllocation* prototypeObject);
 
   void loadJSScriptForBlock(MBasicBlock* block, Register reg);
   void loadOutermostJSScript(Register reg);
@@ -241,14 +241,11 @@ class CodeGenerator final : public CodeGeneratorSpecific {
   void addGetPropertyCache(LInstruction* ins, LiveRegisterSet liveRegs,
                            TypedOrValueRegister value,
                            const ConstantOrRegister& id,
-                           TypedOrValueRegister output, Register maybeTemp,
-                           GetPropertyResultFlags flags);
+                           TypedOrValueRegister output, Register maybeTemp);
   void addSetPropertyCache(LInstruction* ins, LiveRegisterSet liveRegs,
                            Register objReg, Register temp,
                            const ConstantOrRegister& id,
-                           const ConstantOrRegister& value, bool strict,
-                           bool needsPostBarrier, bool needsTypeBarrier,
-                           bool guardHoles);
+                           const ConstantOrRegister& value, bool strict);
 
   MOZ_MUST_USE bool generateBranchV(const ValueOperand& value, Label* ifTrue,
                                     Label* ifFalse, FloatRegister fr);

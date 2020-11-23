@@ -292,9 +292,13 @@ void LIRGeneratorShared::defineReturn(LInstruction* lir, MDefinition* mir) {
                                  LFloatReg(ReturnDoubleReg)));
       break;
     case MIRType::Simd128:
+#ifdef ENABLE_WASM_SIMD
       lir->setDef(0, LDefinition(vreg, LDefinition::SIMD128,
                                  LFloatReg(ReturnSimd128Reg)));
       break;
+#else
+      MOZ_CRASH("No SIMD support");
+#endif
     default:
       LDefinition::Type type = LDefinition::TypeFrom(mir->type());
       switch (type) {
@@ -363,32 +367,6 @@ void LIRGeneratorShared::redefine(MDefinition* def, MDefinition* as) {
   } else {
     ensureDefined(as);
     def->setVirtualRegister(as->virtualRegister());
-
-#ifdef DEBUG
-    if (JitOptions.runExtraChecks && def->resultTypeSet() &&
-        as->resultTypeSet() &&
-        !def->resultTypeSet()->equals(as->resultTypeSet())) {
-      switch (def->type()) {
-        case MIRType::Object:
-        case MIRType::ObjectOrNull:
-        case MIRType::String:
-        case MIRType::Symbol:
-        case MIRType::BigInt: {
-          LAssertResultT* check =
-              new (alloc()) LAssertResultT(useRegister(def));
-          add(check, def->toInstruction());
-          break;
-        }
-        case MIRType::Value: {
-          LAssertResultV* check = new (alloc()) LAssertResultV(useBox(def));
-          add(check, def->toInstruction());
-          break;
-        }
-        default:
-          break;
-      }
-    }
-#endif
   }
 }
 
@@ -644,9 +622,6 @@ static inline uint32_t VirtualRegisterOfPayload(MDefinition* mir) {
         inner->type() != MIRType::Float32) {
       return inner->virtualRegister();
     }
-  }
-  if (mir->isTypeBarrier() && mir->toTypeBarrier()->canRedefineInput()) {
-    return VirtualRegisterOfPayload(mir->toTypeBarrier()->input());
   }
   return mir->virtualRegister() + VREG_DATA_OFFSET;
 }

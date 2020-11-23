@@ -20,6 +20,7 @@ const { XPCOMUtils } = ChromeUtils.import(
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   ASRouterTargeting: "resource://activity-stream/lib/ASRouterTargeting.jsm",
+  TargetingContext: "resource://messaging-system/targeting/Targeting.jsm",
   ExperimentManager:
     "resource://messaging-system/experiments/ExperimentManager.jsm",
   RemoteSettings: "resource://services-settings/remote-settings.js",
@@ -40,8 +41,9 @@ XPCOMUtils.defineLazyServiceGetter(
   "nsIUpdateTimerManager"
 );
 
-const COLLECTION_ID = "messaging-experiments";
+const COLLECTION_ID = "nimbus-desktop-experiments";
 const ENABLED_PREF = "messaging-system.rsexperimentloader.enabled";
+const STUDIES_OPT_OUT_PREF = "app.shield.optoutstudies.enabled";
 
 const TIMER_NAME = "rs-experiment-loader-timer";
 const TIMER_LAST_UPDATE_PREF = `app.update.lastUpdateTime.${TIMER_NAME}`;
@@ -72,6 +74,14 @@ class _RemoteSettingsExperimentLoader {
 
     XPCOMUtils.defineLazyPreferenceGetter(
       this,
+      "studiesEnabled",
+      STUDIES_OPT_OUT_PREF,
+      false,
+      this.onEnabledPrefChange.bind(this)
+    );
+
+    XPCOMUtils.defineLazyPreferenceGetter(
+      this,
       "intervalInSeconds",
       RUN_INTERVAL_PREF,
       21600,
@@ -80,7 +90,7 @@ class _RemoteSettingsExperimentLoader {
   }
 
   async init() {
-    if (this._initialized || !this.enabled) {
+    if (this._initialized || !this.enabled || !this.studiesEnabled) {
       return;
     }
 
@@ -106,20 +116,25 @@ class _RemoteSettingsExperimentLoader {
    * @returns {Promise<boolean>} Should we process the recipe?
    */
   async checkTargeting(recipe, customContext = {}) {
+    const context = TargetingContext.combineContexts(
+      { experiment: recipe },
+      customContext,
+      ASRouterTargeting.Environment
+    );
     const { targeting } = recipe;
     if (!targeting) {
       log.debug("No targeting for recipe, so it matches automatically");
       return true;
     }
     log.debug("Testing targeting expression:", targeting);
-    const result = await ASRouterTargeting.isMatch(
-      targeting,
-      customContext,
-      err => {
-        log.debug("Targeting failed because of an error");
-        Cu.reportError(err);
-      }
-    );
+    const targetingContext = new TargetingContext(context);
+    let result = false;
+    try {
+      result = await targetingContext.evalWithDefault(targeting);
+    } catch (e) {
+      log.debug("Targeting failed because of an error");
+      Cu.reportError(e);
+    }
     return Boolean(result);
   }
 
@@ -155,7 +170,7 @@ class _RemoteSettingsExperimentLoader {
         if (await this.checkTargeting(r, context)) {
           matches++;
           log.debug(`${r.id} matched`);
-          await this.manager.onRecipe(r.arguments, "rs-loader");
+          await this.manager.onRecipe(r, "rs-loader");
         } else {
           log.debug(`${r.id} did not match due to targeting`);
         }
@@ -173,10 +188,18 @@ class _RemoteSettingsExperimentLoader {
     this._updating = false;
   }
 
+  /**
+   * Handles feature status based on feature pref and STUDIES_OPT_OUT_PREF.
+   * Changing any of them to false will turn off any recipe fetching and
+   * processing.
+   */
   onEnabledPrefChange(prefName, oldValue, newValue) {
     if (this._initialized && !newValue) {
       this.uninit();
-    } else if (!this._initialized && newValue) {
+    } else if (!this._initialized && newValue && this.enabled) {
+      // If the feature pref is turned on then turn on recipe processing.
+      // If the opt in pref is turned on then turn on recipe processing only if
+      // the feature pref is also enabled.
       this.init();
     }
   }

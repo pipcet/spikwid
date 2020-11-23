@@ -12,7 +12,6 @@
 #include "EnterpriseRoots.h"
 #include "ScopedNSSTypes.h"
 #include "SharedCertVerifier.h"
-#include "mozilla/Attributes.h"
 #include "mozilla/Monitor.h"
 #include "mozilla/Mutex.h"
 #include "mozilla/RefPtr.h"
@@ -35,8 +34,8 @@ class nsITimer;
 namespace mozilla {
 namespace psm {
 
-MOZ_MUST_USE
-::already_AddRefed<mozilla::psm::SharedCertVerifier> GetDefaultCertVerifier();
+[[nodiscard]] ::already_AddRefed<mozilla::psm::SharedCertVerifier>
+GetDefaultCertVerifier();
 UniqueCERTCertList FindClientCertificatesWithPrivateKeys();
 
 }  // namespace psm
@@ -80,12 +79,10 @@ class nsNSSComponent final : public nsINSSComponent, public nsIObserver {
 
   static nsresult SetEnabledTLSVersions();
 
-  // This function should be only called on parent process.
-  // When socket process is enabled, this function sends an IPC to clear the
-  // SSLTokensCache in socket process. If not,
-  // DoClearSSLExternalAndInternalSessionCache() will be called.
-  static void ClearSSLExternalAndInternalSessionCacheNative();
-  // This function does the actual work of clearing the session cache.
+  // This function does the actual work of clearing the session cache. It is to
+  // be used by the socket process (where there is no nsINSSComponent) and
+  // internally by nsNSSComponent.
+  // NB: NSS must have already been initialized before this is called.
   static void DoClearSSLExternalAndInternalSessionCache();
 
  protected:
@@ -97,6 +94,13 @@ class nsNSSComponent final : public nsINSSComponent, public nsIObserver {
 
   void setValidationOptions(bool isInitialSetting,
                             const mozilla::MutexAutoLock& proofOfLock);
+  void GetRevocationBehaviorFromPrefs(
+      /*out*/ mozilla::psm::CertVerifier::OcspDownloadConfig* odc,
+      /*out*/ mozilla::psm::CertVerifier::OcspStrictConfig* osc,
+      /*out*/ uint32_t* certShortLifetimeInDays,
+      /*out*/ TimeDuration& softTimeout,
+      /*out*/ TimeDuration& hardTimeout,
+      const mozilla::MutexAutoLock& proofOfLock);
   void UpdateCertVerifierWithEnterpriseRoots();
   nsresult RegisterObservers();
 
@@ -123,7 +127,7 @@ class nsNSSComponent final : public nsINSSComponent, public nsIObserver {
 #ifdef DEBUG
   nsString mTestBuiltInRootHash;
 #endif
-  nsString mContentSigningRootHash;
+  nsCString mContentSigningRootHash;
   RefPtr<mozilla::psm::SharedCertVerifier> mDefaultCertVerifier;
   nsString mMitmCanaryIssuer;
   bool mMitmDetecionEnabled;

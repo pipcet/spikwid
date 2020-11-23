@@ -33,13 +33,16 @@ class TRRServiceBase {
   void OnTRRModeChange();
   void OnTRRURIChange();
 
+  virtual void ReadEtcHostsFile() {}
+
   nsCString mPrivateURI;
   // Pref caches should only be used on the main thread.
   bool mURIPrefHasUserValue = false;
-  bool mURISetByDetection = false;
   nsCString mURIPref;
   nsCString mRolloutURIPref;
+
   Atomic<uint32_t, Relaxed> mMode;
+  Atomic<bool, Relaxed> mURISetByDetection;
 };
 
 }  // namespace net

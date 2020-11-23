@@ -64,10 +64,9 @@ using mozilla::Unused;  // <snicker>
 using namespace mozilla;
 using namespace mozilla::dom;
 
-class nsGeolocationRequest final
-    : public ContentPermissionRequestBase,
-      public nsIGeolocationUpdate,
-      public SupportsWeakPtr<nsGeolocationRequest> {
+class nsGeolocationRequest final : public ContentPermissionRequestBase,
+                                   public nsIGeolocationUpdate,
+                                   public SupportsWeakPtr {
  public:
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_NSIGEOLOCATIONUPDATE
@@ -78,15 +77,13 @@ class nsGeolocationRequest final
   nsGeolocationRequest(Geolocation* aLocator, GeoPositionCallback aCallback,
                        GeoPositionErrorCallback aErrorCallback,
                        UniquePtr<PositionOptions>&& aOptions,
-                       uint8_t aProtocolType, nsIEventTarget* aMainThreadTarget,
+                       nsIEventTarget* aMainThreadTarget,
                        bool aWatchPositionRequest = false,
                        int32_t aWatchId = 0);
 
   // nsIContentPermissionRequest
   MOZ_CAN_RUN_SCRIPT NS_IMETHOD Cancel(void) override;
   MOZ_CAN_RUN_SCRIPT NS_IMETHOD Allow(JS::HandleValue choices) override;
-
-  MOZ_DECLARE_WEAKREFERENCE_TYPENAME(nsGeolocationRequest)
 
   void Shutdown();
 
@@ -143,8 +140,6 @@ class nsGeolocationRequest final
 
   int32_t mWatchId;
   bool mShutdown;
-  nsCOMPtr<nsIContentPermissionRequester> mRequester;
-  uint8_t mProtocolType;
   nsCOMPtr<nsIEventTarget> mMainThreadTarget;
 };
 
@@ -195,9 +190,8 @@ static nsPIDOMWindowInner* ConvertWeakReferenceToWindow(
 nsGeolocationRequest::nsGeolocationRequest(
     Geolocation* aLocator, GeoPositionCallback aCallback,
     GeoPositionErrorCallback aErrorCallback,
-    UniquePtr<PositionOptions>&& aOptions, uint8_t aProtocolType,
-    nsIEventTarget* aMainThreadTarget, bool aWatchPositionRequest,
-    int32_t aWatchId)
+    UniquePtr<PositionOptions>&& aOptions, nsIEventTarget* aMainThreadTarget,
+    bool aWatchPositionRequest, int32_t aWatchId)
     : ContentPermissionRequestBase(
           aLocator->GetPrincipal(),
           ConvertWeakReferenceToWindow(aLocator->GetOwner()), "geo"_ns,
@@ -209,7 +203,6 @@ nsGeolocationRequest::nsGeolocationRequest(
       mLocator(aLocator),
       mWatchId(aWatchId),
       mShutdown(false),
-      mProtocolType(aProtocolType),
       mMainThreadTarget(aMainThreadTarget) {
   if (nsCOMPtr<nsPIDOMWindowInner> win =
           do_QueryReferent(mLocator->GetOwner())) {
@@ -245,14 +238,6 @@ void nsGeolocationRequest::NotifyErrorAndShutdown(uint16_t aErrorCode) {
 
 NS_IMETHODIMP
 nsGeolocationRequest::Cancel() {
-  if (mRequester) {
-    // Record the number of denied requests for regular web content.
-    // This method is only called when the user explicitly denies the request,
-    // and is not called when the page is simply unloaded, or similar.
-    Telemetry::Accumulate(Telemetry::GEOLOCATION_REQUEST_GRANTED,
-                          mProtocolType);
-  }
-
   if (mLocator->ClearPendingRequest(this)) {
     return NS_OK;
   }
@@ -264,31 +249,6 @@ nsGeolocationRequest::Cancel() {
 NS_IMETHODIMP
 nsGeolocationRequest::Allow(JS::HandleValue aChoices) {
   MOZ_ASSERT(aChoices.isUndefined());
-
-  if (mRequester) {
-    // Record the number of granted requests for regular web content.
-    Telemetry::Accumulate(Telemetry::GEOLOCATION_REQUEST_GRANTED,
-                          mProtocolType + 10);
-
-    // Record whether a location callback is fulfilled while the owner window
-    // is not visible.
-    bool isVisible = false;
-    nsCOMPtr<nsPIDOMWindowInner> window = mLocator->GetParentObject();
-
-    if (window) {
-      nsCOMPtr<Document> doc = window->GetDoc();
-      isVisible = doc && !doc->Hidden();
-    }
-
-    if (IsWatch()) {
-      mozilla::Telemetry::Accumulate(
-          mozilla::Telemetry::GEOLOCATION_WATCHPOSITION_VISIBLE, isVisible);
-    } else {
-      mozilla::Telemetry::Accumulate(
-          mozilla::Telemetry::GEOLOCATION_GETCURRENTPOSITION_VISIBLE,
-          isVisible);
-    }
-  }
 
   if (mLocator->ClearPendingRequest(this)) {
     return NS_OK;
@@ -415,6 +375,10 @@ void nsGeolocationRequest::SendLocation(nsIDOMGeoPosition* aPosition) {
     // callback spins the event loop
     Shutdown();
   }
+
+  nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
+  obs->NotifyObservers(wrapped, "geolocation-position-events",
+                       u"location-updated");
 
   nsAutoMicroTask mt;
   if (mCallback.HasWebIDLCallback()) {
@@ -1024,14 +988,10 @@ nsresult Geolocation::GetCurrentPosition(GeoPositionCallback callback,
 
   // After this we hand over ownership of options to our nsGeolocationRequest.
 
-  // Count the number of requests per protocol/scheme.
-  Telemetry::Accumulate(Telemetry::GEOLOCATION_GETCURRENTPOSITION_SECURE_ORIGIN,
-                        static_cast<uint8_t>(mProtocolType));
-
   nsIEventTarget* target = MainThreadTarget(this);
   RefPtr<nsGeolocationRequest> request = new nsGeolocationRequest(
       this, std::move(callback), std::move(errorCallback), std::move(options),
-      static_cast<uint8_t>(mProtocolType), target);
+      target);
 
   if (!StaticPrefs::geo_enabled() || ShouldBlockInsecureRequests() ||
       !request->CheckPermissionDelegate()) {
@@ -1093,18 +1053,13 @@ int32_t Geolocation::WatchPosition(GeoPositionCallback aCallback,
     return -1;
   }
 
-  // Count the number of requests per protocol/scheme.
-  Telemetry::Accumulate(Telemetry::GEOLOCATION_WATCHPOSITION_SECURE_ORIGIN,
-                        static_cast<uint8_t>(mProtocolType));
-
   // The watch ID:
   int32_t watchId = mLastWatchId++;
 
   nsIEventTarget* target = MainThreadTarget(this);
   RefPtr<nsGeolocationRequest> request = new nsGeolocationRequest(
       this, std::move(aCallback), std::move(aErrorCallback),
-      std::move(aOptions), static_cast<uint8_t>(mProtocolType), target, true,
-      watchId);
+      std::move(aOptions), target, true, watchId);
 
   if (!StaticPrefs::geo_enabled() || ShouldBlockInsecureRequests() ||
       !request->CheckPermissionDelegate()) {

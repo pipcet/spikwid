@@ -29,8 +29,8 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.os.RemoteException;
 import android.os.SystemClock;
-import android.support.annotation.NonNull;
-import android.support.annotation.Nullable;
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import android.text.Editable;
 import android.text.InputFilter;
 import android.text.InputType;
@@ -103,6 +103,7 @@ import android.view.inputmethod.EditorInfo;
     private String mIMETypeHint = ""; // Used by IC/UI thread.
     private String mIMEModeHint = ""; // Used by IC thread.
     private String mIMEActionHint = ""; // Used by IC thread.
+    private String mIMEAutocapitalize = ""; // Used by IC thread.
     private int mIMEFlags; // Used by IC thread.
 
     private boolean mIgnoreSelectionChange; // Used by Gecko thread
@@ -1471,14 +1472,18 @@ import android.view.inputmethod.EditorInfo;
     @Override // IGeckoEditableParent
     public void notifyIMEContext(final IBinder token, final int state, final String typeHint,
                                  final String modeHint, final String actionHint,
+                                 final String autocapitalize,
                                  final int flags) {
         // On Gecko or binder thread.
         if (DEBUG) {
-            Log.d(LOGTAG, "notifyIMEContext(" +
-                          getConstantName(SessionTextInput.EditableListener.class,
-                                          "IME_STATE_", state) +
-                          ", \"" + typeHint + "\", \"" + modeHint + "\", \"" + actionHint +
-                          "\", 0x" + Integer.toHexString(flags) + ")");
+            final StringBuilder sb = new StringBuilder("notifyIMEContext(");
+            sb.append(getConstantName(SessionTextInput.EditableListener.class, "IME_STATE_", state))
+                .append(", type=\""). append(typeHint)
+                .append("\", inputmode=\"").append(modeHint)
+                .append("\", autocapitalize=\"").append(autocapitalize)
+                .append("\", flags=0x").append(Integer.toHexString(flags))
+                .append(")");
+            Log.d(LOGTAG, sb.toString());
         }
 
         // Regular notifyIMEContext calls all come from the parent process (with the default child),
@@ -1493,13 +1498,14 @@ import android.view.inputmethod.EditorInfo;
         mIcPostHandler.post(new Runnable() {
             @Override
             public void run() {
-                icNotifyIMEContext(state, typeHint, modeHint, actionHint, flags);
+                icNotifyIMEContext(state, typeHint, modeHint, actionHint, autocapitalize, flags);
             }
         });
     }
 
     /* package */ void icNotifyIMEContext(final int originalState, final String typeHint,
                                           final String modeHint, final String actionHint,
+                                          final String autocapitalize,
                                           final int flags) {
         if (DEBUG) {
             assertOnIcThread();
@@ -1525,6 +1531,7 @@ import android.view.inputmethod.EditorInfo;
         mIMETypeHint = (typeHint == null) ? "" : typeHint;
         mIMEModeHint = (modeHint == null) ? "" : modeHint;
         mIMEActionHint = (actionHint == null) ? "" : actionHint;
+        mIMEAutocapitalize = (autocapitalize == null) ? "" : autocapitalize;
         mIMEFlags = flags;
 
         if (mListener != null) {
@@ -1562,10 +1569,6 @@ import android.view.inputmethod.EditorInfo;
                     Log.d(LOGTAG, "restartInput(" + reason + ", " + toggleSoftInput + ')');
                 }
 
-                if (toggleSoftInput) {
-                    mSoftInputReentrancyGuard.incrementAndGet();
-                }
-
                 final GeckoSession session = mSession.get();
                 if (session != null) {
                     session.getTextInput().getDelegate().restartInput(session, reason);
@@ -1596,6 +1599,7 @@ import android.view.inputmethod.EditorInfo;
         final String typeHint = mIMETypeHint;
         final String modeHint = mIMEModeHint;
         final String actionHint = mIMEActionHint;
+        final String autocapitalize = mIMEAutocapitalize;
         final int flags = mIMEFlags;
 
         // Some keyboards require us to fill out outAttrs even if we return null.
@@ -1632,7 +1636,7 @@ import android.view.inputmethod.EditorInfo;
         } else if (typeHint.equalsIgnoreCase("number") ||
                 typeHint.equalsIgnoreCase("range")) {
             outAttrs.inputType = InputType.TYPE_CLASS_NUMBER |
-                                 InputType.TYPE_NUMBER_VARIATION_NORMAL;
+                                 InputType.TYPE_NUMBER_VARIATION_NORMAL | InputType.TYPE_NUMBER_FLAG_DECIMAL;
         } else {
             // We look at modeHint
             if (modeHint.equals("tel")) {
@@ -1651,11 +1655,20 @@ import android.view.inputmethod.EditorInfo;
                 // TYPE_TEXT_FLAG_IME_MULTI_LINE flag makes the fullscreen IME line wrap
                 outAttrs.inputType |= InputType.TYPE_TEXT_FLAG_AUTO_CORRECT |
                         InputType.TYPE_TEXT_FLAG_IME_MULTI_LINE;
-                if (!typeHint.equalsIgnoreCase("text")) {
-                    // auto-capitalized mode is the default for types other than text (bug 871884)
-                    outAttrs.inputType |= InputType.TYPE_TEXT_FLAG_CAP_SENTENCES;
-                }
             }
+        }
+
+        if (autocapitalize.equals("characters")) {
+            outAttrs.inputType |= InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS;
+        } else if (autocapitalize.equals("none")) {
+            // not set anymore.
+        } else if (autocapitalize.equals("sentences")) {
+            outAttrs.inputType |= InputType.TYPE_TEXT_FLAG_CAP_SENTENCES;
+        } else if (autocapitalize.equals("words")) {
+            outAttrs.inputType |= InputType.TYPE_TEXT_FLAG_CAP_WORDS;
+        } else if (!typeHint.equalsIgnoreCase("text") && modeHint.length() == 0) {
+            // auto-capitalized mode is the default for types other than text (bug 871884)
+            outAttrs.inputType |= InputType.TYPE_TEXT_FLAG_CAP_SENTENCES;
         }
 
         if (actionHint.equals("enter")) {
@@ -1706,55 +1719,53 @@ import android.view.inputmethod.EditorInfo;
         ThreadUtils.runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                final int reentrancyGuard = mSoftInputReentrancyGuard.decrementAndGet();
-                final boolean isReentrant;
-                if (reentrancyGuard < 0) {
-                    mSoftInputReentrancyGuard.incrementAndGet();
-                    isReentrant = false;
-                } else {
-                    isReentrant = reentrancyGuard > 0;
-                }
+                try {
+                    final int reentrancyGuard = mSoftInputReentrancyGuard.incrementAndGet();
+                    final boolean isReentrant =  reentrancyGuard > 1;
 
-                // When using Find In Page, we can still receive notifyIMEContext calls due to the
-                // selection changing when highlighting. However in this case we don't want to
-                // show/hide the keyboard because the find box has the focus and is taking input from
-                // the keyboard.
-                final GeckoSession session = mSession.get();
+                    // When using Find In Page, we can still receive notifyIMEContext calls due to the
+                    // selection changing when highlighting. However in this case we don't want to
+                    // show/hide the keyboard because the find box has the focus and is taking input from
+                    // the keyboard.
+                    final GeckoSession session = mSession.get();
 
-                if (session == null) {
-                    return;
-                }
-
-                final View view = session.getTextInput().getView();
-                final boolean isFocused = (view == null) || view.hasFocus();
-
-                final boolean isUserAction = ((flags &
-                        SessionTextInput.EditableListener.IME_FLAG_USER_ACTION) != 0);
-
-                if (!force && (isReentrant || !isFocused || !isUserAction)) {
-                    if (DEBUG) {
-                        Log.d(LOGTAG, "toggleSoftInput: no-op, reentrant=" + isReentrant +
-                                ", focused=" + isFocused + ", user=" + isUserAction);
+                    if (session == null) {
+                        return;
                     }
-                    return;
+
+                    final View view = session.getTextInput().getView();
+                    final boolean isFocused = (view == null) || view.hasFocus();
+
+                    final boolean isUserAction = ((flags &
+                            SessionTextInput.EditableListener.IME_FLAG_USER_ACTION) != 0);
+
+                    if (!force && (isReentrant || !isFocused || !isUserAction)) {
+                        if (DEBUG) {
+                            Log.d(LOGTAG, "toggleSoftInput: no-op, reentrant=" + isReentrant +
+                                    ", focused=" + isFocused + ", user=" + isUserAction);
+                        }
+                        return;
+                    }
+                    if (state == SessionTextInput.EditableListener.IME_STATE_DISABLED) {
+                        session.getTextInput().getDelegate().hideSoftInput(session);
+                        return;
+                    }
+                    {
+                        final GeckoBundle bundle = new GeckoBundle();
+                        // This bit is subtle. We want to force-zoom to the input
+                        // if we're _not_ force-showing the virtual keyboard.
+                        //
+                        // We only force-show the virtual keyboard as a result of
+                        // something that _doesn't_ switch the focus, and we don't
+                        // want to move the view out of the focused editor unless
+                        // we _actually_ show toggle the keyboard.
+                        bundle.putBoolean("force", !force);
+                        session.getEventDispatcher().dispatch("GeckoView:ZoomToInput", bundle);
+                    }
+                    session.getTextInput().getDelegate().showSoftInput(session);
+                } finally {
+                    mSoftInputReentrancyGuard.decrementAndGet();
                 }
-                if (state == SessionTextInput.EditableListener.IME_STATE_DISABLED) {
-                    session.getTextInput().getDelegate().hideSoftInput(session);
-                    return;
-                }
-                {
-                    final GeckoBundle bundle = new GeckoBundle();
-                    // This bit is subtle. We want to force-zoom to the input
-                    // if we're _not_ force-showing the virtual keyboard.
-                    //
-                    // We only force-show the virtual keyboard as a result of
-                    // something that _doesn't_ switch the focus, and we don't
-                    // want to move the view out of the focused editor unless
-                    // we _actually_ show toggle the keyboard.
-                    bundle.putBoolean("force", !force);
-                    session.getEventDispatcher().dispatch("GeckoView:ZoomToInput", bundle);
-                }
-                session.getTextInput().getDelegate().showSoftInput(session);
             }
         });
     }

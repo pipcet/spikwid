@@ -230,9 +230,11 @@ interface WebExtensionPolicy {
    * This may be used to delay operations, such as loading extension pages,
    * which depend on extensions being fully initialized.
    *
-   * Note: This will always be either a Promise<WebExtensionPolicy> or null,
+   * Note: This will always be either a Promise<WebExtensionPolicy?> or null,
    * but the WebIDL grammar does not allow us to specify a nullable Promise
    * type.
+   *
+   * Note: This could resolve to null when the startup was interrupted.
    */
   readonly attribute object? readyPromise;
 
@@ -241,6 +243,16 @@ interface WebExtensionPolicy {
    * service worker url declared in the extension manifest.json file.
    */
   boolean isManifestBackgroundWorker(DOMString workerURL);
+
+  /**
+   * Get the unique BrowsingContextGroup ID which will be used for toplevel
+   * page loads from this extension.
+   *
+   * This method will raise an exception if called from outside of the parent
+   * process, or if the extension is inactive.
+   */
+  [Throws]
+  readonly attribute unsigned long long browsingContextGroupId;
 };
 
 dictionary WebExtensionInit {
@@ -270,5 +282,5 @@ dictionary WebExtensionInit {
   sequence<DOMString>? backgroundScripts = null;
   DOMString? backgroundWorkerScript = null;
 
-  Promise<WebExtensionPolicy> readyPromise;
+  Promise<WebExtensionPolicy?> readyPromise;
 };

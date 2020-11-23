@@ -157,7 +157,7 @@ add_task(async function pickButton_redirect() {
   await setDefaultEngine("Google");
   await BrowserTestUtils.withNewTab("about:blank", async () => {
     await withDNSRedirect("www.google.com", "/", async url => {
-      await BrowserTestUtils.loadURI(gBrowser.selectedBrowser, url);
+      BrowserTestUtils.loadURI(gBrowser.selectedBrowser, url);
       await BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser);
       await checkTip(window, UrlbarProviderSearchTips.TIP_TYPE.REDIRECT, false);
 
@@ -327,7 +327,7 @@ add_task(async function clickInInput_redirect() {
   await setDefaultEngine("Google");
   await BrowserTestUtils.withNewTab("about:blank", async () => {
     await withDNSRedirect("www.google.com", "/", async url => {
-      await BrowserTestUtils.loadURI(gBrowser.selectedBrowser, url);
+      BrowserTestUtils.loadURI(gBrowser.selectedBrowser, url);
       await BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser);
       await checkTip(window, UrlbarProviderSearchTips.TIP_TYPE.REDIRECT, false);
 
@@ -383,7 +383,7 @@ add_task(async function openLocation_redirect() {
   await setDefaultEngine("Google");
   await BrowserTestUtils.withNewTab("about:blank", async () => {
     await withDNSRedirect("www.google.com", "/", async url => {
-      await BrowserTestUtils.loadURI(gBrowser.selectedBrowser, url);
+      BrowserTestUtils.loadURI(gBrowser.selectedBrowser, url);
       await BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser);
       await checkTip(window, UrlbarProviderSearchTips.TIP_TYPE.REDIRECT, false);
 
@@ -490,7 +490,7 @@ add_task(async function notification() {
     // Give it a big persistence so it doesn't go away on page load.
     note.persistence = 100;
     await withDNSRedirect("www.google.com", "/", async url => {
-      await BrowserTestUtils.loadURI(gBrowser.selectedBrowser, url);
+      BrowserTestUtils.loadURI(gBrowser.selectedBrowser, url);
       await BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser);
       await checkTip(window, UrlbarProviderSearchTips.TIP_TYPE.NONE);
       box.removeNotification(note, true);
@@ -516,7 +516,7 @@ add_task(async function ignoreEndsEngagement() {
   await setDefaultEngine("Google");
   await BrowserTestUtils.withNewTab("about:blank", async () => {
     await withDNSRedirect("www.google.com", "/", async url => {
-      await BrowserTestUtils.loadURI(gBrowser.selectedBrowser, url);
+      BrowserTestUtils.loadURI(gBrowser.selectedBrowser, url);
       await BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser);
       await checkTip(window, UrlbarProviderSearchTips.TIP_TYPE.REDIRECT, false);
       // We're just looking for any target outside the Urlbar.
@@ -536,7 +536,28 @@ add_task(async function ignoreEndsEngagement() {
   resetSearchTipsProvider();
 });
 
-add_task(async function pasteAndGo() {
+add_task(async function pasteAndGo_url() {
+  await doPasteAndGoTest("http://example.com/", "http://example.com/");
+});
+
+add_task(async function pasteAndGo_nonURL() {
+  // Add a mock engine so we don't hit the network loading the SERP.
+  let engine = await Services.search.addEngineWithDetails("Test", {
+    template: "http://example.com/?search={searchTerms}",
+  });
+  let oldDefaultEngine = await Services.search.getDefault();
+  Services.search.setDefault(engine);
+
+  await doPasteAndGoTest(
+    "pasteAndGo_nonURL",
+    "http://example.com/?search=pasteAndGo_nonURL"
+  );
+
+  Services.search.setDefault(oldDefaultEngine);
+  await Services.search.removeEngine(engine);
+});
+
+async function doPasteAndGoTest(searchString, expectedURL) {
   UrlbarProviderSearchTips.disableTipsForCurrentSession = false;
   let tab = await BrowserTestUtils.openNewForegroundTab({
     gBrowser,
@@ -545,9 +566,8 @@ add_task(async function pasteAndGo() {
   });
   await checkTip(window, UrlbarProviderSearchTips.TIP_TYPE.ONBOARD, false);
 
-  const url = "http://example.com/";
-  await SimpleTest.promiseClipboardChange(url, () => {
-    clipboardHelper.copyString(url);
+  await SimpleTest.promiseClipboardChange(searchString, () => {
+    clipboardHelper.copyString(searchString);
   });
 
   let textBox = gURLBar.querySelector("moz-input-box");
@@ -563,13 +583,13 @@ add_task(async function pasteAndGo() {
   let browserLoadedPromise = BrowserTestUtils.browserLoaded(
     gBrowser.selectedBrowser,
     false,
-    url
+    expectedURL
   );
   EventUtils.synthesizeMouseAtCenter(menuitem, {});
   await browserLoadedPromise;
   BrowserTestUtils.removeTab(tab);
   resetSearchTipsProvider();
-});
+}
 
 // Since we coupled the logic that decides whether to show the tip with our
 // gURLBar.search call, we should make sure search isn't called when

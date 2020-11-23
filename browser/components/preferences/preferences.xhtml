@@ -32,12 +32,14 @@
   <link rel="localization" href="branding/brand.ftl"/>
   <link rel="localization" href="browser/branding/brandings.ftl"/>
   <link rel="localization" href="browser/branding/sync-brand.ftl"/>
+  <link rel="localization" href="browser/browser.ftl"/>
   <link rel="localization" href="browser/preferences/preferences.ftl"/>
   <!-- Used by fontbuilder.js -->
   <link rel="localization" href="browser/preferences/fonts.ftl"/>
   <link rel="localization" href="toolkit/featuregates/features.ftl"/>
 
   <!-- Links below are only used for search-l10n-ids into subdialogs -->
+  <link rel="localization" href="browser/preferences/addEngine.ftl"/>
   <link rel="localization" href="browser/preferences/blocklists.ftl"/>
   <link rel="localization" href="browser/preferences/clearSiteData.ftl"/>
   <link rel="localization" href="browser/preferences/colors.ftl"/>
@@ -74,7 +76,7 @@
 
     <vbox class="navigation">
       <!-- category list -->
-      <richlistbox id="categories">
+      <richlistbox id="categories" data-l10n-id="category-list" data-l10n-attrs="aria-label">
         <richlistitem id="category-general"
                       class="category"
                       value="paneGeneral"

@@ -13,15 +13,13 @@ const EXPECTED_ELEMENT_IN_PARENT_PROCESS = "button";
 const EXPECTED_ELEMENT_IN_CONTENT_PROCESS = "section";
 
 add_task(async () => {
-  await pushPref("devtools.target-switching.enabled", true);
-
   info("Open the memory panel with empty page");
   const tab = await addTab();
   const { panel } = await openMemoryPanel(tab);
   const { gToolbox: toolbox, gStore: store } = panel.panelWin;
 
   info("Open a page running on the content process");
-  await BrowserTestUtils.loadURI(tab.linkedBrowser, CONTENT_PROCESS_URI);
+  BrowserTestUtils.loadURI(tab.linkedBrowser, CONTENT_PROCESS_URI);
   await BrowserTestUtils.browserLoaded(tab.linkedBrowser);
   await takeAndWaitSnapshot(
     panel.panelWin,
@@ -82,7 +80,7 @@ function getNodeNames(snapshot) {
 async function navigateTo(uri, toolbox, tab) {
   const onSwitched = toolbox.targetList.once("switched-target");
   const onLoaded = BrowserTestUtils.browserLoaded(tab.linkedBrowser);
-  await BrowserTestUtils.loadURI(tab.linkedBrowser, uri);
+  BrowserTestUtils.loadURI(tab.linkedBrowser, uri);
   await onLoaded;
   await onSwitched;
   ok(true, "switched-target event is fired");

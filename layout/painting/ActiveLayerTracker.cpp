@@ -17,6 +17,7 @@
 #include "nsExpirationTracker.h"
 #include "nsContainerFrame.h"
 #include "nsIContent.h"
+#include "nsIScrollableFrame.h"
 #include "nsRefreshDriver.h"
 #include "nsPIDOMWindow.h"
 #include "mozilla/dom/Document.h"
@@ -25,6 +26,7 @@
 #include "nsTransitionManager.h"
 #include "nsDisplayList.h"
 #include "nsDOMCSSDeclaration.h"
+#include "nsLayoutUtils.h"
 
 namespace mozilla {
 
@@ -292,7 +294,7 @@ static void IncrementScaleRestyleCountIfNeeded(nsIFrame* aFrame,
     return;
   }
 
-  Size scale = transform2D.ScaleFactors(true);
+  Size scale = transform2D.ScaleFactors();
   if (aActivity->mPreviousTransformScale == Some(scale)) {
     return;  // Nothing changed.
   }

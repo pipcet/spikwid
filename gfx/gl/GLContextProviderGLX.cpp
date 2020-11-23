@@ -171,7 +171,7 @@ bool GLXLibrary::EnsureInitialized() {
   const SymLoadStruct symbols_swapcontrol[] = {SYMBOL(SwapIntervalEXT),
                                                END_OF_SYMBOLS};
 
-  const SymLoadStruct symbols_copysubbuffer[] = {SYMBOL(CopySubBufferMESA),
+  const SymLoadStruct symbols_querydrawable[] = {SYMBOL(QueryDrawable),
                                                  END_OF_SYMBOLS};
 
   const auto fnLoadSymbols = [&](const SymLoadStruct* symbols) {
@@ -220,9 +220,9 @@ bool GLXLibrary::EnsureInitialized() {
         "swaps.");
   }
 
-  if (HasExtension(extensionsStr, "GLX_MESA_copy_sub_buffer") &&
-      fnLoadSymbols(symbols_copysubbuffer)) {
-    mHasCopySubBuffer = true;
+  if (HasExtension(extensionsStr, "GLX_EXT_buffer_age") &&
+      fnLoadSymbols(symbols_querydrawable)) {
+    mHasBufferAge = true;
   }
 
   mIsATI = serverVendor && DoesStringMatch(serverVendor, "ATI");
@@ -627,14 +627,19 @@ bool GLContextGLX::SwapBuffers() {
   return true;
 }
 
-bool GLContextGLX::HasCopySubBuffer() const {
-  return mDoubleBuffered && mGLX->HasCopySubBuffer();
-}
+GLint GLContextGLX::GetBufferAge() const {
+  if (!sGLXLibrary.SupportsBufferAge()) {
+    return 0;
+  }
 
-void GLContextGLX::CopySubBuffer(int x, int y, int w, int h) {
-  MOZ_ASSERT(HasCopySubBuffer());
-
-  mGLX->fCopySubBufferMESA(mDisplay, mDrawable, x, y, w, h);
+  GLuint result = 0;
+  mGLX->fQueryDrawable(mDisplay, mDrawable, LOCAL_GLX_BACK_BUFFER_AGE_EXT,
+                       &result);
+  if (result > INT32_MAX) {
+    // If the result can't fit, just assume the buffer cannot be reused.
+    return 0;
+  }
+  return result;
 }
 
 void GLContextGLX::GetWSIInfo(nsCString* const out) const {
@@ -693,27 +698,6 @@ static bool AreCompatibleVisuals(Visual* one, Visual* two) {
   }
 
   return true;
-}
-
-already_AddRefed<GLContext> GLContextProviderGLX::CreateWrappingExisting(
-    void* aContext, void* aSurface) {
-  if (!sGLXLibrary.EnsureInitialized()) {
-    return nullptr;
-  }
-
-  if (aContext && aSurface) {
-    RefPtr<GLContextGLX> glContext =
-        new GLContextGLX({},
-                         (Display*)DefaultXDisplay(),  // Display
-                         (GLXDrawable)aSurface, (GLXContext)aContext,
-                         false,  // aDeleteDrawable,
-                         true, (gfxXlibSurface*)nullptr);
-
-    glContext->mOwnsContext = false;
-    return glContext.forget();
-  }
-
-  return nullptr;
 }
 
 already_AddRefed<GLContext> CreateForWidget(Display* aXDisplay, Window aXWindow,

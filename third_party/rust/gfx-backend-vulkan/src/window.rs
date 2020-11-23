@@ -1,7 +1,6 @@
 use std::{
     borrow::Borrow,
-    fmt,
-    hash,
+    fmt, hash,
     os::raw::c_void,
     ptr,
     sync::{Arc, Mutex},
@@ -14,14 +13,7 @@ use smallvec::SmallVec;
 
 use crate::{conv, info, native};
 use crate::{
-    Backend,
-    Device,
-    Instance,
-    PhysicalDevice,
-    QueueFamily,
-    RawDevice,
-    RawInstance,
-    VK_ENTRY,
+    Backend, Device, Instance, PhysicalDevice, QueueFamily, RawDevice, RawInstance, VK_ENTRY,
 };
 
 #[derive(Debug, Default)]
@@ -112,7 +104,7 @@ impl Instance {
         }
 
         let surface = {
-            let xlib_loader = khr::XlibSurface::new(entry, &self.raw.0);
+            let xlib_loader = khr::XlibSurface::new(entry, &self.raw.inner);
             let info = vk::XlibSurfaceCreateInfoKHR {
                 s_type: vk::StructureType::XLIB_SURFACE_CREATE_INFO_KHR,
                 p_next: ptr::null(),
@@ -148,7 +140,7 @@ impl Instance {
         }
 
         let surface = {
-            let xcb_loader = khr::XcbSurface::new(entry, &self.raw.0);
+            let xcb_loader = khr::XcbSurface::new(entry, &self.raw.inner);
             let info = vk::XcbSurfaceCreateInfoKHR {
                 s_type: vk::StructureType::XCB_SURFACE_CREATE_INFO_KHR,
                 p_next: ptr::null(),
@@ -179,7 +171,7 @@ impl Instance {
         }
 
         let surface = {
-            let w_loader = khr::WaylandSurface::new(entry, &self.raw.0);
+            let w_loader = khr::WaylandSurface::new(entry, &self.raw.inner);
             let info = vk::WaylandSurfaceCreateInfoKHR {
                 s_type: vk::StructureType::WAYLAND_SURFACE_CREATE_INFO_KHR,
                 p_next: ptr::null(),
@@ -201,7 +193,7 @@ impl Instance {
             .expect("Unable to load Vulkan entry points");
 
         let surface = {
-            let loader = khr::AndroidSurface::new(entry, &self.raw.0);
+            let loader = khr::AndroidSurface::new(entry, &self.raw.inner);
             let info = vk::AndroidSurfaceCreateInfoKHR {
                 s_type: vk::StructureType::ANDROID_SURFACE_CREATE_INFO_KHR,
                 p_next: ptr::null(),
@@ -233,7 +225,7 @@ impl Instance {
                 hinstance: hinstance as *mut _,
                 hwnd: hwnd as *mut _,
             };
-            let win32_loader = khr::Win32Surface::new(entry, &self.raw.0);
+            let win32_loader = khr::Win32Surface::new(entry, &self.raw.inner);
             unsafe {
                 win32_loader
                     .create_win32_surface(&info, None)
@@ -247,7 +239,7 @@ impl Instance {
     #[cfg(target_os = "macos")]
     pub fn create_surface_from_ns_view(&self, view: *mut c_void) -> Surface {
         use ash::extensions::mvk;
-        use core_graphics::{base::CGFloat, geometry::CGRect};
+        use core_graphics_types::{base::CGFloat, geometry::CGRect};
         use objc::runtime::{Object, BOOL, YES};
 
         // TODO: this logic is duplicated from gfx-backend-metal, refactor?
@@ -286,7 +278,7 @@ impl Instance {
         }
 
         let surface = {
-            let mac_os_loader = mvk::MacOSSurface::new(entry, &self.raw.0);
+            let mac_os_loader = mvk::MacOSSurface::new(entry, &self.raw.inner);
             let info = vk::MacOSSurfaceCreateInfoMVK {
                 s_type: vk::StructureType::MACOS_SURFACE_CREATE_INFO_M,
                 p_next: ptr::null(),
@@ -309,7 +301,7 @@ impl Instance {
             .as_ref()
             .expect("Unable to load Vulkan entry points");
 
-        let functor = khr::Surface::new(entry, &self.raw.0);
+        let functor = khr::Surface::new(entry, &self.raw.inner);
 
         let raw = Arc::new(RawSurface {
             handle: surface,
@@ -392,9 +384,9 @@ impl w::Surface<Backend> for Surface {
                     u | conv::map_vk_present_mode(m)
                 }),
             composite_alpha_modes: conv::map_vk_composite_alpha(caps.supported_composite_alpha),
-            image_count: caps.min_image_count ..= max_images,
+            image_count: caps.min_image_count..=max_images,
             current_extent,
-            extents: min_extent ..= max_extent,
+            extents: min_extent..=max_extent,
             max_image_layers: caps.max_image_array_layers as _,
             usage: conv::map_vk_image_usage(caps.supported_usage_flags),
         }
@@ -470,8 +462,7 @@ impl w::PresentationSurface<Backend> for Surface {
                             hal::format::Swizzle::NO,
                             hal::image::SubresourceRange {
                                 aspects: hal::format::Aspects::COLOR,
-                                layers: 0 .. 1,
-                                levels: 0 .. 1,
+                                ..Default::default()
                             },
                         )
                         .unwrap();
@@ -498,8 +489,6 @@ impl w::PresentationSurface<Backend> for Surface {
         &mut self,
         mut timeout_ns: u64,
     ) -> Result<(Self::SwapchainImage, Option<w::Suboptimal>), w::AcquireError> {
-        use hal::window::Swapchain as _;
-
         let ssc = self.swapchain.as_mut().unwrap();
         let moment = Instant::now();
         let (index, suboptimal) =
@@ -524,8 +513,7 @@ impl w::PresentationSurface<Backend> for Surface {
                         view: frame.view,
                         range: hal::image::SubresourceRange {
                             aspects: hal::format::Aspects::COLOR,
-                            layers: 0 .. 1,
-                            levels: 0 .. 1,
+                            ..Default::default()
                         },
                         owner: native::ImageViewOwner::Surface(FramebufferCachePtr(Arc::clone(
                             &frame.framebuffers.0,
@@ -566,7 +554,7 @@ impl fmt::Debug for Swapchain {
     }
 }
 
-impl w::Swapchain<Backend> for Swapchain {
+impl Swapchain {
     unsafe fn acquire_image(
         &mut self,
         timeout_ns: u64,

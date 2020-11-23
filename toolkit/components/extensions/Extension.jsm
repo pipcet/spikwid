@@ -27,8 +27,8 @@ var EXPORTED_SYMBOLS = [
  * (set as the current default value of the "dom.ipc.processCount.extension"
  * preference), if we switch to use more than one extension process, we have to
  * be sure that all the browser's frameLoader are associated to the same process,
- * e.g. by using the `sameProcessAsFrameLoader` property.
- * (http://searchfox.org/mozilla-central/source/dom/interfaces/base/nsIBrowser.idl)
+ * e.g. by enabling the `maychangeremoteness` attribute, and/or setting
+ * `initialBrowsingContextGroupId` attribute to the correct value.
  *
  * At that point we are going to keep track of the existing browsers associated to
  * a webextension to ensure that they are all running in the same process (and we
@@ -501,6 +501,14 @@ class ExtensionData {
 
   _logMessage(message, severity) {
     this.logger[severity](`Loading extension '${this.id}': ${message}`);
+  }
+
+  ensureNoErrors() {
+    if (this.errors.length) {
+      // startup() repeatedly checks whether there are errors after parsing the
+      // extension/manifest before proceeding with starting up.
+      throw new Error(this.errors.join("\n"));
+    }
   }
 
   /**
@@ -991,6 +999,9 @@ class ExtensionData {
           continue;
         }
 
+        // Bug 1671244: Currently all manifest permissions are added to permissions,
+        // even when used otherwise above.  Host permissions other than all_urls
+        // probably should not be in this list.
         permissions.add(perm);
       }
 
@@ -1447,6 +1458,44 @@ class ExtensionData {
   }
 
   /**
+   * Classify host permissions
+   * @param {array<string>} origins
+   *                        permission origins
+   * @returns {object}
+   *              "object.allUrls" contains the permission used to obtain all urls access
+   *              "object.wildcards" set contains permissions with wildcards
+   *              "object.sites" set contains explicit host permissions
+   */
+  static classifyOriginPermissions(origins = []) {
+    let allUrls = null,
+      wildcards = new Set(),
+      sites = new Set();
+    for (let permission of origins) {
+      if (permission == "<all_urls>") {
+        allUrls = permission;
+        break;
+      }
+
+      // Privileged extensions may request access to "about:"-URLs, such as
+      // about:reader.
+      let match = /^[a-z*]+:\/\/([^/]*)\/|^about:/.exec(permission);
+      if (!match) {
+        throw new Error(`Unparseable host permission ${permission}`);
+      }
+      // Note: the scheme is ignored in the permission warnings. If this ever
+      // changes, update the comparePermissions method as needed.
+      if (!match[1] || match[1] == "*") {
+        allUrls = permission;
+      } else if (match[1].startsWith("*.")) {
+        wildcards.add(match[1].slice(2));
+      } else {
+        sites.add(match[1]);
+      }
+    }
+    return { allUrls, wildcards, sites };
+  }
+
+  /**
    * Formats all the strings for a permissions dialog/notification.
    *
    * @param {object} info Information about the permissions being requested.
@@ -1455,6 +1504,10 @@ class ExtensionData {
    *                        Origin permissions requested.
    * @param {array<string>} info.permissions.permissions
    *                        Regular (non-origin) permissions requested.
+   * @param {array<string>} info.optionalPermissions.origins
+   *                        Optional origin permissions listed in the manifest.
+   * @param {array<string>} info.optionalPermissions.permissions
+   *                        Optional (non-origin) permissions listed in the manifest.
    * @param {boolean} info.unsigned
    *                  True if the prompt is for installing an unsigned addon.
    * @param {string} info.type
@@ -1476,47 +1529,41 @@ class ExtensionData {
    *                   property on this object is the notification header text
    *                   and it has the string "<>" as a placeholder for the
    *                   addon name.
+   *
+   *                   "object.msgs" is an array of localized strings describing required permissions
+   *
+   *                   "object.optionalPermissions" is a map of permission name to localized
+   *                   strings describing the permission.
+   *
+   *                   "object.optionalOrigins" is a map of a host permission to localized strings
+   *                   describing the host permission, where appropriate.  Currently only
+   *                   all url style permissions are included.
    */
   static formatPermissionStrings(
     info,
     bundle,
     { collapseOrigins = false } = {}
   ) {
-    let result = {};
+    let result = {
+      msgs: [],
+      optionalPermissions: {},
+      optionalOrigins: {},
+    };
 
     let perms = info.permissions || { origins: [], permissions: [] };
+    let optional_permissions = info.optionalPermissions || {
+      origins: [],
+      permissions: [],
+    };
 
     // First classify our host permissions
-    let allUrls = false,
-      wildcards = new Set(),
-      sites = new Set();
-    for (let permission of perms.origins) {
-      if (permission == "<all_urls>") {
-        allUrls = true;
-        break;
-      }
-
-      // Privileged extensions may request access to "about:"-URLs, such as
-      // about:reader.
-      let match = /^[a-z*]+:\/\/([^/]*)\/|^about:/.exec(permission);
-      if (!match) {
-        throw new Error(`Unparseable host permission ${permission}`);
-      }
-      // Note: the scheme is ignored in the permission warnings. If this ever
-      // changes, update the comparePermissions method as needed.
-      if (!match[1] || match[1] == "*") {
-        allUrls = true;
-      } else if (match[1].startsWith("*.")) {
-        wildcards.add(match[1].slice(2));
-      } else {
-        sites.add(match[1]);
-      }
-    }
+    let { allUrls, wildcards, sites } = ExtensionData.classifyOriginPermissions(
+      perms.origins
+    );
 
     // Format the host permissions.  If we have a wildcard for all urls,
     // a single string will suffice.  Otherwise, show domain wildcards
     // first, then individual host permissions.
-    result.msgs = [];
     if (allUrls) {
       result.msgs.push(
         bundle.GetStringFromName("webextPerms.hostDescription.allUrls")
@@ -1576,7 +1623,7 @@ class ExtensionData {
     let permissionsCopy = perms.permissions.slice(0);
     for (let permission of permissionsCopy.sort()) {
       // Handled above
-      if (permission == "nativeMessaging") {
+      if (permission == NATIVE_MSG_PERM) {
         continue;
       }
       try {
@@ -1585,6 +1632,35 @@ class ExtensionData {
         // We deliberately do not include all permissions in the prompt.
         // So if we don't find one then just skip it.
       }
+    }
+
+    // Generate a map of permission names to permission strings for optional
+    // permissions.  The key is necessary to handle toggling those permissions.
+    for (let permission of optional_permissions.permissions) {
+      if (permission == NATIVE_MSG_PERM) {
+        result.optionalPermissions[
+          permission
+        ] = bundle.formatStringFromName(permissionKey(permission), [
+          info.appName,
+        ]);
+        continue;
+      }
+      try {
+        result.optionalPermissions[permission] = bundle.GetStringFromName(
+          permissionKey(permission)
+        );
+      } catch (err) {
+        // We deliberately do not have strings for all permissions.
+        // So if we don't find one then just skip it.
+      }
+    }
+    allUrls = ExtensionData.classifyOriginPermissions(
+      optional_permissions.origins
+    ).allUrls;
+    if (allUrls) {
+      result.optionalOrigins[allUrls] = bundle.GetStringFromName(
+        "webextPerms.hostDescription.allUrls"
+      );
     }
 
     const haveAccessKeys = AppConstants.platform !== "android";
@@ -1948,6 +2024,10 @@ class Extension extends ExtensionData {
     return new BootstrapScope();
   }
 
+  get browsingContextGroupId() {
+    return this.policy.browsingContextGroupId;
+  }
+
   get groupFrameLoader() {
     let frameLoader = this._backgroundPageFrameLoader;
     for (let view of this.views) {
@@ -2079,9 +2159,7 @@ class Extension extends ExtensionData {
   async loadManifest() {
     let manifest = await super.loadManifest();
 
-    if (this.errors.length) {
-      return Promise.reject({ errors: this.errors });
-    }
+    this.ensureNoErrors();
 
     return manifest;
   }
@@ -2390,6 +2468,8 @@ class Extension extends ExtensionData {
   async startup() {
     this.state = "Startup";
 
+    // readyPromise is resolved with the policy upon success,
+    // and with null if startup was interrupted.
     let resolveReadyPromise;
     let readyPromise = new Promise(resolve => {
       resolveReadyPromise = resolve;
@@ -2431,11 +2511,11 @@ class Extension extends ExtensionData {
         this.state = "Startup: Initted locale";
       }
 
-      if (this.errors.length) {
-        return Promise.reject({ errors: this.errors });
-      }
+      this.ensureNoErrors();
 
       if (this.hasShutdown) {
+        // Startup was interrupted and shutdown() has taken care of unloading
+        // the extension and running cleanup logic.
         return;
       }
 
@@ -2540,17 +2620,10 @@ class Extension extends ExtensionData {
       this.emit("ready");
 
       this.state = "Startup: Complete";
-    } catch (errors) {
-      this.state = `Startup: Error: ${errors}`;
+    } catch (e) {
+      this.state = `Startup: Error: ${e}`;
 
-      for (let e of [].concat(errors)) {
-        dump(
-          `Extension error: ${e.message || e} ${e.filename || e.fileName}:${
-            e.lineNumber
-          } :: ${e.stack || new Error().stack}\n`
-        );
-        Cu.reportError(e);
-      }
+      Cu.reportError(e);
 
       if (this.policy) {
         this.policy.active = false;
@@ -2558,9 +2631,12 @@ class Extension extends ExtensionData {
 
       this.cleanupGeneratedFile();
 
-      throw errors;
+      throw e;
     } finally {
       ExtensionTelemetry.extensionStartup.stopwatchFinish(this);
+      // Mark readyPromise as resolved in case it has not happened before,
+      // e.g. due to an early return or an error.
+      resolveReadyPromise(null);
     }
   }
 

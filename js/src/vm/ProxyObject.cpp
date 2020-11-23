@@ -61,6 +61,10 @@ void ProxyObject::init(const BaseProxyHandler* handler, HandleValue priv,
   } else {
     setSameCompartmentPrivate(priv);
   }
+
+  // The expando slot is nullptr until required by the installation of
+  // a private field.
+  setExpando(nullptr);
 }
 
 /* static */
@@ -81,21 +85,6 @@ ProxyObject* ProxyObject::New(JSContext* cx, const BaseProxyHandler* handler,
     JS::AssertCellIsNotGray(priv.toGCThing());
   }
 #endif
-
-  /*
-   * Eagerly mark properties unknown for proxies, so we don't try to track
-   * their properties and so that we don't need to walk the compartment if
-   * their prototype changes later.  But don't do this for DOM proxies,
-   * because we want to be able to keep track of them in typesets in useful
-   * ways.
-   */
-  if (proto.isObject() && !clasp->isDOMClass()) {
-    ObjectGroupRealm& realm = ObjectGroupRealm::getForNewObject(cx);
-    RootedObject protoObj(cx, proto.toObject());
-    if (!JSObject::setNewGroupUnknown(cx, realm, clasp, protoObj)) {
-      return nullptr;
-    }
-  }
 
   gc::AllocKind allocKind = GetProxyGCObjectKind(clasp, handler, priv);
 
@@ -128,15 +117,11 @@ ProxyObject* ProxyObject::New(JSContext* cx, const BaseProxyHandler* handler,
   // Ensure that the wrapper has the same lifetime assumptions as the
   // wrappee. Prefer to allocate in the nursery, when possible.
   gc::InitialHeap heap;
-  {
-    AutoSweepObjectGroup sweep(group);
-    if (group->shouldPreTenure(sweep) ||
-        (priv.isGCThing() && priv.toGCThing()->isTenured()) ||
-        !handler->canNurseryAllocate()) {
-      heap = gc::TenuredHeap;
-    } else {
-      heap = gc::DefaultHeap;
-    }
+  if ((priv.isGCThing() && priv.toGCThing()->isTenured()) ||
+      !handler->canNurseryAllocate()) {
+    heap = gc::TenuredHeap;
+  } else {
+    heap = gc::DefaultHeap;
   }
 
   debugCheckNewObject(group, shape, allocKind, heap);
@@ -157,11 +142,6 @@ ProxyObject* ProxyObject::New(JSContext* cx, const BaseProxyHandler* handler,
   gc::gcprobes::CreateObject(proxy);
 
   proxy->init(handler, priv, cx);
-
-  // Don't track types of properties of non-DOM and non-singleton proxies.
-  if (!clasp->isDOMClass()) {
-    MarkObjectGroupUnknownProperties(cx, proxy->group());
-  }
 
   return proxy;
 }
@@ -267,6 +247,18 @@ inline void ProxyObject::setPrivate(const Value& priv) {
   *slotOfPrivate() = priv;
 }
 
+void ProxyObject::setExpando(JSObject* expando) {
+  // Ensure that we don't accidentally end up pointing to a
+  // grey object, which would violate GC invariants.
+  MOZ_ASSERT_IF(IsMarkedBlack(this) && expando,
+                !JS::GCThingIsMarkedGray(JS::GCCellPtr(expando)));
+
+  // Ensure we're in the same compartment as the proxy object: Don't want the
+  // expando to end up as a CCW.
+  MOZ_ASSERT_IF(expando, expando->compartment() == compartment());
+  *slotOfExpando() = ObjectOrNullValue(expando);
+}
+
 void ProxyObject::nuke() {
   // Notify the zone that a delegate is no longer a delegate. Be careful not to
   // expose this pointer, because it has already been removed from the wrapper
@@ -274,12 +266,15 @@ void ProxyObject::nuke() {
   // still present.
   JSObject* delegate = UncheckedUnwrapWithoutExpose(this);
   if (delegate != this) {
-    delegate->zone()->delegatePreWriteBarrier(this, delegate);
+    delegate->zone()->beforeClearDelegate(this, delegate);
   }
 
   // Clear the target reference and replaced it with a value that encodes
   // various information about the original target.
   setSameCompartmentPrivate(DeadProxyTargetValue(this));
+
+  // Clear out the expando
+  setExpando(nullptr);
 
   // Update the handler to make this a DeadObjectProxy.
   setHandler(&DeadObjectProxy::singleton);

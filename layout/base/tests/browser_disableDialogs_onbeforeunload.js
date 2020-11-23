@@ -50,17 +50,18 @@ async function openPage(enableDialogs) {
         const { Services } = ChromeUtils.import(
           "resource://gre/modules/Services.jsm"
         );
+        let win = content;
         Services.obs.addObserver(doc => {
-          if (content && doc == content.document) {
-            content.windowUtils[name]();
+          if (doc == win.document) {
+            win.windowUtils[name]();
           }
         }, "document-element-inserted");
       });
       // Load the page.
-      await BrowserTestUtils.loadURI(browser, PAGE_URL);
+      BrowserTestUtils.loadURI(browser, PAGE_URL);
       await BrowserTestUtils.browserLoaded(browser);
       // And then navigate away.
-      await BrowserTestUtils.loadURI(browser, "http://example.com/");
+      BrowserTestUtils.loadURI(browser, "http://example.com/");
       await BrowserTestUtils.browserLoaded(browser);
     }
   );

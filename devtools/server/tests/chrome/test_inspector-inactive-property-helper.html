@@ -51,11 +51,13 @@ SimpleTest.waitForExplicitFinish();
     "place-items-content.js",
     "positioned.js",
     "vertical-align.js",
-    "text-overflow.js"
+    "text-overflow.js",
+    "outline-radius.js",
   ].map(file => `${FOLDER}/${file}`);
 
   // Import all the test cases
   const tests =
+  // eslint-disable-next-line no-unsanitized/method
     (await Promise.all(testFiles.map(f => import(f).then(data => data.default)))).flat();
 
   for (const {

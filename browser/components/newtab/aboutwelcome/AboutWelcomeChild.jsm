@@ -11,6 +11,7 @@ const { XPCOMUtils } = ChromeUtils.import(
 );
 
 XPCOMUtils.defineLazyModuleGetters(this, {
+  DEFAULT_SITES: "resource://activity-stream/lib/DefaultSites.jsm",
   ExperimentAPI: "resource://messaging-system/experiments/ExperimentAPI.jsm",
   shortURL: "resource://activity-stream/lib/ShortURL.jsm",
   TippyTopProvider: "resource://activity-stream/lib/TippyTopProvider.jsm",
@@ -22,6 +23,14 @@ XPCOMUtils.defineLazyGetter(this, "log", () => {
   );
   return new Logger("AboutWelcomeChild");
 });
+
+XPCOMUtils.defineLazyGetter(this, "tippyTopProvider", () =>
+  (async () => {
+    const provider = new TippyTopProvider();
+    await provider.init();
+    return provider;
+  })()
+);
 
 function _parseOverrideContent(value) {
   let result = {};
@@ -42,6 +51,15 @@ XPCOMUtils.defineLazyPreferenceGetter(
   _parseOverrideContent
 );
 
+const SEARCH_REGION_PREF = "browser.search.region";
+
+XPCOMUtils.defineLazyPreferenceGetter(
+  this,
+  "searchRegion",
+  SEARCH_REGION_PREF,
+  ""
+);
+
 /**
  * Lazily get importable sites from parent or reuse cached ones.
  */
@@ -50,9 +68,7 @@ function getImportableSites(child) {
     getImportableSites.cache ??
     (getImportableSites.cache = (async () => {
       // Use tippy top to get packaged rich icons
-      const tippyTop = new TippyTopProvider();
-      await tippyTop.init();
-
+      const tippyTop = await tippyTopProvider;
       // Remove duplicate entries if they would appear the same
       return `[${[
         ...new Set(
@@ -69,6 +85,30 @@ function getImportableSites(child) {
       ]}]`;
     })())
   );
+}
+
+async function getDefaultSites(child) {
+  // Get default TopSites by region
+  let sites = DEFAULT_SITES.get(
+    DEFAULT_SITES.has(searchRegion) ? searchRegion : ""
+  );
+
+  // Use tippy top to get packaged rich icons
+  const tippyTop = await tippyTopProvider;
+  let defaultSites = sites.split(",").map(link => {
+    let site = { url: link };
+    tippyTop.processSite(site);
+    return {
+      icon: site.tippyTopIcon,
+      title: shortURL(site),
+    };
+  });
+  return Cu.cloneInto(defaultSites, child.contentWindow);
+}
+
+async function getSelectedTheme(child) {
+  let activeThemeId = await child.sendQuery("AWPage:GET_SELECTED_THEME");
+  return activeThemeId;
 }
 
 class AboutWelcomeChild extends JSWindowActorChild {
@@ -119,14 +159,18 @@ class AboutWelcomeChild extends JSWindowActorChild {
   exportFunctions() {
     let window = this.contentWindow;
 
-    Cu.exportFunction(this.AWGetStartupData.bind(this), window, {
-      defineAs: "AWGetStartupData",
+    Cu.exportFunction(this.AWGetExperimentData.bind(this), window, {
+      defineAs: "AWGetExperimentData",
+    });
+
+    Cu.exportFunction(this.AWGetAttributionData.bind(this), window, {
+      defineAs: "AWGetAttributionData",
     });
 
     // For local dev, checks for JSON content inside pref browser.aboutwelcome.overrideContent
-    // that is used to override default 3 cards welcome UI with multistage welcome
-    Cu.exportFunction(this.AWGetMultiStageScreens.bind(this), window, {
-      defineAs: "AWGetMultiStageScreens",
+    // that is used to override default welcome UI
+    Cu.exportFunction(this.AWGetWelcomeOverrideContent.bind(this), window, {
+      defineAs: "AWGetWelcomeOverrideContent",
     });
 
     Cu.exportFunction(this.AWGetFxAMetricsFlowURI.bind(this), window, {
@@ -135,6 +179,18 @@ class AboutWelcomeChild extends JSWindowActorChild {
 
     Cu.exportFunction(this.AWGetImportableSites.bind(this), window, {
       defineAs: "AWGetImportableSites",
+    });
+
+    Cu.exportFunction(this.AWGetDefaultSites.bind(this), window, {
+      defineAs: "AWGetDefaultSites",
+    });
+
+    Cu.exportFunction(this.AWGetSelectedTheme.bind(this), window, {
+      defineAs: "AWGetSelectedTheme",
+    });
+
+    Cu.exportFunction(this.AWGetRegion.bind(this), window, {
+      defineAs: "AWGetRegion",
     });
 
     Cu.exportFunction(this.AWSelectTheme.bind(this), window, {
@@ -166,7 +222,7 @@ class AboutWelcomeChild extends JSWindowActorChild {
   /**
    * Send multistage welcome JSON data read from aboutwelcome.overrideConetent pref to page
    */
-  AWGetMultiStageScreens() {
+  AWGetWelcomeOverrideContent() {
     return Cu.cloneInto(
       multiStageAboutWelcomeContent || {},
       this.contentWindow
@@ -179,22 +235,86 @@ class AboutWelcomeChild extends JSWindowActorChild {
     );
   }
 
+  async getAddonInfo(attrbObj) {
+    let { content, source } = attrbObj;
+    try {
+      if (!content || source !== "addons.mozilla.org") {
+        return null;
+      }
+      // Attribution data can be double encoded
+      while (content.includes("%")) {
+        try {
+          const result = decodeURIComponent(content);
+          if (result === content) {
+            break;
+          }
+          content = result;
+        } catch (e) {
+          break;
+        }
+      }
+      return await this.sendQuery("AWPage:GET_ADDON_FROM_REPOSITORY", content);
+    } catch (e) {
+      Cu.reportError(
+        "Failed to get the latest add-on version for Return to AMO"
+      );
+      return null;
+    }
+  }
+
+  hasAMOAttribution(attributionData) {
+    return (
+      attributionData &&
+      attributionData.campaign === "non-fx-button" &&
+      attributionData.source === "addons.mozilla.org"
+    );
+  }
+
+  async formatAttributionData(attribution) {
+    let result = {};
+    if (this.hasAMOAttribution(attribution)) {
+      let extraProps = await this.getAddonInfo(attribution);
+      if (extraProps) {
+        result = {
+          template: "return_to_amo",
+          extraProps,
+        };
+      }
+    }
+    return result;
+  }
+
+  async getAttributionData() {
+    return Cu.cloneInto(
+      await this.formatAttributionData(
+        await this.sendQuery("AWPage:GET_ATTRIBUTION_DATA")
+      ),
+      this.contentWindow
+    );
+  }
+
+  AWGetAttributionData() {
+    return this.wrapPromise(this.getAttributionData());
+  }
+
   /**
    * Send initial data to page including experiment information
    */
-  AWGetStartupData() {
+  AWGetExperimentData() {
     let experimentData;
     try {
-      // Note that we speciifically don't wait for experiments to be loaded from disk so if
+      // Note that we specifically don't wait for experiments to be loaded from disk so if
       // about:welcome loads outside of the "FirstStartup" scenario this will likely not be ready
       experimentData = ExperimentAPI.getExperiment({
-        group: "aboutwelcome",
+        featureId: "aboutwelcome",
+        // Telemetry handled in AboutNewTabService.jsm
+        sendExposurePing: false,
       });
     } catch (e) {
       Cu.reportError(e);
     }
 
-    if (experimentData && experimentData.slug) {
+    if (experimentData?.slug) {
       log.debug(
         `Loading about:welcome with experiment: ${experimentData.slug}`
       );
@@ -210,6 +330,14 @@ class AboutWelcomeChild extends JSWindowActorChild {
 
   AWGetImportableSites() {
     return this.wrapPromise(getImportableSites(this));
+  }
+
+  AWGetDefaultSites() {
+    return this.wrapPromise(getDefaultSites(this));
+  }
+
+  AWGetSelectedTheme() {
+    return this.wrapPromise(getSelectedTheme(this));
   }
 
   /**
@@ -237,6 +365,10 @@ class AboutWelcomeChild extends JSWindowActorChild {
 
   AWWaitForMigrationClose() {
     return this.wrapPromise(this.sendQuery("AWPage:WAIT_FOR_MIGRATION_CLOSE"));
+  }
+
+  AWGetRegion() {
+    return this.wrapPromise(this.sendQuery("AWPage:GET_REGION"));
   }
 
   /**

@@ -7,26 +7,43 @@
 #ifndef jit_BaselineJIT_h
 #define jit_BaselineJIT_h
 
+#include "mozilla/Assertions.h"
+#include "mozilla/Attributes.h"
+#include "mozilla/Likely.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Span.h"
 
-#include "ds/LifoAlloc.h"
-#include "jit/Bailouts.h"
+#include <stddef.h>
+#include <stdint.h>
+
+#include "jsfriendapi.h"
+#include "jspubtd.h"
+
+#include "jit/IonTypes.h"
 #include "jit/JitCode.h"
+#include "jit/JitContext.h"
+#include "jit/JitOptions.h"
 #include "jit/shared/Assembler-shared.h"
+#include "js/AllocPolicy.h"
+#include "js/TypeDecls.h"
+#include "js/Vector.h"
 #include "util/TrailingArray.h"
-#include "vm/EnvironmentObject.h"
-#include "vm/JSContext.h"
-#include "vm/Realm.h"
+#include "vm/JSScript.h"
 #include "vm/TraceLogging.h"
 
 namespace js {
+
+class InterpreterFrame;
+class RunState;
+
 namespace jit {
 
-class ICEntry;
-class ICStub;
-class ReturnAddressEntry;
+class BaselineFrame;
+class ExceptionBailoutInfo;
+class IonCompileTask;
+class JitActivation;
+class JSJitFrameIter;
 
 // Base class for entries mapping a pc offset to a native code offset.
 class BasePCToNativeEntry {
@@ -95,9 +112,6 @@ class RetAddrEntry {
   enum class Kind : uint32_t {
     // An IC for a JOF_IC op.
     IC,
-
-    // A prologue IC.
-    PrologueIC,
 
     // A callVM for an op.
     CallVM,
@@ -262,8 +276,7 @@ class alignas(uintptr_t) BaselineScript final : public TrailingArray {
 
   template <typename T>
   mozilla::Span<T> makeSpan(Offset start, Offset end) {
-    return mozilla::MakeSpan(offsetToPointer<T>(start),
-                             numElements<T>(start, end));
+    return mozilla::Span{offsetToPointer<T>(start), numElements<T>(start, end)};
   }
 
   // We store the native code address corresponding to each bytecode offset in
@@ -384,7 +397,7 @@ class alignas(uintptr_t) BaselineScript final : public TrailingArray {
     return offsetof(BaselineScript, resumeEntriesOffset_);
   }
 
-  static void writeBarrierPre(Zone* zone, BaselineScript* script);
+  static void preWriteBarrier(Zone* zone, BaselineScript* script);
 
   bool hasPendingIonCompileTask() const { return !!pendingIonCompileTask_; }
 
@@ -447,10 +460,6 @@ struct alignas(uintptr_t) BaselineBailoutInfo {
   // The native code address to resume into.
   void* resumeAddr = nullptr;
 
-  // If non-null, we have to type monitor the top stack value for this pc (we
-  // resume right after it).
-  jsbytecode* monitorPC = nullptr;
-
   // The bytecode pc of try block and fault block.
   jsbytecode* tryPC = nullptr;
   jsbytecode* faultPC = nullptr;
@@ -473,7 +482,7 @@ struct alignas(uintptr_t) BaselineBailoutInfo {
 
 MOZ_MUST_USE bool BailoutIonToBaseline(
     JSContext* cx, JitActivation* activation, const JSJitFrameIter& iter,
-    bool invalidate, BaselineBailoutInfo** bailoutInfo,
+    BaselineBailoutInfo** bailoutInfo,
     const ExceptionBailoutInfo* exceptionInfo);
 
 MethodStatus BaselineCompile(JSContext* cx, JSScript* script,

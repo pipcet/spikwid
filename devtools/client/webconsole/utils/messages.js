@@ -7,9 +7,6 @@
 const Services = require("Services");
 const l10n = require("devtools/client/webconsole/utils/l10n");
 const {
-  getUrlDetails,
-} = require("devtools/client/netmonitor/src/utils/request-utils");
-const {
   ResourceWatcher,
 } = require("devtools/shared/resources/resource-watcher");
 
@@ -362,24 +359,7 @@ function transformCSSMessageResource(cssMessageResource) {
 }
 
 function transformNetworkEventResource(networkEventResource) {
-  return new NetworkEventMessage({
-    targetFront: networkEventResource.targetFront,
-    actor: networkEventResource.actor,
-    isXHR: networkEventResource.isXHR,
-    request: networkEventResource.request,
-    response: networkEventResource.response,
-    timeStamp: networkEventResource.timeStamp,
-    totalTime: networkEventResource.totalTime,
-    url: networkEventResource.request.url,
-    urlDetails: getUrlDetails(networkEventResource.request.url),
-    method: networkEventResource.request.method,
-    updates: networkEventResource.updates,
-    cause: networkEventResource.cause,
-    private: networkEventResource.private,
-    securityState: networkEventResource.securityState,
-    chromeContext: networkEventResource.chromeContext,
-    blockedReason: networkEventResource.blockedReason,
-  });
+  return new NetworkEventMessage(networkEventResource);
 }
 
 function transformEvaluationResultPacket(packet) {
@@ -557,6 +537,7 @@ function createWarningGroupMessage(id, type, firstMessage) {
 function getWarningGroupLabel(firstMessage) {
   if (
     isContentBlockingMessage(firstMessage) ||
+    isStorageIsolationMessage(firstMessage) ||
     isTrackingProtectionMessage(firstMessage)
   ) {
     return replaceURL(firstMessage.messageText, "<URL>");
@@ -628,6 +609,10 @@ function getWarningGroupType(message) {
     return MESSAGE_TYPE.CONTENT_BLOCKING_GROUP;
   }
 
+  if (isStorageIsolationMessage(message)) {
+    return MESSAGE_TYPE.STORAGE_ISOLATION_GROUP;
+  }
+
   if (isTrackingProtectionMessage(message)) {
     return MESSAGE_TYPE.TRACKING_PROTECTION_GROUP;
   }
@@ -663,6 +648,7 @@ function getParentWarningGroupMessageId(message) {
 function isWarningGroup(message) {
   return (
     message.type === MESSAGE_TYPE.CONTENT_BLOCKING_GROUP ||
+    message.type === MESSAGE_TYPE.STORAGE_ISOLATION_GROUP ||
     message.type === MESSAGE_TYPE.TRACKING_PROTECTION_GROUP ||
     message.type === MESSAGE_TYPE.COOKIE_SAMESITE_GROUP ||
     message.type === MESSAGE_TYPE.CORS_GROUP ||
@@ -681,9 +667,18 @@ function isContentBlockingMessage(message) {
     category == "cookieBlockedPermission" ||
     category == "cookieBlockedTracker" ||
     category == "cookieBlockedAll" ||
-    category == "cookieBlockedForeign" ||
-    category == "cookiePartitionedForeign"
+    category == "cookieBlockedForeign"
   );
+}
+
+/**
+ * Returns true if the message is a storage isolation message.
+ * @param {ConsoleMessage} message
+ * @returns {Boolean}
+ */
+function isStorageIsolationMessage(message) {
+  const { category } = message;
+  return category == "cookiePartitionedForeign";
 }
 
 /**
@@ -775,8 +770,8 @@ function getNaturalOrder(messageA, messageB) {
 function isMessageNetworkError(message) {
   return (
     message.source === MESSAGE_SOURCE.NETWORK &&
-    message?.response?.status &&
-    message.response.status.toString().match(/^[4,5]\d\d$/)
+    message?.status &&
+    message?.status.toString().match(/^[4,5]\d\d$/)
   );
 }
 

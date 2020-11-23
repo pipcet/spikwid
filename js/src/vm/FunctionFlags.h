@@ -85,9 +85,7 @@ class FunctionFlags {
     RESOLVED_NAME = 1 << 13,
     RESOLVED_LENGTH = 1 << 14,
 
-    // For a function used as an interpreted constructor, whether a 'new' type
-    // had constructor information cleared.
-    NEW_SCRIPT_CLEARED = 1 << 15,
+    // (1 << 15 is unused)
 
     // Shifted form of FunctionKinds.
     NORMAL_KIND = NormalFunction << FUNCTION_KIND_SHIFT,
@@ -116,7 +114,7 @@ class FunctionFlags {
     INTERPRETED_METHOD = BASESCRIPT | METHOD_KIND,
 
     // Flags that XDR ignores. See also: js::BaseScript::MutableFlags.
-    MUTABLE_FLAGS = RESOLVED_NAME | RESOLVED_LENGTH | NEW_SCRIPT_CLEARED,
+    MUTABLE_FLAGS = RESOLVED_NAME | RESOLVED_LENGTH,
 
     // Flags preserved when cloning a function. (Exception:
     // js::MakeDefaultConstructor produces default constructors for ECMAScript
@@ -172,6 +170,13 @@ class FunctionFlags {
   bool isNative() const { return !isInterpreted(); }
 
   bool isConstructor() const { return hasFlags(CONSTRUCTOR); }
+
+  bool isNonBuiltinConstructor() const {
+    // Note: keep this in sync with branchIfNotFunctionIsNonBuiltinCtor in
+    // MacroAssembler.cpp.
+    return hasFlags(BASESCRIPT) && hasFlags(CONSTRUCTOR) &&
+           !hasFlags(SELF_HOSTED);
+  }
 
   /* Possible attributes of a native function: */
   bool isAsmJSNative() const {
@@ -291,10 +296,6 @@ class FunctionFlags {
   void setResolvedLength() { setFlags(RESOLVED_LENGTH); }
   void setResolvedName() { setFlags(RESOLVED_NAME); }
 
-  // Mark a function as having its 'new' script information cleared.
-  bool wasNewScriptCleared() const { return hasFlags(NEW_SCRIPT_CLEARED); }
-  void setNewScriptCleared() { setFlags(NEW_SCRIPT_CLEARED); }
-
   void setInferredName() { setFlags(HAS_INFERRED_NAME); }
   void clearInferredName() { clearFlags(HAS_INFERRED_NAME); }
 
@@ -315,6 +316,18 @@ class FunctionFlags {
   void setIsExtended() { setFlags(EXTENDED); }
 
   bool isNativeConstructor() const { return hasFlags(NATIVE_CTOR); }
+
+  static uint16_t HasJitEntryFlags(bool isConstructing) {
+    uint16_t flags = BASESCRIPT | SELFHOSTLAZY;
+    if (!isConstructing) {
+      flags |= WASM_JIT_ENTRY;
+    }
+    return flags;
+  }
+
+  static FunctionFlags clearMutableflags(FunctionFlags flags) {
+    return FunctionFlags(flags.toRaw() & ~FunctionFlags::MUTABLE_FLAGS);
+  }
 };
 
 } /* namespace js */

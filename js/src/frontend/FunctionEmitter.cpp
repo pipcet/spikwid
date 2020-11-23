@@ -7,6 +7,7 @@
 #include "frontend/FunctionEmitter.h"
 
 #include "mozilla/Assertions.h"  // MOZ_ASSERT
+#include "mozilla/Unused.h"
 
 #include "builtin/ModuleObject.h"          // ModuleObject
 #include "frontend/BytecodeEmitter.h"      // BytecodeEmitter
@@ -35,7 +36,7 @@ FunctionEmitter::FunctionEmitter(BytecodeEmitter* bce, FunctionBox* funbox,
                                  IsHoisted isHoisted)
     : bce_(bce),
       funbox_(funbox),
-      name_(bce_->cx, funbox_->explicitName()),
+      name_(funbox_->explicitName()),
       syntaxKind_(syntaxKind),
       isHoisted_(isHoisted) {}
 
@@ -189,7 +190,7 @@ bool FunctionEmitter::emitAsmJSModule() {
 
 bool FunctionEmitter::emitFunction() {
   // Make the function object a literal in the outer script's pool.
-  uint32_t index;
+  GCThingIndex index;
   if (!bce_->perScriptData().gcThingList().append(funbox_, &index)) {
     return false;
   }
@@ -224,7 +225,7 @@ bool FunctionEmitter::emitFunction() {
   //                [stack]
 }
 
-bool FunctionEmitter::emitNonHoisted(unsigned index) {
+bool FunctionEmitter::emitNonHoisted(GCThingIndex index) {
   // Non-hoisted functions simply emit their respective op.
 
   //                [stack]
@@ -242,7 +243,7 @@ bool FunctionEmitter::emitNonHoisted(unsigned index) {
 
   if (syntaxKind_ == FunctionSyntaxKind::DerivedClassConstructor) {
     //              [stack] PROTO
-    if (!bce_->emitIndexOp(JSOp::FunWithProto, index)) {
+    if (!bce_->emitGCIndexOp(JSOp::FunWithProto, index)) {
       //            [stack] FUN
       return false;
     }
@@ -253,7 +254,7 @@ bool FunctionEmitter::emitNonHoisted(unsigned index) {
   // constructor. Emit the single instruction (without location info).
   JSOp op = syntaxKind_ == FunctionSyntaxKind::Arrow ? JSOp::LambdaArrow
                                                      : JSOp::Lambda;
-  if (!bce_->emitIndexOp(op, index)) {
+  if (!bce_->emitGCIndexOp(op, index)) {
     //              [stack] FUN
     return false;
   }
@@ -261,7 +262,7 @@ bool FunctionEmitter::emitNonHoisted(unsigned index) {
   return true;
 }
 
-bool FunctionEmitter::emitHoisted(unsigned index) {
+bool FunctionEmitter::emitHoisted(GCThingIndex index) {
   MOZ_ASSERT(syntaxKind_ == FunctionSyntaxKind::Statement);
 
   //                [stack]
@@ -275,7 +276,7 @@ bool FunctionEmitter::emitHoisted(unsigned index) {
     return false;
   }
 
-  if (!bce_->emitIndexOp(JSOp::Lambda, index)) {
+  if (!bce_->emitGCIndexOp(JSOp::Lambda, index)) {
     //              [stack] FUN
     return false;
   }
@@ -293,7 +294,7 @@ bool FunctionEmitter::emitHoisted(unsigned index) {
   return true;
 }
 
-bool FunctionEmitter::emitTopLevelFunction(unsigned index) {
+bool FunctionEmitter::emitTopLevelFunction(GCThingIndex index) {
   //                [stack]
 
   if (bce_->sc->isModuleContext()) {
@@ -307,14 +308,11 @@ bool FunctionEmitter::emitTopLevelFunction(unsigned index) {
   MOZ_ASSERT(syntaxKind_ == FunctionSyntaxKind::Statement);
   MOZ_ASSERT(bce_->inPrologue());
 
-  if (!bce_->emitIndexOp(JSOp::Lambda, index)) {
-    //              [stack] FUN
-    return false;
-  }
-  if (!bce_->emit1(JSOp::DefFun)) {
-    //              [stack]
-    return false;
-  }
+  // NOTE: The `index` is not directly stored as an opcode, but we collect the
+  // range of indices in `BytecodeEmitter::emitDeclarationInstantiation` instead
+  // of discrete indices.
+  mozilla::Unused << index;
+
   return true;
 }
 
@@ -439,7 +437,7 @@ bool FunctionScriptEmitter::prepareForBody() {
 
   if (funbox_->isClassConstructor()) {
     if (!funbox_->isDerivedClassConstructor()) {
-      if (!bce_->emitInitializeInstanceFields()) {
+      if (!bce_->emitInitializeInstanceMembers()) {
         //          [stack]
         return false;
       }
@@ -515,8 +513,9 @@ bool FunctionScriptEmitter::emitExtraBodyVarScope() {
   //
   //   function f(x, y = 42) { var y; }
   //
-  JS::Rooted<JSAtom*> name(bce_->cx);
-  for (BindingIter bi(*funbox_->functionScopeBindings(), true); bi; bi++) {
+  const ParserAtom* name = nullptr;
+  for (ParserBindingIter bi(*funbox_->functionScopeBindings(), true); bi;
+       bi++) {
     name = bi.name();
 
     // There may not be a var binding of the same name.
@@ -698,7 +697,7 @@ bool FunctionScriptEmitter::emitEndBody() {
 bool FunctionScriptEmitter::intoStencil() {
   MOZ_ASSERT(state_ == State::EndBody);
 
-  if (!bce_->intoScriptStencil(funbox_->functionStencil().address())) {
+  if (!bce_->intoScriptStencil(&funbox_->functionStencil())) {
     return false;
   }
 
@@ -715,7 +714,7 @@ FunctionParamsEmitter::FunctionParamsEmitter(BytecodeEmitter* bce,
       funbox_(funbox),
       functionEmitterScope_(bce_->innermostEmitterScope()) {}
 
-bool FunctionParamsEmitter::emitSimple(JS::Handle<JSAtom*> paramName) {
+bool FunctionParamsEmitter::emitSimple(const ParserAtom* paramName) {
   MOZ_ASSERT(state_ == State::Start);
 
   //                [stack]
@@ -752,7 +751,7 @@ bool FunctionParamsEmitter::prepareForDefault() {
   return true;
 }
 
-bool FunctionParamsEmitter::emitDefaultEnd(JS::Handle<JSAtom*> paramName) {
+bool FunctionParamsEmitter::emitDefaultEnd(const ParserAtom* paramName) {
   MOZ_ASSERT(state_ == State::Default);
 
   //                [stack] DEFAULT
@@ -858,7 +857,7 @@ bool FunctionParamsEmitter::emitDestructuringDefaultEnd() {
   return true;
 }
 
-bool FunctionParamsEmitter::emitRest(JS::Handle<JSAtom*> paramName) {
+bool FunctionParamsEmitter::emitRest(const ParserAtom* paramName) {
   MOZ_ASSERT(state_ == State::Start);
 
   //                [stack]
@@ -949,7 +948,7 @@ bool FunctionParamsEmitter::emitRestArray() {
   return true;
 }
 
-bool FunctionParamsEmitter::emitAssignment(JS::Handle<JSAtom*> paramName) {
+bool FunctionParamsEmitter::emitAssignment(const ParserAtom* paramName) {
   //                [stack] ARG
 
   NameLocation paramLoc =

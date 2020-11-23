@@ -12,15 +12,14 @@
 #include "jit/MIRGenerator.h"
 
 #include "js/Utility.h"
+#include "vm/HelperThreadTask.h"
 
 namespace js {
-
-class CompilerConstraintList;
-
 namespace jit {
 
 class CodeGenerator;
 class MRootList;
+class WarpSnapshot;
 
 // IonCompileTask represents a single off-thread Ion compilation task.
 class IonCompileTask final : public HelperThreadTask,
@@ -33,7 +32,6 @@ class IonCompileTask final : public HelperThreadTask,
   // performed by FinishOffThreadTask().
   CodeGenerator* backgroundCodegen_ = nullptr;
 
-  CompilerConstraintList* constraints_ = nullptr;
   MRootList* rootList_ = nullptr;
   WarpSnapshot* snapshot_ = nullptr;
 
@@ -43,14 +41,12 @@ class IonCompileTask final : public HelperThreadTask,
 
  public:
   explicit IonCompileTask(MIRGenerator& mirGen, bool scriptHasIonScript,
-                          CompilerConstraintList* constraints,
                           WarpSnapshot* snapshot);
 
   JSScript* script() { return mirGen_.outerInfo().script(); }
   MIRGenerator& mirGen() { return mirGen_; }
   TempAllocator& alloc() { return mirGen_.alloc(); }
   bool scriptHasIonScript() const { return scriptHasIonScript_; }
-  CompilerConstraintList* constraints() { return constraints_; }
   WarpSnapshot* snapshot() { return snapshot_; }
 
   size_t sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf);
@@ -65,10 +61,21 @@ class IonCompileTask final : public HelperThreadTask,
     backgroundCodegen_ = codegen;
   }
 
-  void runTaskLocked(AutoLockHelperThreadState& locked) override;
-
   ThreadType threadType() override { return THREAD_TYPE_ION; }
   void runTask();
+  void runHelperThreadTask(AutoLockHelperThreadState& locked) override;
+};
+
+class IonFreeTask : public HelperThreadTask {
+ public:
+  explicit IonFreeTask(IonCompileTask* task) : task_(task) {}
+  IonCompileTask* compileTask() { return task_; }
+
+  ThreadType threadType() override { return THREAD_TYPE_ION_FREE; }
+  void runHelperThreadTask(AutoLockHelperThreadState& locked) override;
+
+ private:
+  IonCompileTask* task_;
 };
 
 void AttachFinishedCompilations(JSContext* cx);

@@ -12,6 +12,7 @@
 #include "Principal.h"
 #include "jsapi.h"
 #include "jsfriendapi.h"
+#include "js/CompilationAndEvaluation.h"
 #include "mozilla/CycleCollectedJSContext.h"
 #include "mozilla/MozPromise.h"
 #include "mozilla/StorageAccess.h"
@@ -25,16 +26,19 @@
 #include "mozilla/dom/Fetch.h"
 #include "mozilla/dom/IDBFactory.h"
 #include "mozilla/dom/ImageBitmap.h"
+#include "mozilla/dom/MessagePortBinding.h"
 #include "mozilla/dom/Performance.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/PromiseWorkerProxy.h"
 #include "mozilla/dom/ScriptSettings.h"
+#include "mozilla/dom/SerializedStackHolder.h"
 #include "mozilla/dom/ServiceWorkerGlobalScopeBinding.h"
 #include "mozilla/dom/ServiceWorkerManager.h"
 #include "mozilla/dom/ServiceWorkerRegistration.h"
 #include "mozilla/dom/ServiceWorkerUtils.h"
 #include "mozilla/dom/SharedWorkerGlobalScopeBinding.h"
 #include "mozilla/dom/SimpleGlobalObject.h"
+#include "mozilla/dom/TimeoutHandler.h"
 #include "mozilla/dom/WorkerCommon.h"
 #include "mozilla/dom/WorkerDebuggerGlobalScopeBinding.h"
 #include "mozilla/dom/WorkerGlobalScopeBinding.h"
@@ -46,6 +50,8 @@
 #include "nsDebug.h"
 #include "nsISerialEventTarget.h"
 #include "nsJSUtils.h"
+#include "nsQueryObject.h"
+#include "ScriptLoader.h"
 #include "xpcpublic.h"
 
 #ifdef ANDROID
@@ -354,15 +360,15 @@ void WorkerGlobalScope::ImportScripts(JSContext* aCx,
     if (profiler_can_accept_markers()) {
       const uint32_t urlCount = aScriptURLs.Length();
       if (urlCount) {
-        urls = NS_ConvertUTF16toUTF8(aScriptURLs[0]);
+        CopyUTF16toUTF8(aScriptURLs[0], urls);
         for (uint32_t index = 1; index < urlCount; index++) {
           urls.AppendLiteral(",");
           urls.Append(NS_ConvertUTF16toUTF8(aScriptURLs[index]));
         }
       }
     }
-    AUTO_PROFILER_TEXT_MARKER_CAUSE("ImportScripts", urls, JS, Nothing(),
-                                    profiler_get_backtrace());
+    AUTO_PROFILER_MARKER_TEXT("ImportScripts", JS, MarkerStack::Capture(),
+                              urls);
 #endif
     workerinternals::Load(mWorkerPrivate, std::move(stack), aScriptURLs,
                           WorkerScript, aRv);
@@ -802,8 +808,7 @@ class ReportFetchListenerWarningRunnable final : public Runnable {
 
     ServiceWorkerManager::LocalizeAndReportToAllClients(
         mScope, "ServiceWorkerNoFetchHandler", nsTArray<nsString>{},
-        nsIScriptError::warningFlag, mSourceSpec, EmptyString(), mLine,
-        mColumn);
+        nsIScriptError::warningFlag, mSourceSpec, u""_ns, mLine, mColumn);
 
     return NS_OK;
   }

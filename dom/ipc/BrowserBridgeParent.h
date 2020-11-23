@@ -64,8 +64,7 @@ class BrowserBridgeParent : public PBrowserBridgeParent {
 
   mozilla::ipc::IPCResult RecvShow(const OwnerShowInfo&);
   mozilla::ipc::IPCResult RecvScrollbarPreferenceChanged(ScrollbarPreference);
-  mozilla::ipc::IPCResult RecvLoadURL(const nsCString& aUrl,
-                                      nsIPrincipal* aTriggeringPrincipal);
+  mozilla::ipc::IPCResult RecvLoadURL(nsDocShellLoadState* aLoadState);
   mozilla::ipc::IPCResult RecvResumeLoad(uint64_t aPendingSwitchID);
   mozilla::ipc::IPCResult RecvUpdateDimensions(const nsIntRect& aRect,
                                                const ScreenIntSize& aSize);
@@ -81,9 +80,10 @@ class BrowserBridgeParent : public PBrowserBridgeParent {
 
   mozilla::ipc::IPCResult RecvWillChangeProcess();
 
-  mozilla::ipc::IPCResult RecvActivate();
+  mozilla::ipc::IPCResult RecvActivate(uint64_t aActionId);
 
-  mozilla::ipc::IPCResult RecvDeactivate(const bool& aWindowLowering);
+  mozilla::ipc::IPCResult RecvDeactivate(const bool& aWindowLowering,
+                                         uint64_t aActionId);
 
   mozilla::ipc::IPCResult RecvSetIsUnderHiddenEmbedderElement(
       const bool& aIsUnderHiddenEmbedderElement);

@@ -4,10 +4,9 @@
 #[allow(dead_code)]
 use crate::ir::types::*;
 use crate::ir::Type;
-use crate::isa::aarch64::inst::OperandSize;
-use crate::machinst::*;
+use crate::isa::aarch64::inst::{OperandSize, ScalarSize};
 
-use regalloc::RealRegUniverse;
+use regalloc::{PrettyPrint, RealRegUniverse};
 
 use core::convert::TryFrom;
 use std::string::String;
@@ -328,8 +327,7 @@ impl Imm12 {
 }
 
 /// An immediate for logical instructions.
-#[derive(Clone, Debug)]
-#[cfg_attr(test, derive(PartialEq))]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ImmLogic {
     /// The actual value.
     value: u64,
@@ -551,6 +549,37 @@ impl ImmLogic {
         // For every ImmLogical immediate, the inverse can also be encoded.
         Self::maybe_from_u64(!self.value, self.size.to_ty()).unwrap()
     }
+
+    /// This provides a safe(ish) way to avoid the costs of `maybe_from_u64` when we want to
+    /// encode a constant that we know at compiler-build time.  It constructs an `ImmLogic` from
+    /// the fields `n`, `r`, `s` and `size`, but in a debug build, checks that `value_to_check`
+    /// corresponds to those four fields.  The intention is that, in a non-debug build, this
+    /// reduces to something small enough that it will be a candidate for inlining.
+    pub fn from_n_r_s(value_to_check: u64, n: bool, r: u8, s: u8, size: OperandSize) -> Self {
+        // Construct it from the components we got given.
+        let imml = Self {
+            value: value_to_check,
+            n,
+            r,
+            s,
+            size,
+        };
+
+        // In debug mode, check that `n`/`r`/`s` are correct, given `value` and `size`.
+        debug_assert!(match ImmLogic::maybe_from_u64(
+            value_to_check,
+            if size == OperandSize::Size64 {
+                I64
+            } else {
+                I32
+            }
+        ) {
+            None => false, // fail: `value` is unrepresentable
+            Some(imml_check) => imml_check == imml,
+        });
+
+        imml
+    }
 }
 
 /// An immediate for shift instructions.
@@ -638,7 +667,41 @@ impl MoveWideConst {
     }
 }
 
-impl ShowWithRRU for NZCV {
+/// Advanced SIMD modified immediate as used by MOVI/MVNI.
+#[derive(Clone, Copy, Debug)]
+pub struct ASIMDMovModImm {
+    imm: u8,
+    shift: u8,
+    shift_ones: bool,
+}
+
+impl ASIMDMovModImm {
+    pub fn maybe_from_u64(value: u64, size: ScalarSize) -> Option<ASIMDMovModImm> {
+        match size {
+            ScalarSize::Size8 => Some(ASIMDMovModImm {
+                imm: value as u8,
+                shift: 0,
+                shift_ones: false,
+            }),
+            _ => None,
+        }
+    }
+
+    /// Create a zero immediate of this format.
+    pub fn zero() -> Self {
+        ASIMDMovModImm {
+            imm: 0,
+            shift: 0,
+            shift_ones: false,
+        }
+    }
+
+    pub fn value(&self) -> (u8, u32, bool) {
+        (self.imm, self.shift as u32, self.shift_ones)
+    }
+}
+
+impl PrettyPrint for NZCV {
     fn show_rru(&self, _mb_rru: Option<&RealRegUniverse>) -> String {
         let fmt = |c: char, v| if v { c.to_ascii_uppercase() } else { c };
         format!(
@@ -651,13 +714,13 @@ impl ShowWithRRU for NZCV {
     }
 }
 
-impl ShowWithRRU for UImm5 {
+impl PrettyPrint for UImm5 {
     fn show_rru(&self, _mb_rru: Option<&RealRegUniverse>) -> String {
         format!("#{}", self.value)
     }
 }
 
-impl ShowWithRRU for Imm12 {
+impl PrettyPrint for Imm12 {
     fn show_rru(&self, _mb_rru: Option<&RealRegUniverse>) -> String {
         let shift = if self.shift12 { 12 } else { 0 };
         let value = u32::from(self.bits) << shift;
@@ -665,54 +728,65 @@ impl ShowWithRRU for Imm12 {
     }
 }
 
-impl ShowWithRRU for SImm7Scaled {
+impl PrettyPrint for SImm7Scaled {
     fn show_rru(&self, _mb_rru: Option<&RealRegUniverse>) -> String {
         format!("#{}", self.value)
     }
 }
 
-impl ShowWithRRU for FPULeftShiftImm {
+impl PrettyPrint for FPULeftShiftImm {
     fn show_rru(&self, _mb_rru: Option<&RealRegUniverse>) -> String {
         format!("#{}", self.amount)
     }
 }
 
-impl ShowWithRRU for FPURightShiftImm {
+impl PrettyPrint for FPURightShiftImm {
     fn show_rru(&self, _mb_rru: Option<&RealRegUniverse>) -> String {
         format!("#{}", self.amount)
     }
 }
 
-impl ShowWithRRU for SImm9 {
+impl PrettyPrint for SImm9 {
     fn show_rru(&self, _mb_rru: Option<&RealRegUniverse>) -> String {
         format!("#{}", self.value)
     }
 }
 
-impl ShowWithRRU for UImm12Scaled {
+impl PrettyPrint for UImm12Scaled {
     fn show_rru(&self, _mb_rru: Option<&RealRegUniverse>) -> String {
         format!("#{}", self.value)
     }
 }
 
-impl ShowWithRRU for ImmLogic {
+impl PrettyPrint for ImmLogic {
     fn show_rru(&self, _mb_rru: Option<&RealRegUniverse>) -> String {
         format!("#{}", self.value())
     }
 }
 
-impl ShowWithRRU for ImmShift {
+impl PrettyPrint for ImmShift {
     fn show_rru(&self, _mb_rru: Option<&RealRegUniverse>) -> String {
         format!("#{}", self.imm)
     }
 }
 
-impl ShowWithRRU for MoveWideConst {
+impl PrettyPrint for MoveWideConst {
     fn show_rru(&self, _mb_rru: Option<&RealRegUniverse>) -> String {
         if self.shift == 0 {
             format!("#{}", self.bits)
         } else {
             format!("#{}, LSL #{}", self.bits, self.shift * 16)
+        }
+    }
+}
+
+impl PrettyPrint for ASIMDMovModImm {
+    fn show_rru(&self, _mb_rru: Option<&RealRegUniverse>) -> String {
+        if self.shift == 0 {
+            format!("#{}", self.imm)
+        } else {
+            let shift_type = if self.shift_ones { "MSL" } else { "LSL" };
+            format!("#{}, {} #{}", self.imm, shift_type, self.shift)
         }
     }
 }

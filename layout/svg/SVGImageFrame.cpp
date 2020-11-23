@@ -468,13 +468,7 @@ bool SVGImageFrame::CreateWebRenderCommands(
     return true;
   }
 
-  uint32_t flags = imgIContainer::FLAG_ASYNC_NOTIFY;
-  if (aDisplayListBuilder->ShouldSyncDecodeImages()) {
-    flags |= imgIContainer::FLAG_SYNC_DECODE;
-  }
-  if (aDisplayListBuilder->IsPaintingToWindow()) {
-    flags |= imgIContainer::FLAG_HIGH_QUALITY_SCALING;
-  }
+  uint32_t flags = aDisplayListBuilder->GetImageDecodeFlags();
 
   // Compute bounds of the image
   nscoord appUnitsPerDevPx = PresContext()->AppUnitsPerDevPixel();
@@ -736,7 +730,7 @@ void SVGImageFrame::ReflowSVG() {
   }
 
   nsRect overflow = nsRect(nsPoint(0, 0), mRect.Size());
-  nsOverflowAreas overflowAreas(overflow, overflow);
+  OverflowAreas overflowAreas(overflow, overflow);
   FinishAndStoreOverflow(overflowAreas, mRect.Size());
 
   RemoveStateBits(NS_FRAME_FIRST_REFLOW | NS_FRAME_IS_DIRTY |

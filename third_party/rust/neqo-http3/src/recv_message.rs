@@ -7,9 +7,8 @@
 use crate::hframe::{HFrame, HFrameReader};
 use crate::push_controller::PushController;
 use crate::qlog;
-use crate::RecvMessageEvents;
-use crate::RecvStream;
 use crate::{Error, Header, Res};
+use crate::{RecvMessageEvents, RecvStream, ResetType};
 
 use neqo_common::{qdebug, qinfo, qtrace};
 use neqo_qpack::decoder::QPackDecoder;
@@ -20,6 +19,19 @@ use std::collections::VecDeque;
 use std::convert::TryFrom;
 use std::fmt::Debug;
 use std::rc::Rc;
+
+const PSEUDO_HEADER_STATUS: u8 = 0x1;
+const PSEUDO_HEADER_METHOD: u8 = 0x2;
+const PSEUDO_HEADER_SCHEME: u8 = 0x4;
+const PSEUDO_HEADER_AUTHORITY: u8 = 0x8;
+const PSEUDO_HEADER_PATH: u8 = 0x10;
+const REGULAR_HEADER: u8 = 0x80;
+
+#[derive(Debug)]
+pub enum MessageType {
+    Request,
+    Response,
+}
 
 /*
  * Response stream state:
@@ -57,6 +69,7 @@ struct PushInfo {
 #[derive(Debug)]
 pub(crate) struct RecvMessage {
     state: RecvMessageState,
+    message_type: MessageType,
     conn_events: Box<dyn RecvMessageEvents>,
     push_handler: Option<Rc<RefCell<PushController>>>,
     stream_id: u64,
@@ -71,6 +84,7 @@ impl ::std::fmt::Display for RecvMessage {
 
 impl RecvMessage {
     pub fn new(
+        message_type: MessageType,
         stream_id: u64,
         conn_events: Box<dyn RecvMessageEvents>,
         push_handler: Option<Rc<RefCell<PushController>>>,
@@ -79,6 +93,7 @@ impl RecvMessage {
             state: RecvMessageState::WaitingForResponseHeaders {
                 frame_reader: HFrameReader::new(),
             },
+            message_type,
             conn_events,
             push_handler,
             stream_id,
@@ -86,16 +101,11 @@ impl RecvMessage {
         }
     }
 
-    fn handle_headers_frame(
-        &mut self,
-        header_block: Vec<u8>,
-        fin: bool,
-        decoder: &mut QPackDecoder,
-    ) -> Res<()> {
+    fn handle_headers_frame(&mut self, header_block: Vec<u8>, fin: bool) -> Res<()> {
         match self.state {
             RecvMessageState::WaitingForResponseHeaders {..} => {
                 if header_block.is_empty() {
-                    self.add_headers(None, fin, decoder);
+                    return Err(Error::HttpGeneralProtocolStream);
                 } else {
                     self.state = RecvMessageState::DecodingHeaders { header_block, fin };
                 }
@@ -132,43 +142,59 @@ impl RecvMessage {
         Ok(())
     }
 
-    fn add_headers(&mut self, headers: Option<Vec<Header>>, fin: bool, decoder: &mut QPackDecoder) {
+    fn add_headers(
+        &mut self,
+        headers: Vec<Header>,
+        fin: bool,
+        decoder: &mut QPackDecoder,
+    ) -> Res<()> {
+        let interim = self.is_interim(&headers)?;
+        let _valid = self.headers_valid(&headers)?;
+        if fin && interim {
+            return Err(Error::HttpGeneralProtocolStream);
+        }
+
+        self.conn_events
+            .header_ready(self.stream_id, headers, interim, fin);
+
         if fin {
-            self.conn_events.header_ready(self.stream_id, headers, true);
             self.set_closed(decoder);
         } else {
-            self.conn_events
-                .header_ready(self.stream_id, headers, false);
-            self.state = RecvMessageState::WaitingForData {
-                frame_reader: HFrameReader::new(),
+            self.state = if interim {
+                RecvMessageState::WaitingForResponseHeaders {
+                    frame_reader: HFrameReader::new(),
+                }
+            } else {
+                RecvMessageState::WaitingForData {
+                    frame_reader: HFrameReader::new(),
+                }
             };
         }
+        Ok(())
     }
 
-    fn set_state_to_close_pending(&mut self, decoder: &mut QPackDecoder) {
+    fn set_state_to_close_pending(&mut self, post_readable_event: bool) -> Res<()> {
         // Stream has received fin. Depending on headers state set header_ready
         // or data_readable event so that app can pick up the fin.
-        qtrace!(
-            [self],
-            "set_state_to_close_pending:  state={:?}",
-            self.state
-        );
+        qtrace!([self], "set_state_to_close_pending: state={:?}", self.state);
 
         match self.state {
             RecvMessageState::WaitingForResponseHeaders { .. } => {
-                self.conn_events.header_ready(self.stream_id, None, true);
-                self.set_closed(decoder);
+                return Err(Error::HttpGeneralProtocolStream);
             }
             RecvMessageState::ReadingData { .. } => {}
             RecvMessageState::WaitingForData { .. }
             | RecvMessageState::WaitingForFinAfterTrailers { .. } => {
-                self.conn_events.data_readable(self.stream_id)
+                if post_readable_event {
+                    self.conn_events.data_readable(self.stream_id)
+                }
             }
             _ => unreachable!("Closing an already closed transaction."),
         }
         if !matches!(self.state, RecvMessageState::Closed) {
             self.state = RecvMessageState::ClosePending;
         }
+        Ok(())
     }
 
     fn handle_push_promise(
@@ -217,20 +243,20 @@ impl RecvMessage {
                 | RecvMessageState::WaitingForFinAfterTrailers { frame_reader } => {
                     match frame_reader.receive(conn, self.stream_id)? {
                         (None, true) => {
-                            self.set_state_to_close_pending(decoder);
-                            break Ok(());
+                            break self.set_state_to_close_pending(post_readable_event);
                         }
                         (None, false) => break Ok(()),
                         (Some(frame), fin) => {
                             qinfo!(
                                 [self],
-                                "A new frame has been received: {:?}; state={:?}",
+                                "A new frame has been received: {:?}; state={:?} fin={}",
                                 frame,
-                                self.state
+                                self.state,
+                                fin,
                             );
                             match frame {
                                 HFrame::Headers { header_block } => {
-                                    self.handle_headers_frame(header_block, fin, decoder)?
+                                    self.handle_headers_frame(header_block, fin)?
                                 }
                                 HFrame::Data { len } => self.handle_data_frame(len, fin)?,
                                 HFrame::PushPromise {
@@ -243,8 +269,7 @@ impl RecvMessage {
                                 break Ok(());
                             }
                             if fin && !matches!(self.state, RecvMessageState::DecodingHeaders{..}) {
-                                self.set_state_to_close_pending(decoder);
-                                break Ok(());
+                                break self.set_state_to_close_pending(post_readable_event);
                             }
                         }
                     };
@@ -266,8 +291,8 @@ impl RecvMessage {
                     if let Some(headers) =
                         decoder.decode_header_block(header_block, self.stream_id)?
                     {
-                        self.add_headers(Some(headers), done, decoder);
-                        if done {
+                        self.add_headers(headers, done, decoder)?;
+                        if matches!(self.state, RecvMessageState::Closed) {
                             break Ok(());
                         }
                     } else {
@@ -293,6 +318,109 @@ impl RecvMessage {
             decoder.cancel_stream(self.stream_id);
         }
         self.state = RecvMessageState::Closed;
+    }
+
+    fn closing(&self) -> bool {
+        matches!(
+            self.state,
+            RecvMessageState::ClosePending | RecvMessageState::Closed
+        )
+    }
+
+    fn is_interim(&self, headers: &[Header]) -> Res<bool> {
+        match self.message_type {
+            MessageType::Response => {
+                let status = headers.iter().find(|(name, _value)| name == ":status");
+                if let Some((_name, value)) = status {
+                    let status_code = value.parse::<i32>().map_err(|_| Error::InvalidHeader)?;
+                    Ok(status_code >= 100 && status_code < 200)
+                } else {
+                    Err(Error::InvalidHeader)
+                }
+            }
+            MessageType::Request => Ok(false),
+        }
+    }
+
+    fn track_pseudo(name: &str, state: &mut u8, message_type: &MessageType) -> Res<bool> {
+        let (pseudo, bit) = if name.starts_with(':') {
+            if *state & REGULAR_HEADER != 0 {
+                return Err(Error::InvalidHeader);
+            }
+            let bit = match message_type {
+                MessageType::Response => match name {
+                    ":status" => PSEUDO_HEADER_STATUS,
+                    _ => return Err(Error::InvalidHeader),
+                },
+                MessageType::Request => match name {
+                    ":method" => PSEUDO_HEADER_METHOD,
+                    ":scheme" => PSEUDO_HEADER_SCHEME,
+                    ":authority" => PSEUDO_HEADER_AUTHORITY,
+                    ":path" => PSEUDO_HEADER_PATH,
+                    _ => return Err(Error::InvalidHeader),
+                },
+            };
+            (true, bit)
+        } else {
+            (false, REGULAR_HEADER)
+        };
+
+        if *state & bit == 0 || !pseudo {
+            *state |= bit;
+            Ok(pseudo)
+        } else {
+            Err(Error::InvalidHeader)
+        }
+    }
+
+    fn headers_valid(&self, headers: &[Header]) -> Res<bool> {
+        let mut method_value: Option<&String> = None;
+        let mut pseudo_state = 0;
+        for header in headers {
+            let is_pseudo = Self::track_pseudo(&header.0, &mut pseudo_state, &self.message_type)?;
+
+            let mut bytes = header.0.bytes();
+            if is_pseudo {
+                if header.0 == ":method" {
+                    method_value = Some(&header.1);
+                }
+                let _ = bytes.next();
+            }
+
+            if bytes.any(|b| matches!(b, 0 | 0x10 | 0x13 | 0x3a | 0x41..=0x5a)) {
+                return Err(Error::InvalidHeader); // illegal characters.
+            }
+
+            if matches!(
+                header.0.as_str(),
+                "connection"
+                    | "host"
+                    | "keep-alive"
+                    | "proxy-connection"
+                    | "te"
+                    | "transfer-encoding"
+                    | "upgrade"
+            ) {
+                return Err(Error::InvalidHeader);
+            }
+        }
+        // Clear the regular header bit, since we only check pseudo headers below.
+        pseudo_state &= !REGULAR_HEADER;
+        let pseudo_header_mask = match self.message_type {
+            MessageType::Response => PSEUDO_HEADER_STATUS,
+            MessageType::Request => {
+                if method_value == Some(&"CONNECT".to_string()) {
+                    PSEUDO_HEADER_METHOD | PSEUDO_HEADER_AUTHORITY
+                } else {
+                    PSEUDO_HEADER_METHOD | PSEUDO_HEADER_SCHEME | PSEUDO_HEADER_PATH
+                }
+            }
+        };
+        if pseudo_state & pseudo_header_mask != pseudo_header_mask {
+            return Err(Error::InvalidHeader);
+        }
+
+        Ok(true)
     }
 }
 
@@ -323,8 +451,19 @@ impl RecvStream for RecvMessage {
         matches!(self.state, RecvMessageState::Closed)
     }
 
-    fn stream_reset(&self, app_error: AppError) {
-        self.conn_events.reset(self.stream_id, app_error);
+    fn stream_reset(&self, app_error: AppError, decoder: &mut QPackDecoder, reset_type: ResetType) {
+        if !self.closing() || !self.blocked_push_promise.is_empty() {
+            decoder.cancel_stream(self.stream_id);
+        }
+        match reset_type {
+            ResetType::Local => {
+                self.conn_events.reset(self.stream_id, app_error, true);
+            }
+            ResetType::Remote => {
+                self.conn_events.reset(self.stream_id, app_error, false);
+            }
+            ResetType::App => {}
+        }
     }
 
     fn read_data(

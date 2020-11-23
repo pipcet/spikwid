@@ -36,6 +36,12 @@
 
 using namespace mozilla;
 
+// To make one of these prefs toggleable from a reftest add a user
+// pref in testing/profiles/reftest/user.js. For example, to make
+// ui.useAccessibilityTheme toggleable, add:
+//
+// user_pref("ui.useAccessibilityTheme", 0);
+//
 nsLookAndFeelIntPref nsXPLookAndFeel::sIntPrefs[] = {
     {"ui.caretBlinkTime", IntID::CaretBlinkTime, false, 0},
     {"ui.caretWidth", IntID::CaretWidth, false, 0},
@@ -92,6 +98,7 @@ nsLookAndFeelIntPref nsXPLookAndFeel::sIntPrefs[] = {
      6 /* fine and hover-capable pointer, i.e. mouse-type */},
     {"ui.allPointerCapabilities", IntID::AllPointerCapabilities, false,
      6 /* fine and hover-capable pointer, i.e. mouse-type */},
+    {"ui.scrollArrowStyle", IntID::ScrollArrowStyle, false, 0},
 };
 
 nsLookAndFeelFloatPref nsXPLookAndFeel::sFloatPrefs[] = {
@@ -140,6 +147,12 @@ const char nsXPLookAndFeel::sColorPrefs[][41] = {
     "ui.IMESelectedConvertedTextForeground",
     "ui.IMESelectedConvertedTextUnderline",
     "ui.SpellCheckerUnderline",
+    "ui.themedScrollbar",
+    "ui.themedScrollbarInactive",
+    "ui.themedScrollbarThumb",
+    "ui.themedScrollbarThumbHover",
+    "ui.themedScrollbarThumbActive",
+    "ui.themedScrollbarThumbInactive",
     "ui.activeborder",
     "ui.activecaption",
     "ui.appworkspace",
@@ -282,7 +295,8 @@ void nsXPLookAndFeel::IntPrefChanged(nsLookAndFeelIntPref* data) {
 #endif
   }
 
-  NotifyChangedAllWindows();
+  // Int prefs can't change our system colors or fonts.
+  NotifyChangedAllWindows(widget::ThemeChangeKind::MediaQueriesOnly);
 }
 
 // static
@@ -308,7 +322,8 @@ void nsXPLookAndFeel::FloatPrefChanged(nsLookAndFeelFloatPref* data) {
 #endif
   }
 
-  NotifyChangedAllWindows();
+  // Float prefs can't change our system colors or fonts.
+  NotifyChangedAllWindows(widget::ThemeChangeKind::MediaQueriesOnly);
 }
 
 // static
@@ -342,7 +357,8 @@ void nsXPLookAndFeel::ColorPrefChanged(unsigned int index,
 #endif
   }
 
-  NotifyChangedAllWindows();
+  // Color prefs affect style, because they by definition change system colors.
+  NotifyChangedAllWindows(widget::ThemeChangeKind::Style);
 }
 
 void nsXPLookAndFeel::InitFromPref(nsLookAndFeelIntPref* aPref) {
@@ -449,10 +465,10 @@ void nsXPLookAndFeel::Init() {
   if (XRE_IsContentProcess()) {
     mozilla::dom::ContentChild* cc = mozilla::dom::ContentChild::GetSingleton();
 
-    LookAndFeel::SetIntCache(cc->LookAndFeelCache());
+    LookAndFeel::SetCache(cc->BorrowLookAndFeelCache());
     // This is only ever used once during initialization, and can be cleared
     // now.
-    cc->LookAndFeelCache().Clear();
+    cc->BorrowLookAndFeelCache() = LookAndFeelCache{};
   }
 }
 
@@ -768,9 +784,9 @@ nscolor nsXPLookAndFeel::GetStandinForNativeColor(ColorID aID) {
 // otherwise we'll return NS_ERROR_NOT_AVAILABLE, in which case, the
 // platform-specific nsLookAndFeel should use its own values instead.
 //
-nsresult nsXPLookAndFeel::GetColorImpl(ColorID aID,
-                                       bool aUseStandinsForNativeColors,
-                                       nscolor& aResult) {
+nsresult nsXPLookAndFeel::GetColorValue(ColorID aID,
+                                        bool aUseStandinsForNativeColors,
+                                        nscolor& aResult) {
   if (!sInitialized) Init();
 
     // define DEBUG_SYSTEM_COLOR_USE if you want to debug system color
@@ -931,28 +947,8 @@ nsresult nsXPLookAndFeel::GetColorImpl(ColorID aID,
   return NS_ERROR_NOT_AVAILABLE;
 }
 
-nsresult nsXPLookAndFeel::GetIntImpl(IntID aID, int32_t& aResult) {
+nsresult nsXPLookAndFeel::GetIntValue(IntID aID, int32_t& aResult) {
   if (!sInitialized) Init();
-
-  // Set the default values for these prefs. but allow different platforms
-  // to override them in their nsLookAndFeel if desired.
-  switch (aID) {
-    case IntID::ScrollButtonLeftMouseButtonAction:
-      aResult = 0;
-      return NS_OK;
-    case IntID::ScrollButtonMiddleMouseButtonAction:
-      aResult = 3;
-      return NS_OK;
-    case IntID::ScrollButtonRightMouseButtonAction:
-      aResult = 3;
-      return NS_OK;
-    default:
-      /*
-       * The metrics above are hardcoded platform defaults. All the other
-       * metrics are stored in sIntPrefs and can be changed at runtime.
-       */
-      break;
-  }
 
   for (unsigned int i = 0; i < ArrayLength(sIntPrefs); ++i) {
     if (sIntPrefs[i].isSet && (sIntPrefs[i].id == aID)) {
@@ -961,10 +957,10 @@ nsresult nsXPLookAndFeel::GetIntImpl(IntID aID, int32_t& aResult) {
     }
   }
 
-  return NS_ERROR_NOT_AVAILABLE;
+  return NativeGetInt(aID, aResult);
 }
 
-nsresult nsXPLookAndFeel::GetFloatImpl(FloatID aID, float& aResult) {
+nsresult nsXPLookAndFeel::GetFloatValue(FloatID aID, float& aResult) {
   if (!sInitialized) Init();
 
   for (unsigned int i = 0; i < ArrayLength(sFloatPrefs); ++i) {
@@ -974,7 +970,7 @@ nsresult nsXPLookAndFeel::GetFloatImpl(FloatID aID, float& aResult) {
     }
   }
 
-  return NS_ERROR_NOT_AVAILABLE;
+  return NativeGetFloat(aID, aResult);
 }
 
 void nsXPLookAndFeel::RefreshImpl() {
@@ -993,13 +989,17 @@ void nsXPLookAndFeel::RefreshImpl() {
   }
 }
 
-nsTArray<LookAndFeelInt> nsXPLookAndFeel::GetIntCacheImpl() {
-  return nsTArray<LookAndFeelInt>();
+widget::LookAndFeelCache nsXPLookAndFeel::GetCacheImpl() {
+  return LookAndFeelCache{};
 }
 
 static bool sRecordedLookAndFeelTelemetry = false;
 
 void nsXPLookAndFeel::RecordTelemetry() {
+  if (!XRE_IsParentProcess()) {
+    return;
+  }
+
   if (sRecordedLookAndFeelTelemetry) {
     return;
   }
@@ -1009,42 +1009,45 @@ void nsXPLookAndFeel::RecordTelemetry() {
   int32_t i;
   Telemetry::ScalarSet(
       Telemetry::ScalarID::WIDGET_DARK_MODE,
-      NS_SUCCEEDED(GetIntImpl(IntID::SystemUsesDarkTheme, i)) && i != 0);
+      NS_SUCCEEDED(GetIntValue(IntID::SystemUsesDarkTheme, i)) && i != 0);
+
+  RecordLookAndFeelSpecificTelemetry();
 }
 
 namespace mozilla {
 
 // static
-void LookAndFeel::NotifyChangedAllWindows() {
+void LookAndFeel::NotifyChangedAllWindows(widget::ThemeChangeKind aKind) {
   if (nsCOMPtr<nsIObserverService> obs = services::GetObserverService()) {
-    obs->NotifyObservers(nullptr, "look-and-feel-changed", nullptr);
+    obs->NotifyObservers(nullptr, "look-and-feel-changed",
+                         reinterpret_cast<char16_t*>(uintptr_t(aKind)));
   }
 }
 
 // static
 nsresult LookAndFeel::GetColor(ColorID aID, nscolor* aResult) {
-  return nsLookAndFeel::GetInstance()->GetColorImpl(aID, false, *aResult);
+  return nsLookAndFeel::GetInstance()->GetColorValue(aID, false, *aResult);
 }
 
 nsresult LookAndFeel::GetColor(ColorID aID, bool aUseStandinsForNativeColors,
                                nscolor* aResult) {
-  return nsLookAndFeel::GetInstance()->GetColorImpl(
+  return nsLookAndFeel::GetInstance()->GetColorValue(
       aID, aUseStandinsForNativeColors, *aResult);
 }
 
 // static
 nsresult LookAndFeel::GetInt(IntID aID, int32_t* aResult) {
-  return nsLookAndFeel::GetInstance()->GetIntImpl(aID, *aResult);
+  return nsLookAndFeel::GetInstance()->GetIntValue(aID, *aResult);
 }
 
 // static
 nsresult LookAndFeel::GetFloat(FloatID aID, float* aResult) {
-  return nsLookAndFeel::GetInstance()->GetFloatImpl(aID, *aResult);
+  return nsLookAndFeel::GetInstance()->GetFloatValue(aID, *aResult);
 }
 
 // static
 bool LookAndFeel::GetFont(FontID aID, nsString& aName, gfxFontStyle& aStyle) {
-  return nsLookAndFeel::GetInstance()->GetFontImpl(aID, aName, aStyle);
+  return nsLookAndFeel::GetInstance()->GetFontValue(aID, aName, aStyle);
 }
 
 // static
@@ -1076,14 +1079,13 @@ void LookAndFeel::Refresh() { nsLookAndFeel::GetInstance()->RefreshImpl(); }
 void LookAndFeel::NativeInit() { nsLookAndFeel::GetInstance()->NativeInit(); }
 
 // static
-nsTArray<LookAndFeelInt> LookAndFeel::GetIntCache() {
-  return nsLookAndFeel::GetInstance()->GetIntCacheImpl();
+widget::LookAndFeelCache LookAndFeel::GetCache() {
+  return nsLookAndFeel::GetInstance()->GetCacheImpl();
 }
 
 // static
-void LookAndFeel::SetIntCache(
-    const nsTArray<LookAndFeelInt>& aLookAndFeelIntCache) {
-  return nsLookAndFeel::GetInstance()->SetIntCacheImpl(aLookAndFeelIntCache);
+void LookAndFeel::SetCache(const widget::LookAndFeelCache& aCache) {
+  nsLookAndFeel::GetInstance()->SetCacheImpl(aCache);
 }
 
 }  // namespace mozilla

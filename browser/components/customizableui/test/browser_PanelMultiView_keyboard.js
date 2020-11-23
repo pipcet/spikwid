@@ -24,6 +24,7 @@ let gMainRadiogroup;
 let gMainTextbox;
 let gMainButton2;
 let gMainButton3;
+let gCheckbox;
 let gMainTabOrder;
 let gMainArrowOrder;
 let gSubView;
@@ -129,6 +130,9 @@ add_task(async function setup() {
   gMainButton3 = document.createXULElement("button");
   gMainButton3.id = "gMainButton3";
   gMainView.appendChild(gMainButton3);
+  gCheckbox = document.createXULElement("checkbox");
+  gCheckbox.id = "gCheckbox";
+  gMainView.appendChild(gCheckbox);
   gMainTabOrder = [
     gMainButton1,
     gMainMenulist,
@@ -136,8 +140,9 @@ add_task(async function setup() {
     gMainTextbox,
     gMainButton2,
     gMainButton3,
+    gCheckbox,
   ];
-  gMainArrowOrder = [gMainButton1, gMainButton2, gMainButton3];
+  gMainArrowOrder = [gMainButton1, gMainButton2, gMainButton3, gCheckbox];
 
   gSubView = document.createXULElement("panelview");
   gSubView.id = "testSubView";
@@ -456,10 +461,22 @@ add_task(async function testActivationMousedown() {
 async function testTabArrowsEmbeddedDoc(aView, aEmbedder) {
   await openPopup();
   await showSubView(aView);
+  let doc = aEmbedder.contentDocument;
+  if (doc.readyState != "complete" || doc.location.href != kEmbeddedDocUrl) {
+    info(`Embedded doc readyState ${doc.readyState}, location ${doc.location}`);
+    info("Waiting for load on embedder");
+    // Browsers don't fire load events, and iframes don't fire load events in
+    // typeChrome windows. We can handle both by using a capturing event
+    // listener to capture the load event from the child document.
+    await BrowserTestUtils.waitForEvent(aEmbedder, "load", true);
+    // The original doc might have been a temporary about:blank, so fetch it
+    // again.
+    doc = aEmbedder.contentDocument;
+  }
+  is(doc.location.href, kEmbeddedDocUrl, "Embedded doc has correct URl");
   let backButton = aView.querySelector(".subviewbutton-back");
   backButton.id = "docBack";
   await expectFocusAfterKey("Tab", backButton);
-  let doc = aEmbedder.contentDocument;
   // Documents don't have an id property, but expectFocusAfterKey wants one.
   doc.id = "doc";
   await expectFocusAfterKey("Tab", doc);

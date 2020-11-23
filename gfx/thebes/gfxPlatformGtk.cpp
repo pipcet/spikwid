@@ -71,6 +71,12 @@ using namespace mozilla::widget;
 using mozilla::dom::SystemFontListEntry;
 
 static FT_Library gPlatformFTLibrary = nullptr;
+static int32_t sDPI;
+
+static void screen_resolution_changed(GdkScreen* aScreen, GParamSpec* aPspec,
+                                      gpointer aClosure) {
+  sDPI = 0;
+}
 
 gfxPlatformGtk::gfxPlatformGtk() {
   if (!gfxPlatform::IsHeadless()) {
@@ -81,41 +87,34 @@ gfxPlatformGtk::gfxPlatformGtk() {
   mIsX11Display = gfxPlatform::IsHeadless()
                       ? false
                       : GDK_IS_X11_DISPLAY(gdk_display_get_default());
+  if (XRE_IsParentProcess()) {
 #ifdef MOZ_X11
-  if (mIsX11Display && XRE_IsParentProcess() &&
-      mozilla::Preferences::GetBool("gfx.xrender.enabled")) {
-    gfxVars::SetUseXRender(true);
-  }
+    if (mIsX11Display && mozilla::Preferences::GetBool("gfx.xrender.enabled")) {
+      gfxVars::SetUseXRender(true);
+    }
 #endif
+
+    if (IsWaylandDisplay() || (mIsX11Display && PR_GetEnv("MOZ_X11_EGL"))) {
+      gfxVars::SetUseEGL(true);
+    }
+  }
 
   InitBackendPrefs(GetBackendPrefs());
 
-#ifdef MOZ_X11
-  if (mIsX11Display) {
-    mCompositorDisplay = XOpenDisplay(nullptr);
-    MOZ_ASSERT(mCompositorDisplay, "Failed to create compositor display!");
-  } else {
-    mCompositorDisplay = nullptr;
-  }
-#endif  // MOZ_X11
-
 #ifdef MOZ_WAYLAND
   mUseWebGLDmabufBackend =
-      IsWaylandDisplay() && GetDMABufDevice()->IsDMABufWebGLEnabled();
+      gfxVars::UseEGL() && GetDMABufDevice()->IsDMABufWebGLEnabled();
 #endif
 
   gPlatformFTLibrary = Factory::NewFTLibrary();
   MOZ_RELEASE_ASSERT(gPlatformFTLibrary);
   Factory::SetFTLibrary(gPlatformFTLibrary);
+
+  g_signal_connect(gdk_screen_get_default(), "notify::resolution",
+                   G_CALLBACK(screen_resolution_changed), nullptr);
 }
 
 gfxPlatformGtk::~gfxPlatformGtk() {
-#ifdef MOZ_X11
-  if (mCompositorDisplay) {
-    XCloseDisplay(mCompositorDisplay);
-  }
-#endif  // MOZ_X11
-
   Factory::ReleaseFTLibrary(gPlatformFTLibrary);
   gPlatformFTLibrary = nullptr;
 }
@@ -216,17 +215,11 @@ static const char kFontWenQuanYiMicroHei[] = "WenQuanYi Micro Hei";
 static const char kFontNanumGothic[] = "NanumGothic";
 static const char kFontSymbola[] = "Symbola";
 
-void gfxPlatformGtk::GetCommonFallbackFonts(uint32_t aCh, uint32_t aNextCh,
-                                            Script aRunScript,
+void gfxPlatformGtk::GetCommonFallbackFonts(uint32_t aCh, Script aRunScript,
+                                            eFontPresentation aPresentation,
                                             nsTArray<const char*>& aFontList) {
-  EmojiPresentation emoji = GetEmojiPresentation(aCh);
-  if (emoji != EmojiPresentation::TextOnly) {
-    if (aNextCh == kVariationSelector16 ||
-        (aNextCh != kVariationSelector15 &&
-         emoji == EmojiPresentation::EmojiDefault)) {
-      // if char is followed by VS16, try for a color emoji glyph
-      aFontList.AppendElement(kFontTwemojiMozilla);
-    }
+  if (PrefersColor(aPresentation)) {
+    aFontList.AppendElement(kFontTwemojiMozilla);
   }
 
   aFontList.AppendElement(kFontDejaVuSerif);
@@ -261,22 +254,20 @@ gfxPlatformFontList* gfxPlatformGtk::CreatePlatformFontList() {
   return nullptr;
 }
 
-// FIXME(emilio, bug 1554850): This should be invalidated somehow, right now
-// requires a restart.
-static int32_t sDPI = 0;
-
 int32_t gfxPlatformGtk::GetFontScaleDPI() {
-  if (MOZ_UNLIKELY(!sDPI)) {
-    // Make sure init is run so we have a resolution
-    GdkScreen* screen = gdk_screen_get_default();
-    gtk_settings_get_for_screen(screen);
-    sDPI = int32_t(round(gdk_screen_get_resolution(screen)));
-    if (sDPI <= 0) {
-      // Fall back to something sane
-      sDPI = 96;
-    }
+  if (MOZ_LIKELY(sDPI != 0)) {
+    return sDPI;
   }
-  return sDPI;
+  GdkScreen* screen = gdk_screen_get_default();
+  // Ensure settings in config files are processed.
+  gtk_settings_get_for_screen(screen);
+  int32_t dpi = int32_t(round(gdk_screen_get_resolution(screen)));
+  if (dpi <= 0) {
+    // Fall back to something sane
+    dpi = 96;
+  }
+  sDPI = dpi;
+  return dpi;
 }
 
 double gfxPlatformGtk::GetFontScaleFactor() {
@@ -666,7 +657,8 @@ class GtkVsyncSource final : public VsyncSource {
         }
 
         lastVsync = TimeStamp::Now();
-        NotifyVsync(lastVsync);
+        TimeStamp outputTime = lastVsync + GetVsyncRate();
+        NotifyVsync(lastVsync, outputTime);
       }
     }
 
@@ -701,11 +693,20 @@ already_AddRefed<gfx::VsyncSource> gfxPlatformGtk::CreateHardwareVsyncSource() {
   }
 #  endif
 
-  // Only use GLX vsync when the OpenGL compositor is being used.
+  // Only use GLX vsync when the OpenGL compositor / WebRedner is being used.
   // The extra cost of initializing a GLX context while blocking the main
   // thread is not worth it when using basic composition.
+  //
+  // Don't call gl::sGLXLibrary.SupportsVideoSync() when EGL is used.
+  // NVIDIA drivers refuse to use EGL GL context when GLX was initialized first
+  // and fail silently.
   if (gfxConfig::IsEnabled(Feature::HW_COMPOSITING)) {
-    if (gl::sGLXLibrary.SupportsVideoSync()) {
+    bool useGlxVsync = false;
+    // Nvidia doesn't support GLX at the same time as EGL.
+    if (!gfxVars::UseEGL()) {
+      useGlxVsync = gl::sGLXLibrary.SupportsVideoSync();
+    }
+    if (useGlxVsync) {
       RefPtr<VsyncSource> vsyncSource = new GtkVsyncSource();
       VsyncSource::Display& display = vsyncSource->GetGlobalDisplay();
       if (!static_cast<GtkVsyncSource::GLXDisplay&>(display).Setup()) {
@@ -720,21 +721,4 @@ already_AddRefed<gfx::VsyncSource> gfxPlatformGtk::CreateHardwareVsyncSource() {
   return gfxPlatform::CreateHardwareVsyncSource();
 }
 
-#endif
-
-#ifdef MOZ_WAYLAND
-bool gfxPlatformGtk::UseDMABufTextures() {
-  return IsWaylandDisplay() && GetDMABufDevice()->IsDMABufTexturesEnabled();
-}
-bool gfxPlatformGtk::UseDMABufVideoTextures() {
-  return (GetDMABufDevice()->IsDMABufVideoTexturesEnabled() ||
-          StaticPrefs::media_ffmpeg_vaapi_enabled());
-}
-bool gfxPlatformGtk::UseHardwareVideoDecoding() {
-  return gfxPlatform::CanUseHardwareVideoDecoding() &&
-         StaticPrefs::media_ffmpeg_vaapi_enabled();
-}
-bool gfxPlatformGtk::UseDRMVAAPIDisplay() {
-  return IsX11Display() || GetDMABufDevice()->IsDRMVAAPIDisplayEnabled();
-}
 #endif

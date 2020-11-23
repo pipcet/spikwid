@@ -17,8 +17,10 @@ from mozperftest.utils import (
     install_package,
     build_test_list,
     get_multi_tasks_url,
+    get_revision_namespace_url,
     convert_day,
     load_class,
+    checkout_python_script,
 )
 from mozperftest.tests.support import temp_file, requests_content, EXAMPLE_TESTS_DIR
 
@@ -119,22 +121,31 @@ def test_convert_day():
     assert convert_day("yesterday") == yesterday.strftime("%Y.%m.%d")
 
 
+def test_revision_namespace_url():
+    route = "FakeBuildRoute"
+    day = "2020.06.08"
+    buildurl = get_revision_namespace_url(route, day=day)
+    assert day in buildurl and route in buildurl
+    assert buildurl.endswith(".revision")
+
+
 def test_multibuild_url():
     route = "FakeBuildRoute"
     day = "2020.06.08"
-    buildurl = get_multi_tasks_url(route, day=day)
-    assert day in buildurl and route in buildurl
+    revision = "deadbeef"
+    buildurl = get_multi_tasks_url(route, revision, day=day)
+    assert all(item in buildurl for item in (route, day, revision))
 
     with mock.patch("mozperftest.utils.date") as mockeddate:
         mockeddate.today.return_value = mockeddate
         mockeddate.strftime.return_value = "2020.07.09"
-        buildurl = get_multi_tasks_url(route, day="today")
+        buildurl = get_multi_tasks_url(route, revision, day="today")
         assert "2020.07.09" in buildurl and route in buildurl
 
         with mock.patch("mozperftest.utils.timedelta"):
             mockeddate.__sub__.return_value = mockeddate
             mockeddate.strftime.return_value = "2020.08.09"
-            buildurl = get_multi_tasks_url(route)
+            buildurl = get_multi_tasks_url(route, revision)
             assert "2020.08.09" in buildurl and route in buildurl
 
 
@@ -158,6 +169,28 @@ def test_load_class():
 
     klass = load_class("mozperftest.tests.test_utils:ImportMe")
     assert klass is ImportMe
+
+
+class _Venv:
+    python_path = sys.executable
+
+
+def test_checkout_python_script():
+    with silence() as captured:
+        assert checkout_python_script(_Venv(), "lib2to3", ["--help"])
+
+    stdout, stderr = captured
+    stdout.seek(0)
+    assert stdout.read() == "=> lib2to3 [OK]\n"
+
+
+def test_run_python_script_failed():
+    with silence() as captured:
+        assert not checkout_python_script(_Venv(), "nothing")
+
+    stdout, stderr = captured
+    stdout.seek(0)
+    assert stdout.read().endswith("[FAILED]\n")
 
 
 if __name__ == "__main__":

@@ -27,11 +27,8 @@ XPCOMUtils.defineLazyServiceGetter(
   "nsIPurgeTrackerService"
 );
 
-add_task(async function setup() {
-  Services.prefs.setIntPref(
-    "network.cookie.cookieBehavior",
-    Ci.nsICookieService.BEHAVIOR_REJECT_TRACKER_AND_PARTITION_FOREIGN
-  );
+async function setupTest(aCookieBehavior) {
+  Services.prefs.setIntPref("network.cookie.cookieBehavior", aCookieBehavior);
   Services.prefs.setBoolPref("privacy.purge_trackers.enabled", true);
   Services.prefs.setCharPref("privacy.purge_trackers.logging.level", "Debug");
   Services.prefs.setStringPref(
@@ -41,13 +38,50 @@ add_task(async function setup() {
 
   // Enables us to test localStorage in xpcshell.
   Services.prefs.setBoolPref("dom.storage.client_validation", false);
+}
+
+/**
+ * Test that purging doesn't happen when it shouldn't happen.
+ */
+add_task(async function testNotPurging() {
+  await UrlClassifierTestUtils.addTestTrackers();
+  setupTest(Ci.nsICookieService.BEHAVIOR_REJECT_FOREIGN);
+  SiteDataTestUtils.addToCookies(TRACKING_PAGE);
+
+  Services.prefs.setIntPref(
+    "network.cookie.cookieBehavior",
+    Ci.nsICookieService.BEHAVIOR_ACCEPT
+  );
+  await PurgeTrackerService.purgeTrackingCookieJars();
+  ok(SiteDataTestUtils.hasCookies(TRACKING_PAGE), "cookie remains.");
+  Services.prefs.setIntPref(
+    "network.cookie.cookieBehavior",
+    Ci.nsICookieService.BEHAVIOR_REJECT_FOREIGN
+  );
+
+  Services.prefs.setBoolPref("privacy.purge_trackers.enabled", false);
+  await PurgeTrackerService.purgeTrackingCookieJars();
+  ok(SiteDataTestUtils.hasCookies(TRACKING_PAGE), "cookie remains.");
+  Services.prefs.setBoolPref("privacy.purge_trackers.enabled", true);
+
+  Services.prefs.setBoolPref("privacy.sanitize.sanitizeOnShutdown", true);
+  Services.prefs.setBoolPref("privacy.clearOnShutdown.history", true);
+  await PurgeTrackerService.purgeTrackingCookieJars();
+  ok(SiteDataTestUtils.hasCookies(TRACKING_PAGE), "cookie remains.");
+  Services.prefs.clearUserPref("privacy.sanitize.sanitizeOnShutdown");
+  Services.prefs.clearUserPref("privacy.clearOnShutdown.history");
+
+  await PurgeTrackerService.purgeTrackingCookieJars();
+  ok(!SiteDataTestUtils.hasCookies(TRACKING_PAGE), "cookie cleared.");
+
+  UrlClassifierTestUtils.cleanupTestTrackers();
 });
 
 /**
  * Test that cookies indexedDB and localStorage are purged if the cookie is found
  * on the tracking list and does not have an Interaction Permission.
  */
-add_task(async function() {
+async function testIndexedDBAndLocalStorage() {
   await UrlClassifierTestUtils.addTestTrackers();
 
   PermissionTestUtils.add(
@@ -132,12 +166,12 @@ add_task(async function() {
   }
 
   UrlClassifierTestUtils.cleanupTestTrackers();
-});
+}
 
 /**
  * Test that trackers are treated based on their base domain, not origin.
  */
-add_task(async function() {
+async function testBaseDomain() {
   await UrlClassifierTestUtils.addTestTrackers();
 
   let associatedOrigins = [
@@ -184,13 +218,13 @@ add_task(async function() {
   }
 
   UrlClassifierTestUtils.cleanupTestTrackers();
-});
+}
 
 /**
  * Test that trackers are not cleared if they are associated
  * with an entry on the entity list that has user interaction.
  */
-add_task(async function() {
+async function testUserInteraction(ownerPage) {
   Services.prefs.setBoolPref(
     "privacy.purge_trackers.consider_entity_list",
     true
@@ -204,12 +238,11 @@ add_task(async function() {
   );
   await UrlClassifierTestUtils.addTestTrackers();
 
-  // These are hard coded test values on the entity list.
-  const OWNER_PAGE = "https://itisatrap.org";
+  // example.org and itisatrap.org are hard coded test values on the entity list.
   const RESOURCE_PAGE = "https://example.org";
 
   PermissionTestUtils.add(
-    OWNER_PAGE,
+    ownerPage,
     "storageAccessAPI",
     Services.perms.ALLOW_ACTION
   );
@@ -223,7 +256,7 @@ add_task(async function() {
 
   ok(
     SiteDataTestUtils.hasCookies(RESOURCE_PAGE),
-    `${RESOURCE_PAGE} should have retained its cookies when permission is set for ${OWNER_PAGE}.`
+    `${RESOURCE_PAGE} should have retained its cookies when permission is set for ${ownerPage}.`
   );
 
   ok(
@@ -240,20 +273,20 @@ add_task(async function() {
 
   ok(
     !SiteDataTestUtils.hasCookies(RESOURCE_PAGE),
-    `${RESOURCE_PAGE} should not have retained its cookies when permission is set for ${OWNER_PAGE} and the entity list pref is off.`
+    `${RESOURCE_PAGE} should not have retained its cookies when permission is set for ${ownerPage} and the entity list pref is off.`
   );
 
-  PermissionTestUtils.remove(OWNER_PAGE, "storageAccessAPI");
+  PermissionTestUtils.remove(ownerPage, "storageAccessAPI");
   await SiteDataTestUtils.clear();
 
   Services.prefs.clearUserPref("privacy.purge_trackers.consider_entity_list");
   UrlClassifierTestUtils.cleanupTestTrackers();
-});
+}
 
 /**
  * Test that quota storage (even without cookies) is considered when purging trackers.
  */
-add_task(async function() {
+async function testQuotaStorage() {
   await UrlClassifierTestUtils.addTestTrackers();
 
   let testCases = [
@@ -372,13 +405,13 @@ add_task(async function() {
   }
 
   UrlClassifierTestUtils.cleanupTestTrackers();
-});
+}
 
 /**
  * Test that we correctly delete cookies and storage for sites
  * with an expired interaction permission.
  */
-add_task(async function() {
+async function testExpiredInteractionPermission() {
   await UrlClassifierTestUtils.addTestTrackers();
 
   PermissionTestUtils.add(
@@ -461,4 +494,26 @@ add_task(async function() {
   }
 
   UrlClassifierTestUtils.cleanupTestTrackers();
+}
+
+add_task(async function() {
+  const cookieBehaviors = [
+    Ci.nsICookieService.BEHAVIOR_REJECT_FOREIGN,
+    Ci.nsICookieService.BEHAVIOR_LIMIT_FOREIGN,
+    Ci.nsICookieService.BEHAVIOR_REJECT_TRACKER,
+    Ci.nsICookieService.BEHAVIOR_REJECT_TRACKER_AND_PARTITION_FOREIGN,
+  ];
+
+  for (let cookieBehavior of cookieBehaviors) {
+    await setupTest(cookieBehavior);
+    await testIndexedDBAndLocalStorage();
+    await testBaseDomain();
+    // example.org and itisatrap.org are hard coded test values on the entity list.
+    await testUserInteraction("https://itisatrap.org");
+    await testUserInteraction(
+      "https://itisatrap.org^firstPartyDomain=example.net"
+    );
+    await testQuotaStorage();
+    await testExpiredInteractionPermission();
+  }
 });

@@ -524,22 +524,23 @@ static nsRect JoinBoxesForBlockAxisSlice(nsIFrame* aFrame,
                                          const nsRect& aBorderArea) {
   // Inflate the block-axis size as if our continuations were laid out
   // adjacent in that axis.  Note that we don't touch the inline size.
-  nsRect borderArea = aBorderArea;
+  const auto wm = aFrame->GetWritingMode();
+  const nsSize dummyContainerSize;
+  LogicalRect borderArea(wm, aBorderArea, dummyContainerSize);
   nscoord bSize = 0;
-  auto wm = aFrame->GetWritingMode();
   nsIFrame* f = aFrame->GetNextContinuation();
   for (; f; f = f->GetNextContinuation()) {
     bSize += f->BSize(wm);
   }
-  (wm.IsVertical() ? borderArea.width : borderArea.height) += bSize;
+  borderArea.BSize(wm) += bSize;
   bSize = 0;
   f = aFrame->GetPrevContinuation();
   for (; f; f = f->GetPrevContinuation()) {
     bSize += f->BSize(wm);
   }
-  (wm.IsVertical() ? borderArea.x : borderArea.y) -= bSize;
-  (wm.IsVertical() ? borderArea.width : borderArea.height) += bSize;
-  return borderArea;
+  borderArea.BStart(wm) -= bSize;
+  borderArea.BSize(wm) += bSize;
+  return borderArea.GetPhysicalRect(wm, dummyContainerSize);
 }
 
 /**
@@ -777,7 +778,7 @@ static nsCSSBorderRenderer ConstructBorderRenderer(
                "Should use aBorderArea for box-decoration-break:clone");
     MOZ_ASSERT(
         aForFrame->GetSkipSides().IsEmpty() ||
-            IS_TRUE_OVERFLOW_CONTAINER(aForFrame) ||
+            aForFrame->IsTrueOverflowContainer() ||
             aForFrame->IsColumnSetFrame(),  // a little broader than column-rule
         "Should not skip sides for box-decoration-break:clone except "
         "::first-letter/line continuations or other frame types that "
@@ -1198,10 +1199,10 @@ nsIFrame* nsCSSRendering::FindNonTransparentBackgroundFrame(
 // We need to treat the viewport as canvas because, even though
 // it does not actually paint a background, we need to get the right
 // background style so we correctly detect transparent documents.
-bool nsCSSRendering::IsCanvasFrame(nsIFrame* aFrame) {
+bool nsCSSRendering::IsCanvasFrame(const nsIFrame* aFrame) {
   LayoutFrameType frameType = aFrame->Type();
   return frameType == LayoutFrameType::Canvas ||
-         frameType == LayoutFrameType::Root ||
+         frameType == LayoutFrameType::XULRoot ||
          frameType == LayoutFrameType::PageContent ||
          frameType == LayoutFrameType::Viewport;
 }
@@ -1277,7 +1278,7 @@ ComputedStyle* nsCSSRendering::FindRootFrameBackground(nsIFrame* aForFrame) {
   return FindBackgroundStyleFrame(aForFrame)->Style();
 }
 
-inline bool FindElementBackground(nsIFrame* aForFrame,
+inline bool FindElementBackground(const nsIFrame* aForFrame,
                                   nsIFrame* aRootElementFrame) {
   if (aForFrame == aRootElementFrame) {
     // We must have propagated our background to the viewport or canvas. Abort.
@@ -1315,7 +1316,7 @@ inline bool FindElementBackground(nsIFrame* aForFrame,
   return !htmlBG->IsTransparent(aRootElementFrame);
 }
 
-bool nsCSSRendering::FindBackgroundFrame(nsIFrame* aForFrame,
+bool nsCSSRendering::FindBackgroundFrame(const nsIFrame* aForFrame,
                                          nsIFrame** aBackgroundFrame) {
   nsIFrame* rootElementFrame =
       aForFrame->PresShell()->FrameConstructor()->GetRootElementStyleFrame();
@@ -1324,11 +1325,11 @@ bool nsCSSRendering::FindBackgroundFrame(nsIFrame* aForFrame,
     return true;
   }
 
-  *aBackgroundFrame = aForFrame;
+  *aBackgroundFrame = const_cast<nsIFrame*>(aForFrame);
   return FindElementBackground(aForFrame, rootElementFrame);
 }
 
-bool nsCSSRendering::FindBackground(nsIFrame* aForFrame,
+bool nsCSSRendering::FindBackground(const nsIFrame* aForFrame,
                                     ComputedStyle** aBackgroundSC) {
   nsIFrame* backgroundFrame = nullptr;
   if (FindBackgroundFrame(aForFrame, &backgroundFrame)) {
@@ -1375,10 +1376,9 @@ gfx::sRGBColor nsCSSRendering::GetShadowColor(const StyleSimpleShadow& aShadow,
 
 nsRect nsCSSRendering::GetShadowRect(const nsRect& aFrameArea,
                                      bool aNativeTheme, nsIFrame* aForFrame) {
-  nsRect frameRect = aNativeTheme
-                         ? aForFrame->GetVisualOverflowRectRelativeToSelf() +
-                               aFrameArea.TopLeft()
-                         : aFrameArea;
+  nsRect frameRect = aNativeTheme ? aForFrame->InkOverflowRectRelativeToSelf() +
+                                        aFrameArea.TopLeft()
+                                  : aFrameArea;
   Sides skipSides = aForFrame->GetSkipSides();
   frameRect = BoxDecorationRectForBorder(aForFrame, frameRect, skipSides);
 
@@ -2360,16 +2360,9 @@ nscolor nsCSSRendering::DetermineBackgroundColor(nsPresContext* aPresContext,
                                                  nsIFrame* aFrame,
                                                  bool& aDrawBackgroundImage,
                                                  bool& aDrawBackgroundColor) {
-  aDrawBackgroundImage = true;
-  aDrawBackgroundColor = true;
-
-  const nsStyleVisibility* visibility = aStyle->StyleVisibility();
-
-  if (visibility->mColorAdjust != StyleColorAdjust::Exact &&
-      aFrame->HonorPrintBackgroundSettings()) {
-    aDrawBackgroundImage = aPresContext->GetBackgroundImageDraw();
-    aDrawBackgroundColor = aPresContext->GetBackgroundColorDraw();
-  }
+  auto shouldPaint = aFrame->ComputeShouldPaintBackground();
+  aDrawBackgroundImage = shouldPaint.mImage;
+  aDrawBackgroundColor = shouldPaint.mColor;
 
   const nsStyleBackground* bg = aStyle->StyleBackground();
   nscolor bgColor;
@@ -2466,23 +2459,28 @@ ImgDrawResult nsCSSRendering::PaintStyleImageLayerWithSC(
   // nsDisplayCanvasBackground directly.) Either way we don't need to
   // paint the background color here.
   bool isCanvasFrame = IsCanvasFrame(aParams.frame);
+  const bool paintMask = aParams.paintFlags & PAINTBG_MASK_IMAGE;
 
   // Determine whether we are drawing background images and/or
   // background colors.
-  bool drawBackgroundImage;
-  bool drawBackgroundColor;
+  bool drawBackgroundImage = true;
+  bool drawBackgroundColor = !paintMask;
+  nscolor bgColor = NS_RGBA(0, 0, 0, 0);
+  if (!paintMask) {
+    bgColor =
+        DetermineBackgroundColor(&aParams.presCtx, aBackgroundSC, aParams.frame,
+                                 drawBackgroundImage, drawBackgroundColor);
+  }
 
-  nscolor bgColor =
-      DetermineBackgroundColor(&aParams.presCtx, aBackgroundSC, aParams.frame,
-                               drawBackgroundImage, drawBackgroundColor);
+  // Masks shouldn't be suppressed for print.
+  MOZ_ASSERT_IF(paintMask, drawBackgroundImage);
 
-  bool paintMask = (aParams.paintFlags & PAINTBG_MASK_IMAGE);
   const nsStyleImageLayers& layers =
       paintMask ? aBackgroundSC->StyleSVGReset()->mMask
                 : aBackgroundSC->StyleBackground()->mImage;
   // If we're drawing a specific layer, we don't want to draw the
   // background color.
-  if ((drawBackgroundColor && aParams.layer >= 0) || paintMask) {
+  if (drawBackgroundColor && aParams.layer >= 0) {
     drawBackgroundColor = false;
   }
 
@@ -2752,7 +2750,8 @@ nsRect nsCSSRendering::ComputeImageLayerPositioningArea(
     // finished and this page only displays the continuations of
     // absolutely positioned content).
     if (geometryFrame) {
-      positionArea = geometryFrame->GetRect();
+      positionArea =
+          nsPlaceholderFrame::GetRealFrameFor(geometryFrame)->GetRect();
     }
   } else {
     positionArea = nsRect(nsPoint(0, 0), aBorderArea.Size());
@@ -4866,7 +4865,7 @@ bool nsContextBoxBlur::InsetBoxBlur(
   // input data to the blur. This way, we don't have to scale the min
   // inset blur to the invert of the dest context, then rescale it back
   // when we draw to the destination surface.
-  gfx::Size scale = aDestinationCtx->CurrentMatrix().ScaleFactors(true);
+  gfx::Size scale = aDestinationCtx->CurrentMatrix().ScaleFactors();
   Matrix transform = aDestinationCtx->CurrentMatrix();
 
   // XXX: we could probably handle negative scales but for now it's easier just

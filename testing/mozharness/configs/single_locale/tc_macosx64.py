@@ -1,3 +1,7 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
 import os
 
 config = {
@@ -7,12 +11,6 @@ config = {
         "EN_US_BINARY_URL": os.environ["EN_US_BINARY_URL"],
         "DIST": "%(abs_obj_dir)s",
         "L10NBASEDIR": "../../l10n",
-        'TOOLTOOL_CACHE': os.environ.get('TOOLTOOL_CACHE'),
+        "TOOLTOOL_CACHE": os.environ.get("TOOLTOOL_CACHE"),
     },
-    "upload_env": {
-        'UPLOAD_PATH': '/builds/worker/artifacts/',
-    },
-
-    "vcs_share_base": "/builds/hg-shared",
 }
-

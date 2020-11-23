@@ -7,9 +7,13 @@
 #ifndef mozilla_dom_quota_persistencetype_h__
 #define mozilla_dom_quota_persistencetype_h__
 
-#include "mozilla/dom/quota/QuotaCommon.h"
-
+#include <cstdint>
+#include "mozilla/Assertions.h"
+#include "mozilla/Maybe.h"
 #include "mozilla/dom/StorageTypeBinding.h"
+#include "mozilla/dom/quota/QuotaCommon.h"
+#include "mozilla/fallible.h"
+#include "nsStringFwd.h"
 
 BEGIN_QUOTA_NAMESPACE
 
@@ -22,14 +26,16 @@ enum PersistenceType {
   PERSISTENCE_TYPE_INVALID
 };
 
-static const PersistenceType kBestEffortPersistenceTypes[] = {
-    PERSISTENCE_TYPE_TEMPORARY, PERSISTENCE_TYPE_DEFAULT};
-
 static const PersistenceType kAllPersistenceTypes[] = {
     PERSISTENCE_TYPE_PERSISTENT, PERSISTENCE_TYPE_TEMPORARY,
     PERSISTENCE_TYPE_DEFAULT};
 
+static const PersistenceType kBestEffortPersistenceTypes[] = {
+    PERSISTENCE_TYPE_TEMPORARY, PERSISTENCE_TYPE_DEFAULT};
+
 bool IsValidPersistenceType(PersistenceType aPersistenceType);
+
+bool IsBestEffortPersistenceType(const PersistenceType aPersistenceType);
 
 nsLiteralCString PersistenceTypeToString(PersistenceType aPersistenceType);
 

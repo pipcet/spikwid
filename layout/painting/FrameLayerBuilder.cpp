@@ -19,7 +19,6 @@
 #include "LayerTreeInvalidation.h"
 #include "LayerUserData.h"
 #include "Layers.h"
-#include "LayersLogging.h"
 #include "MaskLayerImageCache.h"
 #include "MatrixStack.h"
 #include "UnitTransforms.h"
@@ -29,6 +28,7 @@
 #include "gfxEnv.h"
 #include "gfxUtils.h"
 #include "mozilla/DebugOnly.h"
+#include "mozilla/DisplayPortUtils.h"
 #include "mozilla/EffectCompositor.h"
 #include "mozilla/LayerAnimationInfo.h"
 #include "mozilla/LayerTimelineMarker.h"
@@ -337,7 +337,7 @@ void DisplayItemData::BeginUpdate(Layer* aLayer, LayerState aState,
   if (!copy.RemoveElement(aItem->Frame())) {
     AddFrame(aItem->Frame());
     mChangedFrameInvalidations.Or(mChangedFrameInvalidations,
-                                  aItem->Frame()->GetVisualOverflowRect());
+                                  aItem->Frame()->InkOverflowRect());
   }
 
   if (aIsMerged) {
@@ -347,7 +347,7 @@ void DisplayItemData::BeginUpdate(Layer* aLayer, LayerState aState,
       if (!copy.RemoveElement(frame)) {
         AddFrame(frame);
         mChangedFrameInvalidations.Or(mChangedFrameInvalidations,
-                                      frame->GetVisualOverflowRect());
+                                      frame->InkOverflowRect());
       }
     }
   }
@@ -355,7 +355,7 @@ void DisplayItemData::BeginUpdate(Layer* aLayer, LayerState aState,
   for (nsIFrame* frame : copy) {
     RemoveFrame(frame);
     mChangedFrameInvalidations.Or(mChangedFrameInvalidations,
-                                  frame->GetVisualOverflowRect());
+                                  frame->InkOverflowRect());
   }
 }
 
@@ -1886,7 +1886,7 @@ struct MaskLayerUserData : public LayerUserData {
     mScaleY = aOther.mScaleY;
     mOffset = aOther.mOffset;
     mAppUnitsPerDevPixel = aOther.mAppUnitsPerDevPixel;
-    mRoundedClipRects.SwapElements(aOther.mRoundedClipRects);
+    mRoundedClipRects = std::move(aOther.mRoundedClipRects);
   }
 
   bool operator==(const MaskLayerUserData& aOther) const {
@@ -4252,9 +4252,9 @@ nsRect ContainerState::GetDisplayPortForAnimatedGeometryRoot(
     return mLastDisplayPortRect;
   }
 
-  bool usingDisplayport = nsLayoutUtils::GetDisplayPort(
+  bool usingDisplayport = DisplayPortUtils::GetDisplayPort(
       (*aAnimatedGeometryRoot)->GetContent(), &mLastDisplayPortRect,
-      DisplayportRelativeTo::ScrollFrame);
+      DisplayPortOptions().With(DisplayportRelativeTo::ScrollFrame));
   if (!usingDisplayport) {
     // No async scrolling, so all that matters is that the layer contents
     // cover the scrollport.
@@ -5044,8 +5044,8 @@ void ContainerState::ProcessDisplayItems(nsDisplayList* aList) {
         nsDisplayScrollInfoLayer* scrollItem =
             static_cast<nsDisplayScrollInfoLayer*>(item);
         newLayerEntry->mOpaqueForAnimatedGeometryRootParent = false;
-        newLayerEntry->mBaseScrollMetadata =
-            scrollItem->ComputeScrollMetadata(ownLayer->Manager(), mParameters);
+        newLayerEntry->mBaseScrollMetadata = scrollItem->ComputeScrollMetadata(
+            mBuilder, ownLayer->Manager(), mParameters);
       }
 
       /**
@@ -5444,9 +5444,8 @@ void FrameLayerBuilder::AddPaintedDisplayItem(PaintedLayerData* aLayerData,
           aItem.mItem->Name(), aItem.mItem->Frame());
       std::stringstream stream;
       tempManager->Dump(stream, "", gfxEnv::DumpPaintToFile());
-      fprint_stderr(
-          gfxUtils::sDumpPaintFile,
-          stream);  // not a typo, fprint_stderr declared in LayersLogging.h
+      fprint_stderr(gfxUtils::sDumpPaintFile,
+                    stream);  // not a typo, fprint_stderr declared in nsDebug.h
     }
 
     nsIntPoint offset =
@@ -5457,7 +5456,7 @@ void FrameLayerBuilder::AddPaintedDisplayItem(PaintedLayerData* aLayerData,
     nsIntRegion invalid;
     if (!aItem.mInactiveLayerData->mProps->ComputeDifferences(tmpLayer, invalid,
                                                               nullptr)) {
-      nsRect visible = aItem.mItem->Frame()->GetVisualOverflowRect();
+      nsRect visible = aItem.mItem->Frame()->InkOverflowRect();
       invalid = visible.ToOutsidePixels(paintedData->mAppUnitsPerDevPixel);
     }
     if (aItem.mLayerState == LayerState::LAYER_SVG_EFFECTS) {
@@ -5776,7 +5775,7 @@ void ContainerState::SetupScrollingMetadata(NewLayerEntry* aEntry) {
       metadata = scrollFrame->ComputeScrollMetadata(aEntry->mLayer->Manager(),
                                                     mContainerReferenceFrame,
                                                     Some(mParameters), clip);
-      scrollFrame->NotifyApzTransaction();
+      mBuilder->AddScrollFrameToNotify(scrollFrame);
       mCachedScrollMetadata.mASR = asr;
       mCachedScrollMetadata.mClip = clip;
       mCachedScrollMetadata.mMetadata = metadata;
@@ -6049,7 +6048,7 @@ Size FrameLayerBuilder::ChooseScale(nsIFrame* aContainerFrame,
     } else {
       // Scale factors are normalized to a power of 2 to reduce the number of
       // resolution changes
-      scale = aTransform2d.ScaleFactors(true);
+      scale = aTransform2d.ScaleFactors();
       // For frames with a changing scale transform round scale factors up to
       // nearest power-of-2 boundary so that we don't keep having to redraw
       // the content as it scales up and down. Rounding up to nearest
@@ -6263,7 +6262,7 @@ already_AddRefed<ContainerLayer> FrameLayerBuilder::BuildContainerLayerFor(
       aChildren->GetClippedBoundsWithRespectToASR(aBuilder, containerASR);
   nsRect childrenVisible =
       aContainerItem ? aContainerItem->GetBuildingRectForChildren()
-                     : aContainerFrame->GetVisualOverflowRectRelativeToSelf();
+                     : aContainerFrame->InkOverflowRectRelativeToSelf();
   if (!ChooseScaleAndSetTransform(
           this, aBuilder, aContainerFrame, aContainerItem,
           bounds.Intersect(childrenVisible), aTransform, aParameters,
@@ -6507,7 +6506,7 @@ gfxSize FrameLayerBuilder::GetPaintedLayerScaleForFrame(nsIFrame* aFrame) {
 
   Matrix transform2d;
   if (transform.CanDraw2D(&transform2d)) {
-    return ThebesMatrix(transform2d).ScaleFactors(true);
+    return ThebesMatrix(transform2d).ScaleFactors();
   }
 
   return gfxSize(1.0, 1.0);

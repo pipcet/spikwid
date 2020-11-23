@@ -39,6 +39,8 @@ inactive-css-position-property-on-unpositioned-box = <strong>{ $property }</stro
 
 inactive-text-overflow-when-no-overflow = <strong>{ $property }</strong> has no effect on this element since <strong>overflow:hidden</strong> is not set.
 
+inactive-outline-radius-when-outline-style-auto-or-none = <strong>{ $property }</strong> has no effect on this element because its <strong>outline-style</strong> is <strong>auto</strong> or <strong>none</strong>.
+
 ## In the Rule View when a CSS property cannot be successfully applied we display
 ## an icon. When this icon is hovered this message is displayed to explain how
 ## the problem can be solved.
@@ -68,3 +70,28 @@ inactive-css-not-display-block-on-floated-fix = Try removing <strong>float</stro
 inactive-css-position-property-on-unpositioned-box-fix = Try setting its <strong>position</strong> property to something other than <strong>static</strong>. { learn-more }
 
 inactive-text-overflow-when-no-overflow-fix = Try adding <strong>overflow:hidden</strong>. { learn-more }
+
+inactive-outline-radius-when-outline-style-auto-or-none-fix = Try setting its <strong>outline-style</strong> property to something other than <strong>auto</strong> or <strong>none</strong>. { learn-more }
+
+## In the Rule View when a CSS property may have compatibility issues with other browsers
+## we display an icon. When this icon is hovered this message is displayed to explain why
+## the property is incompatible and the platforms it is incompatible on.
+## Variables:
+##   $property (string) - A CSS declaration name e.g. "-moz-user-select" that can be a platform specific alias.
+##   $rootProperty (string) - A raw CSS property name e.g. "user-select" that is not a platform specific alias.
+
+css-compatibility-default-message = <strong>{ $property }</strong> is not supported in the following browsers:
+
+css-compatibility-deprecated-experimental-message = <strong>{ $property }</strong> was an experimental property that is now deprecated by W3C standards. It is not supported in the following browsers:
+
+css-compatibility-deprecated-experimental-supported-message = <strong>{ $property }</strong> was an experimental property that is now deprecated by W3C standards.
+
+css-compatibility-deprecated-message = <strong>{ $property }</strong> is deprecated by W3C standards. It is not supported in the following browsers:
+
+css-compatibility-deprecated-supported-message = <strong>{ $property }</strong> is deprecated by W3C standards.
+
+css-compatibility-experimental-message = <strong>{ $property }</strong> is an experimental property. It is not supported in the following browsers:
+
+css-compatibility-experimental-supported-message = <strong>{ $property }</strong> is an experimental property.
+
+css-compatibility-learn-more-message = <span data-l10n-name="link">Learn more</span> about <strong>{ $rootProperty }</strong>

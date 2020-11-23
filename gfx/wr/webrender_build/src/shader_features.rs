@@ -15,6 +15,7 @@ bitflags! {
         const PIXEL_LOCAL_STORAGE = 1 << 10;
         const DITHERING = 1 << 11;
         const TEXTURE_EXTERNAL = 1 << 12;
+        const DEBUG = 1 << 13;
     }
 }
 
@@ -34,7 +35,7 @@ impl<'a> FeatureList<'a> {
     }
 
     fn add(&mut self, feature: &'a str) {
-        assert!(!feature.contains(","));
+        assert!(!feature.contains(','));
         self.list.push(feature);
     }
 
@@ -53,7 +54,7 @@ impl<'a> FeatureList<'a> {
     }
 
     fn finish(&mut self) -> String {
-        self.list.sort();
+        self.list.sort_unstable();
         self.list.join(",")
     }
 }
@@ -64,9 +65,8 @@ pub fn get_shader_features(flags: ShaderFeatureFlags) -> ShaderFeatures {
 
     // Clip shaders
     shaders.insert("cs_clip_rectangle", vec![String::new(), "FAST_PATH".to_string()]);
-    for name in &["cs_clip_image", "cs_clip_box_shadow"] {
-        shaders.insert(name, vec![String::new()]);
-    }
+    shaders.insert("cs_clip_image", vec!["TEXTURE_2D".to_string()]);
+    shaders.insert("cs_clip_box_shadow", vec!["TEXTURE_2D".to_string()]);
 
     // Cache shaders
     shaders.insert("cs_blur", vec!["ALPHA_TARGET".to_string(), "COLOR_TARGET".to_string()]);
@@ -74,8 +74,6 @@ pub fn get_shader_features(flags: ShaderFeatureFlags) -> ShaderFeatures {
     for name in &["cs_line_decoration", "cs_gradient", "cs_border_segment", "cs_border_solid", "cs_svg_filter"] {
         shaders.insert(name, vec![String::new()]);
     }
-
-    shaders.insert("cs_scale", vec![String::new()]);
 
     let mut base_prim_features = FeatureList::new();
 
@@ -91,7 +89,7 @@ pub fn get_shader_features(flags: ShaderFeatureFlags) -> ShaderFeatures {
 
     // Brush shaders
     let mut brush_alpha_features = base_prim_features.with("ALPHA_PASS");
-    for name in &["brush_solid", "brush_blend", "brush_mix_blend", "brush_opacity"] {
+    for name in &["brush_solid", "brush_blend", "brush_mix_blend"] {
         let mut features: Vec<String> = Vec::new();
         features.push(base_prim_features.finish());
         features.push(brush_alpha_features.finish());
@@ -108,6 +106,17 @@ pub fn get_shader_features(flags: ShaderFeatureFlags) -> ShaderFeatures {
         features.push(list.concat(&brush_alpha_features).finish());
         features.push(list.with("DEBUG_OVERDRAW").finish());
         shaders.insert(name, features);
+    }
+
+    {
+        let mut features: Vec<String> = Vec::new();
+        features.push(base_prim_features.finish());
+        features.push(brush_alpha_features.finish());
+        features.push(base_prim_features.with("ANTIALIASING").finish());
+        features.push(brush_alpha_features.with("ANTIALIASING").finish());
+        features.push("ANTIALIASING,DEBUG_OVERDRAW".to_string());
+        features.push("DEBUG_OVERDRAW".to_string());
+        shaders.insert("brush_opacity", features);
     }
 
     // Image brush shaders
@@ -151,6 +160,8 @@ pub fn get_shader_features(flags: ShaderFeatureFlags) -> ShaderFeatures {
         let base = texture_type.to_string();
         composite_features.push(base);
     }
+    shaders.insert("cs_scale", composite_features.clone());
+
     // YUV image brush shaders
     let mut yuv_features: Vec<String> = Vec::new();
     for texture_type in &texture_types {
@@ -174,7 +185,7 @@ pub fn get_shader_features(flags: ShaderFeatureFlags) -> ShaderFeatures {
     }
     let mut text_features: Vec<String> = Vec::new();
     for text_type in &text_types {
-        let mut list = base_prim_features.clone();
+        let mut list = base_prim_features.with("TEXTURE_2D");
         if !text_type.is_empty() {
             list.add(text_type);
         }
@@ -188,6 +199,12 @@ pub fn get_shader_features(flags: ShaderFeatureFlags) -> ShaderFeatures {
     shaders.insert("ps_split_composite", vec![base_prim_features.finish()]);
 
     shaders.insert("ps_clear", vec![base_prim_features.finish()]);
+
+    if flags.contains(ShaderFeatureFlags::DEBUG) {
+        for name in &["debug_color", "debug_font"] {
+            shaders.insert(name, vec![String::new()]);
+        }
+    }
 
     shaders
 }

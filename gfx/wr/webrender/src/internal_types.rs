@@ -2,18 +2,19 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use api::{ColorF, DebugCommand, DocumentId, ExternalImageData, ExternalImageId, PrimitiveFlags};
-use api::{ImageFormat, ItemTag, NotificationRequest, Shadow, FilterOp};
+use api::{ColorF, DocumentId, ExternalImageData, ExternalImageId, ExternalImageType, PrimitiveFlags};
+use api::{ImageFormat, NotificationRequest, Shadow, FilterOp, ImageBufferKind};
 use api::units::*;
 use api;
+use crate::render_api::DebugCommand;
 use crate::composite::NativeSurfaceOperation;
 use crate::device::TextureFilter;
 use crate::renderer::PipelineInfo;
 use crate::gpu_cache::GpuCacheUpdateList;
 use crate::frame_builder::Frame;
+use crate::profiler::TransactionProfile;
 use fxhash::FxHasher;
 use plane_split::BspSplitter;
-use crate::profiler::BackendProfileCounters;
 use smallvec::SmallVec;
 use std::{usize, i32};
 use std::collections::{HashMap, HashSet};
@@ -70,7 +71,7 @@ const OPACITY_EPSILON: f32 = 0.001;
 #[cfg_attr(feature = "replay", derive(Deserialize))]
 pub enum Filter {
     Identity,
-    Blur(f32),
+    Blur(f32, f32),
     Brightness(f32),
     Contrast(f32),
     Grayscale(f32),
@@ -116,7 +117,7 @@ impl Filter {
     pub fn is_noop(&self) -> bool {
         match *self {
             Filter::Identity => false, // this is intentional
-            Filter::Blur(length) => length == 0.0,
+            Filter::Blur(width, height) => width == 0.0 && height == 0.0,
             Filter::Brightness(amount) => amount == 1.0,
             Filter::Contrast(amount) => amount == 1.0,
             Filter::Grayscale(amount) => amount == 0.0,
@@ -179,7 +180,7 @@ impl From<FilterOp> for Filter {
     fn from(op: FilterOp) -> Self {
         match op {
             FilterOp::Identity => Filter::Identity,
-            FilterOp::Blur(r) => Filter::Blur(r),
+            FilterOp::Blur(w, h) => Filter::Blur(w, h),
             FilterOp::Brightness(b) => Filter::Brightness(b),
             FilterOp::Contrast(c) => Filter::Contrast(c),
             FilterOp::Grayscale(g) => Filter::Grayscale(g),
@@ -286,6 +287,31 @@ pub enum TextureSource {
     Dummy,
 }
 
+impl TextureSource {
+    pub fn image_buffer_kind(&self) -> ImageBufferKind {
+        match *self {
+            TextureSource::TextureCache(..) => ImageBufferKind::Texture2D,
+
+            TextureSource::External(external_image) => {
+                match external_image.image_type {
+                    ExternalImageType::TextureHandle(kind) => kind,
+                    // Raw buffer external textures go to the texture cache.
+                    ExternalImageType::Buffer => ImageBufferKind::Texture2D,
+                }
+            },
+
+            // Render tasks use texture arrays for now.
+            TextureSource::PrevPassAlpha
+            | TextureSource::PrevPassColor
+            | TextureSource::RenderTaskCache(..)
+            | TextureSource::Dummy => ImageBufferKind::Texture2DArray,
+
+
+            TextureSource::Invalid => ImageBufferKind::Texture2D,
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "capture", derive(Serialize))]
 #[cfg_attr(feature = "replay", derive(Deserialize))]
@@ -322,6 +348,7 @@ pub struct TextureCacheAllocInfo {
     pub layer_count: i32,
     pub format: ImageFormat,
     pub filter: TextureFilter,
+    pub target: ImageBufferKind,
     /// Indicates whether this corresponds to one of the shared texture caches.
     pub is_shared_cache: bool,
     /// If true, this texture requires a depth target.
@@ -333,10 +360,6 @@ pub struct TextureCacheAllocInfo {
 pub enum TextureCacheAllocationKind {
     /// Performs an initial texture allocation.
     Alloc(TextureCacheAllocInfo),
-    /// Reallocates the texture. The existing live texture with the same id
-    /// will be deallocated and its contents blitted over. The new size must
-    /// be greater than the old size.
-    Realloc(TextureCacheAllocInfo),
     /// Reallocates the texture without preserving its contents.
     Reset(TextureCacheAllocInfo),
     /// Frees the texture and the corresponding cache ID.
@@ -435,30 +458,11 @@ impl TextureUpdateList {
 
     /// Pushes a reallocation operation onto the list, potentially coalescing
     /// with previous operations.
-    pub fn push_realloc(&mut self, id: CacheTextureId, info: TextureCacheAllocInfo) {
-        self.debug_assert_coalesced(id);
-
-        // Coallesce this realloc into a previous alloc or realloc, if available.
-        if let Some(cur) = self.allocations.iter_mut().find(|x| x.id == id) {
-            match cur.kind {
-                TextureCacheAllocationKind::Alloc(ref mut i) => *i = info,
-                TextureCacheAllocationKind::Realloc(ref mut i) => *i = info,
-                TextureCacheAllocationKind::Reset(ref mut i) => *i = info,
-                TextureCacheAllocationKind::Free => panic!("Reallocating freed texture"),
-            }
-            return
-        }
-
-        self.allocations.push(TextureCacheAllocation {
-            id,
-            kind: TextureCacheAllocationKind::Realloc(info),
-        });
-    }
-
-    /// Pushes a reallocation operation onto the list, potentially coalescing
-    /// with previous operations.
     pub fn push_reset(&mut self, id: CacheTextureId, info: TextureCacheAllocInfo) {
         self.debug_assert_coalesced(id);
+
+        // Drop any unapplied updates to the to-be-freed texture.
+        self.updates.remove(&id);
 
         // Coallesce this realloc into a previous alloc or realloc, if available.
         if let Some(cur) = self.allocations.iter_mut().find(|x| x.id == id) {
@@ -466,10 +470,6 @@ impl TextureUpdateList {
                 TextureCacheAllocationKind::Alloc(ref mut i) => *i = info,
                 TextureCacheAllocationKind::Reset(ref mut i) => *i = info,
                 TextureCacheAllocationKind::Free => panic!("Resetting freed texture"),
-                TextureCacheAllocationKind::Realloc(_) => {
-                    // Reset takes precedence over realloc
-                    cur.kind = TextureCacheAllocationKind::Reset(info);
-                }
             }
             return
         }
@@ -495,7 +495,6 @@ impl TextureUpdateList {
         match removed_kind {
             Some(TextureCacheAllocationKind::Alloc(..)) => { /* no-op! */ },
             Some(TextureCacheAllocationKind::Free) => panic!("Double free"),
-            Some(TextureCacheAllocationKind::Realloc(..)) |
             Some(TextureCacheAllocationKind::Reset(..)) |
             None => {
                 self.allocations.push(TextureCacheAllocation {
@@ -535,6 +534,7 @@ impl ResourceUpdateList {
 pub struct RenderedDocument {
     pub frame: Frame,
     pub is_new_scene: bool,
+    pub profile: TransactionProfile,
 }
 
 pub enum DebugOutput {
@@ -561,7 +561,6 @@ pub enum ResultMsg {
         DocumentId,
         RenderedDocument,
         ResourceUpdateList,
-        BackendProfileCounters,
     ),
     AppendNotificationRequests(Vec<NotificationRequest>),
     ForceRedraw,
@@ -588,7 +587,6 @@ pub struct LayoutPrimitiveInfo {
     pub rect: LayoutRect,
     pub clip_rect: LayoutRect,
     pub flags: PrimitiveFlags,
-    pub hit_info: Option<ItemTag>,
 }
 
 impl LayoutPrimitiveInfo {
@@ -597,7 +595,6 @@ impl LayoutPrimitiveInfo {
             rect,
             clip_rect,
             flags: PrimitiveFlags::default(),
-            hit_info: None,
         }
     }
 }

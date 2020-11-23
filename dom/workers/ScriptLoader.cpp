@@ -72,6 +72,7 @@
 #include "mozilla/dom/Response.h"
 #include "mozilla/dom/ScriptLoader.h"
 #include "mozilla/dom/ScriptSettings.h"
+#include "mozilla/dom/SerializedStackHolder.h"
 #include "mozilla/dom/SRILogHelper.h"
 #include "mozilla/dom/ServiceWorkerBinding.h"
 #include "mozilla/dom/ServiceWorkerManager.h"
@@ -166,9 +167,7 @@ nsresult ChannelFromScriptURL(
       false /* aForceInherit */);
 
   bool isData = uri->SchemeIs("data");
-  bool isURIUniqueOrigin =
-      StaticPrefs::security_data_uri_unique_opaque_origin() && isData;
-  if (inheritAttrs && !isURIUniqueOrigin) {
+  if (inheritAttrs && !isData) {
     secFlags |= nsILoadInfo::SEC_FORCE_INHERIT_PRINCIPAL;
   }
 
@@ -1117,11 +1116,7 @@ class ScriptLoaderRunnable final : public nsIRunnable, public nsINamed {
         respectedCOEP = mWorkerPrivate->GetOwnerEmbedderPolicy();
       }
 
-      nsCOMPtr<nsILoadInfo> channelLoadInfo;
-      rv = channel->GetLoadInfo(getter_AddRefs(channelLoadInfo));
-      if (NS_WARN_IF(NS_FAILED(rv))) {
-        return rv;
-      }
+      nsCOMPtr<nsILoadInfo> channelLoadInfo = channel->LoadInfo();
       channelLoadInfo->SetLoadingEmbedderPolicy(respectedCOEP);
     }
 
@@ -1289,14 +1284,20 @@ class ScriptLoaderRunnable final : public nsIRunnable, public nsINamed {
     rv = NS_GetFinalChannelURI(channel, getter_AddRefs(finalURI));
     NS_ENSURE_SUCCESS(rv, rv);
 
-    nsCString filename;
-    rv = finalURI->GetSpec(filename);
+    bool isSameOrigin = false;
+    rv = principal->IsSameOrigin(finalURI, false, &isSameOrigin);
     NS_ENSURE_SUCCESS(rv, rv);
 
-    if (!filename.IsEmpty()) {
-      // This will help callers figure out what their script url resolved to in
-      // case of errors.
-      aLoadInfo.mURL.Assign(NS_ConvertUTF8toUTF16(filename));
+    if (isSameOrigin) {
+      nsCString filename;
+      rv = finalURI->GetSpec(filename);
+      NS_ENSURE_SUCCESS(rv, rv);
+
+      if (!filename.IsEmpty()) {
+        // This will help callers figure out what their script url resolved to
+        // in case of errors.
+        aLoadInfo.mURL.Assign(NS_ConvertUTF8toUTF16(filename));
+      }
     }
 
     // Update the principal of the worker and its base URI if we just loaded the
@@ -1898,7 +1899,7 @@ void CacheScriptLoader::ResolvedCallback(JSContext* aCx,
     return;
   }
 
-  rv = mPump->AsyncRead(loader, nullptr);
+  rv = mPump->AsyncRead(loader);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     mPump = nullptr;
     Fail(rv);

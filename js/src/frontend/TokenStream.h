@@ -203,13 +203,14 @@
 
 #include "jspubtd.h"
 
-#include "frontend/CompilationInfo.h"
 #include "frontend/ErrorReporter.h"
+#include "frontend/ParserAtom.h"
 #include "frontend/Token.h"
 #include "frontend/TokenKind.h"
 #include "js/CompileOptions.h"
-#include "js/HashTable.h"    // js::HashMap
-#include "js/RegExpFlags.h"  // JS::RegExpFlags
+#include "js/friend/ErrorMessages.h"  // JSMSG_*
+#include "js/HashTable.h"             // js::HashMap
+#include "js/RegExpFlags.h"           // JS::RegExpFlags
 #include "js/UniquePtr.h"
 #include "js/Vector.h"
 #include "util/Text.h"
@@ -223,13 +224,21 @@ struct KeywordInfo;
 
 namespace js {
 
-class AutoKeepAtoms;
-
 namespace frontend {
 
-extern TokenKind ReservedWordTokenKind(PropertyName* str);
+// Saturate column number at a limit that can be represented in various parts of
+// the engine. Source locations beyond this point will report at the limit
+// column instead.
+//
+// See:
+//  - TokenStreamAnyChars::checkOptions
+//  - ColSpan::isRepresentable
+//  - WasmFrameIter::computeLine
+static constexpr uint32_t ColumnLimit = std::numeric_limits<int32_t>::max() / 2;
 
-extern const char* ReservedWordToCharZ(PropertyName* str);
+extern TokenKind ReservedWordTokenKind(const ParserName* name);
+
+extern const char* ReservedWordToCharZ(const ParserName* name);
 
 extern const char* ReservedWordToCharZ(TokenKind tt);
 
@@ -295,16 +304,8 @@ class TokenStreamSpecific;
 template <typename Unit>
 class MOZ_STACK_CLASS TokenStreamPosition final {
  public:
-  // The JS_HAZ_ROOTED is permissible below because: 1) the only field in
-  // TokenStreamPosition that can keep GC things alive is Token, 2) the only
-  // GC things Token can keep alive are atoms, and 3) the AutoKeepAtoms&
-  // passed to the constructor here represents that collection of atoms
-  // is disabled while atoms in Tokens in this Position are alive.  DON'T
-  // ADD NON-ATOM GC THING POINTERS HERE!  They would create a rooting
-  // hazard that JS_HAZ_ROOTED will cause to be ignored.
   template <class AnyCharsAccess>
-  inline TokenStreamPosition(
-      AutoKeepAtoms& keepAtoms,
+  inline explicit TokenStreamPosition(
       TokenStreamSpecific<Unit, AnyCharsAccess>& tokenStream);
 
  private:
@@ -325,7 +326,7 @@ class MOZ_STACK_CLASS TokenStreamPosition final {
   Token currentToken;
   unsigned lookahead;
   Token lookaheadTokens[TokenStreamShared::maxLookahead];
-} JS_HAZ_ROOTED;
+};
 
 template <typename Unit>
 class SourceUnits;
@@ -730,10 +731,10 @@ class TokenStreamAnyChars : public TokenStreamShared {
   MOZ_MUST_USE bool checkOptions();
 
  private:
-  PropertyName* reservedWordToPropertyName(TokenKind tt) const;
+  const ParserName* reservedWordToPropertyName(TokenKind tt) const;
 
  public:
-  PropertyName* currentName() const {
+  const ParserName* currentName() const {
     if (isCurrentTokenType(TokenKind::Name) ||
         isCurrentTokenType(TokenKind::PrivateName)) {
       return currentToken().name();
@@ -747,7 +748,8 @@ class TokenStreamAnyChars : public TokenStreamShared {
     if (isCurrentTokenType(TokenKind::Name) ||
         isCurrentTokenType(TokenKind::PrivateName)) {
       TokenPos pos = currentToken().pos;
-      return (pos.end - pos.begin) != currentToken().name()->length();
+      const ParserAtom* name = currentToken().name();
+      return (pos.end - pos.begin) != name->length();
     }
 
     MOZ_ASSERT(TokenKindIsPossibleIdentifierName(currentToken().type));
@@ -1024,9 +1026,10 @@ struct SourceUnitTraits<mozilla::Utf8Unit> {
   static constexpr uint8_t maxUnitsLength = 4;
 
   static constexpr size_t lengthInUnits(char32_t codePoint) {
-    return codePoint < 0x80
-               ? 1
-               : codePoint < 0x800 ? 2 : codePoint < 0x10000 ? 3 : 4;
+    return codePoint < 0x80      ? 1
+           : codePoint < 0x800   ? 2
+           : codePoint < 0x10000 ? 3
+                                 : 4;
   }
 };
 
@@ -1500,13 +1503,47 @@ inline void SourceUnits<mozilla::Utf8Unit>::ungetLineOrParagraphSeparator() {
   MOZ_ASSERT(last == 0xA8 || last == 0xA9);
 }
 
-class TokenStreamCharsShared {
-  // Using char16_t (not Unit) is a simplifying decision that hopefully
-  // eliminates the need for a UTF-8 regular expression parser and makes
-  // |copyCharBufferTo| markedly simpler.
-  using CharBuffer = Vector<char16_t, 32>;
+/**
+ * An all-purpose buffer type for accumulating text during tokenizing.
+ *
+ * In principle we could make this buffer contain |char16_t|, |Utf8Unit|, or
+ * |Unit|.  We use |char16_t| because:
+ *
+ *   * we don't have a UTF-8 regular expression parser, so in general regular
+ *     expression text must be copied to a separate UTF-16 buffer to parse it,
+ *     and
+ *   * |TokenStreamCharsShared::copyCharBufferTo|, which copies a shared
+ *     |CharBuffer| to a |char16_t*|, is simpler if it doesn't have to convert.
+ */
+using CharBuffer = Vector<char16_t, 32>;
 
+/**
+ * Append the provided code point (in the range [U+0000, U+10FFFF], surrogate
+ * code points included) to the buffer.
+ */
+extern MOZ_MUST_USE bool AppendCodePointToCharBuffer(CharBuffer& charBuffer,
+                                                     uint32_t codePoint);
+
+/**
+ * Accumulate the range of UTF-16 text (lone surrogates permitted, because JS
+ * allows them in source text) into |charBuffer|.  Normalize '\r', '\n', and
+ * "\r\n" into '\n'.
+ */
+extern MOZ_MUST_USE bool FillCharBufferFromSourceNormalizingAsciiLineBreaks(
+    CharBuffer& charBuffer, const char16_t* cur, const char16_t* end);
+
+/**
+ * Accumulate the range of previously-validated UTF-8 text into |charBuffer|.
+ * Normalize '\r', '\n', and "\r\n" into '\n'.
+ */
+extern MOZ_MUST_USE bool FillCharBufferFromSourceNormalizingAsciiLineBreaks(
+    CharBuffer& charBuffer, const mozilla::Utf8Unit* cur,
+    const mozilla::Utf8Unit* end);
+
+class TokenStreamCharsShared {
  protected:
+  JSContext* cx;
+
   /**
    * Buffer transiently used to store sequences of identifier or string code
    * points when such can't be directly processed from the original source
@@ -1515,14 +1552,11 @@ class TokenStreamCharsShared {
   CharBuffer charBuffer;
 
   /** Information for parsing with a lifetime longer than the parser itself. */
-  CompilationInfo* compilationInfo;
+  ParserAtomsTable* parserAtoms;
 
  protected:
-  explicit TokenStreamCharsShared(JSContext* cx,
-                                  CompilationInfo* compilationInfo)
-      : charBuffer(cx), compilationInfo(compilationInfo) {}
-
-  MOZ_MUST_USE bool appendCodePointToCharBuffer(uint32_t codePoint);
+  explicit TokenStreamCharsShared(JSContext* cx, ParserAtomsTable* parserAtoms)
+      : cx(cx), charBuffer(cx), parserAtoms(parserAtoms) {}
 
   MOZ_MUST_USE bool copyCharBufferTo(
       JSContext* cx, UniquePtr<char16_t[], JS::FreePolicy>* destination);
@@ -1537,21 +1571,13 @@ class TokenStreamCharsShared {
     return mozilla::IsAscii(static_cast<char32_t>(unit));
   }
 
-  JSAtom* drainCharBufferIntoAtom() {
-    JSAtom* atom = AtomizeChars(this->compilationInfo->cx, charBuffer.begin(),
-                                charBuffer.length());
+  const ParserAtom* drainCharBufferIntoAtom() {
+    // Add to parser atoms table.
+    const ParserAtom* atom = this->parserAtoms->internChar16(
+        cx, charBuffer.begin(), charBuffer.length());
     if (!atom) {
       return nullptr;
     }
-
-    // Add to parser atoms table.
-#ifdef JS_PARSER_ATOMS
-    auto maybeId = this->compilationInfo->parserAtoms.internChar16(
-        this->compilationInfo->cx, charBuffer.begin(), charBuffer.length());
-    if (maybeId.isErr()) {
-      return nullptr;
-    }
-#endif  // JS_PARSER_ATOMS
 
     charBuffer.clear();
     return atom;
@@ -1569,8 +1595,7 @@ class TokenStreamCharsShared {
   CharBuffer& getCharBuffer() { return charBuffer; }
 };
 
-inline mozilla::Span<const char> ToCharSpan(
-    mozilla::Span<const mozilla::Utf8Unit> codeUnits) {
+inline auto ToCharSpan(mozilla::Span<const mozilla::Utf8Unit> codeUnits) {
   static_assert(alignof(char) == alignof(mozilla::Utf8Unit),
                 "must have equal alignment to reinterpret_cast<>");
   static_assert(sizeof(char) == sizeof(mozilla::Utf8Unit),
@@ -1584,8 +1609,8 @@ inline mozilla::Span<const char> ToCharSpan(
   // Second, Utf8Unit *contains* a |char|.  Examining that memory as |char|
   // is simply, per C++11 [basic.lval]p10, to access the memory according to
   // the dynamic type of the object: essentially trivially safe.
-  return mozilla::MakeSpan(reinterpret_cast<const char*>(codeUnits.data()),
-                           codeUnits.size());
+  return mozilla::Span{reinterpret_cast<const char*>(codeUnits.data()),
+                       codeUnits.size()};
 }
 
 template <typename Unit>
@@ -1599,7 +1624,7 @@ class TokenStreamCharsBase : public TokenStreamCharsShared {
   // End of fields.
 
  protected:
-  TokenStreamCharsBase(JSContext* cx, CompilationInfo* compilationInfo,
+  TokenStreamCharsBase(JSContext* cx, ParserAtomsTable* parserAtoms,
                        const Unit* units, size_t length, size_t startOffset);
 
   /**
@@ -1616,7 +1641,8 @@ class TokenStreamCharsBase : public TokenStreamCharsShared {
     sourceUnits.ungetCodeUnit();
   }
 
-  MOZ_ALWAYS_INLINE JSAtom* atomizeSourceChars(mozilla::Span<const Unit> units);
+  MOZ_ALWAYS_INLINE const ParserAtom* atomizeSourceChars(
+      mozilla::Span<const Unit> units);
 
   /**
    * Try to match a non-LineTerminator ASCII code point.  Return true iff it
@@ -1660,14 +1686,6 @@ class TokenStreamCharsBase : public TokenStreamCharsShared {
   inline void consumeKnownCodeUnit(T) = delete;
 
   /**
-   * Accumulate the provided range of already-validated text (valid UTF-8, or
-   * anything if Unit is char16_t because JS allows lone surrogates) into
-   * |charBuffer|.  Normalize '\r', '\n', and "\r\n" into '\n'.
-   */
-  MOZ_MUST_USE bool fillCharBufferFromSourceNormalizingAsciiLineBreaks(
-      const Unit* cur, const Unit* end);
-
-  /**
    * Add a null-terminated line of context to error information, for the line
    * in |sourceUnits| that contains |offset|.  Also record the window's
    * length and the offset of the error in the window.  (Don't bother adding
@@ -1702,45 +1720,17 @@ inline void TokenStreamCharsBase<Unit>::consumeKnownCodeUnit(int32_t unit) {
 }
 
 template <>
-MOZ_ALWAYS_INLINE JSAtom* TokenStreamCharsBase<char16_t>::atomizeSourceChars(
+MOZ_ALWAYS_INLINE const ParserAtom*
+TokenStreamCharsBase<char16_t>::atomizeSourceChars(
     mozilla::Span<const char16_t> units) {
-  JSAtom* atom =
-      AtomizeChars(this->compilationInfo->cx, units.data(), units.size());
-  if (!atom) {
-    return nullptr;
-  }
-
-#ifdef JS_PARSER_ATOMS
-  auto maybeId = this->compilationInfo->parserAtoms.internChar16(
-      this->compilationInfo->cx, units.data(), units.size());
-  if (maybeId.isErr()) {
-    return nullptr;
-  }
-#endif  // JS_PARSER_ATOMS
-
-  return atom;
+  return this->parserAtoms->internChar16(cx, units.data(), units.size());
 }
 
 template <>
-/* static */ MOZ_ALWAYS_INLINE JSAtom*
+/* static */ MOZ_ALWAYS_INLINE const ParserAtom*
 TokenStreamCharsBase<mozilla::Utf8Unit>::atomizeSourceChars(
     mozilla::Span<const mozilla::Utf8Unit> units) {
-  auto chars = ToCharSpan(units);
-  JSAtom* atom =
-      AtomizeUTF8Chars(this->compilationInfo->cx, chars.data(), chars.size());
-  if (!atom) {
-    return nullptr;
-  }
-
-#ifdef JS_PARSER_ATOMS
-  auto maybeId = this->compilationInfo->parserAtoms.internUtf8(
-      this->compilationInfo->cx, units.data(), units.size());
-  if (maybeId.isErr()) {
-    return nullptr;
-  }
-#endif  // JS_PARSER_ATOMS
-
-  return atom;
+  return this->parserAtoms->internUtf8(cx, units.data(), units.size());
 }
 
 template <typename Unit>
@@ -1949,7 +1939,6 @@ class GeneralTokenStreamChars : public SpecializedTokenStreamCharsBase<Unit> {
 
  protected:
   using CharsBase::addLineOfContext;
-  using CharsBase::fillCharBufferFromSourceNormalizingAsciiLineBreaks;
   using CharsBase::matchCodeUnit;
   using CharsBase::matchLineTerminator;
   using TokenStreamCharsShared::drainCharBufferIntoAtom;
@@ -2024,7 +2013,7 @@ class GeneralTokenStreamChars : public SpecializedTokenStreamCharsBase<Unit> {
     newToken(TokenKind::BigInt, start, modifier, out);
   }
 
-  void newAtomToken(TokenKind kind, JSAtom* atom, TokenStart start,
+  void newAtomToken(TokenKind kind, const ParserAtom* atom, TokenStart start,
                     TokenStreamShared::Modifier modifier, TokenKind* out) {
     MOZ_ASSERT(kind == TokenKind::String || kind == TokenKind::TemplateHead ||
                kind == TokenKind::NoSubsTemplate);
@@ -2033,13 +2022,13 @@ class GeneralTokenStreamChars : public SpecializedTokenStreamCharsBase<Unit> {
     token->setAtom(atom);
   }
 
-  void newNameToken(PropertyName* name, TokenStart start,
+  void newNameToken(const ParserName* name, TokenStart start,
                     TokenStreamShared::Modifier modifier, TokenKind* out) {
     Token* token = newToken(TokenKind::Name, start, modifier, out);
     token->setName(name);
   }
 
-  void newPrivateNameToken(PropertyName* name, TokenStart start,
+  void newPrivateNameToken(const ParserName* name, TokenStart start,
                            TokenStreamShared::Modifier modifier,
                            TokenKind* out) {
     Token* token = newToken(TokenKind::PrivateName, start, modifier, out);
@@ -2152,7 +2141,7 @@ class GeneralTokenStreamChars : public SpecializedTokenStreamCharsBase<Unit> {
    */
   void consumeOptionalHashbangComment();
 
-  JSAtom* getRawTemplateStringAtom() {
+  const ParserAtom* getRawTemplateStringAtom() {
     TokenStreamAnyChars& anyChars = anyCharsAccess();
 
     MOZ_ASSERT(anyChars.currentToken().type == TokenKind::TemplateHead ||
@@ -2177,7 +2166,8 @@ class GeneralTokenStreamChars : public SpecializedTokenStreamCharsBase<Unit> {
     // Template literals normalize only '\r' and "\r\n" to '\n'; Unicode
     // separators don't need special handling.
     // https://tc39.github.io/ecma262/#sec-static-semantics-tv-and-trv
-    if (!fillCharBufferFromSourceNormalizingAsciiLineBreaks(cur, end)) {
+    if (!FillCharBufferFromSourceNormalizingAsciiLineBreaks(this->charBuffer,
+                                                            cur, end)) {
       return nullptr;
     }
 
@@ -2464,10 +2454,8 @@ class MOZ_STACK_CLASS TokenStreamSpecific
  private:
   using CharsBase::atomizeSourceChars;
   using GeneralCharsBase::badToken;
-  using TokenStreamCharsShared::appendCodePointToCharBuffer;
   // Deliberately don't |using| |charBuffer| because of bug 1472569.  :-(
   using CharsBase::consumeKnownCodeUnit;
-  using CharsBase::fillCharBufferFromSourceNormalizingAsciiLineBreaks;
   using CharsBase::matchCodeUnit;
   using CharsBase::matchLineTerminator;
   using CharsBase::peekCodeUnit;
@@ -2499,7 +2487,7 @@ class MOZ_STACK_CLASS TokenStreamSpecific
   friend class TokenStreamPosition;
 
  public:
-  TokenStreamSpecific(JSContext* cx, CompilationInfo* compilationInfo,
+  TokenStreamSpecific(JSContext* cx, ParserAtomsTable* parserAtoms,
                       const JS::ReadOnlyCompileOptions& options,
                       const Unit* units, size_t length);
 
@@ -2596,6 +2584,8 @@ class MOZ_STACK_CLASS TokenStreamSpecific
         return;
     }
   }
+
+  void reportIllegalCharacter(int32_t cp);
 
   MOZ_MUST_USE bool putIdentInCharBuffer(const Unit* identStart);
 
@@ -2911,7 +2901,6 @@ class MOZ_STACK_CLASS TokenStreamSpecific
 template <typename Unit>
 template <class AnyCharsAccess>
 inline TokenStreamPosition<Unit>::TokenStreamPosition(
-    AutoKeepAtoms& keepAtoms,
     TokenStreamSpecific<Unit, AnyCharsAccess>& tokenStream)
     : currentToken(tokenStream.anyCharsAccess().currentToken()) {
   TokenStreamAnyChars& anyChars = tokenStream.anyCharsAccess();
@@ -2945,12 +2934,12 @@ class MOZ_STACK_CLASS TokenStream
   using Unit = char16_t;
 
  public:
-  TokenStream(JSContext* cx, CompilationInfo* compilationInfo,
+  TokenStream(JSContext* cx, ParserAtomsTable* parserAtoms,
               const JS::ReadOnlyCompileOptions& options, const Unit* units,
               size_t length, StrictModeGetter* smg)
       : TokenStreamAnyChars(cx, options, smg),
         TokenStreamSpecific<Unit, TokenStreamAnyCharsAccess>(
-            cx, compilationInfo, options, units, length) {}
+            cx, parserAtoms, options, units, length) {}
 };
 
 class MOZ_STACK_CLASS DummyTokenStream final : public TokenStream {

@@ -6,13 +6,13 @@
 
 // Encoding and decoding packets off the wire.
 use crate::cid::{ConnectionId, ConnectionIdDecoder, ConnectionIdRef, MAX_CONNECTION_ID_LEN};
-use crate::crypto::{CryptoDxState, CryptoStates};
-use crate::tracking::PNSpace;
+use crate::crypto::{CryptoDxState, CryptoSpace, CryptoStates};
 use crate::{Error, Res};
 
 use neqo_common::{hex, hex_with_len, qtrace, Decoder, Encoder};
 use neqo_crypto::random;
 
+use std::cmp::min;
 use std::convert::TryFrom;
 use std::fmt;
 use std::iter::ExactSizeIterator;
@@ -26,14 +26,16 @@ const PACKET_TYPE_RETRY: u8 = 0x03;
 
 pub const PACKET_BIT_LONG: u8 = 0x80;
 const PACKET_BIT_SHORT: u8 = 0x00;
-const PACKET_BIT_KEY_PHASE: u8 = 0x04;
 const PACKET_BIT_FIXED_QUIC: u8 = 0x40;
+const PACKET_BIT_SPIN: u8 = 0x20;
+const PACKET_BIT_KEY_PHASE: u8 = 0x04;
 
 const PACKET_HP_MASK_LONG: u8 = 0x0f;
 const PACKET_HP_MASK_SHORT: u8 = 0x1f;
 
 const SAMPLE_SIZE: usize = 16;
 const SAMPLE_OFFSET: usize = 4;
+const MAX_PACKET_NUMBER_LEN: usize = 4;
 
 mod retry;
 
@@ -64,11 +66,37 @@ impl PacketType {
     }
 }
 
+impl Into<CryptoSpace> for PacketType {
+    fn into(self) -> CryptoSpace {
+        match self {
+            Self::Initial => CryptoSpace::Initial,
+            Self::ZeroRtt => CryptoSpace::ZeroRtt,
+            Self::Handshake => CryptoSpace::Handshake,
+            Self::Short => CryptoSpace::ApplicationData,
+            _ => panic!("shouldn't be here"),
+        }
+    }
+}
+
+impl From<CryptoSpace> for PacketType {
+    fn from(cs: CryptoSpace) -> Self {
+        match cs {
+            CryptoSpace::Initial => Self::Initial,
+            CryptoSpace::ZeroRtt => Self::ZeroRtt,
+            CryptoSpace::Handshake => Self::Handshake,
+            CryptoSpace::ApplicationData => Self::Short,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum QuicVersion {
     Draft27,
     Draft28,
     Draft29,
+    Draft30,
+    Draft31,
+    Draft32,
 }
 
 impl QuicVersion {
@@ -77,6 +105,9 @@ impl QuicVersion {
             Self::Draft27 => 0xff00_0000 + 27,
             Self::Draft28 => 0xff00_0000 + 28,
             Self::Draft29 => 0xff00_0000 + 29,
+            Self::Draft30 => 0xff00_0000 + 30,
+            Self::Draft31 => 0xff00_0000 + 31,
+            Self::Draft32 => 0xff00_0000 + 32,
         }
     }
 }
@@ -97,6 +128,12 @@ impl TryFrom<Version> for QuicVersion {
             Ok(Self::Draft28)
         } else if ver == 0xff00_0000 + 29 {
             Ok(Self::Draft29)
+        } else if ver == 0xff00_0000 + 30 {
+            Ok(Self::Draft30)
+        } else if ver == 0xff00_0000 + 31 {
+            Ok(Self::Draft31)
+        } else if ver == 0xff00_0000 + 32 {
+            Ok(Self::Draft32)
         } else {
             Err(Error::VersionNegotiation)
         }
@@ -119,15 +156,26 @@ pub struct PacketBuilder {
     pn: PacketNumber,
     header: Range<usize>,
     offsets: PacketBuilderOffsets,
+    limit: usize,
 }
 
 impl PacketBuilder {
+    fn infer_limit(encoder: &Encoder) -> usize {
+        if encoder.capacity() > 64 {
+            encoder.capacity()
+        } else {
+            2048
+        }
+    }
+
     /// Start building a short header packet.
-    pub fn short(mut encoder: Encoder, key_phase: bool, dcid: &ConnectionId) -> Self {
+    #[allow(clippy::unknown_clippy_lints)] // Until we require rust 1.45.
+    #[allow(clippy::reversed_empty_ranges)]
+    pub fn short(mut encoder: Encoder, key_phase: bool, dcid: impl AsRef<[u8]>) -> Self {
         let header_start = encoder.len();
-        // TODO(mt) randomize the spin bit
         encoder.encode_byte(PACKET_BIT_SHORT | PACKET_BIT_FIXED_QUIC | (u8::from(key_phase) << 2));
-        encoder.encode(&dcid);
+        encoder.encode(dcid.as_ref());
+        let limit = Self::infer_limit(&encoder);
         Self {
             encoder,
             pn: u64::max_value(),
@@ -137,24 +185,28 @@ impl PacketBuilder {
                 pn: 0..0,
                 len: 0,
             },
+            limit,
         }
     }
 
     /// Start building a long header packet.
     /// For an Initial packet you will need to call initial_token(),
     /// even if the token is empty.
+    #[allow(clippy::unknown_clippy_lints)] // Until we require rust 1.45.
+    #[allow(clippy::reversed_empty_ranges)] // For initializing an empty range.
     pub fn long(
         mut encoder: Encoder,
         pt: PacketType,
         quic_version: QuicVersion,
-        dcid: &ConnectionId,
-        scid: &ConnectionId,
+        dcid: impl AsRef<[u8]>,
+        scid: impl AsRef<[u8]>,
     ) -> Self {
         let header_start = encoder.len();
         encoder.encode_byte(PACKET_BIT_LONG | PACKET_BIT_FIXED_QUIC | pt.code() << 4);
         encoder.encode_uint(4, quic_version.as_u32());
-        encoder.encode_vec(1, dcid);
-        encoder.encode_vec(1, scid);
+        encoder.encode_vec(1, dcid.as_ref());
+        encoder.encode_vec(1, scid.as_ref());
+        let limit = Self::infer_limit(&encoder);
         Self {
             encoder,
             pn: u64::max_value(),
@@ -164,7 +216,38 @@ impl PacketBuilder {
                 pn: 0..0,
                 len: 0,
             },
+            limit,
         }
+    }
+
+    fn is_long(&self) -> bool {
+        self[self.header.start] & 0x80 == PACKET_BIT_LONG
+    }
+
+    /// This stores a value that can be used as a limit.  This does not cause
+    /// this limit to be enforced until encryption occurs.  Prior to that, it
+    /// is only used voluntarily by users of the builder, through `remaining()`.
+    pub fn set_limit(&mut self, limit: usize) {
+        self.limit = limit;
+    }
+
+    /// How many bytes remain against the size limit for the builder.
+    #[must_use]
+    pub fn remaining(&self) -> usize {
+        self.limit - self.encoder.len()
+    }
+
+    /// Pad with "PADDING" frames.
+    pub fn pad(&mut self) {
+        self.encoder.pad_to(self.limit, 0);
+    }
+
+    /// Add unpredictable values for unprotected parts of the packet.
+    pub fn scramble(&mut self, quic_bit: bool) {
+        let mask = if quic_bit { PACKET_BIT_FIXED_QUIC } else { 0 }
+            | if self.is_long() { 0 } else { PACKET_BIT_SPIN };
+        let first = self.header.start;
+        self[first] ^= random(1)[0] & mask;
     }
 
     /// For an Initial packet, encode the token.
@@ -182,18 +265,21 @@ impl PacketBuilder {
     /// The length is filled in after calling `build`.
     pub fn pn(&mut self, pn: PacketNumber, pn_len: usize) {
         // Reserve space for a length in long headers.
-        if (self.encoder[self.header.start] & 0x80) == PACKET_BIT_LONG {
+        if self.is_long() {
             self.offsets.len = self.encoder.len();
             self.encoder.encode(&[0; 2]);
         }
+
+        // This allows the input to be >4, which is absurd, but we can eat that.
+        let pn_len = min(MAX_PACKET_NUMBER_LEN, pn_len);
+        debug_assert_ne!(pn_len, 0);
         // Encode the packet number and save its offset.
-        debug_assert!(pn_len <= 4 && pn_len > 0);
         let pn_offset = self.encoder.len();
         self.encoder.encode_uint(pn_len, pn);
         self.offsets.pn = pn_offset..self.encoder.len();
 
         // Now encode the packet number length and save the header length.
-        self.encoder[self.header.start] |= (pn_len - 1) as u8;
+        self.encoder[self.header.start] |= u8::try_from(pn_len - 1).unwrap();
         self.header.end = self.encoder.len();
         self.pn = pn;
     }
@@ -204,11 +290,25 @@ impl PacketBuilder {
         self.encoder[self.offsets.len + 1] = (len & 0xff) as u8;
     }
 
+    fn pad_for_crypto(&mut self, crypto: &mut CryptoDxState) {
+        // Make sure that there is enough data in the packet.
+        // The length of the packet number plus the payload length needs to
+        // be at least 4 (MAX_PACKET_NUMBER_LEN) plus any amount by which
+        // the header protection sample exceeds the AEAD expansion.
+        let crypto_pad = crypto.extra_padding();
+        self.encoder.pad_to(
+            self.offsets.pn.start + MAX_PACKET_NUMBER_LEN + crypto_pad,
+            0,
+        );
+    }
+
     /// Build the packet and return the encoder.
     pub fn build(mut self, crypto: &mut CryptoDxState) -> Res<Encoder> {
+        self.pad_for_crypto(crypto);
         if self.offsets.len > 0 {
             self.write_len(crypto.expansion());
         }
+
         let hdr = &self.encoder[self.header.clone()];
         let body = &self.encoder[self.header.end..];
         qtrace!(
@@ -247,7 +347,7 @@ impl PacketBuilder {
 
     /// Work out if nothing was added after the header.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub fn packet_empty(&self) -> bool {
         self.encoder.len() == self.header.end
     }
 
@@ -297,6 +397,9 @@ impl PacketBuilder {
         encoder.encode_uint(4, QuicVersion::Draft27.as_u32());
         encoder.encode_uint(4, QuicVersion::Draft28.as_u32());
         encoder.encode_uint(4, QuicVersion::Draft29.as_u32());
+        encoder.encode_uint(4, QuicVersion::Draft30.as_u32());
+        encoder.encode_uint(4, QuicVersion::Draft31.as_u32());
+        encoder.encode_uint(4, QuicVersion::Draft32.as_u32());
         // Add a greased version, using the randomness already generated.
         for g in &mut grease[..4] {
             *g = *g & 0xf0 | 0x0a;
@@ -391,27 +494,23 @@ impl<'a> PublicPacket<'a> {
         let first = Self::opt(decoder.decode_byte())?;
 
         if first & 0x80 == PACKET_BIT_SHORT {
-            return if first & 0x40 == PACKET_BIT_FIXED_QUIC {
-                let dcid = Self::opt(dcid_decoder.decode_cid(&mut decoder))?;
-                if decoder.remaining() < SAMPLE_OFFSET + SAMPLE_SIZE {
-                    return Err(Error::InvalidPacket);
-                }
-                let header_len = decoder.offset();
-                Ok((
-                    Self {
-                        packet_type: PacketType::Short,
-                        dcid,
-                        scid: None,
-                        token: &[],
-                        header_len,
-                        quic_version: None,
-                        data,
-                    },
-                    &[],
-                ))
-            } else {
-                Err(Error::InvalidPacket)
-            };
+            let dcid = Self::opt(dcid_decoder.decode_cid(&mut decoder))?;
+            if decoder.remaining() < SAMPLE_OFFSET + SAMPLE_SIZE {
+                return Err(Error::InvalidPacket);
+            }
+            let header_len = decoder.offset();
+            return Ok((
+                Self {
+                    packet_type: PacketType::Short,
+                    dcid,
+                    scid: None,
+                    token: &[],
+                    header_len,
+                    quic_version: None,
+                    data,
+                },
+                &[],
+            ));
         }
 
         // Generic long header.
@@ -453,9 +552,6 @@ impl<'a> PublicPacket<'a> {
             ));
         };
 
-        if (first & PACKET_BIT_FIXED_QUIC) != PACKET_BIT_FIXED_QUIC {
-            return Err(Error::InvalidPacket);
-        }
         if dcid.len() > MAX_CONNECTION_ID_LEN || scid.len() > MAX_CONNECTION_ID_LEN {
             return Err(Error::InvalidPacket);
         }
@@ -508,7 +604,7 @@ impl<'a> PublicPacket<'a> {
 
     pub fn is_valid_initial(&self) -> bool {
         // Packet has to be an initial, with a DCID of 8 bytes, or a token.
-        // Assume that the Server class validates the token.
+        // Note: the Server class validates the token and checks the length.
         self.packet_type == PacketType::Initial
             && (self.dcid().len() >= 8 || !self.token.is_empty())
     }
@@ -535,7 +631,7 @@ impl<'a> PublicPacket<'a> {
         self.quic_version
     }
 
-    pub fn packet_len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.data.len()
     }
 
@@ -589,7 +685,7 @@ impl<'a> PublicPacket<'a> {
 
         // Unmask the PN.
         let mut pn_encoded: u64 = 0;
-        for i in 0..4 {
+        for i in 0..MAX_PACKET_NUMBER_LEN {
             hdrbytes[self.header_len + i] ^= mask[1 + i];
             pn_encoded <<= 8;
             pn_encoded += u64::from(hdrbytes[self.header_len + i]);
@@ -598,7 +694,7 @@ impl<'a> PublicPacket<'a> {
         // Now decode the packet number length and apply it, hopefully in constant time.
         let pn_len = usize::from((first_byte & 0x3) + 1);
         hdrbytes.truncate(self.header_len + pn_len);
-        pn_encoded >>= 8 * (4 - pn_len);
+        pn_encoded >>= 8 * (MAX_PACKET_NUMBER_LEN - pn_len);
 
         qtrace!("unmasked hdr={}", hex(&hdrbytes));
 
@@ -614,34 +710,34 @@ impl<'a> PublicPacket<'a> {
     }
 
     pub fn decrypt(&self, crypto: &mut CryptoStates, release_at: Instant) -> Res<DecryptedPacket> {
-        let space = PNSpace::from(self.packet_type);
+        let cspace: CryptoSpace = self.packet_type.into();
         // This has to work in two stages because we need to remove header protection
         // before picking the keys to use.
-        if let Some(rx) = crypto.rx_hp(space) {
+        if let Some(rx) = crypto.rx_hp(cspace) {
             // Note that this will dump early, which creates a side-channel.
             // This is OK in this case because we the only reason this can
             // fail is if the cryptographic module is bad or the packet is
             // too small (which is public information).
             let (key_phase, pn, header, body) = self.decrypt_header(rx)?;
             qtrace!([rx], "decoded header: {:?}", header);
-            if let Some(rx) = crypto.rx(space, key_phase) {
-                let d = rx.decrypt(pn, &header, body)?;
-                // If this is the first packet ever successfully decrypted
-                // using `rx`, make sure to initiate a key update.
-                if rx.needs_update() {
-                    crypto.key_update_received(release_at)?;
-                }
-                crypto.check_pn_overlap()?;
-                Ok(DecryptedPacket {
-                    pt: self.packet_type,
-                    pn,
-                    data: d,
-                })
-            } else {
-                Err(Error::KeysNotFound)
+            let rx = crypto.rx(cspace, key_phase).unwrap();
+            let d = rx.decrypt(pn, &header, body)?;
+            // If this is the first packet ever successfully decrypted
+            // using `rx`, make sure to initiate a key update.
+            if rx.needs_update() {
+                crypto.key_update_received(release_at)?;
             }
+            crypto.check_pn_overlap()?;
+            Ok(DecryptedPacket {
+                pt: self.packet_type,
+                pn,
+                data: d,
+            })
+        } else if crypto.rx_pending(cspace) {
+            Err(Error::KeysPending(cspace))
         } else {
-            Err(Error::KeysNotFound)
+            qtrace!("keys for {:?} already discarded", cspace);
+            Err(Error::KeysDiscarded)
         }
     }
 
@@ -818,6 +914,28 @@ mod tests {
     }
 
     #[test]
+    fn scramble_short() {
+        fixture_init();
+        let mut firsts = Vec::new();
+        for _ in 0..64 {
+            let mut builder =
+                PacketBuilder::short(Encoder::new(), true, &ConnectionId::from(SERVER_CID));
+            builder.scramble(true);
+            builder.pn(0, 1);
+            firsts.push(builder[0]);
+        }
+        let is_set = |bit| move |v| v & bit == bit;
+        // There should be at least one value with the QUIC bit set:
+        assert!(firsts.iter().any(is_set(PACKET_BIT_FIXED_QUIC)));
+        // ... but not all:
+        assert!(!firsts.iter().all(is_set(PACKET_BIT_FIXED_QUIC)));
+        // There should be at least one value with the spin bit set:
+        assert!(firsts.iter().any(is_set(PACKET_BIT_SPIN)));
+        // ... but not all:
+        assert!(!firsts.iter().all(is_set(PACKET_BIT_SPIN)));
+    }
+
+    #[test]
     fn decode_short() {
         fixture_init();
         let (packet, remainder) = PublicPacket::decode(SAMPLE_SHORT, &cid_mgr()).unwrap();
@@ -885,6 +1003,53 @@ mod tests {
     }
 
     #[test]
+    fn build_long() {
+        const EXPECTED: &[u8] = &[
+            0xe5, 0xff, 0x00, 0x00, 0x1d, 0x00, 0x00, 0x40, 0x14, 0xa8, 0x9d, 0xbf, 0x74, 0x70,
+            0x32, 0xda, 0xba, 0xfb, 0x87, 0x61, 0xb8, 0x31, 0x90, 0xf3, 0x25, 0x52, 0x0b, 0xbe,
+            0xdb,
+        ];
+
+        fixture_init();
+        let mut builder = PacketBuilder::long(
+            Encoder::new(),
+            PacketType::Handshake,
+            QuicVersion::default(),
+            &ConnectionId::from(&[][..]),
+            &ConnectionId::from(&[][..]),
+        );
+        builder.pn(0, 1);
+        builder.encode(&[1, 2, 3]);
+        let packet = builder.build(&mut CryptoDxState::test_default()).unwrap();
+        assert_eq!(&packet[..], EXPECTED);
+    }
+
+    #[test]
+    fn scramble_long() {
+        fixture_init();
+        let mut found_unset = false;
+        let mut found_set = false;
+        for _ in 1..64 {
+            let mut builder = PacketBuilder::long(
+                Encoder::new(),
+                PacketType::Handshake,
+                QuicVersion::default(),
+                &ConnectionId::from(&[][..]),
+                &ConnectionId::from(&[][..]),
+            );
+            builder.pn(0, 1);
+            builder.scramble(true);
+            if (builder[0] & PACKET_BIT_FIXED_QUIC) == 0 {
+                found_unset = true;
+            } else {
+                found_set = true;
+            }
+        }
+        assert!(found_unset);
+        assert!(found_set);
+    }
+
+    #[test]
     fn build_abort() {
         let mut builder = PacketBuilder::long(
             Encoder::new(),
@@ -915,6 +1080,24 @@ mod tests {
         0xff, 0xff, 0x00, 0x00, 0x1d, 0x00, 0x08, 0xf0, 0x67, 0xa5, 0x50, 0x2a, 0x42, 0x62, 0xb5,
         0x74, 0x6f, 0x6b, 0x65, 0x6e, 0xd1, 0x69, 0x26, 0xd8, 0x1f, 0x6f, 0x9c, 0xa2, 0x95, 0x3a,
         0x8a, 0xa4, 0x57, 0x5e, 0x1e, 0x49,
+    ];
+
+    const SAMPLE_RETRY_30: &[u8] = &[
+        0xff, 0xff, 0x00, 0x00, 0x1e, 0x00, 0x08, 0xf0, 0x67, 0xa5, 0x50, 0x2a, 0x42, 0x62, 0xb5,
+        0x74, 0x6f, 0x6b, 0x65, 0x6e, 0x2d, 0x3e, 0x04, 0x5d, 0x6d, 0x39, 0x20, 0x67, 0x89, 0x94,
+        0x37, 0x10, 0x8c, 0xe0, 0x0a, 0x61,
+    ];
+
+    const SAMPLE_RETRY_31: &[u8] = &[
+        0xff, 0xff, 0x00, 0x00, 0x1f, 0x00, 0x08, 0xf0, 0x67, 0xa5, 0x50, 0x2a, 0x42, 0x62, 0xb5,
+        0x74, 0x6f, 0x6b, 0x65, 0x6e, 0xc7, 0x0c, 0xe5, 0xde, 0x43, 0x0b, 0x4b, 0xdb, 0x7d, 0xf1,
+        0xa3, 0x83, 0x3a, 0x75, 0xf9, 0x86,
+    ];
+
+    const SAMPLE_RETRY_32: &[u8] = &[
+        0xff, 0xff, 0x00, 0x00, 0x20, 0x00, 0x08, 0xf0, 0x67, 0xa5, 0x50, 0x2a, 0x42, 0x62, 0xb5,
+        0x74, 0x6f, 0x6b, 0x65, 0x6e, 0x59, 0x75, 0x65, 0x19, 0xdd, 0x6c, 0xc8, 0x5b, 0xd9, 0x0e,
+        0x33, 0xa9, 0x34, 0xd2, 0xff, 0x85,
     ];
 
     const RETRY_TOKEN: &[u8] = b"token";
@@ -956,13 +1139,30 @@ mod tests {
     }
 
     #[test]
+    fn build_retry_30() {
+        build_retry_single(QuicVersion::Draft30, SAMPLE_RETRY_30);
+    }
+
+    #[test]
+    fn build_retry_31() {
+        build_retry_single(QuicVersion::Draft31, SAMPLE_RETRY_31);
+    }
+
+    #[test]
+    fn build_retry_32() {
+        build_retry_single(QuicVersion::Draft32, SAMPLE_RETRY_32);
+    }
+
+    #[test]
     fn build_retry_multiple() {
         // Run the build_retry test a few times.
-        // This increases the chance that the full comparison happens.
+        // Odds are approximately 1 in 8 that the full comparison doesn't happen
+        // for a given version.
         for _ in 0..32 {
             build_retry_27();
             build_retry_28();
             build_retry_29();
+            build_retry_30();
         }
     }
 
@@ -991,6 +1191,21 @@ mod tests {
     #[test]
     fn decode_retry_29() {
         decode_retry(QuicVersion::Draft29, SAMPLE_RETRY_29);
+    }
+
+    #[test]
+    fn decode_retry_30() {
+        decode_retry(QuicVersion::Draft30, SAMPLE_RETRY_30);
+    }
+
+    #[test]
+    fn decode_retry_31() {
+        decode_retry(QuicVersion::Draft31, SAMPLE_RETRY_31);
+    }
+
+    #[test]
+    fn decode_retry_32() {
+        decode_retry(QuicVersion::Draft32, SAMPLE_RETRY_32);
     }
 
     /// Check some packets that are clearly not valid Retry packets.
@@ -1029,7 +1244,8 @@ mod tests {
     const SAMPLE_VN: &[u8] = &[
         0x80, 0x00, 0x00, 0x00, 0x00, 0x08, 0xf0, 0x67, 0xa5, 0x50, 0x2a, 0x42, 0x62, 0xb5, 0x08,
         0x83, 0x94, 0xc8, 0xf0, 0x3e, 0x51, 0x57, 0x08, 0xff, 0x00, 0x00, 0x1b, 0xff, 0x00, 0x00,
-        0x1c, 0xff, 0x00, 0x00, 0x1d, 0x0a, 0x0a, 0x0a, 0x0a,
+        0x1c, 0xff, 0x00, 0x00, 0x1d, 0xff, 0x00, 0x00, 0x1e, 0xff, 0x00, 0x00, 0x1f, 0xff, 0x00,
+        0x00, 0x20, 0x0a, 0x0a, 0x0a, 0x0a,
     ];
 
     #[test]

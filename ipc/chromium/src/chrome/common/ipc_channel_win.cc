@@ -9,15 +9,18 @@
 #include <windows.h>
 #include <sstream>
 
+#include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/process_util.h"
 #include "base/rand_util.h"
 #include "base/string_util.h"
 #include "base/win_util.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/ipc_channel_utils.h"
 #include "chrome/common/ipc_message_utils.h"
 #include "mozilla/ipc/ProtocolUtils.h"
+#include "mozilla/Atomics.h"
 #include "mozilla/LateWriteChecks.h"
 #include "nsThreadUtils.h"
 
@@ -54,7 +57,7 @@ Channel::ChannelImpl::State::~State() {
 
 //------------------------------------------------------------------------------
 
-Channel::ChannelImpl::ChannelImpl(const std::wstring& channel_id, Mode mode,
+Channel::ChannelImpl::ChannelImpl(const ChannelId& channel_id, Mode mode,
                                   Listener* listener)
     : ALLOW_THIS_IN_INITIALIZER_LIST(input_state_(this)),
       ALLOW_THIS_IN_INITIALIZER_LIST(output_state_(this)),
@@ -71,7 +74,7 @@ Channel::ChannelImpl::ChannelImpl(const std::wstring& channel_id, Mode mode,
   }
 }
 
-Channel::ChannelImpl::ChannelImpl(const std::wstring& channel_id,
+Channel::ChannelImpl::ChannelImpl(const ChannelId& channel_id,
                                   HANDLE server_pipe, Mode mode,
                                   Listener* listener)
     : ALLOW_THIS_IN_INITIALIZER_LIST(input_state_(this)),
@@ -113,12 +116,12 @@ void Channel::ChannelImpl::Init(Mode mode, Listener* listener) {
 void Channel::ChannelImpl::OutputQueuePush(mozilla::UniquePtr<Message> msg) {
   mozilla::LogIPCMessage::LogDispatchWithPid(msg.get(), other_pid_);
 
-  output_queue_.push(std::move(msg));
+  output_queue_.Push(std::move(msg));
   output_queue_length_++;
 }
 
 void Channel::ChannelImpl::OutputQueuePop() {
-  output_queue_.pop();
+  mozilla::UniquePtr<Message> message = output_queue_.Pop();
   output_queue_length_--;
 }
 
@@ -144,7 +147,7 @@ void Channel::ChannelImpl::Close() {
     MessageLoopForIO::current()->WaitForIOCompletion(INFINITE, this);
   }
 
-  while (!output_queue_.empty()) {
+  while (!output_queue_.IsEmpty()) {
     OutputQueuePop();
   }
 
@@ -159,8 +162,8 @@ bool Channel::ChannelImpl::Send(mozilla::UniquePtr<Message> message) {
 
 #ifdef IPC_MESSAGE_DEBUG_EXTRA
   DLOG(INFO) << "sending message @" << message.get() << " on channel @" << this
-             << " with type " << message->type() << " (" << output_queue_.size()
-             << " in queue)";
+             << " with type " << message->type() << " ("
+             << output_queue_.Count() << " in queue)";
 #endif
 
 #ifdef FUZZING
@@ -188,8 +191,8 @@ bool Channel::ChannelImpl::Send(mozilla::UniquePtr<Message> message) {
   return true;
 }
 
-const std::wstring Channel::ChannelImpl::PipeName(
-    const std::wstring& channel_id, int32_t* secret) const {
+const Channel::ChannelId Channel::ChannelImpl::PipeName(
+    const ChannelId& channel_id, int32_t* secret) const {
   MOZ_ASSERT(secret);
 
   std::wostringstream ss;
@@ -208,10 +211,9 @@ const std::wstring Channel::ChannelImpl::PipeName(
   return ss.str();
 }
 
-bool Channel::ChannelImpl::CreatePipe(const std::wstring& channel_id,
-                                      Mode mode) {
+bool Channel::ChannelImpl::CreatePipe(const ChannelId& channel_id, Mode mode) {
   DCHECK(pipe_ == INVALID_HANDLE_VALUE);
-  const std::wstring pipe_name = PipeName(channel_id, &shared_secret_);
+  const ChannelId pipe_name = PipeName(channel_id, &shared_secret_);
   if (mode == MODE_SERVER) {
     waiting_for_shared_secret_ = !!shared_secret_;
     pipe_ = CreateNamedPipeW(pipe_name.c_str(),
@@ -485,8 +487,8 @@ bool Channel::ChannelImpl::ProcessOutgoingMessages(
       return false;
     }
     // Message was sent.
-    DCHECK(!output_queue_.empty());
-    Message* m = output_queue_.front().get();
+    DCHECK(!output_queue_.IsEmpty());
+    Message* m = output_queue_.FirstElement().get();
 
     MOZ_RELEASE_ASSERT(partial_write_iter_.isSome());
     Pickle::BufferList::IterImpl& iter = partial_write_iter_.ref();
@@ -502,12 +504,12 @@ bool Channel::ChannelImpl::ProcessOutgoingMessages(
     }
   }
 
-  if (output_queue_.empty()) return true;
+  if (output_queue_.IsEmpty()) return true;
 
   if (INVALID_HANDLE_VALUE == pipe_) return false;
 
   // Write to pipe...
-  Message* m = output_queue_.front().get();
+  Message* m = output_queue_.FirstElement().get();
 
   if (partial_write_iter_.isNothing()) {
     Pickle::BufferList::IterImpl iter(m->Buffers());
@@ -562,7 +564,7 @@ void Channel::ChannelImpl::OnIOCompleted(MessageLoopForIO::IOContext* context,
     if (waiting_connect_) {
       if (!ProcessConnection()) return;
       // We may have some messages queued up to send...
-      if (!output_queue_.empty() && !output_state_.is_pending)
+      if (!output_queue_.IsEmpty() && !output_state_.is_pending)
         ProcessOutgoingMessages(NULL, 0);
       if (input_state_.is_pending) return;
       // else, fall-through and look for incoming messages...
@@ -591,12 +593,12 @@ uint32_t Channel::ChannelImpl::Unsound_NumQueuedMessages() const {
 
 //------------------------------------------------------------------------------
 // Channel's methods simply call through to ChannelImpl.
-Channel::Channel(const std::wstring& channel_id, Mode mode, Listener* listener)
+Channel::Channel(const ChannelId& channel_id, Mode mode, Listener* listener)
     : channel_impl_(new ChannelImpl(channel_id, mode, listener)) {
   MOZ_COUNT_CTOR(IPC::Channel);
 }
 
-Channel::Channel(const std::wstring& channel_id, void* server_pipe, Mode mode,
+Channel::Channel(const ChannelId& channel_id, void* server_pipe, Mode mode,
                  Listener* listener)
     : channel_impl_(new ChannelImpl(channel_id, server_pipe, mode, listener)) {
   MOZ_COUNT_CTOR(IPC::Channel);
@@ -631,20 +633,32 @@ uint32_t Channel::Unsound_NumQueuedMessages() const {
   return channel_impl_->Unsound_NumQueuedMessages();
 }
 
+namespace {
+
+// Global atomic used to guarantee channel IDs are unique.
+mozilla::Atomic<int> g_last_id;
+
+}  // namespace
+
 // static
-std::wstring Channel::GenerateVerifiedChannelID(const std::wstring& prefix) {
+Channel::ChannelId Channel::GenerateVerifiedChannelID() {
   // Windows pipes can be enumerated by low-privileged processes. So, we
   // append a strong random value after the \ character. This value is not
   // included in the pipe name, but sent as part of the client hello, to
   // prevent hijacking the pipe name to spoof the client.
-  std::wstring id = prefix;
-  if (!id.empty()) id.append(L".");
   int secret;
   do {  // Guarantee we get a non-zero value.
     secret = base::RandInt(0, std::numeric_limits<int>::max());
   } while (secret == 0);
-  id.append(GenerateUniqueRandomChannelID());
-  return id.append(StringPrintf(L"\\%d", secret));
+  return StringPrintf(L"%d.%u.%d\\%d", base::GetCurrentProcId(), g_last_id++,
+                      base::RandInt(0, std::numeric_limits<int32_t>::max()),
+                      secret);
+}
+
+// static
+Channel::ChannelId Channel::ChannelIDForCurrentProcess() {
+  return CommandLine::ForCurrentProcess()->GetSwitchValue(
+      switches::kProcessChannelID);
 }
 
 }  // namespace IPC
