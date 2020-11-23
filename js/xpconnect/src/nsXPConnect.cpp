@@ -556,11 +556,8 @@ nsresult InitClassesWithNewWrappedGlobal(JSContext* aJSContext,
     if (!JS_DefineProfilingFunctions(aJSContext, global)) {
       return UnexpectedFailure(NS_ERROR_OUT_OF_MEMORY);
     }
-    if (aPrincipal->IsSystemPrincipal()) {
-      if (!glean::Glean::DefineGlean(aJSContext, global) ||
-          !glean::GleanPings::DefineGleanPings(aJSContext, global)) {
-        return UnexpectedFailure(NS_ERROR_FAILURE);
-      }
+    if (!js::DefineTestingFunctions(aJSContext, global, false, false)) {
+      return UnexpectedFailure(NS_ERROR_OUT_OF_MEMORY);
     }
   }
 
