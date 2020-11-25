@@ -66,9 +66,7 @@
 #  endif
 #endif
 
-#ifdef MOZ_CODE_COVERAGE
 #  include "mozilla/CodeCoverageHandler.h"
-#endif
 
 // all this crap is needed to do the interactive shell stuff
 #include <stdlib.h>
@@ -1335,9 +1333,7 @@ int XRE_XPCShellMain(int argc, char** argv, char** envp,
 #  endif
 #endif
 
-#ifdef MOZ_CODE_COVERAGE
     CodeCoverageHandler::Init();
-#endif
 
     {
       if (!glob) {

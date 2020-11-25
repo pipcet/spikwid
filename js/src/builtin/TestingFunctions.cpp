@@ -284,11 +284,7 @@ static bool GetBuildConfiguration(JSContext* cx, unsigned argc, Value* vp) {
     return false;
   }
 
-#ifdef MOZ_CODE_COVERAGE
   value = BooleanValue(true);
-#else
-  value = BooleanValue(false);
-#endif
   if (!JS_SetProperty(cx, info, "coverage", value)) {
     return false;
   }

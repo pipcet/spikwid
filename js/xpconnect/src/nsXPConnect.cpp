@@ -556,9 +556,6 @@ nsresult InitClassesWithNewWrappedGlobal(JSContext* aJSContext,
     if (!JS_DefineProfilingFunctions(aJSContext, global)) {
       return UnexpectedFailure(NS_ERROR_OUT_OF_MEMORY);
     }
-    if (!js::DefineTestingFunctions(aJSContext, global, false, false)) {
-      return UnexpectedFailure(NS_ERROR_OUT_OF_MEMORY);
-    }
   }
 
   aNewGlobal.set(global);

@@ -498,9 +498,7 @@ bool gLCovIsEnabled = false;
 
 void InitLCov() {
   const char* outDir = getenv("JS_CODE_COVERAGE_OUTPUT_DIR");
-  if (outDir && *outDir != 0) {
-    EnableLCov();
-  }
+  EnableLCov();
 }
 
 void EnableLCov() {
