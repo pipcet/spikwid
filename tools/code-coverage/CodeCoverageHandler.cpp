@@ -53,10 +53,10 @@ void CodeCoverageHandler::FlushCounters() {
   CrossProcessMutexAutoLock lock(*CodeCoverageHandler::Get()->GetMutex());
 
 #if defined(__clang__) && __clang_major__ >= 12
-  __gcov_dump();
-  __gcov_reset();
+  //__gcov_dump();
+  //__gcov_reset();
 #else
-  __gcov_flush();
+  //__gcov_flush();
 #endif
 
   printf_stderr("[CodeCoverage] flush completed.\n");
