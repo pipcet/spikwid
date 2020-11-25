@@ -23,6 +23,7 @@
 #include "mozilla/Mutex.h"
 #include "prtime.h"
 #include "nsIObserverService.h"
+#include "nsWeakReference.h"
 
 #define NS_N(x) (sizeof(x) / sizeof(*x))
 

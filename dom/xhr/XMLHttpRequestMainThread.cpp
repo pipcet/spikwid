@@ -32,9 +32,11 @@
 #include "mozilla/Encoding.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/EventListenerManager.h"
+#include "mozilla/HoldDropJSObjects.h"
 #include "mozilla/LoadInfo.h"
 #include "mozilla/LoadContext.h"
 #include "mozilla/MemoryReporting.h"
+#include "mozilla/SpinEventLoopUntil.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_network.h"
 #include "mozilla/StaticPrefs_privacy.h"
@@ -53,6 +55,7 @@
 #include "nsIAuthPrompt.h"
 #include "nsIAuthPrompt2.h"
 #include "nsIClassOfService.h"
+#include "nsIHttpChannel.h"
 #include "nsISupportsPriority.h"
 #include "nsIInterfaceRequestorUtils.h"
 #include "nsStreamUtils.h"
@@ -1397,7 +1400,8 @@ nsresult XMLHttpRequestMainThread::Open(const nsACString& aMethod,
   // Gecko-specific
   if (!aAsync && !DontWarnAboutSyncXHR() && GetOwner() &&
       GetOwner()->GetExtantDoc()) {
-    GetOwner()->GetExtantDoc()->WarnOnceAbout(Document::eSyncXMLHttpRequest);
+    GetOwner()->GetExtantDoc()->WarnOnceAbout(
+        DeprecatedOperations::eSyncXMLHttpRequest);
   }
 
   Telemetry::Accumulate(Telemetry::XMLHTTPREQUEST_ASYNC_OR_SYNC,
@@ -3675,6 +3679,13 @@ NS_IMETHODIMP XMLHttpRequestMainThread::nsHeaderVisitor::VisitHeader(
   }
   return NS_OK;
 }
+
+XMLHttpRequestMainThread::nsHeaderVisitor::nsHeaderVisitor(
+    const XMLHttpRequestMainThread& aXMLHttpRequest,
+    NotNull<nsIHttpChannel*> aHttpChannel)
+    : mXHR(aXMLHttpRequest), mHttpChannel(aHttpChannel) {}
+
+XMLHttpRequestMainThread::nsHeaderVisitor::~nsHeaderVisitor() = default;
 
 void XMLHttpRequestMainThread::MaybeCreateBlobStorage() {
   MOZ_ASSERT(mResponseType == XMLHttpRequestResponseType::Blob);

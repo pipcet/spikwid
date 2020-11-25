@@ -6,8 +6,10 @@
 
 #include "places_test_harness.h"
 #include "nsIPrefBranch.h"
+#include "nsIPrefService.h"
 #include "nsString.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/SpinEventLoopUntil.h"
 #include "mozilla/StaticPrefs_layout.h"
 #include "nsNetUtil.h"
 

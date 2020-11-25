@@ -10,7 +10,6 @@
 #include "js/TypeDecls.h"
 #include "ipc/IPCMessageUtils.h"
 #include "mozilla/Attributes.h"
-#include "mozilla/ErrorResult.h"
 #include "mozilla/dom/PromiseNativeHandler.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsDataHashtable.h"
@@ -20,7 +19,13 @@ class nsIGlobalObject;
 class nsQueryJSActor;
 
 namespace mozilla {
+class ErrorResult;
+
 namespace dom {
+
+namespace ipc {
+class StructuredCloneData;
+}
 
 class JSActorManager;
 class JSActorMessageMeta;

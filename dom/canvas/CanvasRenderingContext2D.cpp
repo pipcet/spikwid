@@ -75,6 +75,8 @@
 #include "mozilla/Assertions.h"
 #include "mozilla/CheckedInt.h"
 #include "mozilla/DebugOnly.h"
+#include "mozilla/dom/CanvasGradient.h"
+#include "mozilla/dom/CanvasPattern.h"
 #include "mozilla/dom/DOMMatrix.h"
 #include "mozilla/dom/ImageBitmap.h"
 #include "mozilla/dom/ImageData.h"
@@ -912,6 +914,25 @@ CanvasRenderingContext2D::ContextState::ContextState(const ContextState& aOther)
 
 CanvasRenderingContext2D::ContextState::~ContextState() = default;
 
+void CanvasRenderingContext2D::ContextState::SetColorStyle(Style aWhichStyle,
+                                                           nscolor aColor) {
+  colorStyles[aWhichStyle] = aColor;
+  gradientStyles[aWhichStyle] = nullptr;
+  patternStyles[aWhichStyle] = nullptr;
+}
+
+void CanvasRenderingContext2D::ContextState::SetPatternStyle(
+    Style aWhichStyle, CanvasPattern* aPat) {
+  gradientStyles[aWhichStyle] = nullptr;
+  patternStyles[aWhichStyle] = aPat;
+}
+
+void CanvasRenderingContext2D::ContextState::SetGradientStyle(
+    Style aWhichStyle, CanvasGradient* aGrad) {
+  gradientStyles[aWhichStyle] = aGrad;
+  patternStyles[aWhichStyle] = nullptr;
+}
+
 /**
  ** CanvasRenderingContext2D impl
  **/
@@ -1443,6 +1464,16 @@ bool CanvasRenderingContext2D::TryBasicTarget(
 
   aOutProvider = new PersistentBufferProviderBasic(aOutDT);
   return true;
+}
+
+PresShell* CanvasRenderingContext2D::GetPresShell() {
+  if (mCanvasElement) {
+    return mCanvasElement->OwnerDoc()->GetPresShell();
+  }
+  if (mDocShell) {
+    return mDocShell->GetPresShell();
+  }
+  return nullptr;
 }
 
 NS_IMETHODIMP
@@ -5430,6 +5461,31 @@ bool CanvasRenderingContext2D::IsContextCleanForFrameCapture() {
 bool CanvasRenderingContext2D::ShouldForceInactiveLayer(
     LayerManager* aManager) {
   return !aManager->CanUseCanvasLayerForSize(GetSize());
+}
+
+void CanvasRenderingContext2D::GetAppUnitsValues(int32_t* aPerDevPixel,
+                                                 int32_t* aPerCSSPixel) {
+  // If we don't have a canvas element, we just return something generic.
+  if (aPerDevPixel) {
+    *aPerDevPixel = 60;
+  }
+  if (aPerCSSPixel) {
+    *aPerCSSPixel = 60;
+  }
+  PresShell* presShell = GetPresShell();
+  if (!presShell) {
+    return;
+  }
+  nsPresContext* presContext = presShell->GetPresContext();
+  if (!presContext) {
+    return;
+  }
+  if (aPerDevPixel) {
+    *aPerDevPixel = presContext->AppUnitsPerDevPixel();
+  }
+  if (aPerCSSPixel) {
+    *aPerCSSPixel = AppUnitsPerCSSPixel();
+  }
 }
 
 void CanvasRenderingContext2D::SetWriteOnly() {

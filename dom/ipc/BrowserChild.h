@@ -19,7 +19,6 @@
 #include "nsIWindowProvider.h"
 #include "nsIDocShell.h"
 #include "nsIInterfaceRequestorUtils.h"
-#include "nsFrameMessageManager.h"
 #include "nsWeakReference.h"
 #include "nsIBrowserChild.h"
 #include "nsITooltipListener.h"
@@ -29,6 +28,7 @@
 #include "mozilla/dom/TabContext.h"
 #include "mozilla/dom/CoalescedMouseData.h"
 #include "mozilla/dom/CoalescedWheelData.h"
+#include "mozilla/dom/MessageManagerCallback.h"
 #include "mozilla/DOMEventTargetHelper.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/EventForwards.h"
@@ -41,6 +41,7 @@
 #include "AudioChannelService.h"
 #include "PuppetWidget.h"
 #include "nsDeque.h"
+#include "nsIRemoteTab.h"
 
 class nsBrowserStatusFilter;
 class nsIDOMWindow;

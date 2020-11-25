@@ -9,6 +9,7 @@
 #include "mozilla/PRemoteDecoderManagerChild.h"
 #include "mozilla/RDDProcessHost.h"
 #include "mozilla/ipc/TaskFactory.h"
+#include "nsIObserver.h"
 
 namespace mozilla {
 
@@ -93,6 +94,7 @@ class RDDProcessManager final : public RDDProcessHost::Listener {
   const RefPtr<Observer> mObserver;
   ipc::TaskFactory<RDDProcessManager> mTaskFactory;
   uint32_t mNumProcessAttempts = 0;
+  uint32_t mNumUnexpectedCrashes = 0;
 
   // Fields that are associated with the current RDD process.
   RDDProcessHost* mProcess = nullptr;

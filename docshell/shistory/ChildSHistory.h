@@ -20,9 +20,10 @@
 #define mozilla_dom_ChildSHistory_h
 
 #include "nsCOMPtr.h"
-#include "mozilla/ErrorResult.h"
+#include "mozilla/dom/BindingDeclarations.h"
 #include "nsWrapperCache.h"
 #include "nsThreadUtils.h"
+#include "mozilla/ErrorResult.h"
 #include "mozilla/LinkedList.h"
 #include "nsID.h"
 
