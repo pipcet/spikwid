@@ -223,10 +223,11 @@ void CacheQuotaClient::ReleaseIOThreadObjects() {
   // automatically.
 }
 
-void CacheQuotaClient::AbortOperations(const nsACString& aOrigin) {
+void CacheQuotaClient::AbortOperationsForLocks(
+    const DirectoryLockIdTable& aDirectoryLockIds) {
   AssertIsOnBackgroundThread();
 
-  Manager::Abort(aOrigin);
+  Manager::Abort(aDirectoryLockIds);
 }
 
 void CacheQuotaClient::AbortOperationsForProcess(
@@ -242,15 +243,40 @@ void CacheQuotaClient::AbortOperationsForProcess(
   // Therefore, do nothing here.
 }
 
+void CacheQuotaClient::AbortAllOperations() {
+  AssertIsOnBackgroundThread();
+
+  Manager::AbortAll();
+}
+
 void CacheQuotaClient::StartIdleMaintenance() {}
 
 void CacheQuotaClient::StopIdleMaintenance() {}
 
-void CacheQuotaClient::ShutdownWorkThreads() {
+void CacheQuotaClient::InitiateShutdown() {
   AssertIsOnBackgroundThread();
 
-  // spins the event loop and synchronously shuts down all Managers
-  Manager::ShutdownAll();
+  Manager::InitiateShutdown();
+}
+
+bool CacheQuotaClient::IsShutdownCompleted() const {
+  AssertIsOnBackgroundThread();
+
+  return Manager::IsShutdownAllComplete();
+}
+
+void CacheQuotaClient::ForceKillActors() {
+  // Currently we don't implement killing actors (are there any to kill here?).
+}
+
+nsCString CacheQuotaClient::GetShutdownStatus() const {
+  AssertIsOnBackgroundThread();
+
+  return Manager::GetShutdownStatus();
+}
+
+void CacheQuotaClient::FinalizeShutdown() {
+  // Nothing to do here.
 }
 
 nsresult CacheQuotaClient::UpgradeStorageFrom2_0To2_1(nsIFile* aDirectory) {

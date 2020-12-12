@@ -374,10 +374,10 @@ void jit::LinkIonScript(JSContext* cx, HandleScript calleeScript) {
   }
 
   {
-    AutoEnterAnalysis enterTypes(cx);
+    gc::AutoSuppressGC suppressGC(cx);
     if (!LinkBackgroundCodeGen(cx, task)) {
       // Silently ignore OOM during code generation. The assembly code
-      // doesn't has code to handle it after linking happened. So it's
+      // doesn't have code to handle it after linking happened. So it's
       // not OK to throw a catchable exception from there.
       cx->clearPendingException();
     }
@@ -517,8 +517,9 @@ void jit::AddPendingInvalidation(RecompileInfoVector& invalid,
 IonScript* RecompileInfo::maybeIonScriptToInvalidate() const {
   // Make sure this is not called under CodeGenerator::link (before the
   // IonScript is created).
-  MOZ_ASSERT_IF(script_->zone()->types.currentCompilationId(),
-                script_->zone()->types.currentCompilationId().ref() != id_);
+  MOZ_ASSERT_IF(
+      script_->zone()->jitZone()->currentCompilationId(),
+      script_->zone()->jitZone()->currentCompilationId().ref() != id_);
 
   if (!script_->hasIonScript() ||
       script_->ionScript()->compilationId() != id_) {
@@ -583,14 +584,6 @@ void JitCodeHeader::init(JitCode* jitCode) {
   // mutating executable data.
   MOZ_ASSERT(!gc::IsMovableKind(gc::AllocKind::JITCODE));
   jitCode_ = jitCode;
-
-#if defined(JS_CODEGEN_X86) || defined(JS_CODEGEN_X64)
-  // On AMD Bobcat processors that may have eratas, insert a NOP slide to reduce
-  // crashes
-  if (CPUInfo::NeedAmdBugWorkaround()) {
-    memset((char*)&nops_, X86Encoding::OneByteOpcodeID::OP_NOP, sizeof(nops_));
-  }
-#endif
 }
 
 template <AllowGC allowGC>
@@ -1212,10 +1205,10 @@ bool OptimizeMIR(MIRGenerator* mir) {
 
   if (mir->optimizationInfo().licmEnabled()) {
     AutoTraceLog log(logger, TraceLogger_LICM);
-    // LICM can hoist instructions from conditional branches and trigger
-    // bailouts. Disable it if a hoisted instruction has previously bailed
-    // out for this script.
-    if (!mir->outerInfo().hadLICMBailout()) {
+    // LICM can hoist instructions from conditional branches and
+    // trigger bailouts. Disable it if bailing out of a hoisted
+    // instruction has previously invalidated this script.
+    if (!mir->outerInfo().hadLICMInvalidation()) {
       if (!LICM(mir, graph)) {
         return false;
       }
@@ -1616,8 +1609,7 @@ static void TrackAndSpewIonAbort(JSContext* cx, JSScript* script,
 static AbortReasonOr<WarpSnapshot*> CreateWarpSnapshot(JSContext* cx,
                                                        MIRGenerator* mirGen,
                                                        HandleScript script) {
-  // Suppress GC. This matches the AutoEnterAnalysis (which suppresses GC) in
-  // BuildMIR.
+  // Suppress GC during compilation.
   gc::AutoSuppressGC suppressGC(cx);
 
   SpewBeginFunction(mirGen, script);
@@ -1754,7 +1746,7 @@ static AbortReason IonCompile(JSContext* cx, HandleScript script,
 
   bool succeeded = false;
   {
-    AutoEnterAnalysis enter(cx);
+    gc::AutoSuppressGC suppressGC(cx);
     UniquePtr<CodeGenerator> codegen(CompileBackEnd(mirGen, snapshot));
     if (!codegen) {
       JitSpew(JitSpew_IonAbort, "Failed during back-end compilation.");

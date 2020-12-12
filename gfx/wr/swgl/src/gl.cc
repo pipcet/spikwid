@@ -27,6 +27,37 @@
 #ifdef _WIN32
 #  define ALWAYS_INLINE __forceinline
 #  define NO_INLINE __declspec(noinline)
+
+   // Including Windows.h brings a huge amount of namespace polution so just
+   // define a couple of things manually
+   typedef int                 BOOL;
+#  define WINAPI      __stdcall
+#  define DECLSPEC_IMPORT __declspec(dllimport)
+#  define WINBASEAPI DECLSPEC_IMPORT
+   typedef unsigned long       DWORD;
+   typedef long LONG;
+   typedef __int64 LONGLONG;
+#  define DUMMYSTRUCTNAME
+
+   typedef union _LARGE_INTEGER {
+      struct {
+          DWORD LowPart;
+          LONG HighPart;
+      } DUMMYSTRUCTNAME;
+      struct {
+          DWORD LowPart;
+          LONG HighPart;
+      } u;
+      LONGLONG QuadPart;
+   } LARGE_INTEGER;
+   extern "C" {
+    WINBASEAPI BOOL WINAPI
+    QueryPerformanceCounter(LARGE_INTEGER* lpPerformanceCount);
+
+    WINBASEAPI BOOL WINAPI
+    QueryPerformanceFrequency(LARGE_INTEGER* lpFrequency);
+   }
+
 #else
 #  define ALWAYS_INLINE __attribute__((always_inline)) inline
 #  define NO_INLINE __attribute__((noinline))
@@ -1559,7 +1590,15 @@ static uint64_t get_time_value() {
 #ifdef __MACH__
   return mach_absolute_time();
 #elif defined(_WIN32)
-  return uint64_t(clock()) * (1000000000ULL / CLOCKS_PER_SEC);
+  LARGE_INTEGER time;
+  static bool have_frequency = false;
+  static LARGE_INTEGER frequency;
+  if (!have_frequency) {
+    QueryPerformanceFrequency(&frequency);
+    have_frequency = true;
+  }
+  QueryPerformanceCounter(&time);
+  return time.QuadPart * 1000000000ULL / frequency.QuadPart;
 #else
   return ({
     struct timespec tp;
@@ -3709,7 +3748,13 @@ static int clip_side(int nump, Point3D* p, Interpolants* interp, Point3D* outP,
         assert(numClip < nump + 2);
         float prevDist = prevCoord - prevSide * prev.w;
         float curDist = curCoord - prevSide * cur.w;
-        float k = prevDist / (prevDist - curDist);
+        // It may happen that after we interpolate by the weight k that due to
+        // floating point rounding we've underestimated the value necessary to
+        // push it over the clipping boundary. Just in case, nudge the mantissa
+        // by a single increment so that we essentially round it up and move it
+        // further inside the clipping boundary. We use nextafter to do this in
+        // a portable fashion.
+        float k = nextafterf(prevDist / (prevDist - curDist), 1.0f);
         outP[numClip] = prev + (cur - prev) * k;
         outInterp[numClip] = prevInterp + (curInterp - prevInterp) * k;
         numClip++;
@@ -3721,7 +3766,9 @@ static int clip_side(int nump, Point3D* p, Interpolants* interp, Point3D* outP,
         assert(numClip < nump + 2);
         float prevDist = prevCoord - curSide * prev.w;
         float curDist = curCoord - curSide * cur.w;
-        float k = prevDist / (prevDist - curDist);
+        // Calculate interpolation weight k and the nudge it inside clipping
+        // boundary with nextafter.
+        float k = nextafterf(prevDist / (prevDist - curDist), 1.0f);
         outP[numClip] = prev + (cur - prev) * k;
         outInterp[numClip] = prevInterp + (curInterp - prevInterp) * k;
         numClip++;
@@ -3789,7 +3836,9 @@ static void draw_perspective(int nump, Interpolants interp_outs[4],
       vec3_scalar(ctx->viewport.x0, ctx->viewport.y0, 0.0f) + scale;
   if (test_none(pos.z <= -pos.w || pos.z >= pos.w)) {
     // No points cross the near or far planes, so no clipping required.
-    // Just divide coords by W and convert to viewport.
+    // Just divide coords by W and convert to viewport. We assume the W
+    // coordinate is non-zero and the reciprocal is finite since it would
+    // otherwise fail the test_none condition.
     Float w = 1.0f / pos.w;
     vec3 screen = pos.sel(X, Y, Z) * w * scale + offset;
     Point3D p[4] = {{screen.x.x, screen.y.x, screen.z.x, w.x},
@@ -3845,6 +3894,11 @@ static void draw_perspective(int nump, Interpolants interp_outs[4],
     // Divide coords by W and convert to viewport.
     for (int i = 0; i < nump; i++) {
       float w = 1.0f / p_clip[i].w;
+      // If the W coord is essentially zero, small enough that division would
+      // result in Inf/NaN, then just set the reciprocal itself to zero so that
+      // the coordinates becomes zeroed out, as the only valid point that
+      // satisfies -W <= X/Y/Z <= W is all zeroes.
+      if(!isfinite(w)) w = 0.0f;
       p_clip[i] = Point3D(p_clip[i].sel(X, Y, Z) * w * scale + offset, w);
     }
     draw_perspective_clipped(nump, p_clip, interp_clip, colortex, layer,
@@ -3869,6 +3923,11 @@ static void draw_quad(int nump, Texture& colortex, int layer,
   // Convert output of vertex shader to screen space.
   // Divide coords by W and convert to viewport.
   float w = 1.0f / pos.w.x;
+  // If the W coord is essentially zero, small enough that division would
+  // result in Inf/NaN, then just set the reciprocal itself to zero so that
+  // the coordinates becomes zeroed out, as the only valid point that
+  // satisfies -W <= X/Y/Z <= W is all zeroes.
+  if(!isfinite(w)) w = 0.0f;
   vec2 screen = (pos.sel(X, Y) * w + 1) * 0.5f *
                     vec2_scalar(ctx->viewport.width(), ctx->viewport.height()) +
                 vec2_scalar(ctx->viewport.x0, ctx->viewport.y0);

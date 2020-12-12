@@ -295,8 +295,6 @@ const char kProfileDoChangeTopic[] = "profile-do-change";
 
 const int32_t kCacheVersion = 1;
 
-const int64_t kBypassDirectoryLockIdTableId = -1;
-
 /******************************************************************************
  * SQLite functions
  ******************************************************************************/
@@ -346,25 +344,15 @@ nsresult CreateTables(mozIStorageConnection* aConnection) {
 Result<int32_t, nsresult> LoadCacheVersion(mozIStorageConnection& aConnection) {
   AssertIsOnIOThread();
 
-  nsCOMPtr<mozIStorageStatement> stmt;
-  nsresult rv = aConnection.CreateStatement(
-      "SELECT cache_version FROM database"_ns, getter_AddRefs(stmt));
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return Err(rv);
-  }
+  QM_TRY_INSPECT(const auto& stmt,
+                 CreateAndExecuteSingleStepStatement<
+                     SingleStepResult::ReturnNullIfNoResult>(
+                     aConnection, "SELECT cache_version FROM database"_ns));
 
-  bool hasResult;
-  rv = stmt->ExecuteStep(&hasResult);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return Err(rv);
-  }
-
-  if (NS_WARN_IF(!hasResult)) {
-    return Err(NS_ERROR_FILE_CORRUPTED);
-  }
+  QM_TRY(OkIf(stmt), Err(NS_ERROR_FILE_CORRUPTED));
 
   int32_t version;
-  rv = stmt->GetInt32(0, &version);
+  nsresult rv = stmt->GetInt32(0, &version);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return Err(rv);
   }
@@ -659,25 +647,15 @@ Result<int32_t, nsresult> LoadLocalStorageArchiveVersion(
     mozIStorageConnection& aConnection) {
   AssertIsOnIOThread();
 
-  nsCOMPtr<mozIStorageStatement> stmt;
-  nsresult rv = aConnection.CreateStatement("SELECT version FROM database"_ns,
-                                            getter_AddRefs(stmt));
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return Err(rv);
-  }
+  QM_TRY_INSPECT(const auto& stmt,
+                 CreateAndExecuteSingleStepStatement<
+                     SingleStepResult::ReturnNullIfNoResult>(
+                     aConnection, "SELECT version FROM database"_ns));
 
-  bool hasResult;
-  rv = stmt->ExecuteStep(&hasResult);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return Err(rv);
-  }
-
-  if (NS_WARN_IF(!hasResult)) {
-    return Err(NS_ERROR_FILE_CORRUPTED);
-  }
+  QM_TRY(OkIf(stmt), Err(NS_ERROR_FILE_CORRUPTED));
 
   int32_t version;
-  rv = stmt->GetInt32(0, &version);
+  nsresult rv = stmt->GetInt32(0, &version);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return Err(rv);
   }
@@ -743,6 +721,8 @@ Result<mozilla::Ok, nsresult> CollectEachFileEntry(
 
 }  // namespace
 
+enum class ShouldUpdateLockIdTableFlag { No, Yes };
+
 class DirectoryLockImpl final : public DirectoryLock {
   const NotNull<RefPtr<QuotaManager>> mQuotaManager;
 
@@ -765,7 +745,10 @@ class DirectoryLockImpl final : public DirectoryLock {
   // registraction/unregistration from updating origin access time, etc.
   const bool mInternal;
 
+  const bool mShouldUpdateLockIdTable;
+
   bool mRegistered;
+  FlippedOnce<true> mPending;
   FlippedOnce<false> mInvalidated;
 
  public:
@@ -775,6 +758,7 @@ class DirectoryLockImpl final : public DirectoryLock {
                     const nsACString& aGroup, const OriginScope& aOriginScope,
                     const Nullable<Client::Type>& aClientType, bool aExclusive,
                     bool aInternal,
+                    ShouldUpdateLockIdTableFlag aShouldUpdateLockIdTableFlag,
                     RefPtr<OpenDirectoryListener> aOpenListener);
 
   void AssertIsOnOwningThread() const
@@ -799,6 +783,8 @@ class DirectoryLockImpl final : public DirectoryLock {
 
   void SetRegistered(bool aRegistered) { mRegistered = aRegistered; }
 
+  bool IsPending() const { return mPending; }
+
   // Ideally, we would have just one table (instead of these two:
   // QuotaManager::mDirectoryLocks and QuotaManager::mDirectoryLockIdTable) for
   // all registered locks. However, some directory locks need to be accessed off
@@ -808,9 +794,7 @@ class DirectoryLockImpl final : public DirectoryLock {
   // for now and to not register directory locks for eviction in
   // QuotaMnaager::mDirectoryLockIdTable. This can be improved in future after
   // some refactoring of the mutex locking.
-  bool ShouldUpdateLockIdTable() const {
-    return mId != kBypassDirectoryLockIdTableId;
-  }
+  bool ShouldUpdateLockIdTable() const { return mShouldUpdateLockIdTable; }
 
   bool ShouldUpdateLockTable() {
     return !mInternal &&
@@ -2862,7 +2846,8 @@ DirectoryLockImpl::DirectoryLockImpl(
     MovingNotNull<RefPtr<QuotaManager>> aQuotaManager, const int64_t aId,
     const Nullable<PersistenceType>& aPersistenceType, const nsACString& aGroup,
     const OriginScope& aOriginScope, const Nullable<Client::Type>& aClientType,
-    bool aExclusive, bool aInternal,
+    const bool aExclusive, const bool aInternal,
+    const ShouldUpdateLockIdTableFlag aShouldUpdateLockIdTableFlag,
     RefPtr<OpenDirectoryListener> aOpenListener)
     : mQuotaManager(std::move(aQuotaManager)),
       mPersistenceType(aPersistenceType),
@@ -2872,6 +2857,8 @@ DirectoryLockImpl::DirectoryLockImpl(
       mId(aId),
       mExclusive(aExclusive),
       mInternal(aInternal),
+      mShouldUpdateLockIdTable(aShouldUpdateLockIdTableFlag ==
+                               ShouldUpdateLockIdTableFlag::Yes),
       mRegistered(false) {
   AssertIsOnOwningThread();
   MOZ_ASSERT_IF(aOriginScope.IsOrigin(), !aOriginScope.GetOrigin().IsEmpty());
@@ -2963,6 +2950,8 @@ void DirectoryLockImpl::NotifyOpenListener() {
   mOpenListener.destroy();
 
   mQuotaManager->RemovePendingDirectoryLock(*this);
+
+  mPending.Flip();
 }
 
 already_AddRefed<DirectoryLock> DirectoryLockImpl::Specialize(
@@ -2986,8 +2975,8 @@ already_AddRefed<DirectoryLock> DirectoryLockImpl::Specialize(
       Nullable<PersistenceType>(aPersistenceType), aGroupAndOrigin.mGroup,
       OriginScope::FromOrigin(aGroupAndOrigin.mOrigin),
       Nullable<Client::Type>(aClientType),
-      /* aExclusive */ false, mInternal, /* aOpenListener */ nullptr);
-
+      /* aExclusive */ false, mInternal, ShouldUpdateLockIdTableFlag::Yes,
+      /* aOpenListener */ nullptr);
   if (NS_WARN_IF(!Overlaps(*lock))) {
     return nullptr;
   }
@@ -3053,13 +3042,10 @@ void DirectoryLockImpl::Log() const {
   }
   QM_LOG(("  mOriginScope: %s", originScope.get()));
 
-  nsString clientType;
-  if (mClientType.IsNull()) {
-    clientType.AssignLiteral("null");
-  } else {
-    Client::TypeToText(mClientType.Value(), clientType);
-  }
-  QM_LOG(("  mClientType: %s", NS_ConvertUTF16toUTF8(clientType).get()));
+  const auto clientType = mClientType.IsNull()
+                              ? nsAutoCString{"null"_ns}
+                              : Client::TypeToText(mClientType.Value());
+  QM_LOG(("  mClientType: %s", clientType.get()));
 
   nsCString blockedOnString;
   for (auto blockedOn : mBlockedOn) {
@@ -3185,6 +3171,8 @@ QuotaManager::Observer::Observe(nsISupports* aSubject, const char* aTopic,
       return NS_OK;
     }
 
+    Telemetry::SetEventRecordingEnabled("dom.quota.try"_ns, true);
+
     gBasePath = new nsString();
 
     nsCOMPtr<nsIFile> baseDir;
@@ -3260,6 +3248,8 @@ QuotaManager::Observer::Observe(nsISupports* aSubject, const char* aTopic,
     gStorageName = nullptr;
 
     gBuildId = nullptr;
+
+    Telemetry::SetEventRecordingEnabled("dom.quota.try"_ns, false);
 
     return NS_OK;
   }
@@ -3725,7 +3715,7 @@ auto QuotaManager::CreateDirectoryLock(
   RefPtr<DirectoryLockImpl> lock = new DirectoryLockImpl(
       WrapNotNullUnchecked(this), GenerateDirectoryLockId(), aPersistenceType,
       aGroup, aOriginScope, aClientType, aExclusive, aInternal,
-      std::move(aOpenListener));
+      ShouldUpdateLockIdTableFlag::Yes, std::move(aOpenListener));
 
   mPendingDirectoryLocks.AppendElement(lock);
 
@@ -3759,12 +3749,12 @@ auto QuotaManager::CreateDirectoryLockForEviction(
   MOZ_ASSERT(!aGroupAndOrigin.mOrigin.IsEmpty());
 
   RefPtr<DirectoryLockImpl> lock = new DirectoryLockImpl(
-      WrapNotNullUnchecked(this),
-      /* aDirectoryLockId */ kBypassDirectoryLockIdTableId,
+      WrapNotNullUnchecked(this), GenerateDirectoryLockId(),
       Nullable<PersistenceType>(aPersistenceType), aGroupAndOrigin.mGroup,
       OriginScope::FromOrigin(aGroupAndOrigin.mOrigin),
       Nullable<Client::Type>(),
-      /* aExclusive */ true, /* aInternal */ true, nullptr);
+      /* aExclusive */ true, /* aInternal */ true,
+      ShouldUpdateLockIdTableFlag::No, nullptr);
 
 #ifdef DEBUG
   for (uint32_t index = mDirectoryLocks.Length(); index > 0; index--) {
@@ -4097,18 +4087,34 @@ void QuotaManager::Shutdown() {
       &ShutdownTimerCallback, this, DEFAULT_SHUTDOWN_TIMER_MS,
       nsITimer::TYPE_ONE_SHOT, "QuotaManager::ShutdownTimerCallback"));
 
-  // Each client will spin the event loop while we wait on all the threads
-  // to close. Our timer may fire during that loop.
-  for (Client::Type type : AllClientTypes()) {
-    mClients[type]->ShutdownWorkThreads();
+  const auto& allClientTypes = AllClientTypes();
+
+  bool needsToWait = false;
+  for (Client::Type type : allClientTypes) {
+    needsToWait |= mClients[type]->InitiateShutdownWorkThreads();
+  }
+  needsToWait |= static_cast<bool>(gNormalOriginOps);
+
+  // If any client cannot shutdown immediately, spin the event loop while we
+  // wait on all the threads to close. Our timer may fire during that loop.
+  if (needsToWait) {
+    MOZ_ALWAYS_TRUE(SpinEventLoopUntil([this, &allClientTypes] {
+      return !gNormalOriginOps &&
+             std::all_of(allClientTypes.cbegin(), allClientTypes.cend(),
+                         [&self = *this](const auto type) {
+                           return self.mClients[type]->IsShutdownCompleted();
+                         });
+    }));
+  }
+
+  for (Client::Type type : allClientTypes) {
+    mClients[type]->FinalizeShutdownWorkThreads();
   }
 
   // Cancel the timer regardless of whether it actually fired.
   if (NS_FAILED(mShutdownTimer->Cancel())) {
     NS_WARNING("Failed to cancel shutdown timer!");
   }
-
-  MOZ_ALWAYS_TRUE(SpinEventLoopUntil([&]() { return !gNormalOriginOps; }));
 
   // NB: It's very important that runnable is destroyed on this thread
   // (i.e. after we join the IO thread) because we can't release the
@@ -4521,24 +4527,13 @@ nsresult QuotaManager::LoadQuota() {
   bool loadQuotaFromCache = false;
 
   if (mCacheUsable) {
-    nsCOMPtr<mozIStorageStatement> stmt;
-    rv = mStorageConnection->CreateStatement(
-        nsLiteralCString("SELECT valid, build_id "
-                         "FROM cache"),
-        getter_AddRefs(stmt));
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
-    }
+    QM_TRY_INSPECT(
+        const auto& stmt,
+        CreateAndExecuteSingleStepStatement<
+            SingleStepResult::ReturnNullIfNoResult>(
+            *mStorageConnection, "SELECT valid, build_id FROM cache"_ns));
 
-    bool hasResult;
-    rv = stmt->ExecuteStep(&hasResult);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
-    }
-
-    if (NS_WARN_IF(!hasResult)) {
-      return NS_ERROR_FILE_CORRUPTED;
-    }
+    QM_TRY(OkIf(stmt), Err(NS_ERROR_FILE_CORRUPTED));
 
     int32_t valid;
     rv = stmt->GetInt32(0, &valid);
@@ -4845,7 +4840,6 @@ already_AddRefed<QuotaObject> QuotaManager::GetQuotaObject(
 already_AddRefed<QuotaObject> QuotaManager::GetQuotaObject(
     const int64_t aDirectoryLockId, const nsAString& aPath) {
   NS_ASSERTION(!NS_IsMainThread(), "Wrong thread!");
-  MOZ_DIAGNOSTIC_ASSERT(aDirectoryLockId != kBypassDirectoryLockIdTableId);
 
   Maybe<MutexAutoLock> lock;
 
@@ -4859,6 +4853,7 @@ already_AddRefed<QuotaObject> QuotaManager::GetQuotaObject(
     MOZ_CRASH("Getting quota object for an unregistered directory lock?");
   }
   MOZ_DIAGNOSTIC_ASSERT(directoryLock);
+  MOZ_DIAGNOSTIC_ASSERT(directoryLock->ShouldUpdateLockIdTable());
 
   const PersistenceType persistenceType = directoryLock->GetPersistenceType();
   const GroupAndOrigin& groupAndOrigin = directoryLock->GroupAndOrigin();
@@ -6028,20 +6023,9 @@ nsresult QuotaManager::CreateLocalStorageArchiveConnectionFromWebAppsStore(
 
   if (connection) {
     // Find out the journal mode.
-    nsCOMPtr<mozIStorageStatement> stmt;
-    rv = connection->CreateStatement("PRAGMA journal_mode;"_ns,
-                                     getter_AddRefs(stmt));
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
-    }
-
-    bool hasResult;
-    rv = stmt->ExecuteStep(&hasResult);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
-    }
-
-    MOZ_ASSERT(hasResult);
+    QM_TRY_INSPECT(const auto& stmt,
+                   CreateAndExecuteSingleStepStatement(
+                       *connection, "PRAGMA journal_mode;"_ns));
 
     nsCString journalMode;
     rv = stmt->GetUTF8String(0, journalMode);
@@ -6397,6 +6381,9 @@ nsresult QuotaManager::EnsureStorageIsInitialized() {
       Initialization::Storage,
       [&self = *this] { return static_cast<bool>(self.mStorageConnection); });
 
+  const auto contextLogExtraInfo = ScopedLogExtraInfo{
+      ScopedLogExtraInfo::kTagContext, "Initialization::Storage"_ns};
+
   QM_TRY_UNWRAP(auto storageFile, QM_NewLocalFile(mBasePath));
 
   QM_TRY(storageFile->Append(mStorageName + kSQLiteSuffix));
@@ -6718,9 +6705,8 @@ already_AddRefed<DirectoryLock> QuotaManager::OpenDirectoryInternal(
 
   // All the locks that block this new exclusive lock need to be invalidated.
   // We also need to notify clients to abort operations for them.
-  AutoTArray<UniquePtr<nsTHashtable<nsCStringHashKey>>, Client::TYPE_MAX>
-      origins;
-  origins.SetLength(Client::TypeMax());
+  AutoTArray<Client::DirectoryLockIdTable, Client::TYPE_MAX> lockIds;
+  lockIds.SetLength(Client::TypeMax());
 
   const auto& blockedOnLocks = lock->GetBlockedOnLocks();
 
@@ -6728,21 +6714,20 @@ already_AddRefed<DirectoryLock> QuotaManager::OpenDirectoryInternal(
     if (!blockedOnLock->IsInternal()) {
       blockedOnLock->Invalidate();
 
-      auto& clientOrigins = origins[blockedOnLock->ClientType()];
-      if (!clientOrigins) {
-        clientOrigins = MakeUnique<nsTHashtable<nsCStringHashKey>>();
+      // Clients don't have to handle pending locks. Invalidation is sufficient
+      // in that case (once a lock is ready and the listener needs to be
+      // notified, we will call DirectoryLockFailed instead of
+      // DirectoryLockAcquired which should release any remaining references to
+      // the lock).
+      if (!blockedOnLock->IsPending()) {
+        lockIds[blockedOnLock->ClientType()].Put(blockedOnLock->Id());
       }
-      clientOrigins->PutEntry(blockedOnLock->Origin());
     }
   }
 
   for (Client::Type type : AllClientTypes()) {
-    if (origins[type]) {
-      for (auto iter = origins[type]->Iter(); !iter.Done(); iter.Next()) {
-        MOZ_ASSERT(mClients[type]);
-
-        mClients[type]->AbortOperations(iter.Get()->GetKey());
-      }
+    if (lockIds[type].Filled()) {
+      mClients[type]->AbortOperationsForLocks(lockIds[type]);
     }
   }
 
@@ -6865,6 +6850,9 @@ nsresult QuotaManager::EnsureTemporaryStorageIsInitialized() {
   const auto autoRecord = mInitializationInfo.RecordFirstInitializationAttempt(
       Initialization::TemporaryStorage,
       [&self = *this] { return self.mTemporaryStorageInitialized; });
+
+  const auto contextLogExtraInfo = ScopedLogExtraInfo{
+      ScopedLogExtraInfo::kTagContext, "Initialization::TemporaryStorage"_ns};
 
   nsresult rv;
 
@@ -7656,7 +7644,7 @@ void QuotaManager::ShutdownTimerCallback(nsITimer* aTimer, void* aClosure) {
 
   // Abort all operations.
   for (RefPtr<Client>& client : quotaManager->mClients) {
-    client->AbortOperations(VoidCString());
+    client->AbortAllOperations();
   }
 }
 

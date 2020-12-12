@@ -2651,9 +2651,7 @@ void nsGlobalWindowOuter::SetDocShell(nsDocShell* aDocShell) {
     }
   }
 
-  bool docShellActive;
-  mDocShell->GetIsActive(&docShellActive);
-  SetIsBackgroundInternal(!docShellActive);
+  SetIsBackgroundInternal(!mBrowsingContext->IsActive());
 }
 
 void nsGlobalWindowOuter::DetachFromDocShell(bool aIsBeingDiscarded) {
@@ -5766,7 +5764,10 @@ PopupBlocker::PopupControlState nsGlobalWindowOuter::RevisePopupAbuseLevel(
   if ((abuse == PopupBlocker::openAllowed ||
        abuse == PopupBlocker::openControlled) &&
       StaticPrefs::dom_block_multiple_popups() && !IsPopupAllowed() &&
-      !PopupBlocker::TryUsePopupOpeningToken(mDoc->NodePrincipal())) {
+      !mDoc->ConsumeTransientUserGestureActivation()) {
+    nsContentUtils::ReportToConsole(nsIScriptError::warningFlag, "DOM"_ns, mDoc,
+                                    nsContentUtils::eDOM_PROPERTIES,
+                                    "MultiplePopupsBlockedNoUserActivation");
     abuse = PopupBlocker::openBlocked;
   }
 
@@ -7396,14 +7397,11 @@ nsresult nsGlobalWindowOuter::RestoreWindowState(nsISupports* aState) {
 
   // if a link is focused, refocus with the FLAG_SHOWRING flag set. This makes
   // it easy to tell which link was last clicked when going back a page.
-  Element* focusedElement = inner->GetFocusedElement();
+  RefPtr<Element> focusedElement = inner->GetFocusedElement();
   if (nsContentUtils::ContentIsLink(focusedElement)) {
-    nsFocusManager* fm = nsFocusManager::GetFocusManager();
-    if (fm) {
-      // XXXbz Do we need the stack strong ref here?
-      RefPtr<Element> kungFuDeathGrip(focusedElement);
-      fm->SetFocus(kungFuDeathGrip, nsIFocusManager::FLAG_NOSCROLL |
-                                        nsIFocusManager::FLAG_SHOWRING);
+    if (RefPtr<nsFocusManager> fm = nsFocusManager::GetFocusManager()) {
+      fm->SetFocus(focusedElement, nsIFocusManager::FLAG_NOSCROLL |
+                                       nsIFocusManager::FLAG_SHOWRING);
     }
   }
 

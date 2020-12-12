@@ -49,15 +49,18 @@
 #include "js/ProtoKey.h"
 #include "vm/AsyncFunction.h"
 #include "vm/AsyncIteration.h"
+#include "vm/BooleanObject.h"
 #include "vm/DateObject.h"
 #include "vm/EnvironmentObject.h"
 #include "vm/ErrorObject.h"
 #include "vm/GeneratorObject.h"
 #include "vm/HelperThreads.h"
 #include "vm/JSContext.h"
+#include "vm/NumberObject.h"
 #include "vm/PIC.h"
 #include "vm/RegExpStatics.h"
 #include "vm/RegExpStaticsObject.h"
+#include "vm/StringObject.h"
 
 #include "gc/FreeOp-inl.h"
 #include "vm/JSObject-inl.h"
@@ -163,6 +166,7 @@ bool GlobalObject::skipDeselectedConstructor(JSContext* cx, JSProtoKey key) {
     case JSProto_WasmMemory:
     case JSProto_WasmTable:
     case JSProto_WasmGlobal:
+    case JSProto_WasmException:
       return false;
 
 #ifdef JS_HAS_INTL_API
@@ -893,8 +897,7 @@ static NativeObject* CreateBlankProto(JSContext* cx, const JSClass* clasp,
                                       HandleObject proto) {
   MOZ_ASSERT(clasp != &JSFunction::class_);
 
-  RootedObject blankProto(cx,
-                          NewSingletonObjectWithGivenProto(cx, clasp, proto));
+  RootedObject blankProto(cx, NewTenuredObjectWithGivenProto(cx, clasp, proto));
   if (!blankProto || !JSObject::setDelegate(cx, blankProto)) {
     return nullptr;
   }
@@ -1065,7 +1068,7 @@ bool GlobalObject::getSelfHostedFunction(JSContext* cx,
 
   RootedFunction fun(cx);
   if (!cx->runtime()->createLazySelfHostedFunctionClone(
-          cx, selfHostedName, name, nargs, SingletonObject, &fun)) {
+          cx, selfHostedName, name, nargs, TenuredObject, &fun)) {
     return false;
   }
   funVal.setObject(*fun);

@@ -655,15 +655,16 @@ class BaseRegAlloc {
 
   template <MIRType t>
   bool hasFPU() {
-    return availFPU.hasAny<RegTypeOf<t>::value>();
-  }
-
 #ifdef RABALDR_SIDEALLOC_V128
-  template <>
-  bool hasFPU<MIRType::Simd128>() {
-    MOZ_CRASH("Should not happen");
-  }
+    // Workaround for GCC problem, bug 1677690
+    if constexpr (t == MIRType::Simd128) {
+      MOZ_CRASH("Should not happen");
+    } else
 #endif
+    {
+      return availFPU.hasAny<RegTypeOf<t>::value>();
+    }
+  }
 
   bool isAvailableGPR(Register r) { return availGPR.has(r); }
 
@@ -746,15 +747,16 @@ class BaseRegAlloc {
 
   template <MIRType t>
   FloatRegister allocFPU() {
-    return availFPU.takeAny<RegTypeOf<t>::value>();
-  }
-
 #ifdef RABALDR_SIDEALLOC_V128
-  template <>
-  FloatRegister allocFPU<MIRType::Simd128>() {
-    MOZ_CRASH("Should not happen");
-  }
+    // Workaround for GCC problem, bug 1677690
+    if constexpr (t == MIRType::Simd128) {
+      MOZ_CRASH("Should not happen");
+    } else
 #endif
+    {
+      return availFPU.takeAny<RegTypeOf<t>::value>();
+    }
+  }
 
   void freeGPR(Register r) { availGPR.add(r); }
 
@@ -6527,7 +6529,7 @@ class BaseCompiler final : public BaseCompilerInterface {
     }
 
     uint32_t offsetGuardLimit =
-        GetOffsetGuardLimit(moduleEnv_.hugeMemoryEnabled());
+        GetMaxOffsetGuardLimit(moduleEnv_.hugeMemoryEnabled());
 
     if ((bceSafe_ & (BCESet(1) << local)) &&
         access->offset() < offsetGuardLimit) {
@@ -6549,7 +6551,7 @@ class BaseCompiler final : public BaseCompilerInterface {
   void prepareMemoryAccess(MemoryAccessDesc* access, AccessCheck* check,
                            RegI32 tls, RegI32 ptr) {
     uint32_t offsetGuardLimit =
-        GetOffsetGuardLimit(moduleEnv_.hugeMemoryEnabled());
+        GetMaxOffsetGuardLimit(moduleEnv_.hugeMemoryEnabled());
 
     // Fold offset if necessary for further computations.
     if (access->offset() >= offsetGuardLimit ||
@@ -6718,9 +6720,9 @@ class BaseCompiler final : public BaseCompilerInterface {
     }
 #elif defined(JS_CODEGEN_ARM64)
     if (dest.tag == AnyReg::I64) {
-      masm.wasmLoadI64(*access, HeapReg, ptr, ptr, dest.i64());
+      masm.wasmLoadI64(*access, HeapReg, ptr, dest.i64());
     } else {
-      masm.wasmLoad(*access, HeapReg, ptr, ptr, dest.any());
+      masm.wasmLoad(*access, HeapReg, ptr, dest.any());
     }
 #else
     MOZ_CRASH("BaseCompiler platform hook: load");
@@ -6841,9 +6843,9 @@ class BaseCompiler final : public BaseCompilerInterface {
 #elif defined(JS_CODEGEN_ARM64)
     MOZ_ASSERT(temp.isInvalid());
     if (access->type() == Scalar::Int64) {
-      masm.wasmStoreI64(*access, src.i64(), HeapReg, ptr, ptr);
+      masm.wasmStoreI64(*access, src.i64(), HeapReg, ptr);
     } else {
-      masm.wasmStore(*access, src.any(), HeapReg, ptr, ptr);
+      masm.wasmStore(*access, src.any(), HeapReg, ptr);
     }
 #else
     MOZ_CRASH("BaseCompiler platform hook: store");
@@ -7067,9 +7069,41 @@ class BaseCompiler final : public BaseCompilerInterface {
 #endif
   }
 
-  void pop2xI32ForShiftOrRotate(RegI32* r0, RegI32* r1) {
+  void pop2xI32ForShift(RegI32* r0, RegI32* r1) {
 #if defined(JS_CODEGEN_X86) || defined(JS_CODEGEN_X64)
+    // r1 must be ecx for a variable shift, unless BMI2 is available.
+    if (!Assembler::HasBMI2()) {
+      *r1 = popI32(specific_.ecx);
+      *r0 = popI32();
+      return;
+    }
+#endif
+    pop2xI32(r0, r1);
+  }
+
+  void pop2xI64ForShift(RegI64* r0, RegI64* r1) {
+#if defined(JS_CODEGEN_X86)
     // r1 must be ecx for a variable shift.
+    needI32(specific_.ecx);
+    *r1 = popI64ToSpecific(widenI32(specific_.ecx));
+    *r0 = popI64();
+#else
+#  if defined(JS_CODEGEN_X64)
+    // r1 must be rcx for a variable shift, unless BMI2 is available.
+    if (!Assembler::HasBMI2()) {
+      needI64(specific_.rcx);
+      *r1 = popI64ToSpecific(specific_.rcx);
+      *r0 = popI64();
+      return;
+    }
+#  endif
+    pop2xI64(r0, r1);
+#endif
+  }
+
+  void pop2xI32ForRotate(RegI32* r0, RegI32* r1) {
+#if defined(JS_CODEGEN_X86) || defined(JS_CODEGEN_X64)
+    // r1 must be ecx for a variable rotate.
     *r1 = popI32(specific_.ecx);
     *r0 = popI32();
 #else
@@ -7077,9 +7111,9 @@ class BaseCompiler final : public BaseCompilerInterface {
 #endif
   }
 
-  void pop2xI64ForShiftOrRotate(RegI64* r0, RegI64* r1) {
+  void pop2xI64ForRotate(RegI64* r0, RegI64* r1) {
 #if defined(JS_CODEGEN_X86) || defined(JS_CODEGEN_X64)
-    // r1 must be ecx for a variable shift.
+    // r1 must be ecx for a variable rotate.
     needI32(specific_.ecx);
     *r1 = popI64ToSpecific(widenI32(specific_.ecx));
     *r0 = popI64();
@@ -7996,6 +8030,11 @@ class BaseCompiler final : public BaseCompilerInterface {
   MOZ_MUST_USE bool emitLoop();
   MOZ_MUST_USE bool emitIf();
   MOZ_MUST_USE bool emitElse();
+#ifdef ENABLE_WASM_EXCEPTIONS
+  MOZ_MUST_USE bool emitTry();
+  MOZ_MUST_USE bool emitCatch();
+  MOZ_MUST_USE bool emitThrow();
+#endif
   MOZ_MUST_USE bool emitEnd();
   MOZ_MUST_USE bool emitBr();
   MOZ_MUST_USE bool emitBrIf();
@@ -8909,7 +8948,7 @@ void BaseCompiler::emitShlI32() {
     pushI32(r);
   } else {
     RegI32 r, rs;
-    pop2xI32ForShiftOrRotate(&r, &rs);
+    pop2xI32ForShift(&r, &rs);
     maskShiftCount32(rs);
     masm.lshift32(rs, r);
     freeI32(rs);
@@ -8925,7 +8964,7 @@ void BaseCompiler::emitShlI64() {
     pushI64(r);
   } else {
     RegI64 r, rs;
-    pop2xI64ForShiftOrRotate(&r, &rs);
+    pop2xI64ForShift(&r, &rs);
     masm.lshift64(lowPart(rs), r);
     freeI64(rs);
     pushI64(r);
@@ -8940,7 +8979,7 @@ void BaseCompiler::emitShrI32() {
     pushI32(r);
   } else {
     RegI32 r, rs;
-    pop2xI32ForShiftOrRotate(&r, &rs);
+    pop2xI32ForShift(&r, &rs);
     maskShiftCount32(rs);
     masm.rshift32Arithmetic(rs, r);
     freeI32(rs);
@@ -8956,7 +8995,7 @@ void BaseCompiler::emitShrI64() {
     pushI64(r);
   } else {
     RegI64 r, rs;
-    pop2xI64ForShiftOrRotate(&r, &rs);
+    pop2xI64ForShift(&r, &rs);
     masm.rshift64Arithmetic(lowPart(rs), r);
     freeI64(rs);
     pushI64(r);
@@ -8971,7 +9010,7 @@ void BaseCompiler::emitShrU32() {
     pushI32(r);
   } else {
     RegI32 r, rs;
-    pop2xI32ForShiftOrRotate(&r, &rs);
+    pop2xI32ForShift(&r, &rs);
     maskShiftCount32(rs);
     masm.rshift32(rs, r);
     freeI32(rs);
@@ -8987,7 +9026,7 @@ void BaseCompiler::emitShrU64() {
     pushI64(r);
   } else {
     RegI64 r, rs;
-    pop2xI64ForShiftOrRotate(&r, &rs);
+    pop2xI64ForShift(&r, &rs);
     masm.rshift64(lowPart(rs), r);
     freeI64(rs);
     pushI64(r);
@@ -9002,7 +9041,7 @@ void BaseCompiler::emitRotrI32() {
     pushI32(r);
   } else {
     RegI32 r, rs;
-    pop2xI32ForShiftOrRotate(&r, &rs);
+    pop2xI32ForRotate(&r, &rs);
     masm.rotateRight(rs, r, r);
     freeI32(rs);
     pushI32(r);
@@ -9019,7 +9058,7 @@ void BaseCompiler::emitRotrI64() {
     pushI64(r);
   } else {
     RegI64 r, rs;
-    pop2xI64ForShiftOrRotate(&r, &rs);
+    pop2xI64ForRotate(&r, &rs);
     masm.rotateRight64(lowPart(rs), r, r, maybeHighPart(rs));
     freeI64(rs);
     pushI64(r);
@@ -9034,7 +9073,7 @@ void BaseCompiler::emitRotlI32() {
     pushI32(r);
   } else {
     RegI32 r, rs;
-    pop2xI32ForShiftOrRotate(&r, &rs);
+    pop2xI32ForRotate(&r, &rs);
     masm.rotateLeft(rs, r, r);
     freeI32(rs);
     pushI32(r);
@@ -9051,7 +9090,7 @@ void BaseCompiler::emitRotlI64() {
     pushI64(r);
   } else {
     RegI64 r, rs;
-    pop2xI64ForShiftOrRotate(&r, &rs);
+    pop2xI64ForRotate(&r, &rs);
     masm.rotateLeft64(lowPart(rs), r, r, maybeHighPart(rs));
     freeI64(rs);
     pushI64(r);
@@ -9870,6 +9909,14 @@ bool BaseCompiler::emitEnd() {
     case LabelKind::Else:
       endIfThenElse(type);
       break;
+#ifdef ENABLE_WASM_EXCEPTIONS
+    case LabelKind::Try:
+      MOZ_CRASH("NYI");
+      break;
+    case LabelKind::Catch:
+      MOZ_CRASH("NYI");
+      break;
+#endif
   }
 
   iter_.popEnd();
@@ -10049,6 +10096,54 @@ bool BaseCompiler::emitBrTable() {
 
   return true;
 }
+
+#ifdef ENABLE_WASM_EXCEPTIONS
+bool BaseCompiler::emitTry() {
+  ResultType params;
+  if (!iter_.readTry(&params)) {
+    return false;
+  }
+
+  if (deadCode_) {
+    return true;
+  }
+
+  MOZ_CRASH("NYI");
+}
+
+bool BaseCompiler::emitCatch() {
+  LabelKind kind;
+  uint32_t eventIndex;
+  ResultType paramType, resultType;
+  NothingVector unused_tryValues;
+
+  if (!iter_.readCatch(&kind, &eventIndex, &paramType, &resultType,
+                       &unused_tryValues)) {
+    return false;
+  }
+
+  if (deadCode_) {
+    return true;
+  }
+
+  MOZ_CRASH("NYI");
+}
+
+bool BaseCompiler::emitThrow() {
+  uint32_t exnIndex;
+  NothingVector unused_argValues;
+
+  if (!iter_.readThrow(&exnIndex, &unused_argValues)) {
+    return false;
+  }
+
+  if (deadCode_) {
+    return true;
+  }
+
+  MOZ_CRASH("NYI");
+}
+#endif
 
 bool BaseCompiler::emitDrop() {
   if (!iter_.readDrop()) {
@@ -10967,7 +11062,7 @@ RegI32 BaseCompiler::popMemoryAccess(MemoryAccessDesc* access,
     uint32_t addr = addrTemp;
 
     uint32_t offsetGuardLimit =
-        GetOffsetGuardLimit(moduleEnv_.hugeMemoryEnabled());
+        GetMaxOffsetGuardLimit(moduleEnv_.hugeMemoryEnabled());
 
     uint64_t ea = uint64_t(addr) + uint64_t(access->offset());
     uint64_t limit = moduleEnv_.minMemoryLength + offsetGuardLimit;
@@ -13854,9 +13949,17 @@ bool BaseCompiler::emitVectorShiftRightI64x2(bool isUnsigned) {
   }
 #  endif
 
-#  if defined(JS_CODEGEN_X86) || defined(JS_CODEGEN_X64)
+#  if defined(JS_CODEGEN_X86)
   needI32(specific_.ecx);
   RegI32 count = popI32ToSpecific(specific_.ecx);
+#  elif defined(JS_CODEGEN_X64)
+  RegI32 count;
+  if (Assembler::HasBMI2()) {
+    count = popI32();
+  } else {
+    needI32(specific_.ecx);
+    count = popI32ToSpecific(specific_.ecx);
+  }
 #  elif defined(JS_CODEGEN_ARM64)
   RegI32 count = popI32();
 #  endif
@@ -14104,6 +14207,23 @@ bool BaseCompiler::emitBody() {
         CHECK_NEXT(emitIf());
       case uint16_t(Op::Else):
         CHECK_NEXT(emitElse());
+#ifdef ENABLE_WASM_EXCEPTIONS
+      case uint16_t(Op::Try):
+        if (!moduleEnv_.exceptionsEnabled()) {
+          return iter_.unrecognizedOpcode(&op);
+        }
+        CHECK_NEXT(emitTry());
+      case uint16_t(Op::Catch):
+        if (!moduleEnv_.exceptionsEnabled()) {
+          return iter_.unrecognizedOpcode(&op);
+        }
+        CHECK_NEXT(emitCatch());
+      case uint16_t(Op::Throw):
+        if (!moduleEnv_.exceptionsEnabled()) {
+          return iter_.unrecognizedOpcode(&op);
+        }
+        CHECK_NEXT(emitThrow());
+#endif
       case uint16_t(Op::Br):
         CHECK_NEXT(emitBr());
       case uint16_t(Op::BrIf):
@@ -15579,7 +15699,7 @@ bool js::wasm::BaselineCompileFunctions(const ModuleEnvironment& moduleEnv,
   TempAllocator alloc(&lifo);
   JitContext jitContext(&alloc);
   MOZ_ASSERT(IsCompilingWasm());
-  WasmMacroAssembler masm(alloc);
+  WasmMacroAssembler masm(alloc, moduleEnv);
 
   // Swap in already-allocated empty vectors to avoid malloc/free.
   MOZ_ASSERT(code->empty());

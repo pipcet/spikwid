@@ -38,6 +38,7 @@
 #include "mozilla/RemoteDecoderManagerChild.h"
 #include "mozilla/RemoteLazyInputStreamChild.h"
 #include "mozilla/SchedulerGroup.h"
+#include "mozilla/ScopeExit.h"
 #include "mozilla/SharedStyleSheetCache.h"
 #include "mozilla/SpinEventLoopUntil.h"
 #include "mozilla/StaticPrefs_dom.h"
@@ -1145,15 +1146,6 @@ nsresult ContentChild::ProvideWindowCommon(
   // We have to wait for a response from SendCreateWindow or with information
   // we're going to need to return from this function, So we spin a nested event
   // loop until they get back to us.
-
-  // Prevent the docshell from becoming active while the nested event loop is
-  // spinning.
-  newChild->AddPendingDocShellBlocker();
-  auto removePendingDocShellBlocker = MakeScopeExit([&] {
-    if (newChild) {
-      newChild->RemovePendingDocShellBlocker();
-    }
-  });
 
   {
     // Suppress event handling for all contexts in our BrowsingContextGroup so

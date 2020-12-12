@@ -118,18 +118,15 @@ XPCOMUtils.defineLazyGetter(
 );
 
 this.TelemetryFeed = class TelemetryFeed {
-  constructor({ isParentProcess = true } = {}) {
+  constructor() {
     this.sessions = new Map();
     this._prefs = new Prefs();
+    this._impressionId = this.getOrCreateImpressionId();
     this._aboutHomeSeen = false;
     this._classifySite = classifySite;
     this._addWindowListeners = this._addWindowListeners.bind(this);
     this._browserOpenNewtabStart = null;
     this.handleEvent = this.handleEvent.bind(this);
-    if (isParentProcess && !this._prefs.get(PREF_IMPRESSION_ID)) {
-      const id = String(gUUIDGenerator.generateUUID());
-      this._prefs.set(PREF_IMPRESSION_ID, id);
-    }
   }
 
   get telemetryEnabled() {
@@ -231,8 +228,13 @@ this.TelemetryFeed = class TelemetryFeed {
     return pinnedTabs;
   }
 
-  get _impressionId() {
-    return this._prefs.get(PREF_IMPRESSION_ID);
+  getOrCreateImpressionId() {
+    let impressionId = this._prefs.get(PREF_IMPRESSION_ID);
+    if (!impressionId) {
+      impressionId = String(gUUIDGenerator.generateUUID());
+      this._prefs.set(PREF_IMPRESSION_ID, impressionId);
+    }
+    return impressionId;
   }
 
   browserOpenNewtabStart() {
@@ -576,12 +578,6 @@ this.TelemetryFeed = class TelemetryFeed {
       action.data,
       { action: "activity_stream_undesired_event" }
     );
-  }
-
-  createPerformanceEvent(action) {
-    return Object.assign(this.createPing(), action.data, {
-      action: "activity_stream_performance_event",
-    });
   }
 
   createSessionEndEvent(session) {
@@ -966,9 +962,6 @@ this.TelemetryFeed = class TelemetryFeed {
       // Intentional fall-through
       case at.AS_ROUTER_TELEMETRY_USER_EVENT:
         this.handleASRouterUserEvent(action);
-        break;
-      case at.TELEMETRY_PERFORMANCE_EVENT:
-        this.sendEvent(this.createPerformanceEvent(action));
         break;
       case at.UNINIT:
         this.uninit();

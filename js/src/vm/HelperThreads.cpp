@@ -588,6 +588,7 @@ void ParseTask::trace(JSTracer* trc) {
     compilationInfos_->trace(trc);
   }
   gcOutput_.trace(trc);
+  gcOutputForDelazification_.trace(trc);
 }
 
 size_t ParseTask::sizeOfExcludingThis(
@@ -701,7 +702,8 @@ bool ParseTask::instantiateStencils(JSContext* cx) {
   if (compilationInfo_) {
     result = frontend::InstantiateStencils(cx, *compilationInfo_, gcOutput_);
   } else {
-    result = frontend::InstantiateStencils(cx, *compilationInfos_, gcOutput_);
+    result = frontend::InstantiateStencils(cx, *compilationInfos_, gcOutput_,
+                                           gcOutputForDelazification_);
   }
 
   // Whatever happens to the top-level script compilation (even if it fails),
@@ -794,7 +796,8 @@ void ScriptDecodeTask::parse(JSContext* cx) {
     compilationInfos_ = std::move(compilationInfos.get());
 
     if (compilationInfos_) {
-      if (!frontend::PrepareForInstantiate(cx, *compilationInfos_, gcOutput_)) {
+      if (!frontend::PrepareForInstantiate(cx, *compilationInfos_, gcOutput_,
+                                           gcOutputForDelazification_)) {
         compilationInfos_ = nullptr;
       }
     }
@@ -1086,7 +1089,10 @@ bool GlobalHelperThreadState::submitTask(
 }
 
 static bool StartOffThreadParseTask(JSContext* cx, UniquePtr<ParseTask> task,
-                                    const ReadOnlyCompileOptions& options) {
+                                    const ReadOnlyCompileOptions& options,
+                                    JS::OffThreadToken** tokenOut = nullptr) {
+  MOZ_ASSERT_IF(tokenOut, *tokenOut == nullptr);
+
   // Suppress GC so that calls below do not trigger a new incremental GC
   // which could require barriers on the atoms zone.
   gc::AutoSuppressGC nogc(cx);
@@ -1111,8 +1117,15 @@ static bool StartOffThreadParseTask(JSContext* cx, UniquePtr<ParseTask> task,
     return false;
   }
 
+  JS::OffThreadToken* token = task.get();
   if (!QueueOffThreadParseTask(cx, std::move(task))) {
     return false;
+  }
+
+  // Return an opaque pointer to caller so that it may query/cancel the task
+  // before the callback is fired.
+  if (tokenOut) {
+    *tokenOut = token;
   }
 
   createdForHelper.forget();
@@ -1126,14 +1139,11 @@ static bool StartOffThreadParseScriptInternal(
     void* callbackData, JS::OffThreadToken** tokenOut) {
   auto task = cx->make_unique<ScriptParseTask<Unit>>(cx, srcBuf, callback,
                                                      callbackData);
-  if (tokenOut) {
-    *tokenOut = static_cast<JS::OffThreadToken*>(task.get());
-  }
   if (!task) {
     return false;
   }
 
-  return StartOffThreadParseTask(cx, std::move(task), options);
+  return StartOffThreadParseTask(cx, std::move(task), options, tokenOut);
 }
 
 bool js::StartOffThreadParseScript(JSContext* cx,
@@ -1163,15 +1173,11 @@ static bool StartOffThreadParseModuleInternal(
     void* callbackData, JS::OffThreadToken** tokenOut) {
   auto task = cx->make_unique<ModuleParseTask<Unit>>(cx, srcBuf, callback,
                                                      callbackData);
-
-  if (tokenOut) {
-    *tokenOut = static_cast<JS::OffThreadToken*>(task.get());
-  }
   if (!task) {
     return false;
   }
 
-  return StartOffThreadParseTask(cx, std::move(task), options);
+  return StartOffThreadParseTask(cx, std::move(task), options, tokenOut);
 }
 
 bool js::StartOffThreadParseModule(JSContext* cx,
@@ -1200,19 +1206,16 @@ bool js::StartOffThreadDecodeScript(JSContext* cx,
                                     JS::OffThreadCompileCallback callback,
                                     void* callbackData,
                                     JS::OffThreadToken** tokenOut) {
+  // XDR data must be Stencil format, or a parse-global must be available.
+  MOZ_RELEASE_ASSERT(options.useStencilXDR || options.useOffThreadParseGlobal);
+
   auto task =
       cx->make_unique<ScriptDecodeTask>(cx, range, callback, callbackData);
-  if (tokenOut) {
-    *tokenOut = static_cast<JS::OffThreadToken*>(task.get());
-  }
   if (!task) {
     return false;
   }
 
-  // XDR data must be Stencil format, or a parse-global must be available.
-  MOZ_RELEASE_ASSERT(options.useStencilXDR || options.useOffThreadParseGlobal);
-
-  return StartOffThreadParseTask(cx, std::move(task), options);
+  return StartOffThreadParseTask(cx, std::move(task), options, tokenOut);
 }
 
 bool js::StartOffThreadDecodeMultiScripts(JSContext* cx,
@@ -1407,8 +1410,8 @@ void GlobalHelperThreadState::destroyHelperContexts(
 }
 
 #ifdef DEBUG
-bool GlobalHelperThreadState::isLockedByCurrentThread() const {
-  return gHelperThreadLock.ownedByCurrentThread();
+void GlobalHelperThreadState::assertIsLockedByCurrentThread() const {
+  gHelperThreadLock.assertOwnedByCurrentThread();
 }
 #endif  // DEBUG
 
@@ -1536,7 +1539,9 @@ static inline bool IsHelperThreadSimulatingOOM(js::ThreadType threadType) {
 
 void GlobalHelperThreadState::addSizeOfIncludingThis(
     JS::GlobalStats* stats, AutoLockHelperThreadState& lock) const {
-  MOZ_ASSERT(isLockedByCurrentThread());
+#ifdef DEBUG
+  assertIsLockedByCurrentThread();
+#endif
 
   mozilla::MallocSizeOf mallocSizeOf = stats->mallocSizeOf_;
   JS::HelperThreadStats& htStats = stats->helperThread;
@@ -2543,6 +2548,23 @@ bool GlobalHelperThreadState::submitTask(PromiseHelperTask* task) {
 
 void GlobalHelperThreadState::trace(JSTracer* trc) {
   AutoLockHelperThreadState lock;
+
+#ifdef DEBUG
+  // Since we hold the helper thread lock here we must disable GCMarker's
+  // checking of the atom marking bitmap since that also relies on taking the
+  // lock.
+  GCMarker* marker = nullptr;
+  if (trc->isMarkingTracer()) {
+    marker = GCMarker::fromTracer(trc);
+    marker->setCheckAtomMarking(false);
+  }
+  auto reenableAtomMarkingCheck = mozilla::MakeScopeExit([marker] {
+    if (marker) {
+      marker->setCheckAtomMarking(true);
+    }
+  });
+#endif
+
   for (auto task : ionWorklist(lock)) {
     task->alloc().lifoAlloc()->setReadWrite();
     task->trace(trc);

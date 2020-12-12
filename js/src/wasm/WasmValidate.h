@@ -141,6 +141,9 @@ struct ModuleEnvironment {
   Uint32Vector funcTypeIndices;
   Uint32Vector funcImportGlobalDataOffsets;
   GlobalDescVector globals;
+#ifdef ENABLE_WASM_EXCEPTIONS
+  EventDescVector events;
+#endif
   TableDescVector tables;
   Uint32Vector asmJSSigToTableIndex;
   ImportVector imports;
@@ -179,6 +182,7 @@ struct ModuleEnvironment {
   bool multiValueEnabled() const { return features.multiValue; }
   bool v128Enabled() const { return features.v128; }
   bool hugeMemoryEnabled() const { return !isAsmJS() && features.hugeMemory; }
+  bool exceptionsEnabled() const { return features.exceptions; }
   bool usesMemory() const { return memoryUsage != MemoryUsage::None; }
   bool usesSharedMemory() const { return memoryUsage == MemoryUsage::Shared; }
   bool isAsmJS() const { return kind == ModuleKind::AsmJS; }

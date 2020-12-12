@@ -25,7 +25,6 @@
 #include "vm/BytecodeLocation-inl.h"
 #include "vm/GeckoProfiler-inl.h"
 #include "vm/JSScript-inl.h"
-#include "vm/TypeInference-inl.h"
 
 using mozilla::Maybe;
 
@@ -135,6 +134,14 @@ void JitcodeGlobalEntry::IonEntry::destroy() {
   // Free the script list
   js_free(scriptList_);
   scriptList_ = nullptr;
+}
+
+void JitcodeGlobalEntry::BaselineEntry::trackIonAbort(jsbytecode* pc,
+                                                      const char* message) {
+  MOZ_ASSERT(script_->containsPC(pc));
+  MOZ_ASSERT(message);
+  ionAbortPc_ = pc;
+  ionAbortMessage_ = message;
 }
 
 void* JitcodeGlobalEntry::BaselineEntry::canonicalNativeAddrFor(

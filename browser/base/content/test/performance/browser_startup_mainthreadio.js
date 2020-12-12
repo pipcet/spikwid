@@ -219,8 +219,7 @@ const startupPhases = {
       path: "ProfD:xulstore/data.mdb",
       condition: WIN,
       read: 1,
-      write: 3,
-      fsync: 1,
+      write: 1,
     },
   ],
 
@@ -269,17 +268,17 @@ const startupPhases = {
     },
     {
       // bug 1541246
+      path: "ProfD:extensions",
+      condition: WIN,
+      stat: 1,
+    },
+    {
+      // bug 1541246
       path: "UAppData:",
       ignoreIfUnused: true, // sometimes before opening first browser window,
       // sometimes before first paint
       condition: WIN,
       stat: 1,
-    },
-    {
-      // bug 1546838
-      path: "ProfD:xulstore/data.mdb",
-      condition: WIN,
-      read: 2,
     },
   ],
 
@@ -354,7 +353,7 @@ const startupPhases = {
       // bug 1546838
       path: "ProfD:xulstore/data.mdb",
       condition: MAC,
-      write: 3,
+      write: 1,
     },
   ],
 

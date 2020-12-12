@@ -29,6 +29,7 @@
 #include "jit/MIR.h"
 #include "jit/MoveEmitter.h"
 #include "jit/SharedICHelpers.h"
+#include "jit/SharedICRegisters.h"
 #include "jit/Simulator.h"
 #include "js/Conversions.h"
 #include "js/friend/DOMProxy.h"  // JS::ExpandoAndGeneration
@@ -40,6 +41,7 @@
 #include "vm/TraceLogging.h"
 #include "vm/TypedArrayObject.h"
 #include "wasm/WasmTypes.h"
+#include "wasm/WasmValidate.h"
 
 #include "gc/Nursery-inl.h"
 #include "jit/ABIFunctionList-inl.h"
@@ -47,7 +49,6 @@
 #include "jit/TemplateObject-inl.h"
 #include "vm/Interpreter-inl.h"
 #include "vm/JSObject-inl.h"
-#include "vm/TypeInference-inl.h"
 
 using namespace js;
 using namespace js::jit;
@@ -432,13 +433,6 @@ void MacroAssembler::createGCObject(Register obj, Register temp,
     const NativeTemplateObject& ntemplate =
         templateObj.asNativeTemplateObject();
     nDynamicSlots = ntemplate.numDynamicSlots();
-
-    // Arrays with copy on write elements do not need fixed space for an
-    // elements header. The template object, which owns the original
-    // elements, might have another allocation kind.
-    if (ntemplate.denseElementsAreCopyOnWrite()) {
-      allocKind = gc::AllocKind::OBJECT0_BACKGROUND;
-    }
   }
 
   allocateObject(obj, temp, allocKind, nDynamicSlots, initialHeap, fail);
@@ -837,9 +831,7 @@ void MacroAssembler::initGCThing(Register obj, Register temp,
   if (templateObj.isNative()) {
     const NativeTemplateObject& ntemplate =
         templateObj.asNativeTemplateObject();
-    MOZ_ASSERT_IF(!ntemplate.denseElementsAreCopyOnWrite(),
-                  !ntemplate.hasDynamicElements());
-    MOZ_ASSERT_IF(ntemplate.convertDoubleElements(), ntemplate.isArrayObject());
+    MOZ_ASSERT(!ntemplate.hasDynamicElements());
 
     // If the object has dynamic slots, the slots member has already been
     // filled in.
@@ -848,10 +840,7 @@ void MacroAssembler::initGCThing(Register obj, Register temp,
                Address(obj, NativeObject::offsetOfSlots()));
     }
 
-    if (ntemplate.denseElementsAreCopyOnWrite()) {
-      storePtr(ImmPtr(ntemplate.getDenseElements()),
-               Address(obj, NativeObject::offsetOfElements()));
-    } else if (ntemplate.isArrayObject()) {
+    if (ntemplate.isArrayObject()) {
       int elementsOffset = NativeObject::offsetOfFixedElements();
 
       computeEffectiveAddress(Address(obj, elementsOffset), temp);
@@ -866,9 +855,7 @@ void MacroAssembler::initGCThing(Register obj, Register temp,
                                ObjectElements::offsetOfInitializedLength()));
       store32(Imm32(ntemplate.getArrayLength()),
               Address(obj, elementsOffset + ObjectElements::offsetOfLength()));
-      store32(Imm32(ntemplate.convertDoubleElements()
-                        ? ObjectElements::CONVERT_DOUBLE_ELEMENTS
-                        : 0),
+      store32(Imm32(0),
               Address(obj, elementsOffset + ObjectElements::offsetOfFlags()));
       MOZ_ASSERT(!ntemplate.hasPrivate());
     } else if (ntemplate.isArgumentsObject()) {
@@ -1570,12 +1557,6 @@ void MacroAssembler::loadJitActivation(Register dest) {
   loadPtr(Address(dest, offsetof(JSContext, activation_)), dest);
 }
 
-void MacroAssembler::guardGroupHasUnanalyzedNewScript(Register group,
-                                                      Register scratch,
-                                                      Label* fail) {
-  MOZ_CRASH("TODO(no-TI): remove");
-}
-
 void MacroAssembler::guardSpecificAtom(Register str, JSAtom* atom,
                                        Register scratch,
                                        const LiveRegisterSet& volatileRegs,
@@ -1767,35 +1748,6 @@ void MacroAssembler::loadJitCodeRaw(Register func, Register dest) {
                 "jitCodeRaw_");
   loadPtr(Address(func, JSFunction::offsetOfScript()), dest);
   loadPtr(Address(dest, BaseScript::offsetOfJitCodeRaw()), dest);
-}
-
-void MacroAssembler::loadJitCodeNoArgCheck(Register func, Register dest) {
-#ifdef DEBUG
-  {
-    Label ok;
-    int32_t flags = FunctionFlags::BASESCRIPT;
-    branchTestFunctionFlags(func, flags, Assembler::NonZero, &ok);
-    assumeUnreachable("Function has no BaseScript!");
-    bind(&ok);
-  }
-#endif
-
-  static_assert(ScriptWarmUpData::JitScriptTag == 0,
-                "Code below depends on tag value");
-  Imm32 tagMask(ScriptWarmUpData::TagMask);
-
-  // Read jitCodeSkipArgCheck.
-  loadPtr(Address(func, JSFunction::offsetOfScript()), dest);
-  loadPtr(Address(dest, BaseScript::offsetOfWarmUpData()), dest);
-#ifdef DEBUG
-  {
-    Label ok;
-    branchTestPtr(Assembler::Zero, dest, tagMask, &ok);
-    assumeUnreachable("Function has no JitScript!");
-    bind(&ok);
-  }
-#endif
-  loadPtr(Address(dest, JitScript::offsetOfJitCodeSkipArgCheck()), dest);
 }
 
 void MacroAssembler::loadBaselineJitCodeRaw(Register func, Register dest,
@@ -2445,7 +2397,8 @@ void MacroAssembler::alignJitStackBasedOnNArgs(uint32_t argc) {
 // ===============================================================
 
 MacroAssembler::MacroAssembler(JSContext* cx)
-    : framePushed_(0),
+    : wasmMaxOffsetGuardLimit_(0),
+      framePushed_(0),
 #ifdef DEBUG
       inCall_(false),
 #endif
@@ -2464,7 +2417,8 @@ MacroAssembler::MacroAssembler(JSContext* cx)
 }
 
 MacroAssembler::MacroAssembler()
-    : framePushed_(0),
+    : wasmMaxOffsetGuardLimit_(0),
+      framePushed_(0),
 #ifdef DEBUG
       inCall_(false),
 #endif
@@ -2490,7 +2444,8 @@ MacroAssembler::MacroAssembler()
 }
 
 MacroAssembler::MacroAssembler(WasmToken, TempAllocator& alloc)
-    : framePushed_(0),
+    : wasmMaxOffsetGuardLimit_(0),
+      framePushed_(0),
 #ifdef DEBUG
       inCall_(false),
 #endif
@@ -2508,6 +2463,24 @@ MacroAssembler::MacroAssembler(WasmToken, TempAllocator& alloc)
   SetStackPointer64(sp);
   armbuffer_.id = 0;
 #endif
+}
+
+WasmMacroAssembler::WasmMacroAssembler(TempAllocator& alloc, bool limitedSize)
+    : MacroAssembler(WasmToken(), alloc) {
+  if (!limitedSize) {
+    setUnlimitedBuffer();
+  }
+}
+
+WasmMacroAssembler::WasmMacroAssembler(TempAllocator& alloc,
+                                       const wasm::ModuleEnvironment& env,
+                                       bool limitedSize)
+    : MacroAssembler(WasmToken(), alloc) {
+  setWasmMaxOffsetGuardLimit(
+      wasm::GetMaxOffsetGuardLimit(env.hugeMemoryEnabled()));
+  if (!limitedSize) {
+    setUnlimitedBuffer();
+  }
 }
 
 bool MacroAssembler::icBuildOOLFakeExitFrame(void* fakeReturnAddr,
@@ -3260,12 +3233,6 @@ void MacroAssembler::branchTestObjCompartment(
   branchPtr(cond, scratch, ImmPtr(compartment), label);
 }
 
-void MacroAssembler::branchIfObjGroupHasNoAddendum(Register obj,
-                                                   Register scratch,
-                                                   Label* label) {
-  MOZ_CRASH("TODO(no-TI): remove");
-}
-
 void MacroAssembler::branchIfPretenuredGroup(const ObjectGroup* group,
                                              Register scratch, Label* label) {
   movePtr(ImmGCPtr(group), scratch);
@@ -3283,11 +3250,15 @@ void MacroAssembler::branchIfNonNativeObj(Register obj, Register scratch,
                Imm32(JSClass::NON_NATIVE), label);
 }
 
-void MacroAssembler::copyObjGroupNoPreBarrier(Register sourceObj,
-                                              Register destObj,
-                                              Register scratch) {
-  loadPtr(Address(sourceObj, JSObject::offsetOfGroup()), scratch);
-  storePtr(scratch, Address(destObj, JSObject::offsetOfGroup()));
+void MacroAssembler::branchIfObjectNotExtensible(Register obj, Register scratch,
+                                                 Label* label) {
+  loadPtr(Address(obj, JSObject::offsetOfShape()), scratch);
+  loadPtr(Address(scratch, Shape::offsetOfBaseShape()), scratch);
+
+  // Spectre-style checks are not needed here because we do not interpret data
+  // based on this check.
+  branchTest32(Assembler::NonZero, Address(scratch, BaseShape::offsetOfFlags()),
+               Imm32(js::BaseShape::NOT_EXTENSIBLE), label);
 }
 
 void MacroAssembler::maybeBranchTestType(MIRType type, MDefinition* maybeDef,
@@ -3803,7 +3774,7 @@ void MacroAssembler::packedArrayPop(Register array, ValueOperand output,
 
   // Check flags.
   static constexpr uint32_t UnhandledFlags =
-      ObjectElements::Flags::NON_PACKED | ObjectElements::Flags::COPY_ON_WRITE |
+      ObjectElements::Flags::NON_PACKED |
       ObjectElements::Flags::NONWRITABLE_ARRAY_LENGTH |
       ObjectElements::Flags::NOT_EXTENSIBLE |
       ObjectElements::Flags::MAYBE_IN_ITERATION;
@@ -3850,7 +3821,7 @@ void MacroAssembler::packedArrayShift(Register array, ValueOperand output,
 
   // Check flags.
   static constexpr uint32_t UnhandledFlags =
-      ObjectElements::Flags::NON_PACKED | ObjectElements::Flags::COPY_ON_WRITE |
+      ObjectElements::Flags::NON_PACKED |
       ObjectElements::Flags::NONWRITABLE_ARRAY_LENGTH |
       ObjectElements::Flags::NOT_EXTENSIBLE |
       ObjectElements::Flags::MAYBE_IN_ITERATION;

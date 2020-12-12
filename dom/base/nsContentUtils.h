@@ -38,7 +38,6 @@
 #include "mozilla/UniquePtr.h"
 #include "mozilla/dom/BindingDeclarations.h"
 #include "mozilla/dom/FromParser.h"
-#include "mozilla/dom/ReferrerPolicyBinding.h"
 #include "mozilla/fallible.h"
 #include "mozilla/gfx/Point.h"
 #include "nsCOMPtr.h"
@@ -189,6 +188,7 @@ class NodeInfo;
 class Selection;
 class WorkerPrivate;
 enum class ElementCallbackType;
+enum class ReferrerPolicy : uint8_t;
 }  // namespace dom
 
 namespace intl {
@@ -1604,8 +1604,9 @@ class nsContentUtils {
    * Helper to dispatch a "framefocusrequested" event to chrome, which will only
    * bring the window to the foreground and switch tabs if aCanRaise is true.
    */
-  static void RequestFrameFocus(Element& aFrameElement, bool aCanRaise,
-                                mozilla::dom::CallerType aCallerType);
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY static void RequestFrameFocus(
+      Element& aFrameElement, bool aCanRaise,
+      mozilla::dom::CallerType aCallerType);
 
   /**
    * This method creates and dispatches a trusted event.

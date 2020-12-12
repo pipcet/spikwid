@@ -1081,7 +1081,6 @@ void DXGITextureHostD3D11::PushDisplayItems(
     case gfx::SurfaceFormat::P016:
     case gfx::SurfaceFormat::NV12: {
       MOZ_ASSERT(aImageKeys.length() == 2);
-      bool supportsExternalCompositing = false;
       // XXX Add P010 and P016 support.
       if (GetFormat() == gfx::SurfaceFormat::NV12 &&
           gfx::gfxVars::UseWebRenderDCompVideoOverlayWin()) {
@@ -1794,11 +1793,7 @@ AutoLockD3D11Texture::~AutoLockD3D11Texture() {
 
 SyncObjectD3D11ClientContentDevice::SyncObjectD3D11ClientContentDevice(
     SyncHandle aSyncHandle)
-    : SyncObjectD3D11Client(aSyncHandle) {
-  if (!XRE_IsGPUProcess() && gfxPlatform::GetPlatform()->DevicesInitialized()) {
-    mContentDevice = DeviceManagerDx::Get()->GetContentDevice();
-  }
-}
+    : SyncObjectD3D11Client(aSyncHandle) {}
 
 bool SyncObjectD3D11ClientContentDevice::Synchronize(bool aFallible) {
   // Since this can be called from either the Paint or Main thread.
@@ -1849,6 +1844,18 @@ bool SyncObjectD3D11ClientContentDevice::IsSyncObjectValid() {
     return false;
   }
   return true;
+}
+
+void SyncObjectD3D11ClientContentDevice::EnsureInitialized() {
+  if (mContentDevice) {
+    return;
+  }
+
+  if (XRE_IsGPUProcess() || !gfxPlatform::GetPlatform()->DevicesInitialized()) {
+    return;
+  }
+
+  mContentDevice = DeviceManagerDx::Get()->GetContentDevice();
 }
 
 }  // namespace layers

@@ -42,13 +42,13 @@
 #include "debugger/DebugAPI-inl.h"
 #include "jit/ABIFunctionList-inl.h"
 #include "jit/BaselineFrameInfo-inl.h"
+#include "jit/JitScript-inl.h"
 #include "jit/MacroAssembler-inl.h"
 #include "jit/SharedICHelpers-inl.h"
 #include "jit/VMFunctionList-inl.h"
 #include "vm/Interpreter-inl.h"
 #include "vm/JSScript-inl.h"
 #include "vm/NativeObject-inl.h"
-#include "vm/TypeInference-inl.h"
 
 using namespace js;
 using namespace js::jit;
@@ -222,8 +222,8 @@ MethodStatus BaselineCompiler::compile() {
     }
   }
 
-  // Pin analysis info during compilation.
-  AutoEnterAnalysis autoEnterAnalysis(cx);
+  // Suppress GC during compilation.
+  gc::AutoSuppressGC suppressGC(cx);
 
   MOZ_ASSERT(!script->hasBaselineScript());
 
@@ -1059,23 +1059,6 @@ void BaselineInterpreterCodeGen::loadInt32LengthBytecodeOperand(Register dest) {
   LoadInt32Operand(masm, dest);
 }
 
-template <>
-void BaselineCompilerCodeGen::loadInt32IndexBytecodeOperand(ValueOperand dest) {
-  uint32_t index = GET_UINT32(handler.pc());
-  MOZ_ASSERT(index <= INT32_MAX,
-             "the bytecode emitter must fail to compile code that would "
-             "produce an index exceeding int32_t range");
-  masm.moveValue(Int32Value(AssertedCast<int32_t>(index)), dest);
-}
-
-template <>
-void BaselineInterpreterCodeGen::loadInt32IndexBytecodeOperand(
-    ValueOperand dest) {
-  Register scratch = dest.scratchReg();
-  LoadInt32Operand(masm, scratch);
-  masm.tagValue(JSVAL_TYPE_INT32, scratch, dest);
-}
-
 template <typename Handler>
 bool BaselineCodeGen<Handler>::emitDebugPrologue() {
   auto ifDebuggee = [this]() {
@@ -1683,11 +1666,6 @@ void BaselineCodeGen<Handler>::emitProfilerExitFrame() {
 
 template <typename Handler>
 bool BaselineCodeGen<Handler>::emit_Nop() {
-  return true;
-}
-
-template <typename Handler>
-bool BaselineCodeGen<Handler>::emit_IterNext() {
   return true;
 }
 
@@ -2857,77 +2835,119 @@ bool BaselineCodeGen<Handler>::emit_NewArray() {
   return true;
 }
 
+static void MarkElementsNonPackedIfHoleValue(MacroAssembler& masm,
+                                             Register elements,
+                                             ValueOperand val) {
+  Label notHole;
+  masm.branchTestMagic(Assembler::NotEqual, val, &notHole);
+  {
+    Address elementsFlags(elements, ObjectElements::offsetOfFlags());
+    masm.or32(Imm32(ObjectElements::NON_PACKED), elementsFlags);
+  }
+  masm.bind(&notHole);
+}
+
 template <>
-bool BaselineCompilerCodeGen::emit_NewArrayCopyOnWrite() {
-  // This is like the interpreter implementation, but we can call
-  // getOrFixupCopyOnWriteObject at compile-time.
+bool BaselineInterpreterCodeGen::emit_InitElemArray() {
+  // Pop value into R0, keep the object on the stack.
+  frame.popRegsAndSync(1);
 
-  RootedScript scriptRoot(cx, handler.script());
-  JSObject* obj =
-      ObjectGroup::getOrFixupCopyOnWriteObject(cx, scriptRoot, handler.pc());
-  if (!obj) {
-    return false;
+  // Load object in R2.
+  Register obj = R2.scratchReg();
+  masm.unboxObject(frame.addressOfStackValue(-1), obj);
+
+  // Load index in R1.
+  Register index = R1.scratchReg();
+  LoadInt32Operand(masm, index);
+
+  // Store the Value. No pre-barrier because this is an initialization.
+  masm.loadPtr(Address(obj, NativeObject::offsetOfElements()), obj);
+  masm.storeValue(R0, BaseObjectElementIndex(obj, index));
+
+  // Bump initialized length.
+  Address initLength(obj, ObjectElements::offsetOfInitializedLength());
+  masm.add32(Imm32(1), index);
+  masm.store32(index, initLength);
+
+  // Mark elements as NON_PACKED if we stored the hole value.
+  MarkElementsNonPackedIfHoleValue(masm, obj, R0);
+
+  // Post-barrier.
+  Label skipBarrier;
+  Register scratch = index;
+  masm.branchValueIsNurseryCell(Assembler::NotEqual, R0, scratch, &skipBarrier);
+  {
+    masm.unboxObject(frame.addressOfStackValue(-1), obj);
+    masm.branchPtrInNurseryChunk(Assembler::Equal, obj, scratch, &skipBarrier);
+    MOZ_ASSERT(obj == R2.scratchReg(), "post barrier expects object in R2");
+    masm.call(&postBarrierSlot_);
   }
-
-  prepareVMCall();
-
-  pushArg(ImmGCPtr(obj));
-
-  using Fn = ArrayObject* (*)(JSContext*, HandleArrayObject);
-  if (!callVM<Fn, js::NewDenseCopyOnWriteArray>()) {
-    return false;
-  }
-
-  // Box and push return value.
-  masm.tagValue(JSVAL_TYPE_OBJECT, ReturnReg, R0);
-  frame.push(R0);
+  masm.bind(&skipBarrier);
   return true;
 }
 
 template <>
-bool BaselineInterpreterCodeGen::emit_NewArrayCopyOnWrite() {
-  prepareVMCall();
+bool BaselineCompilerCodeGen::emit_InitElemArray() {
+  // Pop value into R0, keep the object on the stack.
+  Maybe<Value> knownValue = frame.knownStackValue(-1);
+  frame.popRegsAndSync(1);
 
-  pushBytecodePCArg();
-  pushScriptArg();
+  // Load object in R2.
+  Register obj = R2.scratchReg();
+  masm.unboxObject(frame.addressOfStackValue(-1), obj);
 
-  using Fn = ArrayObject* (*)(JSContext*, HandleScript, jsbytecode*);
-  if (!callVM<Fn, NewArrayCopyOnWriteOperation>()) {
-    return false;
+  uint32_t index = GET_UINT32(handler.pc());
+  MOZ_ASSERT(index <= INT32_MAX,
+             "the bytecode emitter must fail to compile code that would "
+             "produce an index exceeding int32_t range");
+
+  // Store the Value. No pre-barrier because this is an initialization.
+  masm.loadPtr(Address(obj, NativeObject::offsetOfElements()), obj);
+  masm.storeValue(R0, Address(obj, index * sizeof(Value)));
+
+  // Bump initialized length.
+  Address initLength(obj, ObjectElements::offsetOfInitializedLength());
+  masm.store32(Imm32(index + 1), initLength);
+
+  // Mark elements as NON_PACKED if we stored the hole value. We know this
+  // statically except when debugger instrumentation is enabled because that
+  // forces a stack-sync (which discards constants and known types) for each op.
+  if (knownValue && knownValue->isMagic(JS_ELEMENTS_HOLE)) {
+    Address elementsFlags(obj, ObjectElements::offsetOfFlags());
+    masm.or32(Imm32(ObjectElements::NON_PACKED), elementsFlags);
+  } else if (handler.compileDebugInstrumentation()) {
+    MarkElementsNonPackedIfHoleValue(masm, obj, R0);
+  } else {
+#ifdef DEBUG
+    Label notHole;
+    masm.branchTestMagic(Assembler::NotEqual, R0, &notHole);
+    masm.assumeUnreachable("Unexpected hole value");
+    masm.bind(&notHole);
+#endif
   }
 
-  // Box and push return value.
-  masm.tagValue(JSVAL_TYPE_OBJECT, ReturnReg, R0);
-  frame.push(R0);
-  return true;
-}
-
-template <typename Handler>
-bool BaselineCodeGen<Handler>::emit_InitElemArray() {
-  // Keep the object and rhs on the stack.
-  frame.syncStack(0);
-
-  // Load object in R0, index in R1.
-  masm.loadValue(frame.addressOfStackValue(-2), R0);
-  loadInt32IndexBytecodeOperand(R1);
-
-  // Call IC.
-  if (!emitNextIC()) {
-    return false;
+  // Post-barrier.
+  if (knownValue) {
+    MOZ_ASSERT(JS::GCPolicy<Value>::isTenured(*knownValue));
+  } else {
+    Label skipBarrier;
+    Register scratch = R1.scratchReg();
+    masm.branchValueIsNurseryCell(Assembler::NotEqual, R0, scratch,
+                                  &skipBarrier);
+    {
+      masm.unboxObject(frame.addressOfStackValue(-1), obj);
+      masm.branchPtrInNurseryChunk(Assembler::Equal, obj, scratch,
+                                   &skipBarrier);
+      MOZ_ASSERT(obj == R2.scratchReg(), "post barrier expects object in R2");
+      masm.call(&postBarrierSlot_);
+    }
+    masm.bind(&skipBarrier);
   }
-
-  // Pop the rhs, so that the object is on the top of the stack.
-  frame.pop();
   return true;
 }
 
 template <typename Handler>
 bool BaselineCodeGen<Handler>::emit_NewObject() {
-  return emitNewObject();
-}
-
-template <typename Handler>
-bool BaselineCodeGen<Handler>::emit_NewObjectWithGroup() {
   return emitNewObject();
 }
 
@@ -3067,11 +3087,6 @@ bool BaselineCodeGen<Handler>::emit_GetElemSuper() {
   frame.pop();
   frame.push(R0);
   return true;
-}
-
-template <typename Handler>
-bool BaselineCodeGen<Handler>::emit_CallElem() {
-  return emit_GetElem();
 }
 
 template <typename Handler>
@@ -3412,16 +3427,6 @@ bool BaselineCodeGen<Handler>::emit_GetProp() {
   // Mark R0 as pushed stack value.
   frame.push(R0);
   return true;
-}
-
-template <typename Handler>
-bool BaselineCodeGen<Handler>::emit_CallProp() {
-  return emit_GetProp();
-}
-
-template <typename Handler>
-bool BaselineCodeGen<Handler>::emit_Length() {
-  return emit_GetProp();
 }
 
 template <typename Handler>

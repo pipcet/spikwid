@@ -738,6 +738,8 @@
 #  define RETURN_STATUS_OR_RESULT(_status, _rv) return _rv
 #endif
 
+class mozIStorageConnection;
+class mozIStorageStatement;
 class nsIFile;
 
 namespace mozilla {
@@ -977,6 +979,36 @@ nsDependentCSubstring GetLeafName(const nsACString& aPath);
 Result<nsCOMPtr<nsIFile>, nsresult> CloneFileAndAppend(
     nsIFile& aDirectory, const nsAString& aPathElement);
 
+Result<nsCOMPtr<mozIStorageStatement>, nsresult> CreateStatement(
+    mozIStorageConnection& aConnection, const nsACString& aStatementString);
+
+enum class SingleStepResult { AssertHasResult, ReturnNullIfNoResult };
+
+template <SingleStepResult ResultHandling>
+using SingleStepSuccessType =
+    std::conditional_t<ResultHandling == SingleStepResult::AssertHasResult,
+                       NotNull<nsCOMPtr<mozIStorageStatement>>,
+                       nsCOMPtr<mozIStorageStatement>>;
+
+template <SingleStepResult ResultHandling>
+Result<SingleStepSuccessType<ResultHandling>, nsresult> ExecuteSingleStep(
+    nsCOMPtr<mozIStorageStatement>&& aStatement);
+
+// Creates a statement with the specified aStatementString, executes a single
+// step, and returns the statement.
+// Depending on the value ResultHandling,
+// - it is asserted that there is a result (default resp.
+//   SingleStepResult::AssertHasResult), and the success type is
+//   MovingNotNull<nsCOMPtr<mozIStorageStatement>>
+// - it is asserted that there is no result, and the success type is Ok
+// - in case there is no result, nullptr is returned, and the success type is
+//   nsCOMPtr<mozIStorageStatement>
+// Any other errors are always propagated.
+template <SingleStepResult ResultHandling = SingleStepResult::AssertHasResult>
+Result<SingleStepSuccessType<ResultHandling>, nsresult>
+CreateAndExecuteSingleStepStatement(mozIStorageConnection& aConnection,
+                                    const nsACString& aStatementString);
+
 void LogError(const nsLiteralCString& aModule, const nsACString& aExpr,
               const nsACString& aSourceFile, int32_t aSourceLine);
 
@@ -992,6 +1024,7 @@ Result<bool, nsresult> WarnIfFileIsUnknown(nsIFile& aFile,
 
 struct MOZ_STACK_CLASS ScopedLogExtraInfo {
   static constexpr const char kTagQuery[] = "query";
+  static constexpr const char kTagContext[] = "context";
 
 #ifdef QM_ENABLE_SCOPED_LOG_EXTRA_INFO
  private:
@@ -1029,6 +1062,7 @@ struct MOZ_STACK_CLASS ScopedLogExtraInfo {
   nsCString mCurrentValue;
 
   static MOZ_THREAD_LOCAL(const nsACString*) sQueryValue;
+  static MOZ_THREAD_LOCAL(const nsACString*) sContextValue;
 
   void AddInfo();
 #else
@@ -1069,6 +1103,19 @@ struct MOZ_STACK_CLASS ScopedLogExtraInfo {
 // directly, they should only be called from the QM_* macros.
 
 QM_META_HANDLE_ERROR("QuotaManager"_ns)
+
+template <SingleStepResult ResultHandling = SingleStepResult::AssertHasResult,
+          typename BindFunctor>
+Result<SingleStepSuccessType<ResultHandling>, nsresult>
+CreateAndExecuteSingleStepStatement(mozIStorageConnection& aConnection,
+                                    const nsACString& aStatementString,
+                                    BindFunctor aBindFunctor) {
+  QM_TRY_UNWRAP(auto stmt, CreateStatement(aConnection, aStatementString));
+
+  QM_TRY(aBindFunctor(*stmt));
+
+  return ExecuteSingleStep<ResultHandling>(std::move(stmt));
+}
 
 }  // namespace quota
 }  // namespace dom

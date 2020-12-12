@@ -20,10 +20,12 @@ pref("app.update.promptWaitTime", 691200);
   pref("app.update.url.manual", "");
   pref("app.update.url.details", "");
   pref("app.releaseNotesURL", "");
+  pref("app.releaseNotesURL.aboutDialog", "");
 #else
   pref("app.update.url.manual", "");
   pref("app.update.url.details", "");
   pref("app.releaseNotesURL", "");
+  pref("app.releaseNotesURL.aboutDialog", "");
 #endif
 
 // The number of days a binary is permitted to be old

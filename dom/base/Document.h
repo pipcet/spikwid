@@ -48,7 +48,6 @@
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/EventTarget.h"
 #include "mozilla/dom/Nullable.h"
-#include "mozilla/dom/ReferrerPolicyBinding.h"
 #include "mozilla/dom/ViewportMetaData.h"
 #include "nsAtom.h"
 #include "nsCOMArray.h"
@@ -893,35 +892,18 @@ class Document : public nsINode,
    * header. So override the old ReferrerInfo if we get one from meta
    */
   void UpdateReferrerInfoFromMeta(const nsAString& aMetaReferrer,
-                                  bool aPreload) {
-    ReferrerPolicyEnum policy =
-        ReferrerInfo::ReferrerPolicyFromMetaString(aMetaReferrer);
-    // The empty string "" corresponds to no referrer policy, causing a fallback
-    // to a referrer policy defined elsewhere.
-    if (policy == ReferrerPolicy::_empty) {
-      return;
-    }
-
-    MOZ_ASSERT(mReferrerInfo);
-    MOZ_ASSERT(mPreloadReferrerInfo);
-
-    if (aPreload) {
-      mPreloadReferrerInfo =
-          static_cast<mozilla::dom::ReferrerInfo*>((mPreloadReferrerInfo).get())
-              ->CloneWithNewPolicy(policy);
-    } else {
-      mReferrerInfo =
-          static_cast<mozilla::dom::ReferrerInfo*>((mReferrerInfo).get())
-              ->CloneWithNewPolicy(policy);
-    }
-  }
+                                  bool aPreload);
 
   /**
    * Set the principals responsible for this document.  Chances are, you do not
    * want to be using this.
+   * Set aSetContentBlockingAllowListPrincipal to false to skip updating the
+   * content blocking allowlist principal. Currently used to prevent setting it
+   * to a NullPrincipal for sandboxed documents.
    */
   void SetPrincipals(nsIPrincipal* aPrincipal,
-                     nsIPrincipal* aPartitionedPrincipal);
+                     nsIPrincipal* aPartitionedPrincipal,
+                     bool aSetContentBlockingAllowListPrincipal = true);
 
   /**
    * Returns true if exempt from HTTPS-Only Mode upgrade.

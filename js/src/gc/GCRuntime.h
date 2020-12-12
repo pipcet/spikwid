@@ -382,7 +382,9 @@ class GCRuntime {
   void unlockGC() { lock.unlock(); }
 
 #ifdef DEBUG
-  bool currentThreadHasLockedGC() const { return lock.ownedByCurrentThread(); }
+  void assertCurrentThreadHasLockedGC() const {
+    lock.assertOwnedByCurrentThread();
+  }
 #endif  // DEBUG
 
   void setAlwaysPreserveCode() { alwaysPreserveCode = true; }
@@ -795,6 +797,7 @@ class GCRuntime {
   void maybeRequestGCAfterBackgroundTask(const AutoLockHelperThreadState& lock);
   void cancelRequestedGCAfterBackgroundTask();
   void finishCollection();
+  void maybeStopStringPretenuring();
   IncrementalProgress joinSweepMarkTask();
 
 #ifdef JS_GC_ZEAL

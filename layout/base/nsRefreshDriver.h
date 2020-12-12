@@ -13,7 +13,6 @@
 #define nsRefreshDriver_h_
 
 #include "mozilla/FlushType.h"
-#include "mozilla/ProfileChunkedBuffer.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/Vector.h"
@@ -31,6 +30,10 @@
 #include "mozilla/layers/TransactionIdAllocator.h"
 #include "LayersTypes.h"
 
+#ifdef MOZ_GECKO_PROFILER
+#  include "mozilla/ProfileChunkedBuffer.h"
+#endif
+
 class nsPresContext;
 
 class imgIRequest;
@@ -42,10 +45,6 @@ class PendingFullscreenEvent;
 class PresShell;
 class RefreshDriverTimer;
 class Runnable;
-
-namespace layout {
-class VsyncChild;
-}  // namespace layout
 
 }  // namespace mozilla
 
@@ -298,14 +297,6 @@ class nsRefreshDriver final : public mozilla::layers::TransactionIdAllocator,
    */
   nsPresContext* GetPresContext() const;
 
-  /**
-   * PBackgroundChild actor is created asynchronously in content process.
-   * We can't create vsync-based timers during PBackground startup. This
-   * function will be called when PBackgroundChild actor is created. Then we can
-   * do the pending vsync-based timer creation.
-   */
-  static void PVsyncActorCreated(mozilla::layout::VsyncChild* aVsyncChild);
-
   void CreateVsyncRefreshTimer();
 
 #ifdef DEBUG
@@ -447,7 +438,9 @@ class nsRefreshDriver final : public mozilla::layers::TransactionIdAllocator,
     const char* mDescription;
     mozilla::TimeStamp mRegisterTime;
     mozilla::Maybe<uint64_t> mInnerWindowId;
+#ifdef MOZ_GECKO_PROFILER
     mozilla::UniquePtr<mozilla::ProfileChunkedBuffer> mCause;
+#endif
     mozilla::FlushType mFlushType;
 
     bool operator==(nsARefreshObserver* aObserver) const {
@@ -500,7 +493,9 @@ class nsRefreshDriver final : public mozilla::layers::TransactionIdAllocator,
   mozilla::RefreshDriverTimer* ChooseTimer();
   mozilla::RefreshDriverTimer* mActiveTimer;
   RefPtr<mozilla::RefreshDriverTimer> mOwnTimer;
+#ifdef MOZ_GECKO_PROFILER
   mozilla::UniquePtr<mozilla::ProfileChunkedBuffer> mRefreshTimerStartedCause;
+#endif
 
   // nsPresContext passed in constructor and unset in Disconnect.
   mozilla::WeakPtr<nsPresContext> mPresContext;
@@ -529,7 +524,9 @@ class nsRefreshDriver final : public mozilla::layers::TransactionIdAllocator,
   // flush since the last time we did it.
   const mozilla::TimeDuration mMinRecomputeVisibilityInterval;
 
+#ifdef MOZ_GECKO_PROFILER
   mozilla::UniquePtr<mozilla::ProfileChunkedBuffer> mViewManagerFlushCause;
+#endif
 
   bool mThrottled : 1;
   bool mNeedToRecomputeVisibility : 1;

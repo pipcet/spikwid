@@ -3403,7 +3403,15 @@ void nsIFrame::BuildDisplayListForStackingContext(
 
     CheckForApzAwareEventHandlers(aBuilder, this);
 
-    if (usingMask) {
+    // If we have a mask, compute a clip to bound the masked content.
+    // This is necessary in case the content moves with an ancestor
+    // ASR of the mask.
+    // Don't do this if we also have a filter, because then the clip
+    // would be applied before the filter, violating
+    // https://www.w3.org/TR/filter-effects-1/#placement.
+    // Filters are a containing block for fixed and absolute descendants,
+    // so the masked content cannot move with an ancestor ASR.
+    if (usingMask && !usingFilter) {
       clipForMask = ComputeClipForMaskItem(aBuilder, this);
       if (clipForMask) {
         aBuilder->IntersectDirtyRect(*clipForMask);
@@ -6179,12 +6187,14 @@ nsIFrame::SizeComputationResult nsIFrame::ComputeSize(
         mainAxisCoord = &maxContStyleCoord;
         // (Note: if our main axis is the block axis, then this 'max-content'
         // value will be treated like 'auto', via the IsAutoBSize() call below.)
-      } else if (!flexBasis->IsAuto()) {
+      } else if (flexBasis->IsSize() && !flexBasis->IsAuto()) {
         // For all other non-'auto' flex-basis values, we just swap in the
         // flex-basis itself for the main-size property.
         mainAxisCoord = &flexBasis->AsSize();
-      }  // else: flex-basis is 'auto', which is deferring to some explicit
-         // value in mainAxisCoord. So we proceed w/o touching mainAxisCoord.
+      } else {
+        // else: flex-basis is 'auto', or 'content' in a table wrapper frame
+        // which we ignore. So we proceed w/o touching mainAxisCoord.
+      }
     }
   }
 
@@ -11194,9 +11204,12 @@ CompositorHitTestInfo nsIFrame::GetCompositorHitTestInfo(
     } else if (touchAction & StyleTouchAction::MANIPULATION) {
       result += CompositorHitTestFlags::eTouchActionDoubleTapZoomDisabled;
     } else {
-      // This path handles the cases none | [pan-x || pan-y] and so both
-      // double-tap and pinch zoom are disabled in here.
-      result += CompositorHitTestFlags::eTouchActionPinchZoomDisabled;
+      // This path handles the cases none | [pan-x || pan-y || pinch-zoom] so
+      // double-tap is disabled in here.
+      if (!(touchAction & StyleTouchAction::PINCH_ZOOM)) {
+        result += CompositorHitTestFlags::eTouchActionPinchZoomDisabled;
+      }
+
       result += CompositorHitTestFlags::eTouchActionDoubleTapZoomDisabled;
 
       if (!(touchAction & StyleTouchAction::PAN_X)) {

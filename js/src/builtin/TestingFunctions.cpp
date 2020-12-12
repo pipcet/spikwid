@@ -51,6 +51,7 @@
 #include "jit/BaselineJIT.h"
 #include "jit/Disassemble.h"
 #include "jit/InlinableNatives.h"
+#include "jit/Invalidation.h"
 #include "jit/Ion.h"
 #include "jit/JitRuntime.h"
 #include "jit/TrialInlining.h"
@@ -89,6 +90,7 @@
 #  include "unicode/utypes.h"
 #  include "unicode/uversion.h"
 #endif
+#include "util/DifferentialTesting.h"
 #include "util/StringBuffer.h"
 #include "util/Text.h"
 #include "vm/AsyncFunction.h"
@@ -183,6 +185,12 @@ static bool GetRealmConfiguration(JSContext* cx, unsigned argc, Value* vp) {
   if (!JS_SetProperty(cx, info, "privateMethods",
                       privateFields && privateMethods ? TrueHandleValue
                                                       : FalseHandleValue)) {
+    return false;
+  }
+
+  bool topLevelAwait = cx->options().topLevelAwait();
+  if (!JS_SetProperty(cx, info, "topLevelAwait",
+                      topLevelAwait ? TrueHandleValue : FalseHandleValue)) {
     return false;
   }
 
@@ -414,15 +422,6 @@ static bool GetBuildConfiguration(JSContext* cx, unsigned argc, Value* vp) {
     return false;
   }
 
-#ifdef JS_MORE_DETERMINISTIC
-  value = BooleanValue(true);
-#else
-  value = BooleanValue(false);
-#endif
-  if (!JS_SetProperty(cx, info, "more-deterministic", value)) {
-    return false;
-  }
-
 #ifdef MOZ_PROFILING
   value = BooleanValue(true);
 #else
@@ -584,9 +583,7 @@ static bool GC(JSContext* cx, unsigned argc, Value* vp) {
     }
   }
 
-#ifndef JS_MORE_DETERMINISTIC
   size_t preBytes = cx->runtime()->gc.heapSize.bytes();
-#endif
 
   if (zone) {
     PrepareForDebugGC(cx->runtime());
@@ -597,10 +594,10 @@ static bool GC(JSContext* cx, unsigned argc, Value* vp) {
   JS::NonIncrementalGC(cx, gckind, reason);
 
   char buf[256] = {'\0'};
-#ifndef JS_MORE_DETERMINISTIC
-  SprintfLiteral(buf, "before %zu, after %zu\n", preBytes,
-                 cx->runtime()->gc.heapSize.bytes());
-#endif
+  if (!js::SupportDifferentialTesting()) {
+    SprintfLiteral(buf, "before %zu, after %zu\n", preBytes,
+                   cx->runtime()->gc.heapSize.bytes());
+  }
   return ReturnStringCopy(cx, args, buf);
 }
 
@@ -849,6 +846,12 @@ static bool WasmFunctionReferencesEnabled(JSContext* cx, unsigned argc,
 static bool WasmGcEnabled(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
   args.rval().setBoolean(wasm::GcTypesAvailable(cx));
+  return true;
+}
+
+static bool WasmExceptionsEnabled(JSContext* cx, unsigned argc, Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  args.rval().setBoolean(wasm::ExceptionsAvailable(cx));
   return true;
 }
 
@@ -3055,11 +3058,11 @@ static bool DumpHeap(JSContext* cx, unsigned argc, Value* vp) {
 }
 
 static bool Terminate(JSContext* cx, unsigned arg, Value* vp) {
-#ifdef JS_MORE_DETERMINISTIC
-  // Print a message to stderr in more-deterministic builds to help jsfunfuzz
+  // Print a message to stderr in differential testing to help jsfunfuzz
   // find uncatchable-exception bugs.
-  fprintf(stderr, "terminate called\n");
-#endif
+  if (js::SupportDifferentialTesting()) {
+    fprintf(stderr, "terminate called\n");
+  }
 
   JS_ClearPendingException(cx);
   return false;
@@ -3332,6 +3335,22 @@ static bool testingFunc_bailAfter(JSContext* cx, unsigned argc, Value* vp) {
     jitRuntime->setIonBailAfterCounter(bailAfter);
   }
 #endif
+
+  args.rval().setUndefined();
+  return true;
+}
+
+static bool testingFunc_invalidate(JSContext* cx, unsigned argc, Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+
+  // If the topmost frame is Ion/Warp, find the IonScript and invalidate it.
+  FrameIter iter(cx);
+  if (!iter.done() && iter.isIon()) {
+    while (!iter.isPhysicalJitFrame()) {
+      ++iter;
+    }
+    js::jit::Invalidate(cx, iter.script());
+  }
 
   args.rval().setUndefined();
   return true;
@@ -3944,16 +3963,18 @@ static bool DetachArrayBuffer(JSContext* cx, unsigned argc, Value* vp) {
 
 static bool HelperThreadCount(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
-#ifdef JS_MORE_DETERMINISTIC
-  // Always return 0 to get consistent output with and without --no-threads.
-  args.rval().setInt32(0);
-#else
+
+  if (js::SupportDifferentialTesting()) {
+    // Always return 0 to get consistent output with and without --no-threads.
+    args.rval().setInt32(0);
+    return true;
+  }
+
   if (CanUseExtraThreads()) {
     args.rval().setInt32(HelperThreadState().threadCount);
   } else {
     args.rval().setInt32(0);
   }
-#endif
   return true;
 }
 
@@ -4036,6 +4057,14 @@ static bool SharedArrayRawBufferRefcount(JSContext* cx, unsigned argc,
 #ifdef NIGHTLY_BUILD
 static bool ObjectAddress(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
+
+  if (js::SupportDifferentialTesting()) {
+    RootedObject callee(cx, &args.callee());
+    ReportUsageErrorASCII(cx, callee,
+                          "Function unavailable in differential testing mode.");
+    return false;
+  }
+
   if (args.length() != 1) {
     RootedObject callee(cx, &args.callee());
     ReportUsageErrorASCII(cx, callee, "Wrong number of arguments");
@@ -4047,20 +4076,23 @@ static bool ObjectAddress(JSContext* cx, unsigned argc, Value* vp) {
     return false;
   }
 
-#  ifdef JS_MORE_DETERMINISTIC
-  args.rval().setInt32(0);
-  return true;
-#  else
   void* ptr = js::UncheckedUnwrap(&args[0].toObject(), true);
   char buffer[64];
   SprintfLiteral(buffer, "%p", ptr);
 
   return ReturnStringCopy(cx, args, buffer);
-#  endif
 }
 
 static bool SharedAddress(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
+
+  if (js::SupportDifferentialTesting()) {
+    RootedObject callee(cx, &args.callee());
+    ReportUsageErrorASCII(cx, callee,
+                          "Function unavailable in differential testing mode.");
+    return false;
+  }
+
   if (args.length() != 1) {
     RootedObject callee(cx, &args.callee());
     ReportUsageErrorASCII(cx, callee, "Wrong number of arguments");
@@ -4072,9 +4104,6 @@ static bool SharedAddress(JSContext* cx, unsigned argc, Value* vp) {
     return false;
   }
 
-#  ifdef JS_MORE_DETERMINISTIC
-  args.rval().setString(cx->staticStrings().getUint(0));
-#  else
   RootedObject obj(cx, CheckedUnwrapStatic(&args[0].toObject()));
   if (!obj) {
     ReportAccessDenied(cx);
@@ -4096,7 +4125,6 @@ static bool SharedAddress(JSContext* cx, unsigned argc, Value* vp) {
   }
 
   args.rval().setString(str);
-#  endif
 
   return true;
 }
@@ -4383,7 +4411,7 @@ static bool FindPath(JSContext* cx, unsigned argc, Value* vp) {
   if (!result) {
     return false;
   }
-  result->ensureDenseInitializedLength(cx, 0, length);
+  result->ensureDenseInitializedLength(0, length);
 
   // Walk |nodes| and |edges| in the stored order, and construct the result
   // array in start-to-target order.
@@ -4580,7 +4608,7 @@ static bool ShortestPaths(JSContext* cx, unsigned argc, Value* vp) {
   if (!results) {
     return false;
   }
-  results->ensureDenseInitializedLength(cx, 0, length);
+  results->ensureDenseInitializedLength(0, length);
 
   for (size_t i = 0; i < length; i++) {
     size_t numPaths = values[i].length();
@@ -4590,7 +4618,7 @@ static bool ShortestPaths(JSContext* cx, unsigned argc, Value* vp) {
     if (!pathsArray) {
       return false;
     }
-    pathsArray->ensureDenseInitializedLength(cx, 0, numPaths);
+    pathsArray->ensureDenseInitializedLength(0, numPaths);
 
     for (size_t j = 0; j < numPaths; j++) {
       size_t pathLength = values[i][j].length();
@@ -4600,7 +4628,7 @@ static bool ShortestPaths(JSContext* cx, unsigned argc, Value* vp) {
       if (!path) {
         return false;
       }
-      path->ensureDenseInitializedLength(cx, 0, pathLength);
+      path->ensureDenseInitializedLength(0, pathLength);
 
       for (size_t k = 0; k < pathLength; k++) {
         RootedPlainObject part(cx, NewBuiltinClassInstance<PlainObject>(cx));
@@ -5052,7 +5080,9 @@ static bool EvalStencilXDR(JSContext* cx, uint32_t argc, Value* vp) {
 
   /* Instantiate the stencil. */
   Rooted<frontend::CompilationGCOutput> output(cx);
-  if (!compilationInfos.get().instantiateStencils(cx, output.get())) {
+  Rooted<frontend::CompilationGCOutput> outputForDelazification(cx);
+  if (!compilationInfos.get().instantiateStencils(
+          cx, output.get(), outputForDelazification.get())) {
     return false;
   }
 
@@ -5320,6 +5350,24 @@ static bool ClearMarkQueue(JSContext* cx, unsigned argc, Value* vp) {
   return true;
 }
 #endif  // DEBUG
+
+static bool NurseryStringsEnabled(JSContext* cx, unsigned argc, Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  args.rval().setBoolean(cx->zone()->allocNurseryStrings);
+  return true;
+}
+
+static bool IsNurseryAllocated(JSContext* cx, unsigned argc, Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (!args.get(0).isGCThing()) {
+    JS_ReportErrorASCII(
+        cx, "The function takes one argument, which must be a GC thing");
+    return false;
+  }
+
+  args.rval().setBoolean(IsInsideNursery(args[0].toGCThing()));
+  return true;
+}
 
 static bool GetLcovInfo(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
@@ -5977,7 +6025,7 @@ static bool EncodeAsUtf8InBuffer(JSContext* cx, unsigned argc, Value* vp) {
   if (!array) {
     return false;
   }
-  array->ensureDenseInitializedLength(cx, 0, 2);
+  array->ensureDenseInitializedLength(0, 2);
 
   uint32_t length;
   bool isSharedMemory;
@@ -6102,14 +6150,12 @@ static bool BaselineCompile(JSContext* cx, unsigned argc, Value* vp) {
 
   const char* returnedStr = nullptr;
   do {
-#ifdef JS_MORE_DETERMINISTIC
     // In order to check for differential behaviour, baselineCompile should have
     // the same output whether --no-baseline is used or not.
-    if (fuzzingSafe) {
-      returnedStr = "skipped (fuzzing-safe)";
+    if (js::SupportDifferentialTesting()) {
+      returnedStr = "skipped (differential testing)";
       break;
     }
-#endif
 
     AutoRealm ar(cx, script);
     if (script->hasBaselineScript()) {
@@ -6767,6 +6813,10 @@ gc::ZealModeHelpText),
 "wasmMultiValueEnabled()",
 "  Returns a boolean indicating whether the WebAssembly multi-value proposal is enabled."),
 
+    JS_FN_HELP("wasmExceptionsEnabled", WasmExceptionsEnabled, 1, 0,
+"wasmExceptionsEnabled()",
+"  Returns a boolean indicating whether the WebAssembly exceptions proposal is enabled."),
+
 #if defined(ENABLE_WASM_SIMD) && defined(DEBUG)
     JS_FN_HELP("wasmSimdAnalysis", WasmSimdAnalysis, 1, 0,
 "wasmSimdAnalysis(...)",
@@ -6853,6 +6903,9 @@ gc::ZealModeHelpText),
 "  Start a counter to bail once after passing the given amount of possible bailout positions in\n"
 "  ionmonkey.\n"),
 
+    JS_FN_HELP("invalidate", testingFunc_invalidate, 0, 0,
+"invalidate()",
+"  Force an immediate invalidation (if running in Warp)."),
 
     JS_FN_HELP("inJit", testingFunc_inJit, 0, 0,
 "inJit()",
@@ -7100,6 +7153,15 @@ gc::ZealModeHelpText),
 "  returned values will be wrapped into the current compartment, so this loses\n"
 "  some fidelity."),
 #endif // DEBUG
+
+    JS_FN_HELP("nurseryStringsEnabled", NurseryStringsEnabled, 0, 0,
+"nurseryStringsEnabled()",
+"  Return whether strings are currently allocated in the nursery for current\n"
+"  global\n"),
+
+    JS_FN_HELP("isNurseryAllocated", IsNurseryAllocated, 1, 0,
+"isNurseryAllocated(thing)",
+"  Return whether a GC thing is nursery allocated.\n"),
 
     JS_FN_HELP("getLcovInfo", GetLcovInfo, 1, 0,
 "getLcovInfo(global)",

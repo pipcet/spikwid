@@ -19,7 +19,6 @@
 #include "wasm/WasmSignalHandlers.h"
 
 #include "mozilla/DebugOnly.h"
-#include "mozilla/ScopeExit.h"
 #include "mozilla/ThreadLocal.h"
 
 #include "threading/Thread.h"
@@ -358,7 +357,7 @@ struct macos_arm_context {
 #  elif defined(__aarch64__)
 struct macos_aarch64_context {
   arm_thread_state64_t thread;
-  arm_neon_state_t float_;
+  arm_neon_state64_t float_;
 };
 #    define CONTEXT macos_aarch64_context
 #  else

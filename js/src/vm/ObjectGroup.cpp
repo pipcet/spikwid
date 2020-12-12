@@ -32,13 +32,27 @@
 #include "gc/ObjectKind-inl.h"
 #include "vm/JSObject-inl.h"
 #include "vm/NativeObject-inl.h"
-#include "vm/TypeInference-inl.h"
 
 using namespace js;
 
 /////////////////////////////////////////////////////////////////////
 // ObjectGroup
 /////////////////////////////////////////////////////////////////////
+
+static ObjectGroup* MakeGroup(JSContext* cx, const JSClass* clasp,
+                              Handle<TaggedProto> proto,
+                              ObjectGroupFlags initialFlags = 0) {
+  MOZ_ASSERT_IF(proto.isObject(),
+                cx->isInsideCurrentCompartment(proto.toObject()));
+
+  ObjectGroup* group = Allocate<ObjectGroup>(cx);
+  if (!group) {
+    return nullptr;
+  }
+  new (group) ObjectGroup(clasp, proto, cx->realm(), initialFlags);
+
+  return group;
+}
 
 ObjectGroup::ObjectGroup(const JSClass* clasp, TaggedProto proto,
                          JS::Realm* realm, ObjectGroupFlags initialFlags)
@@ -106,46 +120,10 @@ bool JSObject::splicePrototype(JSContext* cx, HandleObject obj,
     }
   }
 
-  // Force type instantiation when splicing lazy group.
-  RootedObjectGroup group(cx, JSObject::getGroup(cx, obj));
-  if (!group) {
-    return false;
-  }
-  RootedObjectGroup protoGroup(cx, nullptr);
-  if (proto.isObject()) {
-    RootedObject protoObj(cx, proto.toObject());
-    protoGroup = JSObject::getGroup(cx, protoObj);
-    if (!protoGroup) {
-      return false;
-    }
-  }
-
-  MOZ_ASSERT(group->clasp() == oldClass,
+  MOZ_ASSERT(obj->group()->clasp() == oldClass,
              "splicing a prototype doesn't change a group's class");
-  group->setProto(proto);
+  obj->group()->setProto(proto);
   return true;
-}
-
-/* static */
-ObjectGroup* JSObject::makeLazyGroup(JSContext* cx, HandleObject obj) {
-  MOZ_ASSERT(obj->hasLazyGroup());
-  MOZ_ASSERT(cx->compartment() == obj->compartment());
-
-  // Find flags which need to be specified immediately on the object.
-  ObjectGroupFlags initialFlags = OBJECT_FLAG_SINGLETON;
-
-  Rooted<TaggedProto> proto(cx, obj->taggedProto());
-  ObjectGroup* group = ObjectGroupRealm::makeGroup(
-      cx, obj->nonCCWRealm(), obj->getClass(), proto, initialFlags);
-  if (!group) {
-    return nullptr;
-  }
-
-  AutoEnterAnalysis enter(cx);
-
-  obj->setGroupRaw(group);
-
-  return group;
 }
 
 /////////////////////////////////////////////////////////////////////
@@ -300,7 +278,7 @@ ObjectGroup* ObjectGroup::defaultNewGroup(JSContext* cx, const JSClass* clasp,
     return group;
   }
 
-  AutoEnterAnalysis enter(cx);
+  gc::AutoSuppressGC suppressGC(cx);
 
   ObjectGroupRealm::NewTable*& table = groups.defaultNewTable;
 
@@ -328,11 +306,8 @@ ObjectGroup* ObjectGroup::defaultNewGroup(JSContext* cx, const JSClass* clasp,
     return group;
   }
 
-  ObjectGroupFlags initialFlags = 0;
-
   Rooted<TaggedProto> protoRoot(cx, proto);
-  ObjectGroup* group = ObjectGroupRealm::makeGroup(cx, cx->realm(), clasp,
-                                                   protoRoot, initialFlags);
+  ObjectGroup* group = MakeGroup(cx, clasp, protoRoot);
   if (!group) {
     return nullptr;
   }
@@ -348,110 +323,6 @@ ObjectGroup* ObjectGroup::defaultNewGroup(JSContext* cx, const JSClass* clasp,
 
   groups.defaultNewGroupCache.put(group, associated);
   return group;
-}
-
-/* static */
-ObjectGroup* ObjectGroup::lazySingletonGroup(JSContext* cx,
-                                             ObjectGroupRealm& realm,
-                                             JS::Realm* objectRealm,
-                                             const JSClass* clasp,
-                                             TaggedProto proto) {
-  MOZ_ASSERT_IF(proto.isObject(),
-                cx->compartment() == proto.toObject()->compartment());
-
-  ObjectGroupRealm::NewTable*& table = realm.lazyTable;
-
-  if (!table) {
-    table = cx->new_<ObjectGroupRealm::NewTable>(cx->zone());
-    if (!table) {
-      return nullptr;
-    }
-  }
-
-  ObjectGroupRealm::NewTable::AddPtr p = table->lookupForAdd(
-      ObjectGroupRealm::NewEntry::Lookup(clasp, proto, nullptr));
-  if (p) {
-    ObjectGroup* group = p->group;
-    MOZ_ASSERT(group->lazy());
-
-    return group;
-  }
-
-  AutoEnterAnalysis enter(cx);
-
-  Rooted<TaggedProto> protoRoot(cx, proto);
-  ObjectGroup* group = ObjectGroupRealm::makeGroup(
-      cx, objectRealm, clasp, protoRoot,
-      OBJECT_FLAG_SINGLETON | OBJECT_FLAG_LAZY_SINGLETON);
-  if (!group) {
-    return nullptr;
-  }
-
-  if (!table->add(p, ObjectGroupRealm::NewEntry(group, nullptr))) {
-    ReportOutOfMemory(cx);
-    return nullptr;
-  }
-
-  return group;
-}
-
-inline const JSClass* GetClassForProtoKey(JSProtoKey key) {
-  switch (key) {
-    case JSProto_Null:
-    case JSProto_Object:
-      return &PlainObject::class_;
-    case JSProto_Array:
-      return &ArrayObject::class_;
-
-    case JSProto_Int8Array:
-    case JSProto_Uint8Array:
-    case JSProto_Int16Array:
-    case JSProto_Uint16Array:
-    case JSProto_Int32Array:
-    case JSProto_Uint32Array:
-    case JSProto_Float32Array:
-    case JSProto_Float64Array:
-    case JSProto_Uint8ClampedArray:
-    case JSProto_BigInt64Array:
-    case JSProto_BigUint64Array:
-      return &TypedArrayObject::classes[key - JSProto_Int8Array];
-
-    default:
-      // We only expect to see plain objects, arrays, and typed arrays here.
-      MOZ_CRASH("Bad proto key");
-  }
-}
-
-/* static */
-ObjectGroup* ObjectGroup::defaultNewGroup(JSContext* cx, JSProtoKey key) {
-  JSObject* proto = nullptr;
-  if (key != JSProto_Null) {
-    proto = GlobalObject::getOrCreatePrototype(cx, key);
-    if (!proto) {
-      return nullptr;
-    }
-  }
-  return defaultNewGroup(cx, GetClassForProtoKey(key), TaggedProto(proto));
-}
-
-/* static */
-ArrayObject* ObjectGroup::newArrayObject(JSContext* cx, const Value* vp,
-                                         size_t length, NewObjectKind newKind,
-                                         NewArrayKind arrayKind) {
-  MOZ_ASSERT(newKind != SingletonObject);
-
-  // If we are making a copy on write array, don't try to adjust the group as
-  // getOrFixupCopyOnWriteObject will do this before any objects are copied
-  // from this one.
-  if (arrayKind == NewArrayKind::CopyOnWrite) {
-    ArrayObject* obj = NewDenseCopiedArray(cx, length, vp, nullptr, newKind);
-    if (!obj || !ObjectElements::MakeElementsCopyOnWrite(cx, obj)) {
-      return nullptr;
-    }
-    return obj;
-  }
-
-  return NewDenseCopiedArray(cx, length, vp, nullptr, newKind);
 }
 
 static bool AddPlainObjectProperties(JSContext* cx, HandlePlainObject obj,
@@ -484,84 +355,13 @@ PlainObject* js::NewPlainObjectWithProperties(JSContext* cx,
   return obj;
 }
 
-/* static */
-JSObject* ObjectGroup::newPlainObject(JSContext* cx, IdValuePair* properties,
-                                      size_t nproperties,
-                                      NewObjectKind newKind) {
-  return NewPlainObjectWithProperties(cx, properties, nproperties, newKind);
-}
-
-/* static */
-ObjectGroup* ObjectGroup::allocationSiteGroup(
-    JSContext* cx, JSScript* scriptArg, jsbytecode* pc, JSProtoKey kind,
-    HandleObject protoArg /* = nullptr */) {
-  MOZ_ASSERT_IF(protoArg, kind == JSProto_Array);
-  MOZ_ASSERT(cx->realm() == scriptArg->realm());
-
-  if (protoArg) {
-    return defaultNewGroup(cx, GetClassForProtoKey(kind),
-                           TaggedProto(protoArg));
-  }
-  return defaultNewGroup(cx, kind);
-}
-
-/* static */
-ObjectGroup* ObjectGroup::callingAllocationSiteGroup(JSContext* cx,
-                                                     JSProtoKey key,
-                                                     HandleObject proto) {
-  MOZ_ASSERT_IF(proto, key == JSProto_Array);
-
-  if (proto) {
-    return defaultNewGroup(cx, GetClassForProtoKey(key), TaggedProto(proto));
-  }
-  return defaultNewGroup(cx, key);
-}
-
-/* static */
-ArrayObject* ObjectGroup::getOrFixupCopyOnWriteObject(JSContext* cx,
-                                                      HandleScript script,
-                                                      jsbytecode* pc) {
-  MOZ_CRASH("TODO(no-TI): remove");
-}
-
-/* static */
-ArrayObject* ObjectGroup::getCopyOnWriteObject(JSScript* script,
-                                               jsbytecode* pc) {
-  // getOrFixupCopyOnWriteObject should already have been called for
-  // script/pc, ensuring that the template object has a group with the
-  // COPY_ON_WRITE flag. We don't assert this here, due to a corner case
-  // where this property doesn't hold. See jsop_newarray_copyonwrite in
-  // IonBuilder.
-  ArrayObject* obj = &script->getObject(pc)->as<ArrayObject>();
-  MOZ_ASSERT(obj->denseElementsAreCopyOnWrite());
-
-  return obj;
-}
-
 /////////////////////////////////////////////////////////////////////
 // ObjectGroupRealm
 /////////////////////////////////////////////////////////////////////
 
 ObjectGroupRealm::~ObjectGroupRealm() {
   js_delete(defaultNewTable);
-  js_delete(lazyTable);
   stringSplitStringGroup = nullptr;
-}
-
-/* static */
-ObjectGroup* ObjectGroupRealm::makeGroup(
-    JSContext* cx, Realm* realm, const JSClass* clasp,
-    Handle<TaggedProto> proto, ObjectGroupFlags initialFlags /* = 0 */) {
-  MOZ_ASSERT_IF(proto.isObject(),
-                cx->isInsideCurrentCompartment(proto.toObject()));
-
-  ObjectGroup* group = Allocate<ObjectGroup>(cx);
-  if (!group) {
-    return nullptr;
-  }
-  new (group) ObjectGroup(clasp, proto, realm, initialFlags);
-
-  return group;
 }
 
 /* static */
@@ -582,7 +382,7 @@ ObjectGroup* ObjectGroupRealm::getStringSplitStringGroup(JSContext* cx) {
   }
   Rooted<TaggedProto> tagged(cx, TaggedProto(proto));
 
-  group = makeGroup(cx, cx->realm(), &ArrayObject::class_, tagged);
+  group = MakeGroup(cx, &ArrayObject::class_, tagged);
   if (!group) {
     return nullptr;
   }
@@ -592,26 +392,15 @@ ObjectGroup* ObjectGroupRealm::getStringSplitStringGroup(JSContext* cx) {
 }
 
 void ObjectGroupRealm::addSizeOfExcludingThis(
-    mozilla::MallocSizeOf mallocSizeOf, size_t* allocationSiteTables,
-    size_t* arrayObjectGroupTables, size_t* plainObjectGroupTables,
-    size_t* realmTables) {
-  // TODO(no-TI): remove unused arguments.
-
+    mozilla::MallocSizeOf mallocSizeOf, size_t* realmTables) {
   if (defaultNewTable) {
     *realmTables += defaultNewTable->sizeOfIncludingThis(mallocSizeOf);
-  }
-
-  if (lazyTable) {
-    *realmTables += lazyTable->sizeOfIncludingThis(mallocSizeOf);
   }
 }
 
 void ObjectGroupRealm::clearTables() {
   if (defaultNewTable) {
     defaultNewTable->clear();
-  }
-  if (lazyTable) {
-    lazyTable->clear();
   }
   defaultNewGroupCache.purge();
 }
@@ -651,6 +440,27 @@ void ObjectGroupRealm::fixupNewTableAfterMovingGC(NewTable* table) {
   }
 }
 
+/* static */
+bool JSObject::setSingleton(JSContext* cx, js::HandleObject obj) {
+  MOZ_ASSERT(!IsInsideNursery(obj));
+  MOZ_ASSERT(!obj->isSingleton());
+  MOZ_ASSERT(cx->realm() == obj->nonCCWRealm());
+
+  // At this point singleton groups are only used for the global object. We can
+  // remove this after replacing JS_SplicePrototype.
+  MOZ_ASSERT(obj->is<GlobalObject>());
+
+  ObjectGroupFlags initialFlags = OBJECT_FLAG_SINGLETON;
+  Rooted<TaggedProto> proto(cx, obj->taggedProto());
+  ObjectGroup* group = MakeGroup(cx, obj->getClass(), proto, initialFlags);
+  if (!group) {
+    return false;
+  }
+
+  obj->setGroupRaw(group);
+  return true;
+}
+
 #ifdef JSGC_HASH_TABLE_CHECKS
 
 void ObjectGroupRealm::checkNewTableAfterMovingGC(NewTable* table) {
@@ -677,3 +487,9 @@ void ObjectGroupRealm::checkNewTableAfterMovingGC(NewTable* table) {
 }
 
 #endif  // JSGC_HASH_TABLE_CHECKS
+
+JS::ubi::Node::Size JS::ubi::Concrete<js::ObjectGroup>::size(
+    mozilla::MallocSizeOf mallocSizeOf) const {
+  Size size = js::gc::Arena::thingSize(get().asTenured().getAllocKind());
+  return size;
+}

@@ -56,6 +56,7 @@
 #include "mozilla/NotNull.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/PresShell.h"
+#include "mozilla/ScopeExit.h"
 #include "mozilla/Sprintf.h"
 #include "mozilla/StaticPrefs_media.h"
 #include "mozilla/SVGObserverUtils.h"
@@ -6525,7 +6526,7 @@ bool HTMLMediaElement::IsBeingDestroyed() {
 
 bool HTMLMediaElement::ShouldBeSuspendedByInactiveDocShell() const {
   BrowsingContext* bc = OwnerDoc()->GetBrowsingContext();
-  return bc && !bc->GetIsActive() && bc->Top()->GetSuspendMediaWhenInactive();
+  return bc && !bc->IsActive() && bc->Top()->GetSuspendMediaWhenInactive();
 }
 
 void HTMLMediaElement::NotifyOwnerDocumentActivityChanged() {

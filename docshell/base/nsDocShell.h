@@ -362,7 +362,6 @@ class nsDocShell final : public nsDocLoader,
 
   // Tell the favicon service that aNewURI has the same favicon as aOldURI.
   static void CopyFavicon(nsIURI* aOldURI, nsIURI* aNewURI,
-                          nsIPrincipal* aLoadingPrincipal,
                           bool aInPrivateBrowsing);
 
   static nsDocShell* Cast(nsIDocShell* aDocShell) {
@@ -1052,6 +1051,8 @@ class nsDocShell final : public nsDocLoader,
   // SessionHistoryCommit will be called on the CanonicalBrowsingContext
   // (directly or over IPC).
   void MoveLoadingToActiveEntry();
+
+  void ActivenessMaybeChanged();
 
  private:  // data members
   nsString mTitle;

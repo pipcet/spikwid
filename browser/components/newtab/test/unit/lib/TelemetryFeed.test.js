@@ -8,7 +8,6 @@ import {
   ASRouterEventPing,
   BasePing,
   ImpressionStatsPing,
-  PerfPing,
   SessionPing,
   SpocsFillPing,
   UndesiredPing,
@@ -102,16 +101,8 @@ describe("TelemetryFeed", () => {
     ASRouterPreferences.uninit();
   });
   describe("#init", () => {
-    it("should set preferences in parent process", () => {
-      const testInstance = new TelemetryFeed({ isParentProcess: true });
-      // unfortuntely testing gUUIDGenerator.generateUUID is not possible here
-      // but we still need test coverage
-      assert.isDefined(testInstance);
-    });
-    it("should not set preferences in content process", () => {
-      const testInstance = new TelemetryFeed({ isParentProcess: false });
-      // unfortuntely testing gUUIDGenerator.generateUUID is not possible here
-      // but we still need test coverage
+    it("should create an instance", () => {
+      const testInstance = new TelemetryFeed();
       assert.isDefined(testInstance);
     });
     it("should add .pingCentre, a PingCentre instance", () => {
@@ -637,20 +628,6 @@ describe("TelemetryFeed", () => {
           assert.propertyVal(ping, "value", data.data.value);
           assert.propertyVal(ping, "event", data.data.event);
         });
-      });
-    });
-    describe("#createPerformanceEvent", () => {
-      it("should create a valid event without a session", async () => {
-        const action = ac.PerfEvent({
-          event: "SCREENSHOT_FINISHED",
-          value: 100,
-        });
-        const ping = await instance.createPerformanceEvent(action);
-
-        // Is it valid?
-        assert.validate(ping, PerfPing);
-        // Does it have the right value?
-        assert.propertyVal(ping, "value", 100);
       });
     });
     describe("#createSessionEndEvent", () => {
@@ -1497,16 +1474,6 @@ describe("TelemetryFeed", () => {
           assert.calledWith(eventHandler, action);
         });
       });
-    });
-    it("should send an event on a TELEMETRY_PERFORMANCE_EVENT action", () => {
-      const sendEvent = sandbox.stub(instance, "sendEvent");
-      const eventCreator = sandbox.stub(instance, "createPerformanceEvent");
-      const action = { type: at.TELEMETRY_PERFORMANCE_EVENT };
-
-      instance.onAction(action);
-
-      assert.calledWith(eventCreator, action);
-      assert.calledWith(sendEvent, eventCreator.returnValue);
     });
     it("should send an event on a TELEMETRY_IMPRESSION_STATS action", () => {
       const sendEvent = sandbox.stub(instance, "sendStructuredIngestionEvent");

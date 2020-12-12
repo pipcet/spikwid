@@ -20,6 +20,7 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/ProcInfo.h"
 #include "mozilla/ResultExtensions.h"
+#include "mozilla/ScopeExit.h"
 #include "mozilla/SharedStyleSheetCache.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/dom/ContentParent.h"
@@ -246,7 +247,8 @@ void ChromeUtils::AddProfilerMarker(
     AUTO_PROFILER_STATS(ChromeUtils::AddProfilerMarker);
     if (aText.WasPassed()) {
       profiler_add_marker(aName, category, std::move(options),
-                          ::geckoprofiler::markers::Text{}, aText.Value());
+                          ::geckoprofiler::markers::TextMarker{},
+                          aText.Value());
     } else {
       profiler_add_marker(aName, category, std::move(options));
     }
@@ -1275,11 +1277,6 @@ PopupBlockerState ChromeUtils::GetPopupControlState(GlobalObject& aGlobal) {
           "PopupBlocker::PopupControlState and PopupBlockerState are out of "
           "sync");
   }
-}
-
-/* static */
-bool ChromeUtils::IsPopupTokenUnused(GlobalObject& aGlobal) {
-  return PopupBlocker::IsPopupOpeningTokenUnused();
 }
 
 /* static */

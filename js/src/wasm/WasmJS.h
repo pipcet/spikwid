@@ -19,10 +19,36 @@
 #ifndef wasm_js_h
 #define wasm_js_h
 
-#include "gc/Policy.h"
-#include "gc/ZoneAllocator.h"
-#include "vm/NativeObject.h"
-#include "wasm/WasmTypes.h"
+#include "mozilla/Attributes.h"  // MOZ_MUST_USE
+#include "mozilla/HashTable.h"   // DefaultHasher
+#include "mozilla/Maybe.h"       // mozilla::Maybe
+
+#include <stdint.h>  // int32_t, int64_t, uint32_t
+
+#include "gc/Barrier.h"        // HeapPtr
+#include "gc/ZoneAllocator.h"  // ZoneAllocPolicy
+#include "js/AllocPolicy.h"    // SystemAllocPolicy
+#include "js/Class.h"          // JSClassOps, ClassSpec
+#include "js/GCHashTable.h"    // GCHashMap, GCHashSet
+#include "js/GCVector.h"       // GCVector
+#include "js/PropertySpec.h"   // JSPropertySpec, JSFunctionSpec
+#include "js/RootingAPI.h"     // MovableCellHasher
+#include "js/SweepingAPI.h"    // JS::WeakCache
+#include "js/TypeDecls.h"  // HandleValue, HandleObject, MutableHandleObject, MutableHandleFunction
+#include "js/Vector.h"        // JS::Vector
+#include "vm/JSFunction.h"    // JSFunction
+#include "vm/NativeObject.h"  // NativeObject
+#include "wasm/WasmTypes.h"   // MutableHandleWasmInstanceObject, wasm::*
+
+class JSFreeOp;
+class JSObject;
+class JSTracer;
+struct JSContext;
+
+namespace JS {
+class CallArgs;
+class Value;
+}  // namespace JS
 
 namespace js {
 
@@ -38,6 +64,8 @@ class WasmInstanceScope;
 class SharedArrayRawBuffer;
 
 namespace wasm {
+
+struct ImportValues;
 
 // Return whether WebAssembly can in principle be compiled on this platform (ie
 // combination of hardware and OS), assuming at least one of the compilers that
@@ -128,6 +156,10 @@ bool SimdAvailable(JSContext* cx);
 // Report the result of a Simd simplification to the testing infrastructure.
 void ReportSimdAnalysis(const char* data);
 #endif
+
+// Returns true if WebAssembly as configured by compile-time flags and run-time
+// options can support try/catch, throw, rethrow, and branch_on_exn (evolving).
+bool ExceptionsAvailable(JSContext* cx);
 
 // Compiles the given binary wasm module given the ArrayBufferObject
 // and links the module's imports with the given import object.
@@ -248,8 +280,8 @@ class WasmGlobalObject : public NativeObject {
   static void finalize(JSFreeOp*, JSObject* obj);
   static void trace(JSTracer* trc, JSObject* obj);
 
-  static bool typeGetterImpl(JSContext* cx, const CallArgs& args);
-  static bool typeGetter(JSContext* cx, unsigned argc, Value* vp);
+  static bool typeImpl(JSContext* cx, const CallArgs& args);
+  static bool type(JSContext* cx, unsigned argc, Value* vp);
 
   static bool valueGetterImpl(JSContext* cx, const CallArgs& args);
   static bool valueGetter(JSContext* cx, unsigned argc, Value* vp);
@@ -318,13 +350,9 @@ class WasmInstanceObject : public NativeObject {
                               DefaultHasher<uint32_t>, ZoneAllocPolicy>;
   ExportMap& exports() const;
 
-  // WeakScopeMap maps from function index to js::Scope. This maps is weak
-  // to avoid holding scope objects alive. The scopes are normally created
-  // during debugging.
-  using ScopeMap =
-      JS::WeakCache<GCHashMap<uint32_t, WeakHeapPtr<WasmFunctionScope*>,
-                              DefaultHasher<uint32_t>, ZoneAllocPolicy>>;
-  ScopeMap& scopes() const;
+  // See the definition inside WasmJS.cpp.
+  class UnspecifiedScopeMap;
+  UnspecifiedScopeMap& scopes() const;
 
  public:
   static const unsigned RESERVED_SLOTS = 6;
@@ -340,6 +368,7 @@ class WasmInstanceObject : public NativeObject {
       const wasm::DataSegmentVector& dataSegments,
       const wasm::ElemSegmentVector& elemSegments, wasm::UniqueTlsData tlsData,
       HandleWasmMemoryObject memory,
+      Vector<RefPtr<wasm::ExceptionTag>, 0, SystemAllocPolicy>&& exceptionTags,
       Vector<RefPtr<wasm::Table>, 0, SystemAllocPolicy>&& tables,
       GCVector<HeapPtr<StructTypeDescr*>, 0, SystemAllocPolicy>&&
           structTypeDescrs,
@@ -382,8 +411,8 @@ class WasmMemoryObject : public NativeObject {
   static void finalize(JSFreeOp* fop, JSObject* obj);
   static bool bufferGetterImpl(JSContext* cx, const CallArgs& args);
   static bool bufferGetter(JSContext* cx, unsigned argc, Value* vp);
-  static bool typeGetterImpl(JSContext* cx, const CallArgs& args);
-  static bool typeGetter(JSContext* cx, unsigned argc, Value* vp);
+  static bool typeImpl(JSContext* cx, const CallArgs& args);
+  static bool type(JSContext* cx, unsigned argc, Value* vp);
   static bool growImpl(JSContext* cx, const CallArgs& args);
   static bool grow(JSContext* cx, unsigned argc, Value* vp);
   static uint32_t growShared(HandleWasmMemoryObject memory, uint32_t delta);
@@ -447,10 +476,10 @@ class WasmTableObject : public NativeObject {
   bool isNewborn() const;
   static void finalize(JSFreeOp* fop, JSObject* obj);
   static void trace(JSTracer* trc, JSObject* obj);
-  static bool typeGetterImpl(JSContext* cx, const CallArgs& args);
-  static bool typeGetter(JSContext* cx, unsigned argc, Value* vp);
   static bool lengthGetterImpl(JSContext* cx, const CallArgs& args);
   static bool lengthGetter(JSContext* cx, unsigned argc, Value* vp);
+  static bool typeImpl(JSContext* cx, const CallArgs& args);
+  static bool type(JSContext* cx, unsigned argc, Value* vp);
   static bool getImpl(JSContext* cx, const CallArgs& args);
   static bool get(JSContext* cx, unsigned argc, Value* vp);
   static bool setImpl(JSContext* cx, const CallArgs& args);
@@ -474,6 +503,35 @@ class WasmTableObject : public NativeObject {
                                  mozilla::Maybe<uint32_t> maximumLength,
                                  wasm::RefType tableType, HandleObject proto);
   wasm::Table& table() const;
+};
+
+// The class of WebAssembly.Exception. This class is used to track exception
+// types for exports and imports.
+
+class WasmExceptionObject : public NativeObject {
+  static const unsigned TAG_SLOT = 0;
+  static const unsigned TYPE_SLOT = 1;
+
+  static const JSClassOps classOps_;
+  static const ClassSpec classSpec_;
+  static void finalize(JSFreeOp*, JSObject* obj);
+  static void trace(JSTracer* trc, JSObject* obj);
+
+ public:
+  static const unsigned RESERVED_SLOTS = 2;
+  static const JSClass class_;
+  static const JSClass& protoClass_;
+  static const JSPropertySpec properties[];
+  static const JSFunctionSpec methods[];
+  static const JSFunctionSpec static_methods[];
+  static bool construct(JSContext*, unsigned, Value*);
+
+  static WasmExceptionObject* create(JSContext* cx, wasm::ResultType type,
+                                     HandleObject proto);
+  bool isNewborn() const;
+
+  wasm::ValTypeVector& valueTypes() const;
+  wasm::ExceptionTag& tag() const;
 };
 
 // The class of the WebAssembly global namespace object.

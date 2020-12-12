@@ -8,19 +8,21 @@
 #define frontend_Stencil_h
 
 #include "mozilla/Assertions.h"  // MOZ_ASSERT
+#include "mozilla/Attributes.h"  // MOZ_MUST_USE
 #include "mozilla/Maybe.h"       // mozilla::{Maybe, Nothing}
 #include "mozilla/Range.h"       // mozilla::Range
 #include "mozilla/Span.h"        // mozilla::Span
 #include "mozilla/Variant.h"     // mozilla::Variant
 
-#include <stdint.h>  // char16_t, uint8_t, uint32_t
-#include <stdlib.h>  // size_t
+#include <stddef.h>  // size_t
+#include <stdint.h>  // char16_t, uint8_t, uint16_t, uint32_t
 
 #include "frontend/AbstractScopePtr.h"    // AbstractScopePtr, ScopeIndex
 #include "frontend/FunctionSyntaxKind.h"  // FunctionSyntaxKind
 #include "frontend/ObjLiteral.h"          // ObjLiteralStencil
-#include "frontend/ParserAtom.h"          // TaggedParserAtomIndex
+#include "frontend/ParserAtom.h"          // ParserAtom, TaggedParserAtomIndex
 #include "frontend/TypedIndex.h"          // TypedIndex
+#include "js/AllocPolicy.h"               // SystemAllocPolicy
 #include "js/RegExpFlags.h"               // JS::RegExpFlags
 #include "js/RootingAPI.h"                // Handle
 #include "js/TypeDecls.h"                 // JSContext
@@ -31,15 +33,15 @@
 #include "vm/BigIntType.h"                // ParseBigIntLiteral
 #include "vm/FunctionFlags.h"             // FunctionFlags
 #include "vm/GeneratorAndAsyncKind.h"     // GeneratorKind, FunctionAsyncKind
-#include "vm/JSScript.h"                  // MemberInitializers
-#include "vm/Scope.h"  // BaseScopeData, FunctionScope, LexicalScope, VarScope, GlobalScope, EvalScope, ModuleScope
-#include "vm/ScopeKind.h"  // ScopeKind
-#include "vm/SharedStencil.h"  // ImmutableScriptFlags, GCThingIndex, js::SharedImmutableScriptData
-#include "vm/StencilEnums.h"  // ImmutableScriptFlagsEnum
+#include "vm/Scope.h"  // Scope, BaseScopeData, FunctionScope, LexicalScope, VarScope, GlobalScope, EvalScope, ModuleScope
+#include "vm/ScopeKind.h"      // ScopeKind
+#include "vm/SharedStencil.h"  // ImmutableScriptFlags, GCThingIndex, js::SharedImmutableScriptData, MemberInitializers, SourceExtent
+#include "vm/StencilEnums.h"   // ImmutableScriptFlagsEnum
 
 namespace js {
 
 class JSONPrinter;
+class RegExpObject;
 
 namespace frontend {
 
@@ -204,44 +206,44 @@ class ScopeStencil {
         isArrow_(isArrow),
         data_(data) {}
 
-  static bool createForFunctionScope(JSContext* cx, CompilationStencil& stencil,
-                                     ParserFunctionScopeData* dataArg,
-                                     bool hasParameterExprs,
-                                     bool needsEnvironment,
-                                     FunctionIndex functionIndex, bool isArrow,
-                                     mozilla::Maybe<ScopeIndex> enclosing,
-                                     ScopeIndex* index);
+  static bool createForFunctionScope(
+      JSContext* cx, CompilationInfo& compilationInfo,
+      ParserFunctionScopeData* dataArg, bool hasParameterExprs,
+      bool needsEnvironment, FunctionIndex functionIndex, bool isArrow,
+      mozilla::Maybe<ScopeIndex> enclosing, ScopeIndex* index);
 
-  static bool createForLexicalScope(JSContext* cx, CompilationStencil& stencil,
-                                    ScopeKind kind,
-                                    ParserLexicalScopeData* dataArg,
-                                    uint32_t firstFrameSlot,
-                                    mozilla::Maybe<ScopeIndex> enclosing,
-                                    ScopeIndex* index);
+  static bool createForLexicalScope(
+      JSContext* cx, CompilationInfo& compilationInfo, ScopeKind kind,
+      ParserLexicalScopeData* dataArg, uint32_t firstFrameSlot,
+      mozilla::Maybe<ScopeIndex> enclosing, ScopeIndex* index);
 
   static bool createForVarScope(JSContext* cx,
-                                frontend::CompilationStencil& stencil,
+                                frontend::CompilationInfo& compilationInfo,
                                 ScopeKind kind, ParserVarScopeData* dataArg,
                                 uint32_t firstFrameSlot, bool needsEnvironment,
                                 mozilla::Maybe<ScopeIndex> enclosing,
                                 ScopeIndex* index);
 
-  static bool createForGlobalScope(JSContext* cx, CompilationStencil& stencil,
+  static bool createForGlobalScope(JSContext* cx,
+                                   CompilationInfo& compilationInfo,
                                    ScopeKind kind,
                                    ParserGlobalScopeData* dataArg,
                                    ScopeIndex* index);
 
-  static bool createForEvalScope(JSContext* cx, CompilationStencil& stencil,
+  static bool createForEvalScope(JSContext* cx,
+                                 CompilationInfo& compilationInfo,
                                  ScopeKind kind, ParserEvalScopeData* dataArg,
                                  mozilla::Maybe<ScopeIndex> enclosing,
                                  ScopeIndex* index);
 
-  static bool createForModuleScope(JSContext* cx, CompilationStencil& stencil,
+  static bool createForModuleScope(JSContext* cx,
+                                   CompilationInfo& compilationInfo,
                                    ParserModuleScopeData* dataArg,
                                    mozilla::Maybe<ScopeIndex> enclosing,
                                    ScopeIndex* index);
 
-  static bool createForWithScope(JSContext* cx, CompilationStencil& stencil,
+  static bool createForWithScope(JSContext* cx,
+                                 CompilationInfo& compilationInfo,
                                  mozilla::Maybe<ScopeIndex> enclosing,
                                  ScopeIndex* index);
 
@@ -402,6 +404,8 @@ class StencilModuleMetadata {
   EntryVector indirectExportEntries;
   EntryVector starExportEntries;
   FunctionDeclarationVector functionDecls;
+  // Set to true if the module has a top-level await keyword.
+  bool isAsync = false;
 
   StencilModuleMetadata() = default;
 

@@ -19,6 +19,7 @@ pref("app.update.url.manual", "");
 pref("app.update.url.details", "");
 
 pref("app.releaseNotesURL", "");
+pref("app.releaseNotesURL.aboutDialog", "");
 
 // The number of days a binary is permitted to be old
 // without checking for an update.  This assumes that

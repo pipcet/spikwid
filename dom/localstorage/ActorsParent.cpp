@@ -338,25 +338,6 @@ const uint32_t kShadowMaxWALSize = 512 * 1024;
 
 const uint32_t kShadowJournalSizeLimit = kShadowMaxWALSize * 3;
 
-/**
- * Automatically kill database actors if LocalStorage shutdown takes this long.
- */
-#define SHUTDOWN_FORCE_KILL_TIMEOUT_MS 5000
-
-/**
- * Automatically crash the browser if LocalStorage shutdown takes this long.
- * We've chosen a value that is longer than the value for QuotaManager shutdown
- * timer which is currently set to 30 seconds.  We've also chosen a value that
- * is long enough that it is unlikely for the problem to be falsely triggered by
- * slow system I/O.  We've also chosen a value long enough so that automated
- * tests should time out and fail if LocalStorage shutdown hangs.  Also, this
- * value is long enough so that testers can notice the LocalStorage shutdown
- * hang; we want to know about the hangs, not hide them.  On the other hand this
- * value is less than 60 seconds which is used by nsTerminator to crash a hung
- * main process.
- */
-#define SHUTDOWN_FORCE_CRASH_TIMEOUT_MS 45000
-
 bool IsOnConnectionThread();
 
 void AssertIsOnConnectionThread();
@@ -875,23 +856,12 @@ nsresult SetShadowJournalMode(mozIStorageConnection* aConnection) {
   constexpr auto journalModeQueryStart = "PRAGMA journal_mode = "_ns;
   constexpr auto journalModeWAL = "wal"_ns;
 
-  nsCOMPtr<mozIStorageStatement> stmt;
-  nsresult rv = aConnection->CreateStatement(
-      journalModeQueryStart + journalModeWAL, getter_AddRefs(stmt));
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
-
-  bool hasResult;
-  rv = stmt->ExecuteStep(&hasResult);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
-
-  MOZ_ASSERT(hasResult);
+  LS_TRY_INSPECT(const auto& stmt,
+                 CreateAndExecuteSingleStepStatement(
+                     *aConnection, journalModeQueryStart + journalModeWAL));
 
   nsCString journalMode;
-  rv = stmt->GetUTF8String(0, journalMode);
+  nsresult rv = stmt->GetUTF8String(0, journalMode);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
@@ -901,19 +871,8 @@ nsresult SetShadowJournalMode(mozIStorageConnection* aConnection) {
 
     // Set the threshold for auto-checkpointing the WAL. We don't want giant
     // logs slowing down us.
-    rv = aConnection->CreateStatement("PRAGMA page_size;"_ns,
-                                      getter_AddRefs(stmt));
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
-    }
-
-    bool hasResult;
-    rv = stmt->ExecuteStep(&hasResult);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
-    }
-
-    MOZ_ASSERT(hasResult);
+    LS_TRY_INSPECT(const auto& stmt, CreateAndExecuteSingleStepStatement(
+                                         *aConnection, "PRAGMA page_size;"_ns));
 
     int32_t pageSize;
     rv = stmt->GetInt32(0, &pageSize);
@@ -1696,6 +1655,12 @@ class Datastore final
             nsDataHashtable<nsStringHashKey, LSValue>& aValues,
             nsTArray<LSItemInfo>&& aOrderedItems);
 
+  Maybe<DirectoryLock&> MaybeDirectoryLockRef() const {
+    AssertIsOnBackgroundThread();
+
+    return ToMaybeRef(mDirectoryLock.get());
+  }
+
   const nsCString& Origin() const { return mGroupAndOrigin.mOrigin; }
 
   uint32_t PrivateBrowsingId() const { return mPrivateBrowsingId; }
@@ -1817,6 +1782,12 @@ class PrivateDatastore {
   }
 
   ~PrivateDatastore() { mDatastore->NoteFinishedPrivateDatastore(); }
+
+  const Datastore& DatastoreRef() const {
+    AssertIsOnBackgroundThread();
+
+    return *mDatastore;
+  }
 };
 
 class PreparedDatastore {
@@ -1862,11 +1833,18 @@ class PreparedDatastore {
     mDatastore->NoteFinishedPreparedDatastore(this);
   }
 
-  Datastore* GetDatastore() const {
+  const Datastore& DatastoreRef() const {
     AssertIsOnBackgroundThread();
     MOZ_ASSERT(mDatastore);
 
-    return mDatastore;
+    return *mDatastore;
+  }
+
+  Datastore& MutableDatastoreRef() const {
+    AssertIsOnBackgroundThread();
+    MOZ_ASSERT(mDatastore);
+
+    return *mDatastore;
   }
 
   const Maybe<ContentParentId>& GetContentParentId() const {
@@ -1932,6 +1910,12 @@ class Database final
   Datastore* GetDatastore() const {
     AssertIsOnBackgroundThread();
     return mDatastore;
+  }
+
+  Maybe<Datastore&> MaybeDatastoreRef() const {
+    AssertIsOnBackgroundThread();
+
+    return ToMaybeRef(mDatastore.get());
   }
 
   const PrincipalInfo& GetPrincipalInfo() const { return mPrincipalInfo; }
@@ -2387,7 +2371,6 @@ class PrepareDatastoreOp
   NestedState mNestedState;
   const bool mForPreload;
   bool mDatabaseNotAvailable;
-  bool mRequestedDirectoryLock;
   // Set when the Datastore has been registered with gPrivateDatastores so that
   // it can be unregistered if an error is encountered in PrepareDatastoreOp.
   FlippedOnce<false> mPrivateDatastoreRegistered;
@@ -2406,6 +2389,12 @@ class PrepareDatastoreOp
                      const LSRequestParams& aParams,
                      const Maybe<ContentParentId>& aContentParentId);
 
+  Maybe<DirectoryLock&> MaybeDirectoryLockRef() const {
+    AssertIsOnBackgroundThread();
+
+    return ToMaybeRef(mDirectoryLock.get());
+  }
+
   bool OriginIsKnown() const {
     MOZ_ASSERT(IsOnOwningThread() || IsOnIOThread());
 
@@ -2417,12 +2406,6 @@ class PrepareDatastoreOp
     MOZ_ASSERT(OriginIsKnown());
 
     return mQuotaInfo.mOrigin;
-  }
-
-  bool RequestedDirectoryLock() const {
-    AssertIsOnOwningThread();
-
-    return mRequestedDirectoryLock;
   }
 
   void Invalidate() {
@@ -2805,20 +2788,25 @@ class QuotaClient final : public mozilla::dom::quota::Client {
 
   void ReleaseIOThreadObjects() override;
 
-  void AbortOperations(const nsACString& aOrigin) override;
+  void AbortOperationsForLocks(
+      const DirectoryLockIdTable& aDirectoryLockIds) override;
 
   void AbortOperationsForProcess(ContentParentId aContentParentId) override;
+
+  void AbortAllOperations() override;
 
   void StartIdleMaintenance() override;
 
   void StopIdleMaintenance() override;
 
-  void ShutdownWorkThreads() override;
-
  private:
   ~QuotaClient() override;
 
-  void ShutdownTimedOut();
+  void InitiateShutdown() override;
+  bool IsShutdownCompleted() const override;
+  nsCString GetShutdownStatus() const override;
+  void ForceKillActors() override;
+  void FinalizeShutdown() override;
 
   nsresult CreateArchivedOriginScope(
       const OriginScope& aOriginScope,
@@ -2892,7 +2880,8 @@ class MOZ_STACK_CLASS AutoWriteTransaction final {
 bool gLocalStorageInitialized = false;
 #endif
 
-typedef nsTArray<CheckedUnsafePtr<PrepareDatastoreOp>> PrepareDatastoreOpArray;
+using PrepareDatastoreOpArray =
+    nsTArray<NotNull<CheckedUnsafePtr<PrepareDatastoreOp>>>;
 
 StaticAutoPtr<PrepareDatastoreOpArray> gPrepareDatastoreOps;
 
@@ -2945,7 +2934,7 @@ using PrivateDatastoreHashtable =
 // window actually goes away.
 UniquePtr<PrivateDatastoreHashtable> gPrivateDatastores;
 
-typedef nsTArray<CheckedUnsafePtr<Database>> LiveDatabaseArray;
+using LiveDatabaseArray = nsTArray<NotNull<CheckedUnsafePtr<Database>>>;
 
 StaticAutoPtr<LiveDatabaseArray> gLiveDatabases;
 
@@ -3073,36 +3062,31 @@ Result<int64_t, nsresult> GetUsage(mozIStorageConnection& aConnection,
                                    ArchivedOriginScope* aArchivedOriginScope) {
   AssertIsOnIOThread();
 
-  // XXX This could use CreateAndExecuteSingleStepStatement from dom/indexedDB
   LS_TRY_INSPECT(
       const auto& stmt,
       ([aArchivedOriginScope,
         &aConnection]() -> Result<nsCOMPtr<mozIStorageStatement>, nsresult> {
         if (aArchivedOriginScope) {
-          LS_TRY_UNWRAP(
-              const auto stmt,
-              MOZ_TO_RESULT_INVOKE_TYPED(
-                  nsCOMPtr<mozIStorageStatement>, aConnection, CreateStatement,
-                  "SELECT "
-                  "total(utf16Length(key) + utf16Length(value)) "
-                  "FROM webappsstore2 "
-                  "WHERE originKey = :originKey "
-                  "AND originAttributes = :originAttributes;"_ns));
-
-          LS_TRY(aArchivedOriginScope->BindToStatement(stmt));
-
-          return stmt;
+          LS_TRY_RETURN(CreateAndExecuteSingleStepStatement<
+                        SingleStepResult::ReturnNullIfNoResult>(
+              aConnection,
+              "SELECT "
+              "total(utf16Length(key) + utf16Length(value)) "
+              "FROM webappsstore2 "
+              "WHERE originKey = :originKey "
+              "AND originAttributes = :originAttributes;"_ns,
+              [aArchivedOriginScope](auto& stmt) -> Result<Ok, nsresult> {
+                LS_TRY(aArchivedOriginScope->BindToStatement(&stmt));
+                return Ok{};
+              }));
         }
 
-        LS_TRY_RETURN(MOZ_TO_RESULT_INVOKE_TYPED(
-            nsCOMPtr<mozIStorageStatement>, aConnection, CreateStatement,
-            "SELECT usage FROM database"_ns));
+        LS_TRY_RETURN(CreateAndExecuteSingleStepStatement<
+                      SingleStepResult::ReturnNullIfNoResult>(
+            aConnection, "SELECT usage FROM database"_ns));
       }()));
 
-  LS_TRY_INSPECT(const bool& hasResult,
-                 MOZ_TO_RESULT_INVOKE(stmt, ExecuteStep));
-
-  LS_TRY(OkIf(hasResult), Err(NS_ERROR_FAILURE));
+  LS_TRY(OkIf(stmt), Err(NS_ERROR_FAILURE));
 
   LS_TRY_RETURN(MOZ_TO_RESULT_INVOKE(stmt, GetInt64, 0));
 }
@@ -3157,52 +3141,78 @@ void ClientValidationPrefChangedCallback(const char* aPrefName,
   gClientValidation = Preferences::GetBool(aPrefName, kDefaultClientValidation);
 }
 
-template <typename P>
-void CollectDatabases(P aPredicate, nsTArray<RefPtr<Database>>& aDatabases) {
-  AssertIsOnBackgroundThread();
-
-  if (!gLiveDatabases) {
+template <typename Condition>
+void InvalidatePrepareDatastoreOpsMatching(const Condition& aCondition) {
+  if (!gPrepareDatastoreOps) {
     return;
   }
 
-  for (const auto& database : *gLiveDatabases) {
-    if (aPredicate(database)) {
-      aDatabases.AppendElement(database);
+  for (const auto& prepareDatastoreOp : *gPrepareDatastoreOps) {
+    if (aCondition(*prepareDatastoreOp)) {
+      prepareDatastoreOp->Invalidate();
     }
   }
 }
 
-template <typename P>
-void RequestAllowToCloseIf(P aPredicate) {
+template <typename Condition>
+void InvalidatePreparedDatastoresMatching(const Condition& aCondition) {
+  if (!gPreparedDatastores) {
+    return;
+  }
+
+  for (const auto& preparedDatastoreEntry : *gPreparedDatastores) {
+    const auto& preparedDatastore = preparedDatastoreEntry.GetData();
+    MOZ_ASSERT(preparedDatastore);
+
+    if (aCondition(*preparedDatastore)) {
+      preparedDatastore->Invalidate();
+    }
+  }
+}
+
+template <typename Condition>
+nsTArray<RefPtr<Database>> CollectDatabasesMatching(Condition aCondition) {
   AssertIsOnBackgroundThread();
+
+  if (!gLiveDatabases) {
+    return nsTArray<RefPtr<Database>>{};
+  }
 
   nsTArray<RefPtr<Database>> databases;
 
-  CollectDatabases(aPredicate, databases);
+  for (const auto& database : *gLiveDatabases) {
+    if (aCondition(*database)) {
+      databases.AppendElement(database.get());
+    }
+  }
+
+  return databases;
+}
+
+template <typename Condition>
+void RequestAllowToCloseDatabasesMatching(Condition aCondition) {
+  AssertIsOnBackgroundThread();
+
+  nsTArray<RefPtr<Database>> databases = CollectDatabasesMatching(aCondition);
 
   for (const auto& database : databases) {
     MOZ_ASSERT(database);
 
     database->RequestAllowToClose();
   }
-
-  databases.Clear();
 }
 
-void ForceKillDatabases() {
+void ForceKillAllDatabases() {
   AssertIsOnBackgroundThread();
 
-  nsTArray<RefPtr<Database>> databases;
-
-  CollectDatabases([](const Database* const) { return true; }, databases);
+  nsTArray<RefPtr<Database>> databases =
+      CollectDatabasesMatching([](const auto&) { return true; });
 
   for (const auto& database : databases) {
     MOZ_ASSERT(database);
 
     database->ForceKill();
   }
-
-  databases.Clear();
 }
 
 bool VerifyPrincipalInfo(const PrincipalInfo& aPrincipalInfo,
@@ -3356,11 +3366,11 @@ bool RecvPBackgroundLSDatabaseConstructor(PBackgroundLSDatabaseParent* aActor,
 
   auto* database = static_cast<Database*>(aActor);
 
-  database->SetActorAlive(preparedDatastore->GetDatastore());
+  database->SetActorAlive(&preparedDatastore->MutableDatastoreRef());
 
-  // It's possible that AbortOperations was called before the database actor
-  // was created and became live. Let the child know that the database in no
-  // longer valid.
+  // It's possible that AbortOperationsForLocks was called before the database
+  // actor was created and became live. Let the child know that the database is
+  // no longer valid.
   if (preparedDatastore->IsInvalidated()) {
     database->RequestAllowToClose();
   }
@@ -3480,7 +3490,8 @@ PBackgroundLSRequestParent* AllocPBackgroundLSRequestParent(
       if (!gPrepareDatastoreOps) {
         gPrepareDatastoreOps = new PrepareDatastoreOpArray();
       }
-      gPrepareDatastoreOps->AppendElement(prepareDatastoreOp);
+      gPrepareDatastoreOps->AppendElement(
+          WrapNotNullUnchecked(prepareDatastoreOp.get()));
 
       actor = std::move(prepareDatastoreOp);
 
@@ -3777,30 +3788,24 @@ nsresult ConnectionWriteOptimizer::Perform(Connection* aConnection,
     return rv;
   }
 
-  rv = aConnection->GetCachedStatement(nsLiteralCString("SELECT usage "
-                                                        "FROM database"),
-                                       &stmt);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
+  {
+    LS_TRY_INSPECT(const auto& stmt,
+                   CreateAndExecuteSingleStepStatement<
+                       SingleStepResult::ReturnNullIfNoResult>(
+                       *aConnection->StorageConnection(),
+                       "SELECT usage FROM database"_ns));
+
+    LS_TRY(OkIf(stmt), NS_ERROR_FAILURE);
+
+    int64_t usage;
+    rv = stmt->GetInt64(0, &usage);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return rv;
+    }
+
+    aOutUsage = usage;
   }
 
-  bool hasResult;
-  rv = stmt->ExecuteStep(&hasResult);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
-
-  if (NS_WARN_IF(!hasResult)) {
-    return NS_ERROR_FAILURE;
-  }
-
-  int64_t usage;
-  rv = stmt->GetInt64(0, &usage);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
-
-  aOutUsage = usage;
   return NS_OK;
 }
 
@@ -4831,6 +4836,16 @@ void Datastore::NoteFinishedPrepareDatastoreOp(
 
   mPrepareDatastoreOps.RemoveEntry(aPrepareDatastoreOp);
 
+  // XXX Can we store a strong reference to the quota client ourselves to avoid
+  // going through mConnection?
+  if (mConnection) {
+    mConnection->GetQuotaClient()->MaybeRecordShutdownStep(
+        "PrepareDatastoreOp finished"_ns);
+  } else {
+    // XXX Bug 1681670 will change reporting to go to the quota manager instead,
+    // which resolves this case.
+  }
+
   MaybeClose();
 }
 
@@ -4850,6 +4865,16 @@ void Datastore::NoteFinishedPrivateDatastore() {
   MOZ_ASSERT(!mClosed);
 
   mHasLivePrivateDatastore = false;
+
+  // XXX Can we store a strong reference to the quota client ourselves to avoid
+  // going through mConnection?
+  if (mConnection) {
+    mConnection->GetQuotaClient()->MaybeRecordShutdownStep(
+        "PrivateDatastore finished"_ns);
+  } else {
+    // XXX Bug 1681670 will change reporting to go to the quota manager instead,
+    // which resolves this case.
+  }
 
   MaybeClose();
 }
@@ -4875,6 +4900,16 @@ void Datastore::NoteFinishedPreparedDatastore(
 
   mPreparedDatastores.RemoveEntry(aPreparedDatastore);
 
+  // XXX Can we store a strong reference to the quota client ourselves to avoid
+  // going through mConnection?
+  if (mConnection) {
+    mConnection->GetQuotaClient()->MaybeRecordShutdownStep(
+        "PreparedDatastore finished"_ns);
+  } else {
+    // XXX Bug 1681670 will change reporting to go to the quota manager instead,
+    // which resolves this case.
+  }
+
   MaybeClose();
 }
 
@@ -4897,6 +4932,16 @@ void Datastore::NoteFinishedDatabase(Database* aDatabase) {
   MOZ_ASSERT(!mClosed);
 
   mDatabases.RemoveEntry(aDatabase);
+
+  // XXX Can we store a strong reference to the quota client ourselves to avoid
+  // going through mConnection?
+  if (mConnection) {
+    mConnection->GetQuotaClient()->MaybeRecordShutdownStep(
+        "Database finished"_ns);
+  } else {
+    // XXX Bug 1681670 will change reporting to go to the quota manager instead,
+    // which resolves this case.
+  }
 
   MaybeClose();
 }
@@ -5557,6 +5602,16 @@ void Datastore::CleanupMetadata() {
   MOZ_ASSERT(gDatastores->Get(mGroupAndOrigin.mOrigin));
   gDatastores->Remove(mGroupAndOrigin.mOrigin);
 
+  // XXX Can we store a strong reference to the quota client ourselves to avoid
+  // going through mConnection?
+  if (mConnection) {
+    mConnection->GetQuotaClient()->MaybeRecordShutdownStep(
+        "Datastore removed"_ns);
+  } else {
+    // XXX Bug 1681670 will change reporting to go to the quota manager instead,
+    // which resolves this case.
+  }
+
   if (!gDatastores->Count()) {
     gDatastores = nullptr;
   }
@@ -5648,7 +5703,7 @@ void Database::SetActorAlive(Datastore* aDatastore) {
     gLiveDatabases = new LiveDatabaseArray();
   }
 
-  gLiveDatabases->AppendElement(this);
+  gLiveDatabases->AppendElement(WrapNotNullUnchecked(this));
 }
 
 void Database::RegisterSnapshot(Snapshot* aSnapshot) {
@@ -5753,6 +5808,9 @@ void Database::AllowToClose() {
 
   MOZ_ASSERT(gLiveDatabases);
   gLiveDatabases->RemoveElement(this);
+
+  // XXX Record removal from gLiveDatabase here as well, once we have an easy
+  // way to record a shutdown step here.
 
   if (gLiveDatabases->IsEmpty()) {
     gLiveDatabases = nullptr;
@@ -6814,7 +6872,6 @@ PrepareDatastoreOp::PrepareDatastoreOp(
       mForPreload(aParams.type() ==
                   LSRequestParams::TLSRequestPreloadDatastoreParams),
       mDatabaseNotAvailable(false),
-      mRequestedDirectoryLock(false),
       mInvalidated(false)
 #ifdef DEBUG
       ,
@@ -6914,10 +6971,11 @@ void PrepareDatastoreOp::Log() {
     case NestedState::CheckClosingDatastore: {
       for (uint32_t index = gPrepareDatastoreOps->Length(); index > 0;
            index--) {
-        PrepareDatastoreOp* existingOp = (*gPrepareDatastoreOps)[index - 1];
+        const auto& existingOp = (*gPrepareDatastoreOps)[index - 1];
 
         if (existingOp->mDelayedOp == this) {
-          LS_LOG(("  mDelayedBy: [%p]", existingOp));
+          LS_LOG(("  mDelayedBy: [%p]",
+                  static_cast<PrepareDatastoreOp*>(existingOp.get())));
 
           existingOp->Log();
 
@@ -7036,7 +7094,7 @@ nsresult PrepareDatastoreOp::CheckExistingOperations() {
   // See if this PrepareDatastoreOp needs to wait.
   bool foundThis = false;
   for (uint32_t index = gPrepareDatastoreOps->Length(); index > 0; index--) {
-    PrepareDatastoreOp* existingOp = (*gPrepareDatastoreOps)[index - 1];
+    const auto& existingOp = (*gPrepareDatastoreOps)[index - 1];
 
     if (existingOp == this) {
       foundThis = true;
@@ -7190,8 +7248,6 @@ nsresult PrepareDatastoreOp::OpenDirectory() {
       PERSISTENCE_TYPE_DEFAULT, mQuotaInfo, mozilla::dom::quota::Client::LS,
       /* aExclusive */ false, this);
 
-  mRequestedDirectoryLock = true;
-
   return NS_OK;
 }
 
@@ -7206,11 +7262,11 @@ void PrepareDatastoreOp::SendToIOThread() {
   // are preparing a datastore for private browsing.
   // Note that we do use a directory lock for private browsing even though we
   // don't do any stuff on disk. The thing is that without a directory lock,
-  // quota manager wouldn't call AbortOperations for our private browsing
-  // origin when a clear origin operation is requested. AbortOperations
-  // requests all databases to close and the datastore is destroyed in the end.
-  // Any following LocalStorage API call will trigger preparation of a new
-  // (empty) datastore.
+  // quota manager wouldn't call AbortOperationsForLocks for our private
+  // browsing origin when a clear origin operation is requested.
+  // AbortOperationsForLocks requests all databases to close and the datastore
+  // is destroyed in the end. Any following LocalStorage API call will trigger
+  // preparation of a new (empty) datastore.
   if (mPrivateBrowsingId) {
     FinishNesting();
 
@@ -7640,26 +7696,15 @@ nsresult PrepareDatastoreOp::VerifyDatabaseInformation(
   AssertIsOnIOThread();
   MOZ_ASSERT(aConnection);
 
-  nsCOMPtr<mozIStorageStatement> stmt;
-  nsresult rv = aConnection->CreateStatement(nsLiteralCString("SELECT origin "
-                                                              "FROM database"),
-                                             getter_AddRefs(stmt));
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
+  LS_TRY_INSPECT(const auto& stmt,
+                 CreateAndExecuteSingleStepStatement<
+                     SingleStepResult::ReturnNullIfNoResult>(
+                     *aConnection, "SELECT origin FROM database"_ns));
 
-  bool hasResult;
-  rv = stmt->ExecuteStep(&hasResult);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
-
-  if (NS_WARN_IF(!hasResult)) {
-    return NS_ERROR_FILE_CORRUPTED;
-  }
+  LS_TRY(OkIf(stmt), NS_ERROR_FILE_CORRUPTED);
 
   nsCString origin;
-  rv = stmt->GetUTF8String(0, origin);
+  nsresult rv = stmt->GetUTF8String(0, origin);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
@@ -7998,6 +8043,16 @@ void PrepareDatastoreOp::CleanupMetadata() {
 
   MOZ_ASSERT(gPrepareDatastoreOps);
   gPrepareDatastoreOps->RemoveElement(this);
+
+  // XXX Can we store a strong reference to the quota client ourselves to avoid
+  // going through mConnection?
+  if (mConnection) {
+    mConnection->GetQuotaClient()->MaybeRecordShutdownStep(
+        "PrepareDatastoreOp completed"_ns);
+  } else {
+    // XXX Bug 1681670 will change reporting to go to the quota manager instead,
+    // which resolves this case.
+  }
 
   if (gPrepareDatastoreOps->IsEmpty()) {
     gPrepareDatastoreOps = nullptr;
@@ -9072,7 +9127,8 @@ void QuotaClient::ReleaseIOThreadObjects() {
   gArchivedOrigins = nullptr;
 }
 
-void QuotaClient::AbortOperations(const nsACString& aOrigin) {
+void QuotaClient::AbortOperationsForLocks(
+    const DirectoryLockIdTable& aDirectoryLockIds) {
   AssertIsOnBackgroundThread();
 
   // A PrepareDatastoreOp object could already acquire a directory lock for
@@ -9088,72 +9144,94 @@ void QuotaClient::AbortOperations(const nsACString& aOrigin) {
   // will close the Datastore on the parent side (the closing releases the
   // directory lock).
 
-  if (gPrepareDatastoreOps) {
-    for (PrepareDatastoreOp* prepareDatastoreOp : *gPrepareDatastoreOps) {
-      MOZ_ASSERT(prepareDatastoreOp);
+  InvalidatePrepareDatastoreOpsMatching(
+      [&aDirectoryLockIds](const auto& prepareDatastoreOp) {
+        // Check if the PrepareDatastoreOp holds an acquired DirectoryLock.
+        // Origin clearing can't be blocked by this PrepareDatastoreOp if there
+        // is no acquired DirectoryLock. If there is an acquired DirectoryLock,
+        // check if the table contains the lock for the PrepareDatastoreOp.
+        return IsLockForObjectAcquiredAndContainedInLockTable(
+            prepareDatastoreOp, aDirectoryLockIds);
+      });
 
-      // Explicitely check if a directory lock has been requested.
-      // Origin clearing can't be blocked by this PrepareDatastoreOp if it
-      // hasn't requested a directory lock yet, so we can just ignore it.
-      // This will also guarantee that PrepareDatastoreOp has a known origin.
-      // And it also ensures that the ordering is right. Without the check we
-      // could invalidate ops whose directory locks were requested after we
-      // requested a directory lock for origin clearing.
-      if (!prepareDatastoreOp->RequestedDirectoryLock()) {
-        continue;
-      }
+  if (gPrivateDatastores) {
+    gPrivateDatastores->RemoveIf([&aDirectoryLockIds](const auto& iter) {
+      const auto& privateDatastore = iter.Data();
 
-      MOZ_ASSERT(prepareDatastoreOp->OriginIsKnown());
+      // The PrivateDatastore::mDatastore member is not cleared until the
+      // PrivateDatastore is destroyed.
+      const auto& datastore = privateDatastore->DatastoreRef();
 
-      if (aOrigin.IsVoid() || prepareDatastoreOp->Origin() == aOrigin) {
-        prepareDatastoreOp->Invalidate();
-      }
-    }
-  }
-
-  if (gPrivateDatastores &&
-      (aOrigin.IsVoid() ||
-       (gPrivateDatastores->Remove(aOrigin) && !gPrivateDatastores->Count()))) {
-    gPrivateDatastores = nullptr;
-  }
-
-  if (gPreparedDatastores) {
-    for (auto iter = gPreparedDatastores->ConstIter(); !iter.Done();
-         iter.Next()) {
-      const auto& preparedDatastore = iter.Data();
-      MOZ_ASSERT(preparedDatastore);
-
-      if (aOrigin.IsVoid() || preparedDatastore->Origin() == aOrigin) {
-        preparedDatastore->Invalidate();
-      }
-    }
-  }
-
-  if (aOrigin.IsVoid()) {
-    RequestAllowToCloseIf([](const Database* const) { return true; });
-  } else {
-    RequestAllowToCloseIf([&aOrigin](const Database* const aDatabase) {
-      return aDatabase->Origin() == aOrigin;
+      // If the PrivateDatastore exists then it must be registered in
+      // Datastore::mHasLivePrivateDatastore as well. The Datastore must have
+      // a DirectoryLock if there is a registered PrivateDatastore.
+      return IsLockForObjectContainedInLockTable(datastore, aDirectoryLockIds);
     });
+
+    if (!gPrivateDatastores->Count()) {
+      gPrivateDatastores = nullptr;
+    }
   }
+
+  InvalidatePreparedDatastoresMatching([&aDirectoryLockIds](
+                                           const auto& preparedDatastore) {
+    // The PreparedDatastore::mDatastore member is not cleared until the
+    // PreparedDatastore is destroyed.
+    const auto& datastore = preparedDatastore.DatastoreRef();
+
+    // If the PreparedDatastore exists then it must be registered in
+    // Datastore::mPreparedDatastores as well. The Datastore must have a
+    // DirectoryLock if there are registered PreparedDatastore objects.
+    return IsLockForObjectContainedInLockTable(datastore, aDirectoryLockIds);
+  });
+
+  RequestAllowToCloseDatabasesMatching(
+      [&aDirectoryLockIds](const auto& database) {
+        const auto& maybeDatastore = database.MaybeDatastoreRef();
+
+        // If the Database is registered in gLiveDatabases then it must have a
+        // Datastore.
+        MOZ_ASSERT(maybeDatastore.isSome());
+
+        // If the Database is registered in gLiveDatabases then it must be
+        // registered in Datastore::mDatabases as well. The Datastore must have
+        // a DirectoryLock if there are registered Database objects.
+        return IsLockForObjectContainedInLockTable(*maybeDatastore,
+                                                   aDirectoryLockIds);
+      });
 }
 
 void QuotaClient::AbortOperationsForProcess(ContentParentId aContentParentId) {
   AssertIsOnBackgroundThread();
 
-  RequestAllowToCloseIf([aContentParentId](const Database* const aDatabase) {
-    return aDatabase->IsOwnedByProcess(aContentParentId);
+  RequestAllowToCloseDatabasesMatching(
+      [&aContentParentId](const auto& database) {
+        return database.IsOwnedByProcess(aContentParentId);
+      });
+}
+
+void QuotaClient::AbortAllOperations() {
+  AssertIsOnBackgroundThread();
+
+  InvalidatePrepareDatastoreOpsMatching([](const auto& prepareDatastoreOp) {
+    return prepareDatastoreOp.MaybeDirectoryLockRef();
   });
+
+  if (gPrivateDatastores) {
+    gPrivateDatastores = nullptr;
+  }
+
+  InvalidatePreparedDatastoresMatching([](const auto&) { return true; });
+
+  RequestAllowToCloseDatabasesMatching([](const auto&) { return true; });
 }
 
 void QuotaClient::StartIdleMaintenance() { AssertIsOnBackgroundThread(); }
 
 void QuotaClient::StopIdleMaintenance() { AssertIsOnBackgroundThread(); }
 
-void QuotaClient::ShutdownWorkThreads() {
-  AssertIsOnBackgroundThread();
+void QuotaClient::InitiateShutdown() {
   MOZ_ASSERT(!mShutdownRequested);
-
   mShutdownRequested = true;
 
   // gPrepareDatastoreOps are short lived objects running a state machine.
@@ -9174,52 +9252,24 @@ void QuotaClient::ShutdownWorkThreads() {
     gPreparedDatastores = nullptr;
   }
 
-  RequestAllowToCloseIf([](const Database* const) { return true; });
+  RequestAllowToCloseDatabasesMatching([](const auto&) { return true; });
 
   if (gPreparedObsevers) {
     gPreparedObsevers->Clear();
     gPreparedObsevers = nullptr;
   }
-
-  nsCOMPtr<nsITimer> timer = NS_NewTimer();
-
-  MOZ_ALWAYS_SUCCEEDS(timer->InitWithNamedFuncCallback(
-      [](nsITimer* aTimer, void* aClosure) {
-        ForceKillDatabases();
-
-        MOZ_ALWAYS_SUCCEEDS(aTimer->InitWithNamedFuncCallback(
-            [](nsITimer* aTimer, void* aClosure) {
-              auto quotaClient = static_cast<QuotaClient*>(aClosure);
-
-              quotaClient->ShutdownTimedOut();
-            },
-            aClosure, SHUTDOWN_FORCE_CRASH_TIMEOUT_MS, nsITimer::TYPE_ONE_SHOT,
-            "localstorage::QuotaClient::ShutdownWorkThreads::ForceCrashTimer"));
-      },
-      this, SHUTDOWN_FORCE_KILL_TIMEOUT_MS, nsITimer::TYPE_ONE_SHOT,
-      "localstorage::QuotaClient::ShutdownWorkThreads::ForceKillTimer"));
-
-  // This should release any local storage related quota objects or directory
-  // locks.
-  MOZ_ALWAYS_TRUE(SpinEventLoopUntil([&]() {
-    // Don't have to check gPrivateDatastores and gPreparedDatastores since we
-    // nulled it out above.
-    return !gPrepareDatastoreOps && !gDatastores && !gLiveDatabases;
-  }));
-
-  MOZ_ALWAYS_SUCCEEDS(timer->Cancel());
-
-  // And finally, shutdown the connection thread.
-  if (gConnectionThread) {
-    gConnectionThread->Shutdown();
-
-    gConnectionThread = nullptr;
-  }
 }
 
-void QuotaClient::ShutdownTimedOut() {
+bool QuotaClient::IsShutdownCompleted() const {
+  // Don't have to check gPrivateDatastores and gPreparedDatastores since we
+  // nulled it out in InitiateShutdown.
+  return !gPrepareDatastoreOps && !gDatastores && !gLiveDatabases;
+}
+
+void QuotaClient::ForceKillActors() { ForceKillAllDatabases(); }
+
+nsCString QuotaClient::GetShutdownStatus() const {
   AssertIsOnBackgroundThread();
-  MOZ_DIAGNOSTIC_ASSERT(gPrepareDatastoreOps || gDatastores || gLiveDatabases);
 
   nsCString data;
 
@@ -9231,8 +9281,6 @@ void QuotaClient::ShutdownTimedOut() {
     nsTHashtable<nsCStringHashKey> ids;
 
     for (const auto& prepareDatastoreOp : *gPrepareDatastoreOps) {
-      MOZ_ASSERT(prepareDatastoreOp);
-
       nsCString id;
       prepareDatastoreOp->Stringify(id);
 
@@ -9273,8 +9321,6 @@ void QuotaClient::ShutdownTimedOut() {
     nsTHashtable<nsCStringHashKey> ids;
 
     for (const auto& database : *gLiveDatabases) {
-      MOZ_ASSERT(database);
-
       nsCString id;
       database->Stringify(id);
 
@@ -9286,10 +9332,16 @@ void QuotaClient::ShutdownTimedOut() {
     data.Append(")\n");
   }
 
-  CrashReporter::AnnotateCrashReport(
-      CrashReporter::Annotation::LocalStorageShutdownTimeout, data);
+  return data;
+}
 
-  MOZ_CRASH("LocalStorage shutdown timed out");
+void QuotaClient::FinalizeShutdown() {
+  // And finally, shutdown the connection thread.
+  if (gConnectionThread) {
+    gConnectionThread->Shutdown();
+
+    gConnectionThread = nullptr;
+  }
 }
 
 nsresult QuotaClient::CreateArchivedOriginScope(

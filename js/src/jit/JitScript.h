@@ -15,12 +15,13 @@
 #include "js/UniquePtr.h"
 #include "util/TrailingArray.h"
 #include "vm/EnvironmentObject.h"
-#include "vm/TypeInference.h"
 
 class JS_PUBLIC_API JSScript;
 
 namespace js {
 namespace jit {
+
+class JitZone;
 
 // Information about a script's bytecode, used by IonBuilder. This is cached
 // in JitScript.
@@ -233,11 +234,6 @@ class alignas(uintptr_t) JitScript final : public TrailingArray {
   // Allocated space for fallback IC stubs.
   FallbackICStubSpace fallbackStubSpace_ = {};
 
-  // Like JSScript::jitCodeRaw_ but when the script has an IonScript this can
-  // point to a separate entry point that skips the argument type checks.
-  // TODO(no-TI): remove.
-  uint8_t* jitCodeSkipArgCheck_ = nullptr;
-
   // Profile string used by the profiler for Baseline Interpreter frames.
   const char* profileString_ = nullptr;
 
@@ -341,9 +337,6 @@ class alignas(uintptr_t) JitScript final : public TrailingArray {
 
   static constexpr Offset offsetOfICEntries() { return sizeof(JitScript); }
 
-  static constexpr size_t offsetOfJitCodeSkipArgCheck() {
-    return offsetof(JitScript, jitCodeSkipArgCheck_);
-  }
   static constexpr size_t offsetOfBaselineScript() {
     return offsetof(JitScript, baselineScript_);
   }
@@ -503,7 +496,7 @@ class alignas(uintptr_t) JitScript final : public TrailingArray {
 
 // Ensures no JitScripts are purged in the current zone.
 class MOZ_RAII AutoKeepJitScripts {
-  TypeZone& zone_;
+  jit::JitZone* zone_;
   bool prev_;
 
   AutoKeepJitScripts(const AutoKeepJitScripts&) = delete;
@@ -517,10 +510,6 @@ class MOZ_RAII AutoKeepJitScripts {
 // Mark JitScripts on the stack as active, so that they are not discarded
 // during GC.
 void MarkActiveJitScripts(Zone* zone);
-
-#if defined(JS_STRUCTURED_SPEW) || defined(JS_CACHEIR_SPEW)
-bool GetStubEnteredCount(ICStub* stub, uint32_t* count);
-#endif
 
 #ifdef JS_STRUCTURED_SPEW
 void JitSpewBaselineICStats(JSScript* script, const char* dumpReason);

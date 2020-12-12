@@ -23,6 +23,7 @@
 #include "jit/mips64/Simulator-mips64.h"
 #include "jit/Recover.h"
 #include "jit/RematerializedFrame.h"
+#include "jit/SharedICRegisters.h"
 #include "js/friend/StackLimits.h"  // js::CheckRecursionLimitWithStackPointerDontReport, js::ReportOverRecursed
 #include "js/Utility.h"
 #include "util/Memory.h"
@@ -881,17 +882,7 @@ bool BaselineStackBuilder::buildExpressionStack() {
           exprStackSlots());
   for (uint32_t i = 0; i < exprStackSlots(); i++) {
     Value v;
-
-    if (!iter_.moreFrames() && i == exprStackSlots() - 1 &&
-        cx_->hasIonReturnOverride()) {
-      // If coming from an invalidation bailout, and this is the topmost
-      // value, and a value override has been specified, don't read from the
-      // iterator. Otherwise, we risk using a garbage value.
-      // TODO(post-Warp): Remove value overrides and AutoDetectInvalidation.
-      iter_.skip();
-      JitSpew(JitSpew_BaselineBailouts, "      [Return Override]");
-      v = cx_->takeIonReturnOverride();
-    } else if (propagatingIonExceptionForDebugMode()) {
+    if (propagatingIonExceptionForDebugMode()) {
       // If we are in the middle of propagating an exception from Ion by
       // bailing to baseline due to debug mode, we might not have all
       // the stack if we are at the newest frame.
@@ -1771,61 +1762,6 @@ static void InvalidateAfterBailout(JSContext* cx, HandleScript outerScript,
   Invalidate(cx, outerScript);
 }
 
-static void HandleBoundsCheckFailure(JSContext* cx, HandleScript outerScript,
-                                     HandleScript innerScript) {
-  JitSpew(JitSpew_IonBailouts,
-          "Bounds check failure %s:%u:%u, inlined into %s:%u:%u",
-          innerScript->filename(), innerScript->lineno(), innerScript->column(),
-          outerScript->filename(), outerScript->lineno(),
-          outerScript->column());
-
-  if (!innerScript->failedBoundsCheck()) {
-    innerScript->setFailedBoundsCheck();
-  }
-
-  InvalidateAfterBailout(cx, outerScript, "bounds check failure");
-  if (innerScript->hasIonScript()) {
-    Invalidate(cx, innerScript);
-  }
-}
-
-static void HandleShapeGuardFailure(JSContext* cx, HandleScript outerScript,
-                                    HandleScript innerScript) {
-  if (JitOptions.warpBuilder) {
-    // Warp handles this by invalidating when the IC stub changes.
-    return;
-  }
-
-  JitSpew(JitSpew_IonBailouts,
-          "Shape guard failure %s:%u:%u, inlined into %s:%u:%u",
-          innerScript->filename(), innerScript->lineno(), innerScript->column(),
-          outerScript->filename(), outerScript->lineno(),
-          outerScript->column());
-
-  // TODO: Currently this mimic's Ion's handling of this case.  Investigate
-  // setting the flag on innerScript as opposed to outerScript, and maybe
-  // invalidating both inner and outer scripts, instead of just the outer one.
-  outerScript->setFailedShapeGuard();
-
-  InvalidateAfterBailout(cx, outerScript, "shape guard failure");
-}
-
-static void HandleBaselineInfoBailout(JSContext* cx, HandleScript outerScript,
-                                      HandleScript innerScript) {
-  if (JitOptions.warpBuilder) {
-    // Warp handles this by invalidating when the IC stub changes.
-    return;
-  }
-
-  JitSpew(JitSpew_IonBailouts,
-          "Baseline info failure %s:%u:%u, inlined into %s:%u:%u",
-          innerScript->filename(), innerScript->lineno(), innerScript->column(),
-          outerScript->filename(), outerScript->lineno(),
-          outerScript->column());
-
-  InvalidateAfterBailout(cx, outerScript, "invalid baseline info");
-}
-
 static void HandleLexicalCheckFailure(JSContext* cx, HandleScript outerScript,
                                       HandleScript innerScript) {
   JitSpew(JitSpew_IonBailouts,
@@ -2045,7 +1981,6 @@ bool jit::FinishBailoutToBaseline(BaselineBailoutInfo* bailoutInfoArg) {
           innerScript->getWarmUpCount(), (unsigned)bailoutKind);
 
   switch (bailoutKind) {
-    // Normal bailouts.
     case BailoutKind::TranspiledCacheIR:
       // Do nothing. The baseline fallback code will invalidate the script
       // if necessary to prevent bailout loops.
@@ -2064,10 +1999,22 @@ bool jit::FinishBailoutToBaseline(BaselineBailoutInfo* bailoutInfoArg) {
       break;
 
     case BailoutKind::LICM:
-      // An instruction hoisted by LICM bailed out.
-      MOZ_ASSERT(!outerScript->hadLICMBailout());
-      outerScript->setHadLICMBailout();
-      InvalidateAfterBailout(cx, outerScript, "LICM failure");
+      // LICM may cause spurious bailouts by hoisting unreachable
+      // guards past branches.  To prevent bailout loops, when an
+      // instruction hoisted by LICM bails out, we set a flag on the
+      // IonScript and resume in baseline. If the guard would have
+      // been executed anyway, then the baseline fallback code will
+      // invalidate the script. Otherwise, the next time we reach this
+      // point, we will invalidate the script and disable LICM.
+      MOZ_ASSERT(!outerScript->hadLICMInvalidation());
+      if (outerScript->hasIonScript()) {
+        if (outerScript->ionScript()->hadLICMBailout()) {
+          outerScript->setHadLICMInvalidation();
+          InvalidateAfterBailout(cx, outerScript, "LICM failure");
+        } else {
+          outerScript->ionScript()->setHadLICMBailout();
+        }
+      }
       break;
 
     case BailoutKind::HoistBoundsCheck:
@@ -2077,60 +2024,21 @@ bool jit::FinishBailoutToBaseline(BaselineBailoutInfo* bailoutInfoArg) {
       InvalidateAfterBailout(cx, outerScript, "bounds check failure");
       break;
 
+    case BailoutKind::EagerTruncation:
+      // An eager truncation generated by range analysis bailed out.
+      MOZ_ASSERT(!outerScript->hadEagerTruncationBailout());
+      outerScript->setHadEagerTruncationBailout();
+      InvalidateAfterBailout(cx, outerScript, "eager range analysis failure");
+      break;
+
     case BailoutKind::TooManyArguments:
       // A funapply or spread call had more than JIT_ARGS_LENGTH_MAX arguments.
       // TODO: Invalidate and disable recompilation if this happens too often.
       break;
 
-    case BailoutKind::GenericIon:
-      // A bailout that Ion did not assign a more specific bailout kind.
-      MOZ_ASSERT(!JitOptions.warpBuilder);
-      break;
-
     case BailoutKind::Inevitable:
     case BailoutKind::DuringVMCall:
-    case BailoutKind::DynamicNameNotFound:
-    case BailoutKind::Overflow:
-    case BailoutKind::Round:
-    case BailoutKind::NonPrimitiveInput:
-    case BailoutKind::PrecisionLoss:
-    case BailoutKind::TypeBarrierO:
-    case BailoutKind::TypeBarrierV:
-    case BailoutKind::ValueGuard:
-    case BailoutKind::NullOrUndefinedGuard:
-    case BailoutKind::Hole:
-    case BailoutKind::NoDenseElementsGuard:
-    case BailoutKind::NegativeIndex:
-    case BailoutKind::Unbox:
     case BailoutKind::Debugger:
-    case BailoutKind::SpecificAtomGuard:
-    case BailoutKind::SpecificSymbolGuard:
-    case BailoutKind::StringToIndexGuard:
-    case BailoutKind::StringToInt32Guard:
-    case BailoutKind::StringToDoubleGuard:
-    case BailoutKind::NonInt32ArrayLength:
-    case BailoutKind::FunctionLength:
-    case BailoutKind::FunctionName:
-    case BailoutKind::InvalidCodePoint:
-    case BailoutKind::ProtoGuard:
-    case BailoutKind::ProxyGuard:
-    case BailoutKind::NotProxyGuard:
-    case BailoutKind::NotDOMProxyGuard:
-    case BailoutKind::NotArrayBufferMaybeSharedGuard:
-    case BailoutKind::TypedArrayGuard:
-    case BailoutKind::MegamorphicAccess:
-    case BailoutKind::ArgumentsObjectAccess:
-    case BailoutKind::ArrayPopShift:
-    case BailoutKind::ArraySlice:
-    case BailoutKind::TagNotEqualGuard:
-    case BailoutKind::FunctionFlagsGuard:
-    case BailoutKind::FunctionIsNonBuiltinCtorGuard:
-    case BailoutKind::FunctionKindGuard:
-    case BailoutKind::FunctionScriptGuard:
-    case BailoutKind::PackedArrayGuard:
-    case BailoutKind::HasGetterSetterGuard:
-    case BailoutKind::DOMExpandoValueGenerationGuard:
-    case BailoutKind::DOMExpandoMissingOrShapeGuard:
       // Do nothing.
       break;
 
@@ -2140,34 +2048,25 @@ bool jit::FinishBailoutToBaseline(BaselineBailoutInfo* bailoutInfoArg) {
       // script.
       break;
 
-    // Invalid assumption based on baseline code.
-    case BailoutKind::OverflowInvalidate:
-      outerScript->setHadOverflowBailout();
-      [[fallthrough]];
-    case BailoutKind::DoubleOutput:
-    case BailoutKind::ObjectIdentityOrTypeGuard:
-      HandleBaselineInfoBailout(cx, outerScript, innerScript);
-      break;
-
     case BailoutKind::NotOptimizedArgumentsGuard:
       // Optimized-arguments escaped to a slow path. Disable the optimization to
       // prevent bailout loops.
       JSScript::argumentsOptimizationFailed(cx, innerScript);
       break;
 
-    case BailoutKind::BoundsCheck:
-      HandleBoundsCheckFailure(cx, outerScript, innerScript);
-      break;
-    case BailoutKind::ShapeGuard:
-      HandleShapeGuardFailure(cx, outerScript, innerScript);
-      break;
     case BailoutKind::UninitializedLexical:
       HandleLexicalCheckFailure(cx, outerScript, innerScript);
       break;
+
     case BailoutKind::IonExceptionDebugMode:
       // Return false to resume in HandleException with reconstructed
       // baseline frame.
       return false;
+
+    case BailoutKind::OnStackInvalidation:
+      // The script has already been invalidated. There is nothing left to do.
+      break;
+
     default:
       MOZ_CRASH("Unknown bailout kind!");
   }

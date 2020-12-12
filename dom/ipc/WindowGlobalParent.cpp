@@ -26,6 +26,7 @@
 #include "mozilla/dom/ChromeUtils.h"
 #include "mozilla/dom/ipc/IdType.h"
 #include "mozilla/dom/ipc/StructuredCloneData.h"
+#include "mozilla/ScopeExit.h"
 #include "mozilla/ServoCSSParser.h"
 #include "mozilla/ServoStyleSet.h"
 #include "mozilla/StaticPrefs_network.h"
@@ -212,11 +213,11 @@ already_AddRefed<WindowGlobalChild> WindowGlobalParent::GetChildActor() {
   return do_AddRef(static_cast<WindowGlobalChild*>(otherSide));
 }
 
-already_AddRefed<BrowserParent> WindowGlobalParent::GetBrowserParent() {
+BrowserParent* WindowGlobalParent::GetBrowserParent() {
   if (IsInProcess() || !CanSend()) {
     return nullptr;
   }
-  return do_AddRef(static_cast<BrowserParent*>(Manager()));
+  return static_cast<BrowserParent*>(Manager());
 }
 
 ContentParent* WindowGlobalParent::GetContentParent() {

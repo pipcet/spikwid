@@ -962,11 +962,12 @@ class FunctionCompiler {
     MOZ_ASSERT(!inDeadCode());
 
     uint32_t offsetGuardLimit =
-        GetOffsetGuardLimit(moduleEnv_.hugeMemoryEnabled());
+        GetMaxOffsetGuardLimit(moduleEnv_.hugeMemoryEnabled());
 
-    // Fold a constant base into the offset (so the base is 0 in which case
-    // the codegen is optimized), if it doesn't wrap or trigger an
-    // MWasmAddOffset.
+    // Fold a constant base into the offset and make the base 0, provided the
+    // offset stays below the guard limit.  The reason for folding the base into
+    // the offset rather than vice versa is that a small offset can be ignored
+    // by both explicit bounds checking and bounds check elimination.
     if ((*base)->isConstant()) {
       uint32_t basePtr = (*base)->toConstant()->toInt32();
       uint32_t offset = access->offset();
@@ -982,11 +983,11 @@ class FunctionCompiler {
     bool mustAdd = false;
     bool alignmentCheck = needAlignmentCheck(access, *base, &mustAdd);
 
-    // If the offset is bigger than the guard region, a separate instruction
-    // is necessary to add the offset to the base and check for overflow.
+    // If the offset is bigger than the guard region, a separate instruction is
+    // necessary to add the offset to the base and check for overflow.
     //
-    // Also add the offset if we have a Wasm atomic access that needs
-    // alignment checking and the offset affects alignment.
+    // Also add the offset if we have a Wasm atomic access that needs alignment
+    // checking and the offset affects alignment.
     if (access->offset() >= offsetGuardLimit || mustAdd ||
         !JitOptions.wasmFoldOffsets) {
       *base = computeEffectiveAddress(*base, access);
@@ -2418,6 +2419,14 @@ static bool EmitEnd(FunctionCompiler& f) {
         return false;
       }
       break;
+#ifdef ENABLE_WASM_EXCEPTIONS
+    case LabelKind::Try:
+      MOZ_CRASH("NYI");
+      break;
+    case LabelKind::Catch:
+      MOZ_CRASH("NYI");
+      break;
+#endif
   }
 
   MOZ_ASSERT_IF(!f.inDeadCode(), postJoinDefs.length() == type.length());
@@ -2495,6 +2504,40 @@ static bool EmitUnreachable(FunctionCompiler& f) {
   f.unreachableTrap();
   return true;
 }
+
+#ifdef ENABLE_WASM_EXCEPTIONS
+static bool EmitTry(FunctionCompiler& f) {
+  ResultType params;
+  if (!f.iter().readTry(&params)) {
+    return false;
+  }
+
+  MOZ_CRASH("NYI");
+}
+
+static bool EmitCatch(FunctionCompiler& f) {
+  LabelKind kind;
+  uint32_t eventIndex;
+  ResultType paramType, resultType;
+  DefVector tryValues;
+  if (!f.iter().readCatch(&kind, &eventIndex, &paramType, &resultType,
+                          &tryValues)) {
+    return false;
+  }
+
+  MOZ_CRASH("NYI");
+}
+
+static bool EmitThrow(FunctionCompiler& f) {
+  uint32_t exnIndex;
+  DefVector argValues;
+  if (!f.iter().readThrow(&exnIndex, &argValues)) {
+    return false;
+  }
+
+  MOZ_CRASH("NYI");
+}
+#endif
 
 static bool EmitCallArgs(FunctionCompiler& f, const FuncType& funcType,
                          const DefVector& args, CallCompileState* call) {
@@ -4362,6 +4405,23 @@ static bool EmitBodyExprs(FunctionCompiler& f) {
         CHECK(EmitIf(f));
       case uint16_t(Op::Else):
         CHECK(EmitElse(f));
+#ifdef ENABLE_WASM_EXCEPTIONS
+      case uint16_t(Op::Try):
+        if (!f.moduleEnv().exceptionsEnabled()) {
+          return f.iter().unrecognizedOpcode(&op);
+        }
+        CHECK(EmitTry(f));
+      case uint16_t(Op::Catch):
+        if (!f.moduleEnv().exceptionsEnabled()) {
+          return f.iter().unrecognizedOpcode(&op);
+        }
+        CHECK(EmitCatch(f));
+      case uint16_t(Op::Throw):
+        if (!f.moduleEnv().exceptionsEnabled()) {
+          return f.iter().unrecognizedOpcode(&op);
+        }
+        CHECK(EmitThrow(f));
+#endif
       case uint16_t(Op::Br):
         CHECK(EmitBr(f));
       case uint16_t(Op::BrIf):
@@ -5377,7 +5437,7 @@ bool wasm::IonCompileFunctions(const ModuleEnvironment& moduleEnv,
   TempAllocator alloc(&lifo);
   JitContext jitContext(&alloc);
   MOZ_ASSERT(IsCompilingWasm());
-  WasmMacroAssembler masm(alloc);
+  WasmMacroAssembler masm(alloc, moduleEnv);
 
   // Swap in already-allocated empty vectors to avoid malloc/free.
   MOZ_ASSERT(code->empty());

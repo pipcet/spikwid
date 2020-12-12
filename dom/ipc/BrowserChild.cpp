@@ -14,12 +14,14 @@
 #include <algorithm>
 #include <utility>
 
+#include "BackgroundChild.h"
 #include "BrowserParent.h"
 #include "ClientLayerManager.h"
 #include "ContentChild.h"
 #include "DocumentInlines.h"
 #include "EventStateManager.h"
 #include "FrameLayerBuilder.h"
+#include "GeckoProfiler.h"
 #include "Layers.h"
 #include "MMPrinter.h"
 #include "PermissionMessageUtils.h"
@@ -74,6 +76,7 @@
 #include "mozilla/gfx/Matrix.h"
 #include "mozilla/gfx/gfxVars.h"
 #include "mozilla/ipc/BackgroundUtils.h"
+#include "mozilla/ipc/PBackgroundChild.h"
 #include "mozilla/ipc/URIUtils.h"
 #include "mozilla/layers/APZCCallbackHelper.h"
 #include "mozilla/layers/APZCTreeManagerChild.h"
@@ -140,6 +143,10 @@
 
 #ifdef XP_WIN
 #  include "mozilla/plugins/PluginWidgetChild.h"
+#endif
+
+#ifdef MOZ_WAYLAND
+#  include "nsAppRunner.h"
 #endif
 
 #ifdef NS_PRINTING
@@ -314,6 +321,7 @@ BrowserChild::BrowserChild(ContentChild* aManager, const TabId& aTabId,
       mDidFakeShow(false),
       mTriedBrowserInit(false),
       mOrientation(hal::eScreenOrientation_PortraitPrimary),
+      mVsyncChild(nullptr),
       mIgnoreKeyPressEvent(false),
       mHasValidInnerSize(false),
       mDestroyed(false),
@@ -550,11 +558,27 @@ nsresult BrowserChild::Init(mozIDOMWindowProxy* aParent,
   NS_ENSURE_SUCCESS(rv, rv);
 #endif
 
+  InitVsyncChild();
+
   // We've all set up, make sure our visibility state is consistent. This is
   // important for OOP iframes, which start off as hidden.
   UpdateVisibility();
 
   return NS_OK;
+}
+
+void BrowserChild::InitVsyncChild() {
+#if defined(MOZ_WAYLAND)
+  if (!IsWaylandDisabled()) {
+    PVsyncChild* actor = SendPVsyncConstructor();
+    mVsyncChild = static_cast<VsyncChild*>(actor);
+  } else
+#endif
+  {
+    PBackgroundChild* actorChild =
+        BackgroundChild::GetOrCreateForCurrentThread();
+    mVsyncChild = static_cast<VsyncChild*>(actorChild->SendPVsyncConstructor());
+  }
 }
 
 void BrowserChild::NotifyTabContextUpdated() {
@@ -1170,6 +1194,7 @@ mozilla::ipc::IPCResult BrowserChild::RecvUpdateDimensions(
   mUnscaledOuterRect = aDimensionInfo.rect();
   mClientOffset = aDimensionInfo.clientOffset();
   mChromeOffset = aDimensionInfo.chromeOffset();
+  MOZ_ASSERT_IF(!IsTopLevel(), mChromeOffset == LayoutDeviceIntPoint());
 
   mOrientation = aDimensionInfo.orientation();
   SetUnscaledInnerSize(aDimensionInfo.size());
@@ -1561,7 +1586,20 @@ mozilla::ipc::IPCResult BrowserChild::RecvRealMouseMoveEvent(
   return IPC_OK();
 }
 
+mozilla::ipc::IPCResult BrowserChild::RecvRealMouseMoveEventForTests(
+    const WidgetMouseEvent& aEvent, const ScrollableLayerGuid& aGuid,
+    const uint64_t& aInputBlockId) {
+  return RecvRealMouseMoveEvent(aEvent, aGuid, aInputBlockId);
+}
+
 mozilla::ipc::IPCResult BrowserChild::RecvNormalPriorityRealMouseMoveEvent(
+    const WidgetMouseEvent& aEvent, const ScrollableLayerGuid& aGuid,
+    const uint64_t& aInputBlockId) {
+  return RecvRealMouseMoveEvent(aEvent, aGuid, aInputBlockId);
+}
+
+mozilla::ipc::IPCResult
+BrowserChild::RecvNormalPriorityRealMouseMoveEventForTests(
     const WidgetMouseEvent& aEvent, const ScrollableLayerGuid& aGuid,
     const uint64_t& aInputBlockId) {
   return RecvRealMouseMoveEvent(aEvent, aGuid, aInputBlockId);
@@ -2143,6 +2181,23 @@ bool BrowserChild::DeallocPFilePickerChild(PFilePickerChild* actor) {
   return true;
 }
 
+PVsyncChild* BrowserChild::AllocPVsyncChild() {
+  RefPtr<dom::VsyncChild> actor = new VsyncChild();
+  // There still has one ref-count after return, and it will be released in
+  // DeallocPVsyncChild().
+  return actor.forget().take();
+}
+
+bool BrowserChild::DeallocPVsyncChild(PVsyncChild* aActor) {
+  MOZ_ASSERT(aActor);
+
+  // This actor already has one ref-count. Please check AllocPVsyncChild().
+  RefPtr<VsyncChild> actor = dont_AddRef(static_cast<VsyncChild*>(aActor));
+  return true;
+}
+
+RefPtr<VsyncChild> BrowserChild::GetVsyncChild() { return mVsyncChild; }
+
 mozilla::ipc::IPCResult BrowserChild::RecvActivateFrameEvent(
     const nsString& aType, const bool& capture) {
   nsCOMPtr<nsPIDOMWindowOuter> window = do_GetInterface(WebNavigation());
@@ -2284,7 +2339,8 @@ mozilla::ipc::IPCResult BrowserChild::RecvPrintPreview(
   // went wrong.
   auto sendCallbackError = MakeScopeExit([&] {
     if (aCallback) {
-      aCallback(PrintPreviewResultInfo(0, 0, false));  // signal error
+      aCallback(
+          PrintPreviewResultInfo(0, 0, false, false, false));  // signal error
     }
   });
 
@@ -2435,41 +2491,6 @@ mozilla::ipc::IPCResult BrowserChild::RecvDestroy() {
   nsCOMPtr<nsIRunnable> deleteRunnable = new DelayedDeleteRunnable(this);
   MOZ_ALWAYS_SUCCEEDS(NS_DispatchToCurrentThread(deleteRunnable));
 
-  return IPC_OK();
-}
-
-void BrowserChild::AddPendingDocShellBlocker() { mPendingDocShellBlockers++; }
-
-void BrowserChild::RemovePendingDocShellBlocker() {
-  mPendingDocShellBlockers--;
-  if (!mPendingDocShellBlockers && mPendingDocShellReceivedMessage) {
-    mPendingDocShellReceivedMessage = false;
-    InternalSetDocShellIsActive(mPendingDocShellIsActive);
-  }
-  if (!mPendingDocShellBlockers && mPendingRenderLayersReceivedMessage) {
-    mPendingRenderLayersReceivedMessage = false;
-    RecvRenderLayers(mPendingRenderLayers, mPendingLayersObserverEpoch);
-  }
-}
-
-void BrowserChild::InternalSetDocShellIsActive(bool aIsActive) {
-  if (nsCOMPtr<nsIDocShell> docShell = do_GetInterface(WebNavigation())) {
-    docShell->SetIsActive(aIsActive);
-  }
-}
-
-mozilla::ipc::IPCResult BrowserChild::RecvSetDocShellIsActive(
-    const bool& aIsActive) {
-  // If we're currently waiting for window opening to complete, we need to hold
-  // off on setting the docshell active. We queue up the values we're receiving
-  // in the mWindowOpenDocShellActiveStatus.
-  if (mPendingDocShellBlockers > 0) {
-    mPendingDocShellReceivedMessage = true;
-    mPendingDocShellIsActive = aIsActive;
-    return IPC_OK();
-  }
-
-  InternalSetDocShellIsActive(aIsActive);
   return IPC_OK();
 }
 
@@ -2851,26 +2872,18 @@ void BrowserChild::MakeVisible() {
     return;
   }
 
-  // For top level stuff, the browser / tab-switcher is responsible of fixing
-  // the docshell state up explicitly via SetDocShellIsActive.
+  // The browser / tab-switcher is responsible of fixing the browsingContext
+  // state up explicitly via SetDocShellIsActive, which propagates to children
+  // automatically.
   //
   // We need it not to be observable, as this used via RecvRenderLayers and co.,
   // for stuff like async tab warming.
   //
   // We don't want to go through the docshell because we don't want to change
   // the visibility state of the document, which has side effects like firing
-  // events to content and unblocking media playback.
-  //
-  // FIXME(emilio): This feels a bit sketchy. Ideally we'd be able to just not
-  // update visibility of stuff in the tab warming case (we just want to paint
-  // once so that stuff is there already, really...), and use the docshell here
-  // all the time, but that makes some of the devtools tests fail (??).
-  if (mIsTopLevel) {
-    if (RefPtr<PresShell> presShell = docShell->GetPresShell()) {
-      presShell->SetIsActive(true);
-    }
-  } else {
-    docShell->SetIsActive(true);
+  // events to content, unblocking media playback, unthrottling timeouts...
+  if (RefPtr<PresShell> presShell = docShell->GetPresShell()) {
+    presShell->SetIsActive(true);
   }
 }
 
@@ -2902,8 +2915,16 @@ void BrowserChild::MakeHidden() {
                                                       nullptr);
         rootPresContext->ApplyPluginGeometryUpdates();
       }
+      presShell->SetIsActive(false);
     }
-    docShell->SetIsActive(false);
+  }
+
+  // FIXME(emilio): The lack of parallelism between this and MakeVisible is a
+  // bit suspect, but I guess we don't always want the front-end to manage the
+  // tab visibility.
+  if (mIsTopLevel && mBrowsingContext && mBrowsingContext->IsActive()) {
+    Unused << mBrowsingContext->SetExplicitActive(
+        dom::ExplicitActiveStatus::None);
   }
 
   if (mPuppetWidget) {

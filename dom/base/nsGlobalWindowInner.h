@@ -35,6 +35,7 @@
 #include "mozilla/dom/BindingDeclarations.h"
 #include "mozilla/dom/ChromeMessageBroadcaster.h"
 #include "mozilla/dom/DebuggerNotificationManager.h"
+#include "mozilla/dom/GamepadHandle.h"
 #include "mozilla/dom/Location.h"
 #include "mozilla/dom/NavigatorBinding.h"
 #include "mozilla/dom/StorageEvent.h"
@@ -290,10 +291,7 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
   virtual mozilla::EventListenerManager* GetOrCreateListenerManager() override;
 
   mozilla::Maybe<mozilla::dom::EventCallbackDebuggerNotificationType>
-  GetDebuggerNotificationType() const override {
-    return mozilla::Some(
-        mozilla::dom::EventCallbackDebuggerNotificationType::Global);
-  }
+  GetDebuggerNotificationType() const override;
 
   bool ComputeDefaultWantsUntrusted(mozilla::ErrorResult& aRv) final;
 
@@ -491,10 +489,12 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
                                           const double aDuration);
 
   // Inner windows only.
-  void AddGamepad(uint32_t aIndex, mozilla::dom::Gamepad* aGamepad);
-  void RemoveGamepad(uint32_t aIndex);
+  void AddGamepad(mozilla::dom::GamepadHandle aHandle,
+                  mozilla::dom::Gamepad* aGamepad);
+  void RemoveGamepad(mozilla::dom::GamepadHandle aHandle);
   void GetGamepads(nsTArray<RefPtr<mozilla::dom::Gamepad>>& aGamepads);
-  already_AddRefed<mozilla::dom::Gamepad> GetGamepad(uint32_t aIndex);
+  already_AddRefed<mozilla::dom::Gamepad> GetGamepad(
+      mozilla::dom::GamepadHandle aHandle);
   void SetHasSeenGamepadInput(bool aHasSeen);
   bool HasSeenGamepadInput();
   void SyncGamepadState();
@@ -1252,8 +1252,15 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
   // Hint to the JS engine whether we are currently loading.
   void HintIsLoading(bool aIsLoading);
 
- public:
   mozilla::dom::ContentMediaController* GetContentMediaController();
+
+  bool TryOpenExternalProtocolIframe() {
+    if (mHasOpenedExternalProtocolFrame) {
+      return false;
+    }
+    mHasOpenedExternalProtocolFrame = true;
+    return true;
+  }
 
  private:
   RefPtr<mozilla::dom::ContentMediaController> mContentMediaController;
@@ -1322,8 +1329,14 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
   // Whether we told the JS engine that we were in pageload.
   bool mHintedWasLoading : 1;
 
+  // Whether this window has opened an external-protocol iframe without user
+  // activation once already. Only relevant for top windows.
+  bool mHasOpenedExternalProtocolFrame : 1;
+
   nsCheapSet<nsUint32HashKey> mGamepadIndexSet;
-  nsRefPtrHashtable<nsUint32HashKey, mozilla::dom::Gamepad> mGamepads;
+  nsRefPtrHashtable<nsGenericHashKey<mozilla::dom::GamepadHandle>,
+                    mozilla::dom::Gamepad>
+      mGamepads;
 
   RefPtr<nsScreen> mScreen;
 

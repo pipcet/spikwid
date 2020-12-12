@@ -5,9 +5,12 @@
 //! Manages the pending pings queue and directory.
 //!
 //! * Keeps track of pending pings, loading any unsent ping from disk on startup;
-//! * Exposes `get_upload_task` API for the platform layer to request next upload task;
-//! * Exposes `process_ping_upload_response` API to check the HTTP response from the ping upload
-//!   and either delete the corresponding ping from disk or re-enqueue it for sending.
+//! * Exposes [`get_upload_task`](PingUploadManager::get_upload_task) API for
+//!   the platform layer to request next upload task;
+//! * Exposes
+//!   [`process_ping_upload_response`](PingUploadManager::process_ping_upload_response)
+//!   API to check the HTTP response from the ping upload and either delete the
+//!   corresponding ping from disk or re-enqueue it for sending.
 
 use std::collections::VecDeque;
 use std::convert::TryInto;
@@ -123,11 +126,12 @@ pub enum PingUploadTask {
     /// * Pending pings queue is empty, no more pings to request;
     /// * Requester has gotten more than MAX_WAIT_ATTEMPTS (3, by default) `PingUploadTask::Wait` responses in a row;
     /// * Requester has reported more than MAX_RECOVERABLE_FAILURES_PER_UPLOADING_WINDOW
-    ///   recoverable upload failures on the same uploading window[1]
+    ///   recoverable upload failures on the same uploading window (see below)
     ///   and should stop requesting at this moment.
     ///
-    /// [1]: An "uploading window" starts when a requester gets a new `PingUploadTask::Upload(PingRequest)`
-    ///      response and finishes when they finally get a `PingUploadTask::Done` or `PingUploadTask::Wait` response.
+    /// An "uploading window" starts when a requester gets a new
+    /// `PingUploadTask::Upload(PingRequest)` response and finishes when they
+    /// finally get a `PingUploadTask::Done` or `PingUploadTask::Wait` response.
     Done,
 }
 
@@ -271,7 +275,7 @@ impl PingUploadManager {
         match request.build() {
             Ok(request) => Some(request),
             Err(e) => {
-                log::error!("Error trying to build ping request: {}", e);
+                log::warn!("Error trying to build ping request: {}", e);
                 self.directory_manager.delete_file(&document_id);
 
                 // Record the error.
@@ -305,7 +309,7 @@ impl PingUploadManager {
             .iter()
             .any(|request| request.document_id == document_id)
         {
-            log::trace!(
+            log::warn!(
                 "Attempted to enqueue a duplicate ping {} at {}.",
                 document_id,
                 path
@@ -621,7 +625,7 @@ impl PingUploadManager {
             }
 
             UnrecoverableFailure | HttpStatus(400..=499) => {
-                log::error!(
+                log::warn!(
                     "Unrecoverable upload failure while attempting to send ping {}. Error was {:?}",
                     document_id,
                     status
@@ -630,7 +634,7 @@ impl PingUploadManager {
             }
 
             RecoverableFailure | HttpStatus(_) => {
-                log::info!(
+                log::warn!(
                     "Recoverable upload failure while attempting to send ping {}, will retry. Error was {:?}",
                     document_id,
                     status

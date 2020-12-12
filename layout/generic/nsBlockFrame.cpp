@@ -1352,8 +1352,7 @@ void nsBlockFrame::Reflow(nsPresContext* aPresContext, ReflowOutput& aMetrics,
   // Drain & handle pushed floats
   DrainPushedFloats();
   OverflowAreas fcBounds;
-  nsReflowStatus fcStatus;
-  ReflowPushedFloats(state, fcBounds, fcStatus);
+  ReflowPushedFloats(state, fcBounds);
 
   // If we're not dirty (which means we'll mark everything dirty later)
   // and our inline-size has changed, mark the lines dirty that we need to
@@ -1401,7 +1400,6 @@ void nsBlockFrame::Reflow(nsPresContext* aPresContext, ReflowOutput& aMetrics,
   }
 
   state.mReflowStatus.MergeCompletionStatusFrom(ocStatus);
-  state.mReflowStatus.MergeCompletionStatusFrom(fcStatus);
 
   // If we end in a BR with clear and affected floats continue,
   // we need to continue, too.
@@ -1504,12 +1502,17 @@ void nsBlockFrame::Reflow(nsPresContext* aPresContext, ReflowOutput& aMetrics,
     nsSize containerSize = aMetrics.PhysicalSize();
     nscoord deltaX = containerSize.width - state.ContainerSize().width;
     if (deltaX != 0) {
+      // We compute our lines and markers' overflow areas later in
+      // ComputeOverflowAreas(), so we don't need to adjust their overflow areas
+      // here.
       const nsPoint physicalDelta(deltaX, 0);
       for (auto& line : Lines()) {
         UpdateLineContainerSize(&line, containerSize);
       }
+      fcBounds.Clear();
       for (nsIFrame* f : mFloats) {
         f->MovePositionBy(physicalDelta);
+        ConsiderChildOverflow(fcBounds, f);
       }
       nsFrameList* markerList = GetOutsideMarkerList();
       if (markerList) {
@@ -1518,8 +1521,10 @@ void nsBlockFrame::Reflow(nsPresContext* aPresContext, ReflowOutput& aMetrics,
         }
       }
       if (nsFrameList* overflowContainers = GetOverflowContainers()) {
+        ocBounds.Clear();
         for (nsIFrame* f : *overflowContainers) {
           f->MovePositionBy(physicalDelta);
+          ConsiderChildOverflow(ocBounds, f);
         }
       }
     }
@@ -1879,8 +1884,8 @@ void nsBlockFrame::ComputeFinalSize(const ReflowInput& aReflowInput,
   }
 
   if (NS_UNCONSTRAINEDSIZE != aReflowInput.ComputedBSize()) {
-    // Note: We don't use blockEndEdgeOfChildren because it inclues the previous
-    // margin.
+    // Note: We don't use blockEndEdgeOfChildren because it includes the
+    // previous margin.
     nscoord contentBSize = aState.mBCoord + nonCarriedOutBDirMargin;
     finalSize.BSize(wm) =
         ComputeFinalBSize(aReflowInput, aState.mReflowStatus, contentBSize,
@@ -3769,9 +3774,12 @@ void nsBlockFrame::ReflowBlockFrame(BlockReflowInput& aState,
       // input for ColumnSet so that ColumnSet can use it to compute its max
       // column block size.
       if (frame->IsColumnSetFrame()) {
-        if (availSize.BSize(wm) != NS_UNCONSTRAINEDSIZE) {
+        if (availSize.BSize(wm) != NS_UNCONSTRAINEDSIZE &&
+            StyleBorder()->mBoxDecorationBreak ==
+                StyleBoxDecorationBreak::Clone) {
           // If the available size is constrained, we need to subtract
-          // ColumnSetWrapper's block-end border and padding.
+          // ColumnSetWrapper's block-end border and padding, if we know we're
+          // going to use it.
           availSize.BSize(wm) -= aState.BorderPadding().BEnd(wm);
         }
 
@@ -6681,8 +6689,7 @@ StyleClear nsBlockFrame::FindTrailingClear() {
 }
 
 void nsBlockFrame::ReflowPushedFloats(BlockReflowInput& aState,
-                                      OverflowAreas& aOverflowAreas,
-                                      nsReflowStatus& aStatus) {
+                                      OverflowAreas& aOverflowAreas) {
   // Pushed floats live at the start of our float list; see comment
   // above nsBlockFrame::DrainPushedFloats.
   nsIFrame* f = mFloats.FirstChild();
@@ -7665,13 +7672,12 @@ nscoord nsBlockFrame::ComputeFinalBSize(const ReflowInput& aReflowInput,
   NS_ASSERTION(!(IsTrueOverflowContainer() && computedBSizeLeftOver),
                "overflow container must not have computedBSizeLeftOver");
 
-  const nsReflowStatus statusFromChildren = aStatus;
   const nscoord availBSize = aReflowInput.AvailableBSize();
   nscoord finalBSize = NSCoordSaturatingAdd(
       NSCoordSaturatingAdd(aBorderPadding.BStart(wm), computedBSizeLeftOver),
       aBorderPadding.BEnd(wm));
 
-  if (statusFromChildren.IsIncomplete() && finalBSize <= availBSize) {
+  if (aStatus.IsIncomplete() && finalBSize <= availBSize) {
     // We used up all of our element's remaining computed block-size on this
     // page/column, but our children are incomplete. Set aStatus to
     // overflow-incomplete.
@@ -7694,7 +7700,7 @@ nscoord nsBlockFrame::ComputeFinalBSize(const ReflowInput& aReflowInput,
     return std::min(finalBSize, aBEndEdgeOfChildren);
   }
 
-  if (statusFromChildren.IsComplete()) {
+  if (aStatus.IsComplete()) {
     if (computedBSizeLeftOver > 0 && NS_UNCONSTRAINEDSIZE != availBSize &&
         finalBSize > availBSize) {
       if (ShouldAvoidBreakInside(aReflowInput)) {

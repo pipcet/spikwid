@@ -235,6 +235,13 @@ function waitForFrame() {
   });
 }
 
+// Return a promise that is resolved on the next MozAfterPaint event
+function promiseAfterPaint() {
+  return new Promise(resolve => {
+    window.addEventListener("MozAfterPaint", resolve, { once: true });
+  });
+}
+
 function promiseApzRepaintsFlushed(aWindow = window) {
   return new Promise(function(resolve, reject) {
     var repaintDone = function() {
@@ -669,26 +676,6 @@ function runContinuation(testFunction) {
         );
       }
     });
-  };
-}
-
-// Same as runContinuation, except it takes an async generator, and doesn't
-// invoke it with any callback, since the generator doesn't need one.
-function runAsyncContinuation(testFunction) {
-  return async function() {
-    var asyncContinuation = testFunction();
-    try {
-      var ret = await asyncContinuation.next();
-      while (!ret.done) {
-        ret = await asyncContinuation.next();
-      }
-    } catch (ex) {
-      SimpleTest.ok(
-        false,
-        "APZ async test continuation failed with exception: " + ex
-      );
-      throw ex;
-    }
   };
 }
 

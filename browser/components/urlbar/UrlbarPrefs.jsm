@@ -91,11 +91,18 @@ const PREF_URLBAR_DEFAULTS = new Map([
   // Whether we style the search mode indicator's close button on hover.
   ["experimental.searchModeIndicatorHover", false],
 
+  // When we send events to extensions, we wait this amount of time in
+  // milliseconds for them to respond before timing out.
+  ["extension.timeout", 400],
+
   // When true, `javascript:` URLs are not included in search results.
   ["filter.javascript", true],
 
   // Applies URL highlighting and other styling to the text in the urlbar input.
   ["formatting.enabled", true],
+
+  // Whether during IME composition the results panel should be closed.
+  ["imeCompositionClosesPanel", true],
 
   // Controls the composition of search results.
   ["matchBuckets", "suggestion:4,general:Infinity"],
@@ -139,20 +146,22 @@ const PREF_URLBAR_DEFAULTS = new Map([
   // Whether speculative connections should be enabled.
   ["speculativeConnect.enabled", true],
 
-  // Results will include the user's bookmarks when this is true.
+  // Whether results will include the user's bookmarks.
   ["suggest.bookmark", true],
 
-  // Results will include the user's history when this is true.
+  // Whether results will include the user's history.
   ["suggest.history", true],
 
-  // Results will include switch-to-tab results when this is true.
+  // Whether results will include switch-to-tab results.
   ["suggest.openpage", true],
 
-  // Results will include search suggestions when this is true.
+  // Whether results will include search suggestions.
   ["suggest.searches", false],
 
-  // Results will include Top Sites and the view will open on focus when this
-  // is true.
+  // Whether results will include search engines (e.g. tab-to-search).
+  ["suggest.engines", true],
+
+  // Whether results will include top sites and the view will open on focus.
   ["suggest.topsites", true],
 
   // When using switch to tabs, if set to true this will move the tab into the
@@ -201,10 +210,6 @@ const PREF_URLBAR_DEFAULTS = new Map([
   // be restyled and deduped against form history. This only happens when
   // search mode is active.
   ["update2.restyleBrowsingHistoryAsSearch", true],
-
-  // Whether we display a tab-to-complete result when the user types an engine
-  // name.
-  ["update2.tabToComplete", true],
 ]);
 const PREF_OTHER_DEFAULTS = new Map([
   ["keyword.enabled", true],

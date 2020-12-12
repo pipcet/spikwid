@@ -129,6 +129,10 @@ window.addEventListener("AboutLoginsChromeToContent", event => {
 });
 
 window.addEventListener("AboutLoginsRemoveAllLoginsDialog", () => {
+  let loginItem = document.querySelector("login-item");
+  if (loginItem.dataset.editing) {
+    loginItem._toggleEditing();
+  }
   let options = {};
   if (fxaLoggedIn && passwordSyncEnabled) {
     options.title = "about-logins-confirm-remove-all-sync-dialog-title";
@@ -140,7 +144,7 @@ window.addEventListener("AboutLoginsRemoveAllLoginsDialog", () => {
   options.confirmCheckboxLabel =
     "about-logins-confirm-remove-all-dialog-checkbox-label";
   options.confirmButtonLabel =
-    "about-logins-confirm-remove-all-dialog-confirm-button";
+    "about-logins-confirm-remove-all-dialog-confirm-button-label";
   options.count = numberOfLogins;
 
   let dialog = document.querySelector("remove-logins-dialog");
@@ -148,6 +152,7 @@ window.addEventListener("AboutLoginsRemoveAllLoginsDialog", () => {
   try {
     dialogPromise.then(
       () => {
+        window.document.documentElement.classList.remove("login-selected");
         let removeAllEvt = new CustomEvent("AboutLoginsRemoveAllLogins", {
           bubbles: true,
         });

@@ -33,6 +33,7 @@
 #include "mozilla/PresShell.h"
 #include "mozilla/ResultExtensions.h"
 #include "mozilla/SchedulerGroup.h"
+#include "mozilla/ScopeExit.h"
 #include "mozilla/ScrollTypes.h"
 #include "mozilla/Services.h"
 #include "mozilla/StaticPrefs_browser.h"
@@ -350,7 +351,7 @@ static bool IsUrgentStart(BrowsingContext* aBrowsingContext,
     return true;
   }
 
-  return aBrowsingContext->GetIsActive();
+  return aBrowsingContext->IsActive();
 }
 
 nsDocShell::nsDocShell(BrowsingContext* aBrowsingContext,
@@ -1217,7 +1218,7 @@ bool nsDocShell::MaybeInitTiming() {
   }
 
   mTiming->NotifyNavigationStart(
-      mBrowsingContext->GetIsActive()
+      mBrowsingContext->IsActive()
           ? nsDOMNavigationTiming::DocShellState::eActive
           : nsDOMNavigationTiming::DocShellState::eInactive);
 
@@ -2585,9 +2586,6 @@ nsresult nsDocShell::SetDocLoaderParent(nsDocLoader* aParent) {
     if (mAllowWindowControl &&
         NS_SUCCEEDED(parentAsDocShell->GetAllowWindowControl(&value))) {
       SetAllowWindowControl(value);
-    }
-    if (NS_SUCCEEDED(parentAsDocShell->GetIsActive(&value))) {
-      SetIsActive(value);
     }
     if (NS_FAILED(parentAsDocShell->GetAllowDNSPrefetch(&value))) {
       value = false;
@@ -4775,28 +4773,21 @@ nsDocShell::GetIsOffScreenBrowser(bool* aIsOffScreen) {
   return NS_OK;
 }
 
-NS_IMETHODIMP
-nsDocShell::SetIsActive(bool aIsActive) {
-  // Keep track ourselves.
-  // Changing the activeness on a discarded browsing context has no effect.
-  Unused << mBrowsingContext->SetIsActive(aIsActive);
-
-  // Tell the PresShell about it.
+void nsDocShell::ActivenessMaybeChanged() {
+  bool isActive = mBrowsingContext->IsActive();
   if (RefPtr<PresShell> presShell = GetPresShell()) {
-    presShell->SetIsActive(aIsActive);
+    presShell->SetIsActive(isActive);
   }
 
   // Tell the window about it
   if (mScriptGlobal) {
-    mScriptGlobal->SetIsBackground(!aIsActive);
+    mScriptGlobal->SetIsBackground(!isActive);
     if (RefPtr<Document> doc = mScriptGlobal->GetExtantDoc()) {
       // Update orientation when the top-level browsing context becomes active.
-      if (aIsActive) {
-        if (mBrowsingContext->IsTop()) {
-          // We only care about the top-level browsing context.
-          uint16_t orientation = mBrowsingContext->GetOrientationLock();
-          ScreenOrientation::UpdateActiveOrientationLock(orientation);
-        }
+      if (isActive && mBrowsingContext->IsTop()) {
+        // We only care about the top-level browsing context.
+        uint16_t orientation = mBrowsingContext->GetOrientationLock();
+        ScreenOrientation::UpdateActiveOrientationLock(orientation);
       }
 
       doc->PostVisibilityUpdateEvent();
@@ -4812,37 +4803,18 @@ nsDocShell::SetIsActive(bool aIsActive) {
   }
   if (timing) {
     timing->NotifyDocShellStateChanged(
-        aIsActive ? nsDOMNavigationTiming::DocShellState::eActive
-                  : nsDOMNavigationTiming::DocShellState::eInactive);
-  }
-
-  // Recursively tell all of our children, but don't tell <iframe mozbrowser>
-  // children; they handle their state separately.
-  for (auto* child : mChildList.ForwardRange()) {
-    nsCOMPtr<nsIDocShell> docshell = do_QueryObject(child);
-    if (!docshell) {
-      continue;
-    }
-
-    docshell->SetIsActive(aIsActive);
+        isActive ? nsDOMNavigationTiming::DocShellState::eActive
+                 : nsDOMNavigationTiming::DocShellState::eInactive);
   }
 
   // Restart or stop meta refresh timers if necessary
   if (mDisableMetaRefreshWhenInactive) {
-    if (mBrowsingContext->GetIsActive()) {
+    if (isActive) {
       ResumeRefreshURIs();
     } else {
       SuspendRefreshURIs();
     }
   }
-
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsDocShell::GetIsActive(bool* aIsActive) {
-  *aIsActive = mBrowsingContext->GetIsActive();
-  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -5109,7 +5081,7 @@ nsDocShell::RefreshURI(nsIURI* aURI, nsIPrincipal* aPrincipal, int32_t aDelay,
   }
 
   if (busyFlags & BUSY_FLAGS_BUSY ||
-      (!mBrowsingContext->GetIsActive() && mDisableMetaRefreshWhenInactive)) {
+      (!mBrowsingContext->IsActive() && mDisableMetaRefreshWhenInactive)) {
     // We don't  want to create the timer right now. Instead queue up the
     // request and trigger the timer in EndPageLoad() or whenever we become
     // active.
@@ -6450,7 +6422,7 @@ nsresult nsDocShell::EndPageLoad(nsIWebProgress* aProgress,
 
   // if there's a refresh header in the channel, this method
   // will set it up for us.
-  if (mBrowsingContext->GetIsActive() || !mDisableMetaRefreshWhenInactive)
+  if (mBrowsingContext->IsActive() || !mDisableMetaRefreshWhenInactive)
     RefreshURIFromQueue();
 
   // Test whether this is the top frame or a subframe
@@ -8251,14 +8223,11 @@ nsresult nsDocShell::CheckLoadingPermissions() {
 //*****************************************************************************
 
 void nsDocShell::CopyFavicon(nsIURI* aOldURI, nsIURI* aNewURI,
-                             nsIPrincipal* aLoadingPrincipal,
                              bool aInPrivateBrowsing) {
   if (XRE_IsContentProcess()) {
     dom::ContentChild* contentChild = dom::ContentChild::GetSingleton();
     if (contentChild) {
-      contentChild->SendCopyFavicon(aOldURI, aNewURI,
-                                    IPC::Principal(aLoadingPrincipal),
-                                    aInPrivateBrowsing);
+      contentChild->SendCopyFavicon(aOldURI, aNewURI, aInPrivateBrowsing);
     }
     return;
   }
@@ -8974,8 +8943,7 @@ nsresult nsDocShell::HandleSameDocumentNavigation(
 
   // Inform the favicon service that the favicon for oldURI also
   // applies to aLoadState->URI().
-  CopyFavicon(currentURI, aLoadState->URI(), doc->NodePrincipal(),
-              UsePrivateBrowsing());
+  CopyFavicon(currentURI, aLoadState->URI(), UsePrivateBrowsing());
 
   RefPtr<nsGlobalWindowOuter> scriptGlobal = mScriptGlobal;
   RefPtr<nsGlobalWindowInner> win =
@@ -9269,7 +9237,7 @@ nsresult nsDocShell::InternalLoad(nsDocShellLoadState* aLoadState,
     MOZ_ASSERT(mBrowsingContext->IsTop());
     MOZ_ALWAYS_SUCCEEDS(
         mBrowsingContext->SetOrientationLock(hal::eScreenOrientation_None));
-    if (mBrowsingContext->GetIsActive()) {
+    if (mBrowsingContext->IsActive()) {
       ScreenOrientation::UpdateActiveOrientationLock(
           hal::eScreenOrientation_None);
     }
@@ -9938,33 +9906,60 @@ nsresult nsDocShell::DoURILoad(nsDocShellLoadState* aLoadState,
                           nsIProtocolHandler::URI_DOES_NOT_RETURN_DATA,
                           &doesNotReturnData);
       if (doesNotReturnData) {
-        bool popupBlocked = true;
+        WindowContext* parentContext =
+            mBrowsingContext->GetParentWindowContext();
+        MOZ_ASSERT(parentContext);
+        const bool popupBlocked = [&] {
+          const bool active = mBrowsingContext->IsActive();
 
-        // Let's consider external protocols as popups and let's check if the
-        // page is allowed to open them without abuse regardless of allowed
-        // events
-        if (PopupBlocker::GetPopupControlState() <= PopupBlocker::openBlocked) {
-          // This use-case of GetFrameElementInternal is fission safe,
-          // because PopupBlocker::TryUsePopupOpeningToken only uses
-          // the principal if it is the system principal, otherwise it
-          // only considers the popup token.
-          nsCOMPtr<nsINode> loadingNode =
-              mScriptGlobal->GetFrameElementInternal();
-          popupBlocked = !PopupBlocker::TryUsePopupOpeningToken(
-              loadingNode ? loadingNode->NodePrincipal() : nullptr);
-        } else if (mBrowsingContext->GetIsActive() &&
-                   PopupBlocker::ConsumeTimerTokenForExternalProtocolIframe()) {
-          popupBlocked = false;
-        } else {
-          // Check if the parent context of the frame allows popups.
-          WindowContext* parentContext =
-              mBrowsingContext->GetParentWindowContext();
-          MOZ_ASSERT(parentContext);
-          popupBlocked = !parentContext->CanShowPopup();
-        }
+          // For same-origin-with-top windows, we grant a single free popup
+          // without user activation, see bug 1680721.
+          //
+          // We consume the flag now even if there's no user activation.
+          const bool hasFreePass = [&] {
+            if (!active || !parentContext->SameOriginWithTop()) {
+              return false;
+            }
+            nsGlobalWindowInner* win =
+                parentContext->TopWindowContext()->GetInnerWindow();
+            return win && win->TryOpenExternalProtocolIframe();
+          }();
+
+          if (parentContext->ConsumeTransientUserGestureActivation()) {
+            // If the user has interacted with the page, consume it.
+            return false;
+          }
+
+          // TODO(emilio): Can we remove this check? It seems like what prompted
+          // this code (bug 1514547) should be covered by transient user
+          // activation, see bug 1514547.
+          if (active &&
+              PopupBlocker::ConsumeTimerTokenForExternalProtocolIframe()) {
+            return false;
+          }
+
+          if (parentContext->CanShowPopup()) {
+            return false;
+          }
+
+          if (hasFreePass) {
+            return false;
+          }
+
+          return true;
+        }();
 
         // No error must be returned when iframes are blocked.
         if (popupBlocked) {
+          nsAutoString message;
+          nsresult rv = nsContentUtils::GetLocalizedString(
+              nsContentUtils::eDOM_PROPERTIES,
+              "ExternalProtocolFrameBlockedNoUserActivation", message);
+          if (NS_SUCCEEDED(rv)) {
+            nsContentUtils::ReportToConsoleByWindowID(
+                message, nsIScriptError::warningFlag, "DOM"_ns,
+                parentContext->InnerWindowId());
+          }
           return NS_OK;
         }
       }
@@ -11245,8 +11240,7 @@ nsresult nsDocShell::UpdateURLAndHistory(Document* aDocument, nsIURI* aNewURI,
 
     // Inform the favicon service that our old favicon applies to this new
     // URI.
-    CopyFavicon(aCurrentURI, aNewURI, aDocument->NodePrincipal(),
-                UsePrivateBrowsing());
+    CopyFavicon(aCurrentURI, aNewURI, UsePrivateBrowsing());
   } else {
     FireDummyOnLocationChange();
   }

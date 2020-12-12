@@ -20,6 +20,7 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   AddonManager: "resource://gre/modules/AddonManager.jsm",
   AMTelemetry: "resource://gre/modules/AddonManager.jsm",
   NewTabPagePreloading: "resource:///modules/NewTabPagePreloading.jsm",
+  BrowserSearchTelemetry: "resource:///modules/BrowserSearchTelemetry.jsm",
   BrowserUsageTelemetry: "resource:///modules/BrowserUsageTelemetry.jsm",
   BrowserUtils: "resource://gre/modules/BrowserUtils.jsm",
   BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.jsm",
@@ -89,6 +90,7 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   WebNavigationFrames: "resource://gre/modules/WebNavigationFrames.jsm",
   fxAccounts: "resource://gre/modules/FxAccounts.jsm",
   webrtcUI: "resource:///modules/webrtcUI.jsm",
+  WebsiteFilter: "resource:///modules/policies/WebsiteFilter.jsm",
   ZoomUI: "resource:///modules/ZoomUI.jsm",
 });
 
@@ -550,6 +552,16 @@ XPCOMUtils.defineLazyPreferenceGetter(
   "gAddonAbuseReportEnabled",
   "extensions.abuseReport.enabled",
   false
+);
+
+XPCOMUtils.defineLazyPreferenceGetter(
+  this,
+  "gProton",
+  "browser.proton.enabled",
+  false,
+  (pref, oldValue, newValue) => {
+    document.documentElement.toggleAttribute("proton", newValue);
+  }
 );
 
 customElements.setElementCreationCallback("translation-notification", () => {
@@ -1697,6 +1709,8 @@ var gBrowserInit = {
     ) {
       document.documentElement.setAttribute("icon", "main-window");
     }
+
+    document.documentElement.toggleAttribute("proton", gProton);
 
     // Call this after we set attributes that might change toolbars' computed
     // text color.
@@ -4411,7 +4425,9 @@ const BrowserSearch = {
       csp
     );
     if (engine) {
-      BrowserSearch.recordSearchInTelemetry(engine, "contextmenu", { url });
+      BrowserSearchTelemetry.recordSearch(gBrowser, engine, "contextmenu", {
+        url,
+      });
     }
   },
 
@@ -4428,7 +4444,7 @@ const BrowserSearch = {
       csp
     );
     if (engine) {
-      BrowserSearch.recordSearchInTelemetry(engine, "system", { url });
+      BrowserSearchTelemetry.recordSearch(gBrowser, engine, "system", { url });
     }
   },
 
@@ -4447,9 +4463,14 @@ const BrowserSearch = {
       tab
     );
 
-    BrowserSearch.recordSearchInTelemetry(result.engine, "webextension", {
-      url: result.url,
-    });
+    BrowserSearchTelemetry.recordSearch(
+      gBrowser,
+      result.engine,
+      "webextension",
+      {
+        url: result.url,
+      }
+    );
   },
 
   pasteAndSearch(event) {
@@ -4475,53 +4496,6 @@ const BrowserSearch = {
     );
     var where = newWindowPref == 3 ? "tab" : "window";
     openTrustedLinkIn(this.searchEnginesURL, where);
-  },
-
-  /**
-   * Helper to record a search with Telemetry.
-   *
-   * Telemetry records only search counts and nothing pertaining to the search itself.
-   *
-   * @param engine
-   *        (nsISearchEngine) The engine handling the search.
-   * @param source
-   *        (string) Where the search originated from. See BrowserUsageTelemetry for
-   *        allowed values.
-   * @param details [optional]
-   *        An optional parameter passed to |BrowserUsageTelemetry.recordSearch|.
-   *        See its documentation for allowed options.
-   *        Additionally, if the search was a suggested search, |details.selection|
-   *        indicates where the item was in the suggestion list and how the user
-   *        selected it: {selection: {index: The selected index, kind: "key" or "mouse"}}
-   */
-  recordSearchInTelemetry(engine, source, details = {}) {
-    try {
-      BrowserUsageTelemetry.recordSearch(gBrowser, engine, source, details);
-    } catch (ex) {
-      Cu.reportError(ex);
-    }
-  },
-
-  /**
-   * Helper to record a one-off search with Telemetry.
-   *
-   * Telemetry records only search counts and nothing pertaining to the search itself.
-   *
-   * @param engine
-   *        (nsISearchEngine) The engine handling the search.
-   * @param source
-   *        (string) Where the search originated from. See BrowserUsageTelemetry for
-   *        allowed values.
-   * @param type
-   *        (string) Indicates how the user selected the search item.
-   */
-  recordOneoffSearchInTelemetry(engine, source, type) {
-    try {
-      const details = { type, isOneOff: true };
-      BrowserUsageTelemetry.recordSearch(gBrowser, engine, source, details);
-    } catch (ex) {
-      Cu.reportError(ex);
-    }
   },
 };
 
@@ -6308,15 +6282,6 @@ function onViewToolbarsPopupShowing(aEvent, aInsertPoint) {
     if (toolbar.id == "PersonalToolbar" && gBookmarksToolbar2h2020) {
       let menu = BookmarkingUI.buildBookmarksToolbarSubmenu(toolbar);
       popup.insertBefore(menu, firstMenuItem);
-
-      // Insert Show Otherbookmarks menu item.
-      let otherBookmarksMenuItem = BookmarkingUI.buildShowOtherBookmarksMenuItem();
-
-      if (!otherBookmarksMenuItem) {
-        continue;
-      }
-
-      popup.insertBefore(otherBookmarksMenuItem, menu.nextElementSibling);
     } else {
       let menuItem = document.createXULElement("menuitem");
       menuItem.setAttribute("id", "toggle_" + toolbar.id);
@@ -6966,6 +6931,7 @@ function handleLinkClick(event, href, linkNode) {
       true,
       true,
       referrerInfo,
+      doc.cookieJarSettings,
       doc
     );
     event.preventDefault();
@@ -7324,31 +7290,6 @@ var gPageStyleMenu = {
     sheetData.filteredStyleSheets.push(...styleSheets.filteredStyleSheets);
     sheetData.preferredStyleSheetSet =
       sheetData.preferredStyleSheetSet || styleSheets.preferredStyleSheetSet;
-  },
-
-  /**
-   * Return an array of Objects representing stylesheets in a
-   * browser. Note that the pageshow event needs to fire in content
-   * before this information will be available.
-   *
-   * @param browser (optional)
-   *        The <xul:browser> to search for stylesheets. If omitted, this
-   *        defaults to the currently selected tab's browser.
-   * @returns Array
-   *        An Array of Objects representing stylesheets in the browser.
-   *        See the documentation for gPageStyleMenu for a description
-   *        of the Object structure.
-   */
-  getBrowserStyleSheets(browser) {
-    if (!browser) {
-      browser = gBrowser.selectedBrowser;
-    }
-
-    let data = this._pageStyleSheets.get(browser.permanentKey);
-    if (!data) {
-      return [];
-    }
-    return data.filteredStyleSheets;
   },
 
   clearBrowserStyleSheets(permanentKey) {

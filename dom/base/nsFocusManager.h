@@ -181,9 +181,6 @@ class nsFocusManager final : public nsIFocusManager,
   };
   static mozilla::dom::Element* GetFocusedDescendant(
       nsPIDOMWindowOuter* aWindow, SearchRange aSearchRange,
-      bool* aFocusIsOutOfProcess, nsPIDOMWindowOuter** aFocusedWindow);
-  static mozilla::dom::Element* GetFocusedDescendant(
-      nsPIDOMWindowOuter* aWindow, SearchRange aSearchRange,
       nsPIDOMWindowOuter** aFocusedWindow);
 
   /**
@@ -210,9 +207,9 @@ class nsFocusManager final : public nsIFocusManager,
   /**
    * Setter for focusedWindow with CallerType
    */
-  nsresult SetFocusedWindowWithCallerType(mozIDOMWindowProxy* aWindowToFocus,
-                                          mozilla::dom::CallerType aCallerType,
-                                          uint64_t aActionId);
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY nsresult SetFocusedWindowWithCallerType(
+      mozIDOMWindowProxy* aWindowToFocus, mozilla::dom::CallerType aCallerType,
+      uint64_t aActionId);
 
   /**
    * Given an element, which must be the focused element, activate the remote
@@ -260,7 +257,8 @@ class nsFocusManager final : public nsIFocusManager,
    * normal focus except that the widget focus is not changed. Updating the
    * widget focus state is the responsibility of the caller.
    */
-  nsresult FocusPlugin(mozilla::dom::Element* aPlugin);
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY nsresult
+  FocusPlugin(mozilla::dom::Element* aPlugin);
 
   static uint32_t FocusOptionsToFocusManagerFlags(
       const mozilla::dom::FocusOptions& aOptions);
@@ -327,10 +325,9 @@ class nsFocusManager final : public nsIFocusManager,
    * All actual focus changes must use this method to do so. (as opposed
    * to those that update the focus in an inactive window for instance).
    */
-  MOZ_CAN_RUN_SCRIPT_BOUNDARY
-  void SetFocusInner(mozilla::dom::Element* aNewContent, int32_t aFlags,
-                     bool aFocusChanged, bool aAdjustWidget,
-                     uint64_t aActionId);
+  MOZ_CAN_RUN_SCRIPT void SetFocusInner(mozilla::dom::Element* aNewContent,
+                                        int32_t aFlags, bool aFocusChanged,
+                                        bool aAdjustWidget, uint64_t aActionId);
 
   /**
    * Returns true if aPossibleAncestor is the same as aWindow or an
@@ -460,8 +457,7 @@ class nsFocusManager final : public nsIFocusManager,
   MOZ_CAN_RUN_SCRIPT_BOUNDARY
   void Focus(nsPIDOMWindowOuter* aWindow, mozilla::dom::Element* aContent,
              uint32_t aFlags, bool aIsNewDocument, bool aFocusChanged,
-             bool aWindowRaised, bool aAdjustWidget,
-             bool aFocusInOtherContentProcess, uint64_t aActionId,
+             bool aWindowRaised, bool aAdjustWidget, uint64_t aActionId,
              const mozilla::Maybe<BlurredElementInfo>& = mozilla::Nothing());
 
   /**

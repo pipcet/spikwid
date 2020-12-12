@@ -690,6 +690,92 @@ void js::BaseScript::swapData(UniquePtr<PrivateScriptData>& other) {
   other.reset(tmp);
 }
 
+js::Scope* js::BaseScript::enclosingScope() const {
+  MOZ_ASSERT(!warmUpData_.isEnclosingScript(),
+             "Enclosing scope is not computed yet");
+
+  if (warmUpData_.isEnclosingScope()) {
+    return warmUpData_.toEnclosingScope();
+  }
+
+  MOZ_ASSERT(data_, "Script doesn't seem to be compiled");
+
+  return gcthings()[js::GCThingIndex::outermostScopeIndex()]
+      .as<Scope>()
+      .enclosing();
+}
+
+size_t JSScript::numAlwaysLiveFixedSlots() const {
+  if (bodyScope()->is<js::FunctionScope>()) {
+    return bodyScope()->as<js::FunctionScope>().nextFrameSlot();
+  }
+  if (bodyScope()->is<js::ModuleScope>()) {
+    return bodyScope()->as<js::ModuleScope>().nextFrameSlot();
+  }
+  return 0;
+}
+
+unsigned JSScript::numArgs() const {
+  if (bodyScope()->is<js::FunctionScope>()) {
+    return bodyScope()->as<js::FunctionScope>().numPositionalFormalParameters();
+  }
+  return 0;
+}
+
+bool JSScript::functionHasParameterExprs() const {
+  // Only functions have parameters.
+  js::Scope* scope = bodyScope();
+  if (!scope->is<js::FunctionScope>()) {
+    return false;
+  }
+  return scope->as<js::FunctionScope>().hasParameterExprs();
+}
+
+js::ModuleObject* JSScript::module() const {
+  if (bodyScope()->is<js::ModuleScope>()) {
+    return bodyScope()->as<js::ModuleScope>().module();
+  }
+  return nullptr;
+}
+
+bool JSScript::isGlobalCode() const {
+  return bodyScope()->is<js::GlobalScope>();
+}
+
+js::VarScope* JSScript::functionExtraBodyVarScope() const {
+  MOZ_ASSERT(functionHasExtraBodyVarScope());
+  for (JS::GCCellPtr gcThing : gcthings()) {
+    if (!gcThing.is<js::Scope>()) {
+      continue;
+    }
+    js::Scope* scope = &gcThing.as<js::Scope>();
+    if (scope->kind() == js::ScopeKind::FunctionBodyVar) {
+      return &scope->as<js::VarScope>();
+    }
+  }
+  MOZ_CRASH("Function extra body var scope not found");
+}
+
+bool JSScript::needsBodyEnvironment() const {
+  for (JS::GCCellPtr gcThing : gcthings()) {
+    if (!gcThing.is<js::Scope>()) {
+      continue;
+    }
+    js::Scope* scope = &gcThing.as<js::Scope>();
+    if (ScopeKindIsInBody(scope->kind()) && scope->hasEnvironment()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool JSScript::isDirectEvalInFunction() const {
+  if (!isForEval()) {
+    return false;
+  }
+  return bodyScope()->hasOnChain(js::ScopeKind::Function);
+}
+
 template <XDRMode mode>
 /* static */
 XDRResult js::PrivateScriptData::XDR(XDRState<mode>* xdr, HandleScript script,
@@ -2726,7 +2812,7 @@ bool ScriptSource::xdrEncodeStencils(
   }
 
   for (auto& delazification : compilationInfos.delazifications) {
-    if (!xdrEncodeFunctionStencilWith(cx, delazification.stencil, xdrEncoder)) {
+    if (!xdrEncodeFunctionStencilWith(cx, delazification, xdrEncoder)) {
       return false;
     }
   }
@@ -3631,7 +3717,8 @@ PrivateScriptData* PrivateScriptData::new_(JSContext* cx, uint32_t ngcthings) {
 /* static */
 bool PrivateScriptData::InitFromStencil(
     JSContext* cx, js::HandleScript script,
-    js::frontend::CompilationInfo& compilationInfo,
+    js::frontend::CompilationInput& input,
+    js::frontend::CompilationStencil& stencil,
     js::frontend::CompilationGCOutput& gcOutput,
     const frontend::ScriptStencil& scriptStencil) {
   uint32_t ngcthings = scriptStencil.gcThings.size();
@@ -3645,7 +3732,7 @@ bool PrivateScriptData::InitFromStencil(
 
   js::PrivateScriptData* data = script->data_;
   if (ngcthings) {
-    if (!EmitScriptThingsVector(cx, compilationInfo, gcOutput,
+    if (!EmitScriptThingsVector(cx, input, stencil, gcOutput,
                                 scriptStencil.gcThings, data->gcthings())) {
       return false;
     }
@@ -3726,7 +3813,8 @@ bool JSScript::createPrivateScriptData(JSContext* cx, HandleScript script,
 
 /* static */
 bool JSScript::fullyInitFromStencil(
-    JSContext* cx, frontend::CompilationInfo& compilationInfo,
+    JSContext* cx, js::frontend::CompilationInput& input,
+    js::frontend::CompilationStencil& stencil,
     frontend::CompilationGCOutput& gcOutput, HandleScript script,
     const frontend::ScriptStencil& scriptStencil, HandleFunction fun) {
   MutableScriptFlags lazyMutableFlags;
@@ -3785,7 +3873,7 @@ bool JSScript::fullyInitFromStencil(
   script->resetArgsUsageAnalysis();
 
   // Create and initialize PrivateScriptData
-  if (!PrivateScriptData::InitFromStencil(cx, script, compilationInfo, gcOutput,
+  if (!PrivateScriptData::InitFromStencil(cx, script, input, stencil, gcOutput,
                                           scriptStencil)) {
     return false;
   }
@@ -3828,7 +3916,8 @@ bool JSScript::fullyInitFromStencil(
 }
 
 JSScript* JSScript::fromStencil(JSContext* cx,
-                                frontend::CompilationInfo& compilationInfo,
+                                js::frontend::CompilationInput& input,
+                                js::frontend::CompilationStencil& stencil,
                                 frontend::CompilationGCOutput& gcOutput,
                                 const frontend::ScriptStencil& scriptStencil,
                                 HandleFunction fun) {
@@ -3848,8 +3937,8 @@ JSScript* JSScript::fromStencil(JSContext* cx,
     return nullptr;
   }
 
-  if (!fullyInitFromStencil(cx, compilationInfo, gcOutput, script,
-                            scriptStencil, fun)) {
+  if (!fullyInitFromStencil(cx, input, stencil, gcOutput, script, scriptStencil,
+                            fun)) {
     return nullptr;
   }
 
@@ -4862,31 +4951,20 @@ BaseScript* BaseScript::CreateRawLazy(JSContext* cx, uint32_t ngcthings,
 
 void JSScript::updateJitCodeRaw(JSRuntime* rt) {
   MOZ_ASSERT(rt);
-  uint8_t* jitCodeSkipArgCheck;
   if (hasBaselineScript() && baselineScript()->hasPendingIonCompileTask()) {
     MOZ_ASSERT(!isIonCompilingOffThread());
     setJitCodeRaw(rt->jitRuntime()->lazyLinkStub().value);
-    jitCodeSkipArgCheck = jitCodeRaw();
   } else if (hasIonScript()) {
     jit::IonScript* ion = ionScript();
     setJitCodeRaw(ion->method()->raw());
-    jitCodeSkipArgCheck = jitCodeRaw() + ion->getSkipArgCheckEntryOffset();
   } else if (hasBaselineScript()) {
     setJitCodeRaw(baselineScript()->method()->raw());
-    jitCodeSkipArgCheck = jitCodeRaw();
   } else if (hasJitScript() && js::jit::IsBaselineInterpreterEnabled()) {
     setJitCodeRaw(rt->jitRuntime()->baselineInterpreter().codeRaw());
-    jitCodeSkipArgCheck = jitCodeRaw();
   } else {
     setJitCodeRaw(rt->jitRuntime()->interpreterStub().value);
-    jitCodeSkipArgCheck = jitCodeRaw();
   }
   MOZ_ASSERT(jitCodeRaw());
-  MOZ_ASSERT(jitCodeSkipArgCheck);
-
-  if (hasJitScript()) {
-    jitScript()->jitCodeSkipArgCheck_ = jitCodeSkipArgCheck;
-  }
 }
 
 bool JSScript::hasLoops() {

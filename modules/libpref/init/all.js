@@ -172,14 +172,6 @@ pref("security.xfocsp.errorReporting.automatic", false);
 // https://tools.ietf.org/html/rfc7469#section-4.1
 pref("security.cert_pinning.max_max_age_seconds", 5184000);
 
-// security.pki.distrust_ca_policy controls what root program distrust policies
-// are enforced at this time:
-// 0: No distrust policies enforced
-// 1: Symantec roots distrusted for certificates issued after cutoff
-// 2: Symantec roots distrusted regardless of date
-// See https://wiki.mozilla.org/CA/Upcoming_Distrust_Actions for more details.
-pref("security.pki.distrust_ca_policy", 2);
-
 // 0: Disable CRLite entirely
 // 1: Enable and check revocations via CRLite, but only collect telemetry
 // 2: Enable and enforce revocations via CRLite
@@ -908,6 +900,7 @@ pref("nglayout.debug.paint_flashing_chrome", false);
 // URI fixup prefs
 pref("browser.fixup.alternate.enabled", true);
 pref("browser.fixup.alternate.prefix", "www.");
+pref("browser.fixup.alternate.protocol", "https");
 pref("browser.fixup.alternate.suffix", ".com");
 pref("browser.fixup.fallback-to-https", true);
 
@@ -3747,7 +3740,7 @@ pref("browser.formfill.prefixWeight",     5);
 
 // Zoom prefs
 pref("browser.zoom.full", false);
-pref("toolkit.zoomManager.zoomValues", ".3,.5,.67,.8,.9,1,1.1,1.2,1.33,1.5,1.7,2,2.4,3");
+pref("toolkit.zoomManager.zoomValues", ".3,.5,.67,.8,.9,1,1.1,1.2,1.33,1.5,1.7,2,2.4,3,4,5");
 
 //
 // Image-related prefs
@@ -3814,9 +3807,10 @@ pref("network.psl.onUpdate_notify", false);
   pref("gfx.xrender.enabled",false);
   pref("widget.content.gtk-theme-override", "");
   pref("widget.disable-workspace-management", false);
+  pref("widget.titlebar-x11-use-shape-mask", false);
 #endif
 #ifdef MOZ_WAYLAND
-  pref("widget.wayland_vsync.enabled", false);
+  pref("widget.wayland_vsync.enabled", true);
   pref("widget.wayland.use-opaque-region", false);
   pref("widget.use-xdg-desktop-portal", false);
 #endif
@@ -4577,8 +4571,6 @@ pref("devtools.errorconsole.deprecation_warnings", true);
   pref("devtools.debugger.remote-enabled", true, sticky);
 #endif
 
-pref("devtools.debugger.features.watchpoints", true);
-
 // Disable service worker debugging on all channels (see Bug 1651605).
 pref("devtools.debugger.features.windowless-service-workers", false);
 
@@ -4644,3 +4636,8 @@ pref("browser.privatebrowsing.autostart", false);
 //preferred external application for a protocol. If a site doesn't have
 // permission we will show a prompt.
 pref("security.external_protocol_requires_permission", true);
+
+// Whether about:support shows a section "Third-Party Modules" or not
+#ifdef XP_WIN
+  pref("browser.enableAboutThirdParty", false);
+#endif

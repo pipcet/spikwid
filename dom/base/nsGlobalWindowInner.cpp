@@ -116,6 +116,7 @@
 #include "mozilla/dom/EventTarget.h"
 #include "mozilla/dom/Fetch.h"
 #include "mozilla/dom/Gamepad.h"
+#include "mozilla/dom/GamepadHandle.h"
 #include "mozilla/dom/GamepadManager.h"
 #include "mozilla/dom/HashChangeEvent.h"
 #include "mozilla/dom/HashChangeEventBinding.h"
@@ -131,6 +132,7 @@
 #include "mozilla/dom/LocalStorage.h"
 #include "mozilla/dom/LocalStorageCommon.h"
 #include "mozilla/dom/Location.h"
+#include "mozilla/dom/MediaKeys.h"
 #include "mozilla/dom/NavigatorBinding.h"
 #include "mozilla/dom/Nullable.h"
 #include "mozilla/dom/PartitionedLocalStorage.h"
@@ -339,6 +341,7 @@ using namespace mozilla::dom;
 using namespace mozilla::dom::ipc;
 using mozilla::TimeDuration;
 using mozilla::TimeStamp;
+using mozilla::dom::GamepadHandle;
 using mozilla::dom::cache::CacheStorage;
 
 #define FORWARD_TO_OUTER(method, args, err_rval)                     \
@@ -924,6 +927,7 @@ nsGlobalWindowInner::nsGlobalWindowInner(nsGlobalWindowOuter* aOuterWindow,
       mWasCurrentInnerWindow(false),
       mHasSeenGamepadInput(false),
       mHintedWasLoading(false),
+      mHasOpenedExternalProtocolFrame(false),
       mSuspendDepth(0),
       mFreezeDepth(0),
 #ifdef DEBUG
@@ -1225,6 +1229,11 @@ void nsGlobalWindowInner::FreeInnerObjects() {
     mAudioContexts[i]->OnWindowDestroy();
   }
   mAudioContexts.Clear();
+
+  for (MediaKeys* mediaKeys : mMediaKeysInstances) {
+    mediaKeys->OnInnerWindowDestroy();
+  }
+  mMediaKeysInstances.Clear();
 
   DisableGamepadUpdates();
   mHasGamepad = false;
@@ -2625,6 +2634,21 @@ bool nsPIDOMWindowInner::HasActivePeerConnections() {
   MOZ_ASSERT(NS_IsMainThread());
   return mTopInnerWindow ? mTopInnerWindow->mActivePeerConnections
                          : mActivePeerConnections;
+}
+
+void nsPIDOMWindowInner::AddMediaKeysInstance(MediaKeys* aMediaKeys) {
+  MOZ_ASSERT(NS_IsMainThread());
+  mMediaKeysInstances.AppendElement(aMediaKeys);
+}
+
+void nsPIDOMWindowInner::RemoveMediaKeysInstance(MediaKeys* aMediaKeys) {
+  MOZ_ASSERT(NS_IsMainThread());
+  mMediaKeysInstances.RemoveElement(aMediaKeys);
+}
+
+bool nsPIDOMWindowInner::HasActiveMediaKeysInstance() {
+  MOZ_ASSERT(NS_IsMainThread());
+  return !mMediaKeysInstances.IsEmpty();
 }
 
 bool nsPIDOMWindowInner::IsPlayingAudio() {
@@ -4152,6 +4176,12 @@ bool nsGlobalWindowInner::DispatchEvent(Event& aEvent, CallerType aCallerType,
     aRv.Throw(rv);
   }
   return retval;
+}
+
+mozilla::Maybe<mozilla::dom::EventCallbackDebuggerNotificationType>
+nsGlobalWindowInner::GetDebuggerNotificationType() const {
+  return mozilla::Some(
+      mozilla::dom::EventCallbackDebuggerNotificationType::Global);
 }
 
 bool nsGlobalWindowInner::ComputeDefaultWantsUntrusted(ErrorResult& aRv) {
@@ -6535,7 +6565,7 @@ void nsGlobalWindowInner::AddSizeOfIncludingThis(
   }
 }
 
-void nsGlobalWindowInner::AddGamepad(uint32_t aIndex, Gamepad* aGamepad) {
+void nsGlobalWindowInner::AddGamepad(GamepadHandle aHandle, Gamepad* aGamepad) {
   // Create the index we will present to content based on which indices are
   // already taken, as required by the spec.
   // https://w3c.github.io/gamepad/gamepad.html#widl-Gamepad-index
@@ -6545,17 +6575,17 @@ void nsGlobalWindowInner::AddGamepad(uint32_t aIndex, Gamepad* aGamepad) {
   }
   mGamepadIndexSet.Put(index);
   aGamepad->SetIndex(index);
-  mGamepads.Put(aIndex, RefPtr{aGamepad});
+  mGamepads.Put(aHandle, RefPtr{aGamepad});
 }
 
-void nsGlobalWindowInner::RemoveGamepad(uint32_t aIndex) {
+void nsGlobalWindowInner::RemoveGamepad(GamepadHandle aHandle) {
   RefPtr<Gamepad> gamepad;
-  if (!mGamepads.Get(aIndex, getter_AddRefs(gamepad))) {
+  if (!mGamepads.Get(aHandle, getter_AddRefs(gamepad))) {
     return;
   }
   // Free up the index we were using so it can be reused
   mGamepadIndexSet.Remove(gamepad->Index());
-  mGamepads.Remove(aIndex);
+  mGamepads.Remove(aHandle);
 }
 
 void nsGlobalWindowInner::GetGamepads(nsTArray<RefPtr<Gamepad>>& aGamepads) {
@@ -6576,10 +6606,11 @@ void nsGlobalWindowInner::GetGamepads(nsTArray<RefPtr<Gamepad>>& aGamepads) {
   }
 }
 
-already_AddRefed<Gamepad> nsGlobalWindowInner::GetGamepad(uint32_t aIndex) {
+already_AddRefed<Gamepad> nsGlobalWindowInner::GetGamepad(
+    GamepadHandle aHandle) {
   RefPtr<Gamepad> gamepad;
 
-  if (mGamepads.Get(aIndex, getter_AddRefs(gamepad))) {
+  if (mGamepads.Get(aHandle, getter_AddRefs(gamepad))) {
     return gamepad.forget();
   }
 

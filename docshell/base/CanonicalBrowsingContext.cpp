@@ -158,6 +158,7 @@ void CanonicalBrowsingContext::MaybeAddAsProgressListener(
 void CanonicalBrowsingContext::ReplacedBy(
     CanonicalBrowsingContext* aNewContext) {
   MOZ_ASSERT(!aNewContext->EverAttached());
+  MOZ_ASSERT(IsTop() && aNewContext->IsTop());
   if (mStatusFilter) {
     mStatusFilter->RemoveProgressListener(mWebProgress);
     mStatusFilter = nullptr;
@@ -171,6 +172,10 @@ void CanonicalBrowsingContext::ReplacedBy(
     mSessionHistory.swap(aNewContext->mSessionHistory);
     RefPtr<ChildSHistory> childSHistory = ForgetChildSHistory();
     aNewContext->SetChildSHistory(childSHistory);
+  }
+
+  if (mozilla::SessionHistoryInParent()) {
+    BackgroundSessionStorageManager::PropagateManager(Id(), aNewContext->Id());
   }
 
   MOZ_ASSERT(aNewContext->mLoadingEntries.IsEmpty());
@@ -1314,6 +1319,13 @@ CanonicalBrowsingContext::PendingRemotenessChange::~PendingRemotenessChange() {
              "should've already been Cancel() or Complete()-ed");
 }
 
+BrowserParent* CanonicalBrowsingContext::GetBrowserParent() const {
+  if (auto* wg = GetCurrentWindowGlobal()) {
+    return wg->GetBrowserParent();
+  }
+  return nullptr;
+}
+
 RefPtr<CanonicalBrowsingContext::RemotenessPromise>
 CanonicalBrowsingContext::ChangeRemoteness(const nsACString& aRemoteType,
                                            uint64_t aPendingSwitchId,
@@ -1563,6 +1575,12 @@ bool CanonicalBrowsingContext::AttemptSpeculativeLoadInParent(
 
   uint64_t outerWindowId = 0;
   if (!SupportsLoadingInParent(aLoadState, &outerWindowId)) {
+    return false;
+  }
+
+  // Session-history-in-parent implementation relies currently on getting a
+  // round trip through a child process.
+  if (aLoadState->LoadIsFromSessionHistory()) {
     return false;
   }
 

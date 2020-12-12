@@ -124,11 +124,13 @@
 #include "IHistory.h"
 #include "mozilla/dom/WindowGlobalParent.h"
 #include "mozilla/dom/CanonicalBrowsingContext.h"
+#include "GeckoProfiler.h"
 #include "MMPrinter.h"
 #include "SessionStoreFunctions.h"
 #include "mozilla/dom/CrashReport.h"
 #include "nsISecureBrowserUI.h"
 #include "nsIXULRuntime.h"
+#include "VsyncSource.h"
 
 #ifdef XP_WIN
 #  include "mozilla/plugins/PluginWidgetParent.h"
@@ -224,7 +226,7 @@ BrowserParent::BrowserParent(ContentParent* aManager, const TabId& aTabId,
       mCustomCursorHotspotX(0),
       mCustomCursorHotspotY(0),
       mVerifyDropLinks{},
-      mDocShellIsActive(false),
+      mVsyncParent(nullptr),
       mMarkedDestroying(false),
       mIsDestroyed(false),
       mRemoteTargetSetsCursor(false),
@@ -562,6 +564,8 @@ void BrowserParent::SetOwnerElement(Element* aElement) {
   if (!GetBrowserBridgeParent() && mBrowsingContext && mFrameElement) {
     mBrowsingContext->SetEmbedderElement(mFrameElement);
   }
+
+  UpdateVsyncParentVsyncSource();
 
   VisitChildren([aElement](BrowserBridgeParent* aBrowser) {
     if (auto* browserParent = aBrowser->GetBrowserParent()) {
@@ -1078,7 +1082,9 @@ void BrowserParent::UpdateDimensions(const nsIntRect& rect,
   hal::GetCurrentScreenConfiguration(&config);
   hal::ScreenOrientation orientation = config.orientation();
   LayoutDeviceIntPoint clientOffset = GetClientOffset();
-  LayoutDeviceIntPoint chromeOffset = -GetChildProcessOffset();
+  LayoutDeviceIntPoint chromeOffset = !GetBrowserBridgeParent()
+                                          ? -GetChildProcessOffset()
+                                          : LayoutDeviceIntPoint();
 
   if (!mUpdatedDimensions || mOrientation != orientation ||
       mDimensions != size || !mRect.IsEqualEdges(rect) ||
@@ -1346,6 +1352,29 @@ IPCResult BrowserParent::RecvNewWindowGlobal(
   return IPC_OK();
 }
 
+PVsyncParent* BrowserParent::AllocPVsyncParent() {
+  MOZ_ASSERT(!mVsyncParent);
+  mVsyncParent = new VsyncParent();
+  UpdateVsyncParentVsyncSource();
+  return mVsyncParent.get();
+}
+
+bool BrowserParent::DeallocPVsyncParent(PVsyncParent* aActor) {
+  MOZ_ASSERT(aActor);
+  mVsyncParent = nullptr;
+  return true;
+}
+
+void BrowserParent::UpdateVsyncParentVsyncSource() {
+  if (!mVsyncParent) {
+    return;
+  }
+
+  if (nsCOMPtr<nsIWidget> widget = GetWidget()) {
+    mVsyncParent->UpdateVsyncSource(widget->GetVsyncSource());
+  }
+}
+
 void BrowserParent::SendMouseEvent(const nsAString& aType, float aX, float aY,
                                    int32_t aButton, int32_t aClickCount,
                                    int32_t aModifiers) {
@@ -1452,11 +1481,23 @@ void BrowserParent::SendRealMouseEvent(WidgetMouseEvent& aEvent) {
       MOZ_ASSERT(!ret || aEvent.HasBeenPostedToRemoteProcess());
       return;
     }
+
+    if (!aEvent.mFlags.mIsSynthesizedForTests) {
+      DebugOnly<bool> ret =
+          isInputPriorityEventEnabled
+              ? SendRealMouseMoveEvent(aEvent, guid, blockId)
+              : SendNormalPriorityRealMouseMoveEvent(aEvent, guid, blockId);
+      NS_WARNING_ASSERTION(ret, "SendRealMouseMoveEvent() failed");
+      MOZ_ASSERT(!ret || aEvent.HasBeenPostedToRemoteProcess());
+      return;
+    }
+
     DebugOnly<bool> ret =
         isInputPriorityEventEnabled
-            ? SendRealMouseMoveEvent(aEvent, guid, blockId)
-            : SendNormalPriorityRealMouseMoveEvent(aEvent, guid, blockId);
-    NS_WARNING_ASSERTION(ret, "SendRealMouseMoveEvent() failed");
+            ? SendRealMouseMoveEventForTests(aEvent, guid, blockId)
+            : SendNormalPriorityRealMouseMoveEventForTests(aEvent, guid,
+                                                           blockId);
+    NS_WARNING_ASSERTION(ret, "SendRealMouseMoveEventForTests() failed");
     MOZ_ASSERT(!ret || aEvent.HasBeenPostedToRemoteProcess());
     return;
   }
@@ -1989,12 +2030,9 @@ bool BrowserParent::SendHandleTap(TapType aType,
     return false;
   }
   if ((aType == TapType::eSingleTap || aType == TapType::eSecondTap)) {
-    nsFocusManager* fm = nsFocusManager::GetFocusManager();
-    if (fm) {
-      RefPtr<nsFrameLoader> frameLoader = GetFrameLoader();
-      if (frameLoader) {
-        RefPtr<Element> element = frameLoader->GetOwnerContent();
-        if (element) {
+    if (RefPtr<nsFocusManager> fm = nsFocusManager::GetFocusManager()) {
+      if (RefPtr<nsFrameLoader> frameLoader = GetFrameLoader()) {
+        if (RefPtr<Element> element = frameLoader->GetOwnerContent()) {
           fm->SetFocus(element, nsIFocusManager::FLAG_BYMOUSE |
                                     nsIFocusManager::FLAG_BYTOUCH |
                                     nsIFocusManager::FLAG_NOSCROLL);
@@ -2903,7 +2941,7 @@ bool BrowserParent::HandleQueryContentEvent(WidgetQueryContentEvent& aEvent) {
   }
   if (NS_WARN_IF(!mContentCache.HandleQueryContentEvent(
           aEvent, textInputHandlingWidget)) ||
-      NS_WARN_IF(!aEvent.mSucceeded)) {
+      NS_WARN_IF(aEvent.Failed())) {
     return true;
   }
   switch (aEvent.mMessage) {
@@ -2912,10 +2950,10 @@ bool BrowserParent::HandleQueryContentEvent(WidgetQueryContentEvent& aEvent) {
     case eQueryEditorRect: {
       nsCOMPtr<nsIWidget> browserWidget = GetWidget();
       if (browserWidget != textInputHandlingWidget) {
-        aEvent.mReply.mRect += nsLayoutUtils::WidgetToWidgetOffset(
+        aEvent.mReply->mRect += nsLayoutUtils::WidgetToWidgetOffset(
             browserWidget, textInputHandlingWidget);
       }
-      aEvent.mReply.mRect = TransformChildToParent(aEvent.mReply.mRect);
+      aEvent.mReply->mRect = TransformChildToParent(aEvent.mReply->mRect);
       break;
     }
     default:
@@ -3343,29 +3381,8 @@ mozilla::ipc::IPCResult BrowserParent::RecvRespondStartSwipeEvent(
   return IPC_OK();
 }
 
-bool BrowserParent::GetDocShellIsActive() { return mDocShellIsActive; }
-
-void BrowserParent::SetDocShellIsActive(bool isActive) {
-  mDocShellIsActive = isActive;
-  SetRenderLayers(isActive);
-  Unused << SendSetDocShellIsActive(isActive);
-
-  // update active accessible documents on windows
-#if defined(XP_WIN) && defined(ACCESSIBILITY)
-  if (a11y::Compatibility::IsDolphin()) {
-    if (a11y::DocAccessibleParent* tabDoc = GetTopLevelDocAccessible()) {
-      HWND window = tabDoc->GetEmulatedWindowHandle();
-      MOZ_ASSERT(window);
-      if (window) {
-        if (isActive) {
-          a11y::nsWinUtils::ShowNativeWindow(window);
-        } else {
-          a11y::nsWinUtils::HideNativeWindow(window);
-        }
-      }
-    }
-  }
-#endif
+bool BrowserParent::GetDocShellIsActive() {
+  return mBrowsingContext && mBrowsingContext->IsActive();
 }
 
 bool BrowserParent::GetHasPresented() { return mHasPresented; }

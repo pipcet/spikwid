@@ -676,11 +676,6 @@
   value: 500
   mirror: always
 
-- name: apz.relative-update.enabled
-  type: RelaxedAtomicBool
-  value: true
-  mirror: always
-
 #---------------------------------------------------------------------------
 # Prefs starting with "beacon."
 #---------------------------------------------------------------------------
@@ -1590,11 +1585,17 @@
   value: false
   mirror: always
 
-# Any how many seconds we allow external protocol URLs in iframe when not in
+# After how many seconds we allow external protocol URLs in iframe when not in
 # single events
 - name: dom.delay.block_external_protocol_in_iframes
   type: uint32_t
   value: 10   # in seconds
+  mirror: always
+
+# Whether the above pref has any effect at all.
+- name: dom.delay.block_external_protocol_in_iframes.enabled
+  type: bool
+  value: @IS_NOT_NIGHTLY_BUILD@
   mirror: always
 
 # HTML <dialog> element
@@ -2208,6 +2209,11 @@
 - name: dom.media.silence_duration_for_audibility
   type: AtomicFloat
   value: 2.0f
+  mirror: always
+
+- name: dom.menuitem.enabled
+  type: bool
+  value: false
   mirror: always
 
 # Enable meta-viewport support in remote APZ-enabled frames.
@@ -4217,13 +4223,7 @@
 
 - name: gfx.direct3d11.use-double-buffering
   type: RelaxedAtomicBool
-#ifdef XP_WIN
-  # Prefer flipping between two buffers over copying from our back buffer
-  # to the OS.
-  value: @IS_NIGHTLY_BUILD@
-#else
   value: false
-#endif
   mirror: always
 
 - name: gfx.direct3d11.enable-debug-layer
@@ -5081,6 +5081,15 @@
   value: @IS_ANDROID@
   mirror: always
 
+#ifdef XP_WIN
+  # If true, automatically extend selection to cluster boundaries when
+  # TSF/TIP requests to select from/by middle of a cluster.
+-   name: intl.tsf.hack.extend_setting_selection_range_to_cluster_boundaries
+    type: bool
+    value: @IS_NOT_EARLY_BETA_OR_EARLIER@
+    mirror: always
+#endif
+
 # If you use legacy Chinese IME which puts an ideographic space to composition
 # string as placeholder, this pref might be useful.  If this is true and when
 # web contents forcibly commits composition (e.g., moving focus), the
@@ -5146,6 +5155,12 @@
   type: RelaxedAtomicBool
   value: false
   mirror: always
+
+  # Experimental support for Top-level Await in JavaScript.
+- name: javascript.options.experimental.top_level_await
+  type: RelaxedAtomicBool
+  value: false
+  mirror: always
 #endif
 
 # The amount of time we wait between a request to GC (due to leaving a page) and doing the actual GC, in ms.
@@ -5160,7 +5175,8 @@
   value: 10000
   mirror: always
 
-# Duration of the dom events full gc delay, in ms.
+# After doing a zonal GC, wait this much time (in ms) and then do a full GC,
+# unless one is already pending.
 - name: javascript.options.gc_delay.full
   type: uint32_t
   value: 60000
@@ -5579,11 +5595,7 @@
 
 - name: layers.mlgpu.enabled
   type: bool
-#if defined(XP_WIN)
-  value: true
-#else
   value: false
-#endif
   mirror: once
   do_not_use_directly: true
 
@@ -6064,13 +6076,6 @@
   value: false
   mirror: always
 
-# Is support for CSS conic-gradient enabled?
-- name: layout.css.conic-gradient.enabled
-  type: RelaxedAtomicBool
-  value: true
-  mirror: always
-  rust: true
-
 # Should stray control characters be rendered visibly?
 - name: layout.css.control-characters.visible
   type: RelaxedAtomicBool
@@ -6525,7 +6530,7 @@
 
 - name: layout.display-list.improve-fragmentation
   type: RelaxedAtomicBool
-  value: false
+  value: true
   mirror: always
 
 # Are dynamic reflow roots enabled?
@@ -7202,7 +7207,7 @@
 
 - name: media.rdd-retryonfailure.enabled
   type: RelaxedAtomicBool
-  value: @IS_NIGHTLY_BUILD@
+  value: true
   mirror: always
 
 - name: media.rdd-process.startup_timeout_ms
@@ -7221,11 +7226,11 @@
 - name: media.rdd-ffvpx.enabled
   type: RelaxedAtomicBool
 #if defined(XP_WIN)
-  value: @IS_NIGHTLY_BUILD@
+  value: true
 #elif defined(XP_MACOSX)
-  value: @IS_NIGHTLY_BUILD@
+  value: true
 #elif defined(XP_LINUX) && !defined(ANDROID)
-  value: @IS_NIGHTLY_BUILD@
+  value: true
 #else
   value: false
 #endif
@@ -7235,29 +7240,25 @@
 #ifdef MOZ_WMF
 - name: media.rdd-wmf.enabled
   type: RelaxedAtomicBool
-#if defined(XP_WIN)
-  value: @IS_NIGHTLY_BUILD@
-#else
-  value: false
-#endif
+  value: true
   mirror: always
 #endif
 
 #ifdef MOZ_APPLEMEDIA
 - name: media.rdd-applemedia.enabled
   type: RelaxedAtomicBool
-  value: @IS_NIGHTLY_BUILD@
+  value: true
   mirror: always
 #endif
 
 - name: media.rdd-theora.enabled
   type: RelaxedAtomicBool
 #if defined(XP_WIN)
-  value: @IS_NIGHTLY_BUILD@
+  value: true
 #elif defined(XP_MACOSX)
-  value: @IS_NIGHTLY_BUILD@
+  value: true
 #elif defined(XP_LINUX) && !defined(ANDROID)
-  value: @IS_NIGHTLY_BUILD@
+  value: true
 #else
   value: false
 #endif
@@ -7279,11 +7280,11 @@
 - name: media.rdd-vpx.enabled
   type: RelaxedAtomicBool
 #if defined(XP_WIN)
-  value: @IS_NIGHTLY_BUILD@
+  value: true
 #elif defined(XP_MACOSX)
-  value: @IS_NIGHTLY_BUILD@
+  value: true
 #elif defined(XP_LINUX) && !defined(ANDROID)
-  value: @IS_NIGHTLY_BUILD@
+  value: true
 #else
   value: false
 #endif
@@ -7857,7 +7858,11 @@
   # acceleration for decoding.
 -   name: media.navigator.mediadatadecoder_vpx_enabled
     type: RelaxedAtomicBool
+#if defined(NIGHTLY_BUILD)
     value: true
+#else
+    value: false
+#endif
     mirror: always
 
   # Use MediaDataDecoder API for H264 in WebRTC. This includes hardware
@@ -8546,7 +8551,7 @@
 # API instead of PR_GetAddrInfoByName
 - name: network.dns.dns_query_single_label
   type: RelaxedAtomicBool
-  value: true
+  value: false
   mirror: always
 
 # The proxy type. See nsIProtocolProxyService.idl
@@ -8583,12 +8588,6 @@
 - name: network.http.stale_while_revalidate.enabled
   type: RelaxedAtomicBool
   value: true
-  mirror: always
-
-# Whether to use sni encryption.
-- name: network.security.esni.enabled
-  type: bool
-  value: false
   mirror: always
 
 # Whether to cache SSL resumption tokens in necko.
@@ -9035,6 +9034,12 @@
   value: @IS_EARLY_BETA_OR_EARLIER@
   mirror: always
 
+# Whether the pages per sheet print setting is enabled.
+- name: print.pages_per_sheet.enabled
+  type: RelaxedAtomicBool
+  value: true
+  mirror: always
+
 # Whether we allow the print progress dialog to show up.
 - name: print.show_print_progress
   type: RelaxedAtomicBool
@@ -9388,7 +9393,7 @@
 
 - name: privacy.partition.network_state
   type: RelaxedAtomicBool
-  value: @IS_EARLY_BETA_OR_EARLIER@
+  value: true
   mirror: always
 
 - name: privacy.partition.bloburl_per_agent_cluster
@@ -10449,7 +10454,7 @@
 #ifdef ANDROID
   value: 400
 #else
-  value: 300
+  value: 500
 #endif
   mirror: always
 

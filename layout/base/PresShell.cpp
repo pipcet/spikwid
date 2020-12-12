@@ -28,6 +28,7 @@
 #include "mozilla/PerfStats.h"
 #include "mozilla/PresShellInlines.h"
 #include "mozilla/RangeUtils.h"
+#include "mozilla/ScopeExit.h"
 #include "mozilla/Sprintf.h"
 #include "mozilla/StaticPrefs_apz.h"
 #include "mozilla/StaticPrefs_dom.h"
@@ -2479,12 +2480,6 @@ PresShell::CompleteMove(bool aForward, bool aExtend) {
       nsISelectionController::SELECTION_FOCUS_REGION,
       nsISelectionController::SCROLL_SYNCHRONOUS |
           nsISelectionController::SCROLL_FOR_CARET_MOVE);
-}
-
-NS_IMETHODIMP
-PresShell::SelectAll() {
-  RefPtr<nsFrameSelection> frameSelection = mSelection;
-  return frameSelection->SelectAll();
 }
 
 static void DoCheckVisibility(nsPresContext* aPresContext, nsIContent* aNode,
@@ -10870,32 +10865,29 @@ nsAccessibilityService* PresShell::GetAccessibilityService() {
 
 // Asks our docshell whether we're active.
 void PresShell::QueryIsActive() {
-  nsCOMPtr<nsISupports> container = mPresContext->GetContainerWeak();
-  if (mDocument) {
-    Document* displayDoc = mDocument->GetDisplayDocument();
-    if (displayDoc) {
-      // Ok, we're an external resource document -- we need to use our display
-      // document's docshell to determine "IsActive" status, since we lack
-      // a container.
-      MOZ_ASSERT(!container,
-                 "external resource doc shouldn't have its own container");
-
-      nsPresContext* displayPresContext = displayDoc->GetPresContext();
-      if (displayPresContext) {
-        container = displayPresContext->GetContainerWeak();
-      }
-    }
+  Document* doc = mDocument;
+  if (!doc) {
+    return;
+  }
+  if (Document* displayDoc = doc->GetDisplayDocument()) {
+    // Ok, we're an external resource document -- we need to use our display
+    // document's docshell to determine "IsActive" status, since we lack
+    // a browsing context of our own.
+    MOZ_ASSERT(!doc->GetBrowsingContext(),
+               "external resource doc shouldn't have its own BC");
+    doc = displayDoc;
   }
 
-  nsCOMPtr<nsIDocShell> docshell(do_QueryInterface(container));
-  if (docshell) {
-    bool isActive;
-    nsresult rv = docshell->GetIsActive(&isActive);
+  if (BrowsingContext* bc = doc->GetBrowsingContext()) {
     // Even though in theory the docshell here could be "Inactive and
-    // Foreground", thus implying aIsHidden=false for SetIsActive(),
-    // this is a newly created PresShell so we'd like to invalidate anyway
-    // upon being made active to ensure that the contents get painted.
-    if (NS_SUCCEEDED(rv)) SetIsActive(isActive);
+    // Foreground", thus implying aIsHidden=false for SetIsActive(), this is a
+    // newly created PresShell so we'd like to invalidate anyway upon being made
+    // active to ensure that the contents get painted.
+    auto* browserChild = BrowserChild::GetFrom(doc->GetDocShell());
+    const bool hiddenInRemoteFrame = browserChild &&
+                                     !browserChild->IsTopLevel() &&
+                                     !browserChild->IsVisible();
+    SetIsActive(bc->IsActive() && !hiddenInRemoteFrame);
   }
 }
 

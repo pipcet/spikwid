@@ -12,6 +12,7 @@
 #include "nsContentUtils.h"
 #include "nsSize.h"
 #include "mozilla/ReflowInput.h"
+#include "mozilla/ScopeExit.h"
 #include "nsComponentManagerUtils.h"
 #include "nsString.h"
 #include "nsAtom.h"
@@ -1274,7 +1275,7 @@ void ChromeTooltipListener::sTooltipCallback(nsITimer* aTimer,
       }
     }
 
-    if (!widget || !docShell || !docShell->GetIsActive()) {
+    if (!widget || !docShell || !docShell->GetBrowsingContext()->IsActive()) {
       return;
     }
 

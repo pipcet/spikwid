@@ -49,6 +49,7 @@
 #include "gc/WeakMap-inl.h"
 #include "gc/Zone-inl.h"
 #include "vm/GeckoProfiler-inl.h"
+#include "vm/JSScript-inl.h"
 #include "vm/NativeObject-inl.h"
 #include "vm/PlainObject-inl.h"  // js::PlainObject
 #include "vm/Realm-inl.h"
@@ -1085,8 +1086,15 @@ void GCMarker::traverse(AccessorShape* thing) {
 }
 }  // namespace js
 
+#ifdef DEBUG
+void GCMarker::setCheckAtomMarking(bool check) {
+  MOZ_ASSERT(check != checkAtomMarking);
+  checkAtomMarking = check;
+}
+#endif
+
 template <typename S, typename T>
-static inline void CheckTraversedEdge(S source, T* target) {
+inline void GCMarker::checkTraversedEdge(S source, T* target) {
 #ifdef DEBUG
   // Atoms and Symbols do not have or mark their internal pointers,
   // respectively.
@@ -1111,12 +1119,10 @@ static inline void CheckTraversedEdge(S source, T* target) {
 
   // If we are marking an atom, that atom must be marked in the source zone's
   // atom bitmap.
-  if (!sourceZone->isAtomsZone() && targetZone->isAtomsZone()) {
-    // We can't currently check this if the helper thread lock is held.
-    if (!gHelperThreadLock.ownedByCurrentThread()) {
-      MOZ_ASSERT(target->runtimeFromAnyThread()->gc.atomMarking.atomIsMarked(
-          sourceZone, reinterpret_cast<TenuredCell*>(target)));
-    }
+  if (checkAtomMarking && !sourceZone->isAtomsZone() &&
+      targetZone->isAtomsZone()) {
+    MOZ_ASSERT(target->runtimeFromAnyThread()->gc.atomMarking.atomIsMarked(
+        sourceZone, reinterpret_cast<TenuredCell*>(target)));
   }
 
   // If we have access to a compartment pointer for both things, they must
@@ -1128,7 +1134,7 @@ static inline void CheckTraversedEdge(S source, T* target) {
 
 template <typename S, typename T>
 void js::GCMarker::traverseEdge(S source, T* target) {
-  CheckTraversedEdge(source, target);
+  checkTraversedEdge(source, target);
   traverse(target);
 }
 
@@ -1243,7 +1249,7 @@ inline void js::GCMarker::eagerlyMarkChildren(Shape* shape) {
     // must point to this shape or an anscestor.  Since these pointers will
     // be traced by this loop they do not need to be traced here as well.
     BaseShape* base = shape->base();
-    CheckTraversedEdge(shape, base);
+    checkTraversedEdge(shape, base);
     if (mark(base)) {
       MOZ_ASSERT(base->canSkipMarkingShapeCache(shape));
       base->traceChildrenSkipShapeCache(this);
@@ -1907,7 +1913,7 @@ inline void GCMarker::processMarkStackTop(SliceBudget& budget) {
         }
 
         case SlotsOrElementsKind::Elements: {
-          base = nobj->getDenseElementsAllowCopyOnWrite();
+          base = nobj->getDenseElements();
 
           // Account for shifted elements.
           size_t numShifted = nobj->getElementsHeader()->numShiftedElements();
@@ -2003,7 +2009,7 @@ scan_obj : {
   }
 
   markImplicitEdges(obj);
-  traverseEdge(obj, obj->groupRaw());
+  traverseEdge(obj, obj->group());
 
   CallTraceHook(this, obj);
 
@@ -2022,15 +2028,7 @@ scan_obj : {
       break;
     }
 
-    if (nobj->denseElementsAreCopyOnWrite()) {
-      JSObject* owner = nobj->getElementsHeader()->ownerObject();
-      if (owner != nobj) {
-        traverseEdge(obj, owner);
-        break;
-      }
-    }
-
-    base = nobj->getDenseElementsAllowCopyOnWrite();
+    base = nobj->getDenseElements();
     kind = SlotsOrElementsKind::Elements;
     index = 0;
     end = nobj->getDenseInitializedLength();
@@ -2399,6 +2397,7 @@ GCMarker::GCMarker(JSRuntime* rt)
 #ifdef DEBUG
       ,
       markLaterArenas(0),
+      checkAtomMarking(true),
       strictCompartmentChecking(false),
       markQueue(rt),
       queuePos(0)
@@ -3110,10 +3109,8 @@ void js::TenuringTracer::traceObject(JSObject* obj) {
     return;
   }
 
-  // Note: the contents of copy on write elements pointers are filled in
-  // during parsing and cannot contain nursery pointers.
   NativeObject* nobj = &obj->as<NativeObject>();
-  if (!nobj->hasEmptyElements() && !nobj->denseElementsAreCopyOnWrite()) {
+  if (!nobj->hasEmptyElements()) {
     HeapSlotArray elements = nobj->getDenseElements();
     Value* elems = elements.begin()->unbarrieredAddress();
     traceSlots(elems, elems + nobj->getDenseInitializedLength());
@@ -3331,7 +3328,7 @@ size_t js::TenuringTracer::moveSlotsToTenured(NativeObject* dst,
 size_t js::TenuringTracer::moveElementsToTenured(NativeObject* dst,
                                                  NativeObject* src,
                                                  AllocKind dstKind) {
-  if (src->hasEmptyElements() || src->denseElementsAreCopyOnWrite()) {
+  if (src->hasEmptyElements()) {
     return 0;
   }
 
@@ -3567,19 +3564,10 @@ JS::BigInt* js::TenuringTracer::moveToTenured(JS::BigInt* src) {
   return dst;
 }
 
-void js::Nursery::collectToFixedPoint(TenuringTracer& mover,
-                                      TenureCountCache& tenureCounts) {
+void js::Nursery::collectToFixedPoint(TenuringTracer& mover) {
   for (RelocationOverlay* p = mover.objHead; p; p = p->next()) {
     auto* obj = static_cast<JSObject*>(p->forwardingAddress());
     mover.traceObject(obj);
-
-    TenureCount& entry = tenureCounts.findEntry(obj->groupRaw());
-    if (entry.group == obj->groupRaw()) {
-      entry.count++;
-    } else if (!entry.group) {
-      entry.group = obj->groupRaw();
-      entry.count = 1;
-    }
   }
 
   for (StringRelocationOverlay* p = mover.stringHead; p; p = p->next()) {

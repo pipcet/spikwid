@@ -327,7 +327,7 @@
 #include "nsIURI.h"
 #include "nsIURIMutator.h"
 #if defined(MOZ_THUNDERBIRD) || defined(MOZ_SUITE)
-#include "nsIURIWithSpecialOrigin.h"
+#  include "nsIURIWithSpecialOrigin.h"
 #endif
 #include "nsIUUIDGenerator.h"
 #include "nsIUserIdleService.h"
@@ -10041,7 +10041,6 @@ bool nsContentUtils::IsMessageInputEvent(const IPC::Message& aMsg) {
       case mozilla::dom::PBrowser::Msg_RealDragEvent__ID:
       case mozilla::dom::PBrowser::Msg_UpdateDimensions__ID:
       case mozilla::dom::PBrowser::Msg_MouseEvent__ID:
-      case mozilla::dom::PBrowser::Msg_SetDocShellIsActive__ID:
         return true;
     }
   }

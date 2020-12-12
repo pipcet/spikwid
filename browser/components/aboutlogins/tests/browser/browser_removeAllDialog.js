@@ -3,10 +3,16 @@
 /* eslint-disable mozilla/no-arbitrary-setTimeout */
 
 ChromeUtils.import("resource://testing-common/OSKeyStoreTestUtils.jsm", this);
+const OS_REAUTH_PREF = "signon.management.page.os-auth.enabled";
 
 async function openRemoveAllDialog(browser) {
   await SimpleTest.promiseFocus(browser);
   await BrowserTestUtils.synthesizeMouseAtCenter("menu-button", {}, browser);
+  await SpecialPowers.spawn(browser, [], async () => {
+    let menuButton = content.document.querySelector("menu-button");
+    let menu = menuButton.shadowRoot.querySelector("ul.menu");
+    await ContentTaskUtils.waitForCondition(() => !menu.hidden);
+  });
   function getRemoveAllMenuButton() {
     let menuButton = window.document.querySelector("menu-button");
     return menuButton.shadowRoot.querySelector(".menuitem-remove-all-logins");
@@ -17,6 +23,20 @@ async function openRemoveAllDialog(browser) {
     browser
   );
   info("remove all dialog should be opened");
+}
+
+async function activateLoginItemEdit(browser) {
+  await SimpleTest.promiseFocus(browser);
+  function getLoginItemEditButton() {
+    let loginItem = window.document.querySelector("login-item");
+    return loginItem.shadowRoot.querySelector(".edit-button");
+  }
+  await BrowserTestUtils.synthesizeMouseAtCenter(
+    getLoginItemEditButton,
+    {},
+    browser
+  );
+  info("login-item should be in edit mode");
 }
 
 async function waitForRemoveAllLogins() {
@@ -90,7 +110,7 @@ add_task(async function test_remove_all_dialog_l10n() {
     );
     is(
       removeAllButton.dataset.l10nId,
-      "about-logins-confirm-remove-all-dialog-confirm-button",
+      "about-logins-confirm-remove-all-dialog-confirm-button-label",
       "Remove all button contents should match l10n-id attribute set on outer element"
     );
     is(
@@ -260,7 +280,7 @@ add_task(async function test_remove_all_dialog_remove_logins() {
     );
     is(
       removeAllButton.dataset.l10nId,
-      "about-logins-confirm-remove-all-dialog-confirm-button",
+      "about-logins-confirm-remove-all-dialog-confirm-button-label",
       "Remove all button contents should match l10n-id attribute set on outer element"
     );
     is(
@@ -308,6 +328,11 @@ add_task(async function test_remove_all_dialog_remove_logins() {
       "Waiting for no logins view since all logins should be deleted"
     );
     await ContentTaskUtils.waitForCondition(
+      () =>
+        !content.document.documentElement.classList.contains("login-selected"),
+      "Waiting for the FxA Sync illustration to reappear"
+    );
+    await ContentTaskUtils.waitForCondition(
       () => loginList.classList.contains("no-logins"),
       "Waiting for login-list to be in no logins view as all logins should be deleted"
     );
@@ -323,4 +348,34 @@ add_task(async function test_remove_all_dialog_remove_logins() {
       "Remove all logins menu button is disabled if there are no logins"
     );
   });
+  await SpecialPowers.spawn(browser, [], async () => {
+    let menuButton = Cu.waiveXrays(
+      content.document.querySelector("menu-button")
+    );
+    let menu = menuButton.shadowRoot.querySelector("ul.menu");
+    await EventUtils.synthesizeKey("KEY_Escape", {}, content);
+    await ContentTaskUtils.waitForCondition(
+      () => menu.hidden,
+      "Waiting for menu to close"
+    );
+  });
+});
+
+add_task(async function test_ensure_edit_mode_reset_login_item() {
+  // Preferences.set(OS_REAUTH_PREF, false);
+  await SpecialPowers.pushPrefEnv({
+    set: [[OS_REAUTH_PREF, false]],
+  });
+  TEST_LOGIN2 = await addLogin(TEST_LOGIN2);
+  let browser = gBrowser.selectedBrowser;
+  await activateLoginItemEdit(browser);
+  await openRemoveAllDialog(browser);
+  await SpecialPowers.spawn(browser, [], async () => {
+    let loginItem = content.document.querySelector("login-item");
+    ok(
+      !loginItem.dataset.editing,
+      "Login item is no longer in edit mode due to remove all dialog being present"
+    );
+  });
+  await SpecialPowers.popPrefEnv();
 });

@@ -274,6 +274,7 @@ static const char kPrefThemeId[] = "extensions.activeThemeID";
 static const char kPrefBrowserStartupBlankWindow[] =
     "browser.startup.blankWindow";
 static const char kPrefPreXulSkeletonUI[] = "browser.startup.preXulSkeletonUI";
+static const char kPrefDrawTabsInTitlebar[] = "browser.tabs.drawInTitlebar";
 #endif  // defined(XP_WIN)
 
 int gArgc;
@@ -1954,7 +1955,8 @@ static void ReflectSkeletonUIPrefToRegistry(const char* aPref, void* aData) {
 
   bool shouldBeEnabled =
       Preferences::GetBool(kPrefPreXulSkeletonUI, false) &&
-      Preferences::GetBool(kPrefBrowserStartupBlankWindow, false);
+      Preferences::GetBool(kPrefBrowserStartupBlankWindow, false) &&
+      Preferences::GetBool(kPrefDrawTabsInTitlebar, false);
   if (shouldBeEnabled && Preferences::HasUserValue(kPrefThemeId)) {
     nsCString themeId;
     Preferences::GetCString(kPrefThemeId, themeId);
@@ -1983,6 +1985,8 @@ static void SetupSkeletonUIPrefs() {
   Preferences::RegisterCallback(&ReflectSkeletonUIPrefToRegistry,
                                 kPrefBrowserStartupBlankWindow);
   Preferences::RegisterCallback(&ReflectSkeletonUIPrefToRegistry, kPrefThemeId);
+  Preferences::RegisterCallback(&ReflectSkeletonUIPrefToRegistry,
+                                kPrefDrawTabsInTitlebar);
 }
 
 #  if defined(MOZ_LAUNCHER_PROCESS)
@@ -2207,9 +2211,9 @@ nsresult LaunchChild(bool aBlankCommandLine) {
   PRStatus failed = PR_WaitProcess(process, &exitCode);
   if (failed || exitCode) return NS_ERROR_FAILURE;
 #      endif  // XP_UNIX
-#    endif    // WP_WIN
-#  endif      // WP_MACOSX
-#endif        // MOZ_WIDGET_ANDROID
+#    endif  // WP_WIN
+#  endif  // WP_MACOSX
+#endif  // MOZ_WIDGET_ANDROID
 
   return NS_ERROR_LAUNCHED_CHILD_PROCESS;
 }
@@ -4154,7 +4158,7 @@ int XREMain::XRE_mainStartup(bool* aExitFlag) {
     }
   }
 #  endif /* DEBUG */
-#endif   /* FUZZING */
+#endif /* FUZZING */
 
 #if defined(XP_WIN)
   // Enable the HeapEnableTerminationOnCorruption exploit mitigation. We ignore
@@ -4691,7 +4695,7 @@ nsresult XREMain::XRE_mainRun() {
 #  if defined(MOZ_GECKO_PROFILER)
   mozilla::mscom::InitProfilerMarkers();
 #  endif  // defined(MOZ_GECKO_PROFILER)
-#endif    // defined(XP_WIN)
+#endif  // defined(XP_WIN)
 
   rv = mScopedXPCOM->SetWindowCreator(mNativeApp);
   NS_ENSURE_SUCCESS(rv, NS_ERROR_FAILURE);
@@ -5342,7 +5346,10 @@ int XREMain::XRE_main(int argc, char* argv[], const BootstrapConfig& aConfig) {
 
   XRE_DeinitCommandLine();
 
-  return NS_FAILED(rv) ? 1 : 0;
+  if (NS_FAILED(rv)) {
+    return 1;
+  }
+  return mozilla::AppShutdown::GetExitCode();
 }
 
 void XRE_StopLateWriteChecks(void) { mozilla::StopLateWriteChecks(); }

@@ -457,6 +457,16 @@ class nsContextMenu {
       "context-savelink",
       this.onSaveableLink || this.onPlainTextLink
     );
+    if (
+      (this.onSaveableLink || this.onPlainTextLink) &&
+      Services.policies.status === Services.policies.ACTIVE
+    ) {
+      this.setItemAttr(
+        "context-savelink",
+        "disabled",
+        !WebsiteFilter.isAllowed(this.linkURL)
+      );
+    }
 
     // Save image depends on having loaded its content, video and audio don't.
     this.showItem("context-saveimage", this.onLoadedImage || this.onCanvas);
@@ -1426,6 +1436,7 @@ class nsContextMenu {
     bypassCache,
     doc,
     referrerInfo,
+    cookieJarSettings,
     windowID,
     linkDownload,
     isContentWindowPrivate
@@ -1494,6 +1505,7 @@ class nsContextMenu {
             bypassCache,
             false,
             referrerInfo,
+            cookieJarSettings,
             doc,
             isContentWindowPrivate,
             this._triggeringPrincipal
@@ -1579,6 +1591,8 @@ class nsContextMenu {
       if (channel instanceof Ci.nsIHttpChannelInternal) {
         channel.forceAllowThirdPartyCookie = true;
       }
+
+      channel.loadInfo.cookieJarSettings = cookieJarSettings;
     }
 
     // fallback to the old way if we don't see the headers quickly
@@ -1610,6 +1624,7 @@ class nsContextMenu {
       true,
       this.ownerDoc,
       referrerInfo,
+      this.contentData.cookieJarSettings,
       this.frameOuterWindowID,
       this.linkDownload,
       isContentWindowPrivate

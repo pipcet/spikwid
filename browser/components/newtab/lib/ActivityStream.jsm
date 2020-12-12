@@ -414,20 +414,6 @@ const PREFS_CONFIG = new Map([
     },
   ],
   [
-    "asrouter.userprefs.cfr.addons",
-    {
-      title: "Does the user allow CFR addon recommendations?",
-      value: true,
-    },
-  ],
-  [
-    "asrouter.userprefs.cfr.features",
-    {
-      title: "Does the user allow CFR feature recommendations?",
-      value: true,
-    },
-  ],
-  [
     "asrouter.providers.onboarding",
     {
       title: "Configuration for onboarding provider",
@@ -589,7 +575,7 @@ const FEEDS_DATA = [
     name: "section.highlights",
     factory: () => new HighlightsFeed(),
     title: "Fetches content recommendations from places db",
-    value: false,
+    value: true,
   },
   {
     name: "system.topstories",

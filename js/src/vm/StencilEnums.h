@@ -293,11 +293,11 @@ enum class MutableScriptFlagsEnum : uint32_t {
   FailedShapeGuard = 1 << 19,
 
   // Script has had instruction hoisted by LICM fail.
-  HadLICMBailout = 1 << 20,
+  HadLICMInvalidation = 1 << 20,
 
   // An overflow happened where Range Analysis hoped it would not. The next
   // compile should be more conservative.
-  HadOverflowBailout = 1 << 21,
+  HadEagerTruncationBailout = 1 << 21,
 
   // This script should not be inlined into others. This happens after inlining
   // has failed.
