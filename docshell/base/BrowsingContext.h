@@ -16,7 +16,6 @@
 #include "mozilla/Span.h"
 #include "mozilla/Tuple.h"
 #include "mozilla/dom/BindingDeclarations.h"
-#include "mozilla/dom/FeaturePolicy.h"
 #include "mozilla/dom/LocationBase.h"
 #include "mozilla/dom/MaybeDiscarded.h"
 #include "mozilla/dom/UserActivation.h"
@@ -63,6 +62,7 @@ class CanonicalBrowsingContext;
 class ChildSHistory;
 class ContentParent;
 class Element;
+struct LoadingSessionHistoryInfo;
 template <typename>
 struct Nullable;
 template <typename T>
@@ -119,9 +119,9 @@ enum class ExplicitActiveStatus : uint8_t {
   /* Hold the audio muted state and should be used on top level browsing     \
    * contexts only */                                                        \
   FIELD(Muted, bool)                                                         \
-  FIELD(FeaturePolicy, RefPtr<mozilla::dom::FeaturePolicy>)                  \
   /* See nsSandboxFlags.h for the possible flags. */                         \
   FIELD(SandboxFlags, uint32_t)                                              \
+  FIELD(InitialSandboxFlags, uint32_t)                                       \
   /* A non-zero unique identifier for the browser element that is hosting    \
    * this                                                                    \
    * BrowsingContext tree. Every BrowsingContext in the element's tree will  \
@@ -721,6 +721,10 @@ class BrowsingContext : public nsILoadContext, public nsWrapperCache {
   // Check if it is allowed to open a popup from the current browsing
   // context or any of its ancestors.
   bool IsPopupAllowed();
+
+  void SessionHistoryCommit(const LoadingSessionHistoryInfo& aInfo,
+                            uint32_t aLoadType, bool aHadActiveEntry,
+                            bool aPersist, bool aCloneEntryChildren);
 
   // Set a new active entry on this browsing context. This is used for
   // implementing history.pushState/replaceState and same document navigations.

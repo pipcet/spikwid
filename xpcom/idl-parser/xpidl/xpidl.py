@@ -345,10 +345,20 @@ class Include(object):
             if not os.path.exists(file):
                 continue
 
-            self.IDL = parent.parser.parse(
-                open(file, encoding="utf-8").read(), filename=file
-            )
-            self.IDL.resolve(parent.incdirs, parent.parser, parent.webidlconfig)
+            if file in parent.includeCache:
+                self.IDL = parent.includeCache[file]
+            else:
+                self.IDL = parent.parser.parse(
+                    open(file, encoding="utf-8").read(), filename=file
+                )
+                self.IDL.resolve(
+                    parent.incdirs,
+                    parent.parser,
+                    parent.webidlconfig,
+                    parent.includeCache,
+                )
+                parent.includeCache[file] = self.IDL
+
             for type in self.IDL.getNames():
                 parent.setName(type)
             parent.deps.extend(self.IDL.deps)
@@ -390,11 +400,12 @@ class IDL(object):
     def __str__(self):
         return "".join([str(p) for p in self.productions])
 
-    def resolve(self, incdirs, parser, webidlconfig):
+    def resolve(self, incdirs, parser, webidlconfig, includeCache=None):
         self.namemap = NameMap()
         self.incdirs = incdirs
         self.parser = parser
         self.webidlconfig = webidlconfig
+        self.includeCache = {} if includeCache is None else includeCache
         for p in self.productions:
             p.resolve(self)
 
@@ -446,7 +457,7 @@ class Typedef(object):
         parent.setName(self)
         self.realtype = parent.getName(self.type, self.location)
 
-        if not isinstance(self.realtype, (Builtin, Native, Typedef)):
+        if not isinstance(self.realtype, (Builtin, CEnum, Native, Typedef)):
             raise IDLError("Unsupported typedef target type", self.location)
 
     def nativeType(self, calltype):
@@ -820,13 +831,13 @@ class Interface(object):
     def getConst(self, name, location):
         # The constant may be in a base class
         iface = self
-        while name not in iface.namemap and iface is not None:
-            iface = self.idl.getName(TypeId(self.base), self.location)
-        if iface is None:
-            raise IDLError("cannot find symbol '%s'" % name, self.location)
+        while name not in iface.namemap and iface.base is not None:
+            iface = self.idl.getName(TypeId(iface.base), self.location)
+        if name not in iface.namemap:
+            raise IDLError("cannot find symbol '%s'" % name, location)
         c = iface.namemap.get(name, location)
         if c.kind != "const":
-            raise IDLError("symbol '%s' is not a constant", c.location)
+            raise IDLError("symbol '%s' is not a constant" % name, location)
 
         return c.getValue()
 

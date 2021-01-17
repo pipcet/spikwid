@@ -58,9 +58,6 @@ class nsComputedDOMStyle final : public nsDOMCSSDeclaration,
   using StyleGeometryBox = mozilla::StyleGeometryBox;
   using Element = mozilla::dom::Element;
   using Document = mozilla::dom::Document;
-  using StyleFlexBasis = mozilla::StyleFlexBasis;
-  using StyleSize = mozilla::StyleSize;
-  using StyleMaxSize = mozilla::StyleMaxSize;
   using LengthPercentage = mozilla::LengthPercentage;
   using LengthPercentageOrAuto = mozilla::LengthPercentageOrAuto;
   using StyleExtremumLength = mozilla::StyleExtremumLength;
@@ -73,7 +70,7 @@ class nsComputedDOMStyle final : public nsDOMCSSDeclaration,
 
   NS_DECL_NSIDOMCSSSTYLEDECLARATION_HELPER
   nsresult GetPropertyValue(const nsCSSPropertyID aPropID,
-                            nsAString& aValue) override;
+                            nsACString& aValue) override;
   void SetPropertyValue(const nsCSSPropertyID aPropID, const nsACString& aValue,
                         nsIPrincipal* aSubjectPrincipal,
                         mozilla::ErrorResult& aRv) override;
@@ -95,7 +92,7 @@ class nsComputedDOMStyle final : public nsDOMCSSDeclaration,
       Element* aElement, nsAtom* aPseudo, StyleType aStyleType = eAll);
 
   static already_AddRefed<ComputedStyle> GetComputedStyleNoFlush(
-      Element* aElement, nsAtom* aPseudo, StyleType aStyleType = eAll) {
+      const Element* aElement, nsAtom* aPseudo, StyleType aStyleType = eAll) {
     return DoGetComputedStyleNoFlush(
         aElement, aPseudo, nsContentUtils::GetPresShellForContent(aElement),
         aStyleType);
@@ -137,6 +134,10 @@ class nsComputedDOMStyle final : public nsDOMCSSDeclaration,
   NS_DECL_NSIMUTATIONOBSERVER_PARENTCHAINCHANGED
 
  private:
+  nsresult GetPropertyValue(const nsCSSPropertyID aPropID,
+                            const nsACString& aMaybeCustomPropertyNme,
+                            nsACString& aValue);
+
   virtual ~nsComputedDOMStyle();
 
   void AssertFlushedPendingReflows() {
@@ -157,7 +158,7 @@ class nsComputedDOMStyle final : public nsDOMCSSDeclaration,
   void SetFrameComputedStyle(ComputedStyle* aStyle, uint64_t aGeneration);
 
   static already_AddRefed<ComputedStyle> DoGetComputedStyleNoFlush(
-      Element* aElement, nsAtom* aPseudo, mozilla::PresShell* aPresShell,
+      const Element* aElement, nsAtom* aPseudo, mozilla::PresShell* aPresShell,
       StyleType aStyleType);
 
 #define STYLE_STRUCT(name_)                \
@@ -291,7 +292,8 @@ class nsComputedDOMStyle final : public nsDOMCSSDeclaration,
                                   const LengthPercentage&,
                                   bool aClampNegativeCalc);
 
-  void SetValueToMaxSize(nsROCSSPrimitiveValue* aValue, const StyleMaxSize&);
+  void SetValueToMaxSize(nsROCSSPrimitiveValue* aValue,
+                         const mozilla::StyleMaxSize&);
 
   void SetValueToExtremumLength(nsROCSSPrimitiveValue* aValue,
                                 StyleExtremumLength);

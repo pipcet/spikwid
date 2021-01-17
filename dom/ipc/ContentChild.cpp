@@ -111,6 +111,7 @@
 #include "mozilla/net/NeckoChild.h"
 #include "mozilla/plugins/PluginInstanceParent.h"
 #include "mozilla/plugins/PluginModuleParent.h"
+#include "mozilla/widget/RemoteLookAndFeel.h"
 #include "mozilla/widget/ScreenManager.h"
 #include "mozilla/widget/WidgetMessageUtils.h"
 #include "nsBaseDragService.h"
@@ -602,7 +603,7 @@ NS_INTERFACE_MAP_END
 
 mozilla::ipc::IPCResult ContentChild::RecvSetXPCOMProcessAttributes(
     XPCOMInitData&& aXPCOMInit, const StructuredCloneData& aInitialData,
-    LookAndFeelCache&& aLookAndFeelCache,
+    LookAndFeelData&& aLookAndFeelData,
     nsTArray<SystemFontListEntry>&& aFontList,
     const Maybe<SharedMemoryHandle>& aSharedUASheetHandle,
     const uintptr_t& aSharedUASheetAddress,
@@ -611,7 +612,7 @@ mozilla::ipc::IPCResult ContentChild::RecvSetXPCOMProcessAttributes(
     return IPC_OK();
   }
 
-  mLookAndFeelCache = std::move(aLookAndFeelCache);
+  mLookAndFeelData = std::move(aLookAndFeelData);
   mFontList = std::move(aFontList);
   mSharedFontListBlocks = std::move(aSharedFontListBlocks);
 #ifdef XP_WIN
@@ -1322,7 +1323,6 @@ void ContentChild::InitXPCOM(
 
   DataStorage::SetCachedStorageEntries(aXPCOMInit.dataStorage());
 
-  PDMFactory::SetSupported(aXPCOMInit.codecsSupported());
   // Initialize the RemoteDecoderManager thread and its associated PBackground
   // channel.
   RemoteDecoderManagerChild::Init();
@@ -1751,7 +1751,8 @@ mozilla::ipc::IPCResult ContentChild::RecvConstructBrowser(
   return IPC_OK();
 }
 
-void ContentChild::GetAvailableDictionaries(nsTArray<nsString>& aDictionaries) {
+void ContentChild::GetAvailableDictionaries(
+    nsTArray<nsCString>& aDictionaries) {
   aDictionaries = mAvailableDictionaries.Clone();
 }
 
@@ -2286,8 +2287,17 @@ mozilla::ipc::IPCResult ContentChild::RecvNotifyVisited(
 }
 
 mozilla::ipc::IPCResult ContentChild::RecvThemeChanged(
-    LookAndFeelCache&& aLookAndFeelCache, widget::ThemeChangeKind aKind) {
-  LookAndFeel::SetCache(aLookAndFeelCache);
+    LookAndFeelData&& aLookAndFeelData, widget::ThemeChangeKind aKind) {
+  switch (aLookAndFeelData.type()) {
+    case LookAndFeelData::TLookAndFeelCache:
+      LookAndFeel::SetCache(aLookAndFeelData.get_LookAndFeelCache());
+      break;
+    case LookAndFeelData::TFullLookAndFeel:
+      LookAndFeel::SetData(std::move(aLookAndFeelData.get_FullLookAndFeel()));
+      break;
+    default:
+      MOZ_ASSERT(false, "unreachable");
+  }
   LookAndFeel::NotifyChangedAllWindows(aKind);
   return IPC_OK();
 }
@@ -2388,7 +2398,7 @@ mozilla::ipc::IPCResult ContentChild::RecvGeolocationError(
 }
 
 mozilla::ipc::IPCResult ContentChild::RecvUpdateDictionaryList(
-    nsTArray<nsString>&& aDictionaries) {
+    nsTArray<nsCString>&& aDictionaries) {
   mAvailableDictionaries = std::move(aDictionaries);
   mozInlineSpellChecker::UpdateCanEnableInlineSpellChecking();
   return IPC_OK();
@@ -2397,12 +2407,13 @@ mozilla::ipc::IPCResult ContentChild::RecvUpdateDictionaryList(
 mozilla::ipc::IPCResult ContentChild::RecvUpdateFontList(
     nsTArray<SystemFontListEntry>&& aFontList) {
   mFontList = std::move(aFontList);
-  gfxPlatform::GetPlatform()->UpdateFontList();
+  gfxPlatform::GetPlatform()->UpdateFontList(true);
   return IPC_OK();
 }
 
-mozilla::ipc::IPCResult ContentChild::RecvRebuildFontList() {
-  gfxPlatform::GetPlatform()->UpdateFontList();
+mozilla::ipc::IPCResult ContentChild::RecvRebuildFontList(
+    const bool& aFullRebuild) {
+  gfxPlatform::GetPlatform()->UpdateFontList(aFullRebuild);
   return IPC_OK();
 }
 
@@ -4438,6 +4449,14 @@ IPCResult ContentChild::RecvFlushFOGData(FlushFOGDataResolver&& aResolver) {
 #ifdef MOZ_GLEAN
   glean::FlushFOGData(std::move(aResolver));
 #endif
+  return IPC_OK();
+}
+
+IPCResult ContentChild::RecvUpdateMediaCodecsSupported(
+    RemoteDecodeIn aLocation,
+    const PDMFactory::MediaCodecsSupported& aSupported) {
+  RemoteDecoderManagerChild::SetSupported(aLocation, aSupported);
+
   return IPC_OK();
 }
 

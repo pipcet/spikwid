@@ -10,6 +10,7 @@
 author: Jordan Lund
 """
 
+from __future__ import absolute_import
 import json
 import os
 import re
@@ -41,6 +42,7 @@ from mozharness.mozilla.testing.codecoverage import (
 )
 from mozharness.mozilla.testing.testbase import TestingMixin, testing_config_options
 
+PY2 = sys.version_info.major == 2
 SUITE_CATEGORIES = [
     "gtest",
     "cppunittest",
@@ -428,19 +430,28 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
         self.register_virtualenv_module(name="mock")
         self.register_virtualenv_module(name="simplejson")
 
-        requirements_files = [
-            os.path.join(
-                dirs["abs_test_install_dir"], "config", "marionette_requirements.txt"
-            )
-        ]
+        marionette_requirements_file = os.path.join(
+            dirs["abs_test_install_dir"], "config", "marionette_requirements.txt"
+        )
+        # marionette_requirements.txt must use the legacy resolver until bug 1684969 is resolved.
+        self.register_virtualenv_module(
+            requirements=[marionette_requirements_file],
+            two_pass=True,
+            legacy_resolver=True,
+        )
 
+        requirements_files = []
         if self._query_specified_suites("mochitest") is not None:
             # mochitest is the only thing that needs this
+            if PY2:
+                wspb_requirements = "websocketprocessbridge_requirements.txt"
+            else:
+                wspb_requirements = "websocketprocessbridge_requirements_3.txt"
             requirements_files.append(
                 os.path.join(
                     dirs["abs_mochitest_dir"],
                     "websocketprocessbridge",
-                    "websocketprocessbridge_requirements.txt",
+                    wspb_requirements,
                 )
             )
 

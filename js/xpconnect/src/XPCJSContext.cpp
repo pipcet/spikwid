@@ -859,8 +859,6 @@ static void LoadStartupJSPrefs(XPCJSContext* xpccx) {
       Preferences::GetInt(JS_OPTIONS_DOT_STR "baselinejit.threshold", -1);
   int32_t normalIonThreshold =
       Preferences::GetInt(JS_OPTIONS_DOT_STR "ion.threshold", -1);
-  int32_t fullIonThreshold =
-      Preferences::GetInt(JS_OPTIONS_DOT_STR "ion.full.threshold", -1);
   int32_t ionFrequentBailoutThreshold = Preferences::GetInt(
       JS_OPTIONS_DOT_STR "ion.frequent_bailout_threshold", -1);
 
@@ -914,8 +912,6 @@ static void LoadStartupJSPrefs(XPCJSContext* xpccx) {
                                 useBaselineEager ? 0 : baselineThreshold);
   JS_SetGlobalJitCompilerOption(cx, JSJITCOMPILER_ION_NORMAL_WARMUP_TRIGGER,
                                 useIonEager ? 0 : normalIonThreshold);
-  JS_SetGlobalJitCompilerOption(cx, JSJITCOMPILER_ION_FULL_WARMUP_TRIGGER,
-                                useIonEager ? 0 : fullIonThreshold);
   JS_SetGlobalJitCompilerOption(cx,
                                 JSJITCOMPILER_ION_FREQUENT_BAILOUT_THRESHOLD,
                                 ionFrequentBailoutThreshold);
@@ -976,6 +972,10 @@ static void ReloadPrefsCallback(const char* pref, void* aXpccx) {
 #endif
 #ifdef ENABLE_WASM_SIMD
   bool useWasmSimd = Preferences::GetBool(JS_OPTIONS_DOT_STR "wasm_simd");
+#endif
+#ifdef ENABLE_WASM_SIMD_WORMHOLE
+  bool useWasmSimdWormhole =
+      Preferences::GetBool(JS_OPTIONS_DOT_STR "wasm_simd_wormhole");
 #endif
   bool useWasmVerbose = Preferences::GetBool(JS_OPTIONS_DOT_STR "wasm_verbose");
   bool throwOnAsmJSValidationFailure = Preferences::GetBool(
@@ -1065,6 +1065,9 @@ static void ReloadPrefsCallback(const char* pref, void* aXpccx) {
 #endif
 #ifdef ENABLE_WASM_SIMD
       .setWasmSimd(useWasmSimd)
+#endif
+#ifdef ENABLE_WASM_SIMD_WORMHOLE
+      .setWasmSimdWormhole(useWasmSimdWormhole)
 #endif
       .setWasmVerbose(useWasmVerbose)
       .setThrowOnAsmJSValidationFailure(throwOnAsmJSValidationFailure)

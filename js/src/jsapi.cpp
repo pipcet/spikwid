@@ -41,7 +41,7 @@
 #include "builtin/Symbol.h"
 #include "frontend/BytecodeCompilation.h"  // frontend::CompileGlobalScriptToStencil, frontend::InstantiateStencils
 #include "frontend/BytecodeCompiler.h"
-#include "frontend/CompilationInfo.h"  // frontend::CompilationInfo, frontend::CompilationInfoVector, frontend::CompilationGCOutput
+#include "frontend/CompilationInfo.h"  // frontend::CompilationStencilSet, frontend::CompilationGCOutput
 #include "gc/FreeOp.h"
 #include "gc/Marking.h"
 #include "gc/Policy.h"
@@ -459,6 +459,13 @@ JS::ContextOptions& JS::ContextOptions::setWasmSimd(bool flag) {
   return *this;
 }
 
+JS::ContextOptions& JS::ContextOptions::setWasmSimdWormhole(bool flag) {
+#ifdef ENABLE_WASM_SIMD_WORMHOLE
+  wasmSimdWormhole_ = flag;
+#endif
+  return *this;
+}
+
 JS::ContextOptions& JS::ContextOptions::setWasmExceptions(bool flag) {
 #ifdef ENABLE_WASM_EXCEPTIONS
   wasmExceptions_ = flag;
@@ -506,6 +513,11 @@ JS_PUBLIC_API bool JS::InitSelfHostedCode(JSContext* cx) {
 
 JS_PUBLIC_API const char* JS_GetImplementationVersion(void) {
   return "JavaScript-C" MOZILLA_VERSION;
+}
+
+JS_PUBLIC_API void JS_SetDestroyZoneCallback(JSContext* cx,
+                                             JSDestroyZoneCallback callback) {
+  cx->runtime()->destroyZoneCallback = callback;
 }
 
 JS_PUBLIC_API void JS_SetDestroyCompartmentCallback(
@@ -1777,6 +1789,13 @@ JS::RealmCreationOptions& JS::RealmCreationOptions::setExistingCompartment(
 
 JS::RealmCreationOptions& JS::RealmCreationOptions::setNewCompartmentAndZone() {
   compSpec_ = CompartmentSpecifier::NewCompartmentAndZone;
+  comp_ = nullptr;
+  return *this;
+}
+
+JS::RealmCreationOptions&
+JS::RealmCreationOptions::setNewCompartmentInSelfHostingZone() {
+  compSpec_ = CompartmentSpecifier::NewCompartmentInSelfHostingZone;
   comp_ = nullptr;
   return *this;
 }
@@ -5196,13 +5215,6 @@ JS_PUBLIC_API void JS_SetGlobalJitCompilerOption(JSContext* cx,
       }
       jit::JitOptions.setNormalIonWarmUpThreshold(value);
       break;
-    case JSJITCOMPILER_ION_FULL_WARMUP_TRIGGER:
-      if (value == uint32_t(-1)) {
-        jit::JitOptions.resetFullIonWarmUpThreshold();
-        break;
-      }
-      jit::JitOptions.setFullIonWarmUpThreshold(value);
-      break;
     case JSJITCOMPILER_ION_GVN_ENABLE:
       if (value == 0) {
         jit::JitOptions.enableGvn(false);
@@ -5216,22 +5228,22 @@ JS_PUBLIC_API void JS_SetGlobalJitCompilerOption(JSContext* cx,
       if (value == 0) {
         jit::JitOptions.forceInlineCaches = false;
         JitSpew(js::jit::JitSpew_IonScripts,
-                "IonBuilder: Enable non-IC optimizations.");
+                "Ion: Enable non-IC optimizations.");
       } else {
         jit::JitOptions.forceInlineCaches = true;
         JitSpew(js::jit::JitSpew_IonScripts,
-                "IonBuilder: Disable non-IC optimizations.");
+                "Ion: Disable non-IC optimizations.");
       }
       break;
     case JSJITCOMPILER_ION_CHECK_RANGE_ANALYSIS:
       if (value == 0) {
         jit::JitOptions.checkRangeAnalysis = false;
         JitSpew(js::jit::JitSpew_IonScripts,
-                "IonBuilder: Enable range analysis checks.");
+                "Ion: Enable range analysis checks.");
       } else {
         jit::JitOptions.checkRangeAnalysis = true;
         JitSpew(js::jit::JitSpew_IonScripts,
-                "IonBuilder: Disable range analysis checks.");
+                "Ion: Disable range analysis checks.");
       }
       break;
     case JSJITCOMPILER_ION_ENABLE:
@@ -5360,9 +5372,6 @@ JS_PUBLIC_API bool JS_GetGlobalJitCompilerOption(JSContext* cx,
       break;
     case JSJITCOMPILER_ION_NORMAL_WARMUP_TRIGGER:
       *valueOut = jit::JitOptions.normalIonWarmUpThreshold;
-      break;
-    case JSJITCOMPILER_ION_FULL_WARMUP_TRIGGER:
-      *valueOut = jit::JitOptions.fullIonWarmUpThreshold;
       break;
     case JSJITCOMPILER_ION_FORCE_IC:
       *valueOut = jit::JitOptions.forceInlineCaches;
@@ -5732,15 +5741,14 @@ JS_PUBLIC_API JS::TranscodeResult JS::DecodeScript(
 
 static JS::TranscodeResult DecodeStencil(
     JSContext* cx, JS::TranscodeBuffer& buffer,
-    frontend::CompilationInfoVector& compilationInfos, size_t cursorIndex) {
-  XDRStencilDecoder decoder(cx, &compilationInfos.initial.input.options, buffer,
-                            cursorIndex);
+    frontend::CompilationStencilSet& stencilSet, size_t cursorIndex) {
+  XDRStencilDecoder decoder(cx, &stencilSet.input.options, buffer, cursorIndex);
 
-  if (!compilationInfos.initial.input.initForGlobal(cx)) {
+  if (!stencilSet.input.initForGlobal(cx)) {
     return JS::TranscodeResult_Throw;
   }
 
-  XDRResult res = decoder.codeStencils(compilationInfos);
+  XDRResult res = decoder.codeStencils(stencilSet);
   if (res.isErr()) {
     return res.unwrapErr();
   }
@@ -5757,20 +5765,23 @@ JS_PUBLIC_API JS::TranscodeResult JS::DecodeScriptMaybeStencil(
     return JS::DecodeScript(cx, options, buffer, scriptp, cursorIndex);
   }
 
+  MOZ_ASSERT(JS::IsTranscodingBytecodeAligned(buffer.begin()));
+  MOZ_ASSERT(JS::IsTranscodingBytecodeOffsetAligned(cursorIndex));
+
   // The buffer contains stencil.
 
-  Rooted<frontend::CompilationInfoVector> compilationInfos(
-      cx, frontend::CompilationInfoVector(cx, options));
+  Rooted<frontend::CompilationStencilSet> stencilSet(
+      cx, frontend::CompilationStencilSet(cx, options));
 
   JS::TranscodeResult res =
-      DecodeStencil(cx, buffer, compilationInfos.get(), cursorIndex);
+      DecodeStencil(cx, buffer, stencilSet.get(), cursorIndex);
   if (res != JS::TranscodeResult_Ok) {
     return res;
   }
 
   Rooted<frontend::CompilationGCOutput> gcOutput(cx);
   Rooted<frontend::CompilationGCOutput> gcOutputForDelazification(cx);
-  if (!frontend::InstantiateStencils(cx, compilationInfos.get(), gcOutput.get(),
+  if (!frontend::InstantiateStencils(cx, stencilSet.get(), gcOutput.get(),
                                      gcOutputForDelazification.get())) {
     return JS::TranscodeResult_Throw;
   }
@@ -5816,24 +5827,24 @@ JS_PUBLIC_API JS::TranscodeResult JS::DecodeScriptAndStartIncrementalEncoding(
     return JS::TranscodeResult_Ok;
   }
 
-  Rooted<frontend::CompilationInfoVector> compilationInfos(
-      cx, frontend::CompilationInfoVector(cx, options));
+  Rooted<frontend::CompilationStencilSet> stencilSet(
+      cx, frontend::CompilationStencilSet(cx, options));
 
   JS::TranscodeResult res =
-      DecodeStencil(cx, buffer, compilationInfos.get(), cursorIndex);
+      DecodeStencil(cx, buffer, stencilSet.get(), cursorIndex);
   if (res != JS::TranscodeResult_Ok) {
     return res;
   }
 
   UniquePtr<XDRIncrementalEncoderBase> xdrEncoder;
-  if (!compilationInfos.get().initial.input.source()->xdrEncodeStencils(
-          cx, compilationInfos.get(), xdrEncoder)) {
+  if (!stencilSet.get().input.source()->xdrEncodeStencils(cx, stencilSet.get(),
+                                                          xdrEncoder)) {
     return JS::TranscodeResult_Throw;
   }
 
   Rooted<frontend::CompilationGCOutput> gcOutput(cx);
   Rooted<frontend::CompilationGCOutput> gcOutputForDelazification(cx);
-  if (!frontend::InstantiateStencils(cx, compilationInfos.get(), gcOutput.get(),
+  if (!frontend::InstantiateStencils(cx, stencilSet.get(), gcOutput.get(),
                                      gcOutputForDelazification.get())) {
     return JS::TranscodeResult_Throw;
   }

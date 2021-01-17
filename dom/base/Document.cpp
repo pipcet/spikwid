@@ -70,6 +70,7 @@
 #include "mozilla/HTMLEditor.h"
 #include "mozilla/HoldDropJSObjects.h"
 #include "mozilla/IdentifierMapEntry.h"
+#include "mozilla/InputTaskManager.h"
 #include "mozilla/IntegerRange.h"
 #include "mozilla/InternalMutationEvent.h"
 #include "mozilla/Likely.h"
@@ -110,6 +111,7 @@
 #include "mozilla/StaticAnalysisFunctions.h"
 #include "mozilla/StaticPrefs_apz.h"
 #include "mozilla/StaticPrefs_browser.h"
+#include "mozilla/StaticPrefs_docshell.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_full_screen_api.h"
 #include "mozilla/StaticPrefs_layout.h"
@@ -1775,14 +1777,6 @@ void Document::GetFailedCertSecurityInfo(FailedCertSecurityInfo& aInfo,
     return;
   }
   aInfo.mValidNotAfter = DOMTimeStamp(validityResult / PR_USEC_PER_MSEC);
-
-  nsAutoString subjectAltNames;
-  rv = cert->GetSubjectAltNames(subjectAltNames);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    aRv.Throw(rv);
-    return;
-  }
-  aInfo.mSubjectAltNames = subjectAltNames;
 
   nsAutoString issuerCommonName;
   nsAutoString certChainPEMString;
@@ -3577,7 +3571,7 @@ nsresult Document::InitCSP(nsIChannel* aChannel) {
   // served with a CSP might block internally applied inline styles.
   nsCOMPtr<nsILoadInfo> loadInfo = aChannel->LoadInfo();
   if (loadInfo->GetExternalContentPolicyType() ==
-      nsIContentPolicy::TYPE_IMAGE) {
+      ExtContentPolicy::TYPE_IMAGE) {
     return NS_OK;
   }
 
@@ -3700,8 +3694,7 @@ nsresult Document::InitCSP(nsIChannel* aChannel) {
     // The principal is only used to enable/disable trackingprotection via
     // permission and can be shared with the top level sandboxed site.
     // See Bug 1654546.
-    SetPrincipals(principal, principal,
-                  /* aSetContentBlockingAllowListPrincipal = */ false);
+    SetPrincipals(principal, principal);
   }
 
   ApplySettingsFromCSP(false);
@@ -3709,36 +3702,27 @@ nsresult Document::InitCSP(nsIChannel* aChannel) {
 }
 
 already_AddRefed<dom::FeaturePolicy> Document::GetParentFeaturePolicy() {
-  if (!mDocumentContainer) {
-    return nullptr;
+  BrowsingContext* browsingContext = GetBrowsingContext();
+  NS_ENSURE_TRUE(browsingContext, nullptr);
+  NS_ENSURE_TRUE(browsingContext->IsContentSubframe(), nullptr);
+
+  HTMLIFrameElement* iframe =
+      HTMLIFrameElement::FromNodeOrNull(browsingContext->GetEmbedderElement());
+  if (iframe) {
+    return do_AddRef(iframe->FeaturePolicy());
   }
 
-  nsPIDOMWindowOuter* containerWindow = mDocumentContainer->GetWindow();
-  if (!containerWindow) {
-    return nullptr;
+  if (XRE_IsParentProcess()) {
+    return do_AddRef(browsingContext->Canonical()->GetContainerFeaturePolicy());
   }
 
-  BrowsingContext* context = containerWindow->GetBrowsingContext();
-  if (!context) {
-    return nullptr;
-  }
+  WindowContext* windowContext = browsingContext->GetCurrentWindowContext();
+  NS_ENSURE_TRUE(windowContext, nullptr);
 
-  RefPtr<dom::FeaturePolicy> parentPolicy;
-  if (context->IsContentSubframe() && !context->GetParent()->IsInProcess()) {
-    // We are in cross process, so try to get feature policy from
-    // container's BrowsingContext
-    parentPolicy = context->GetFeaturePolicy();
-    return parentPolicy.forget();
-  }
+  WindowGlobalChild* child = windowContext->GetWindowGlobalChild();
+  NS_ENSURE_TRUE(child, nullptr);
 
-  nsCOMPtr<nsINode> node = containerWindow->GetFrameElementInternal();
-  HTMLIFrameElement* iframe = HTMLIFrameElement::FromNodeOrNull(node);
-  if (!iframe) {
-    return nullptr;
-  }
-
-  parentPolicy = iframe->FeaturePolicy();
-  return parentPolicy.forget();
+  return do_AddRef(child->GetContainerFeaturePolicy());
 }
 
 nsresult Document::InitFeaturePolicy(nsIChannel* aChannel) {
@@ -4025,8 +4009,7 @@ void Document::UpdateReferrerInfoFromMeta(const nsAString& aMetaReferrer,
 }
 
 void Document::SetPrincipals(nsIPrincipal* aNewPrincipal,
-                             nsIPrincipal* aNewPartitionedPrincipal,
-                             bool aSetContentBlockingAllowListPrincipal) {
+                             nsIPrincipal* aNewPartitionedPrincipal) {
   MOZ_ASSERT(!!aNewPrincipal == !!aNewPartitionedPrincipal);
   if (aNewPrincipal && mAllowDNSPrefetch &&
       StaticPrefs::network_dns_disablePrefetchFromHTTPS()) {
@@ -4041,11 +4024,6 @@ void Document::SetPrincipals(nsIPrincipal* aNewPrincipal,
   mPartitionedPrincipal = aNewPartitionedPrincipal;
 
   mCSSLoader->RegisterInSheetCache();
-
-  if (aSetContentBlockingAllowListPrincipal) {
-    ContentBlockingAllowList::ComputePrincipal(
-        aNewPrincipal, getter_AddRefs(mContentBlockingAllowListPrincipal));
-  }
 
 #ifdef DEBUG
   // Validate that the docgroup is set correctly by calling its getter and
@@ -4075,8 +4053,7 @@ void Document::AssertDocGroupMatchesKey() const {
 
     // GetKey() can fail, e.g. after the TLD service has shut down.
     nsresult rv = mozilla::dom::DocGroup::GetKey(
-        NodePrincipal(), GetBrowsingContext()->CrossOriginIsolated(),
-        docGroupKey);
+        NodePrincipal(), CrossOriginIsolated(), docGroupKey);
     if (NS_SUCCEEDED(rv)) {
       MOZ_ASSERT(mDocGroup->MatchesKey(docGroupKey));
     }
@@ -4191,9 +4168,10 @@ bool Document::HasPendingInitialTranslation() {
 DocumentL10n* Document::GetL10n() { return mDocumentL10n; }
 
 bool Document::DocumentSupportsL10n(JSContext* aCx, JSObject* aObject) {
+  JS::Rooted<JSObject*> object(aCx, aObject);
   nsCOMPtr<nsIPrincipal> callerPrincipal =
       nsContentUtils::SubjectPrincipal(aCx);
-  nsGlobalWindowInner* win = xpc::WindowOrNull(aObject);
+  nsGlobalWindowInner* win = xpc::WindowOrNull(object);
   bool allowed = false;
   callerPrincipal->IsL10nAllowed(win ? win->GetDocumentURI() : nullptr,
                                  &allowed);
@@ -7008,14 +6986,24 @@ nsIGlobalObject* Document::GetScopeObject() const {
   return scope;
 }
 
+bool Document::CrossOriginIsolated() const {
+  // For a data document, it doesn't have a browsing context so that we check
+  // the cross-origin-isolated state from its creator's inner window.
+  if (mLoadedAsData) {
+    nsCOMPtr<nsPIDOMWindowInner> window = do_QueryInterface(GetScopeObject());
+
+    return window && window->GetBrowsingContext() &&
+           window->GetBrowsingContext()->CrossOriginIsolated();
+  }
+
+  return GetBrowsingContext() && GetBrowsingContext()->CrossOriginIsolated();
+}
+
 DocGroup* Document::GetDocGroupOrCreate() {
   if (!mDocGroup) {
-    bool crossOriginIsolated = GetBrowsingContext()
-                                   ? GetBrowsingContext()->CrossOriginIsolated()
-                                   : false;
     nsAutoCString docGroupKey;
     nsresult rv = mozilla::dom::DocGroup::GetKey(
-        NodePrincipal(), crossOriginIsolated, docGroupKey);
+        NodePrincipal(), CrossOriginIsolated(), docGroupKey);
     if (NS_SUCCEEDED(rv) && mDocumentContainer) {
       BrowsingContextGroup* group = GetBrowsingContext()->Group();
       if (group) {
@@ -7038,15 +7026,11 @@ void Document::SetScopeObject(nsIGlobalObject* aGlobal) {
     BrowsingContextGroup* browsingContextGroup =
         window->GetBrowsingContextGroup();
 
-    bool crossOriginIsolated = GetBrowsingContext()
-                                   ? GetBrowsingContext()->CrossOriginIsolated()
-                                   : false;
-
     // We should already have the principal, and now that we have been added
     // to a window, we should be able to join a DocGroup!
     nsAutoCString docGroupKey;
     nsresult rv = mozilla::dom::DocGroup::GetKey(
-        NodePrincipal(), crossOriginIsolated, docGroupKey);
+        NodePrincipal(), CrossOriginIsolated(), docGroupKey);
     if (mDocGroup) {
       if (NS_SUCCEEDED(rv)) {
         MOZ_RELEASE_ASSERT(mDocGroup->MatchesKey(docGroupKey));
@@ -8412,9 +8396,7 @@ void Document::SetDomain(const nsAString& aDomain, ErrorResult& rv) {
     return;
   }
 
-  if (StaticPrefs::
-          dom_postMessage_sharedArrayBuffer_withCOOP_COEP_AtStartup() &&
-      GetBrowsingContext() && GetBrowsingContext()->CrossOriginIsolated()) {
+  if (CrossOriginIsolated()) {
     WarnOnceAbout(Document::eDocumentSetDomainNotAllowed);
     return;
   }
@@ -8735,7 +8717,7 @@ void Document::DoNotifyPossibleTitleChange() {
 }
 
 already_AddRefed<MediaQueryList> Document::MatchMedia(
-    const nsAString& aMediaQueryList, CallerType aCallerType) {
+    const nsACString& aMediaQueryList, CallerType aCallerType) {
   RefPtr<MediaQueryList> result =
       new MediaQueryList(this, aMediaQueryList, aCallerType);
 
@@ -10718,7 +10700,8 @@ bool Document::CanSavePresentation(nsIRequest* aNewRequest,
 
   // Check our event listener manager for unload/beforeunload listeners.
   nsCOMPtr<EventTarget> piTarget = do_QueryInterface(mScriptGlobalObject);
-  if (piTarget) {
+  if (!StaticPrefs::docshell_shistory_bfcache_allow_unload_listeners() &&
+      piTarget) {
     EventListenerManager* manager = piTarget->GetExistingListenerManager();
     if (manager && manager->HasUnloadListeners()) {
       MOZ_LOG(gPageCacheLog, mozilla::LogLevel::Verbose,
@@ -14664,48 +14647,19 @@ static void ChangePointerLockedElement(Element* aElement, Document* aDocument,
   DispatchPointerLockChange(aDocument);
 }
 
-MOZ_CAN_RUN_SCRIPT_BOUNDARY static void StartSetPointerLock(
-    Element* aElement, Document* aDocument, bool aUserInputOrChromeCaller) {
-  const char* error = nullptr;
-  if (!aElement || !aDocument || !aElement->GetComposedDoc()) {
-    error = "PointerLockDeniedNotInDocument";
-  } else if (aElement->GetComposedDoc() != aDocument) {
-    error = "PointerLockDeniedMovedDocument";
-  }
-  if (!error) {
-    nsCOMPtr<Element> pointerLockedElement =
-        do_QueryReferent(EventStateManager::sPointerLockedElement);
-    if (aElement == pointerLockedElement) {
-      DispatchPointerLockChange(aDocument);
-      return;
-    }
-    // Note, we must bypass focus change, so pass true as the last parameter!
-    error = GetPointerLockError(aElement, pointerLockedElement, true);
-    // Another element in the same document is requesting pointer lock,
-    // just grant it without user input check.
-    if (!error && pointerLockedElement) {
-      ChangePointerLockedElement(aElement, aDocument, pointerLockedElement);
-      return;
-    }
-  }
-  // If it is neither user input initiated, nor requested in fullscreen,
-  // it should be rejected.
-  if (!error && !aUserInputOrChromeCaller &&
-      !aDocument->GetUnretargetedFullScreenElement()) {
-    error = "PointerLockDeniedNotInputDriven";
-  }
-  if (!error && !aDocument->SetPointerLock(aElement, StyleCursorKind::None)) {
-    error = "PointerLockDeniedFailedToLock";
-  }
-  if (error) {
-    DispatchPointerLockError(aDocument, error);
-    return;
+MOZ_CAN_RUN_SCRIPT_BOUNDARY static bool StartSetPointerLock(
+    Element* aElement, Document* aDocument) {
+  if (!aDocument->SetPointerLock(aElement, StyleCursorKind::None)) {
+    DispatchPointerLockError(aDocument, "PointerLockDeniedFailedToLock");
+    return false;
   }
 
   ChangePointerLockedElement(aElement, aDocument, nullptr);
   nsContentUtils::DispatchEventOnlyToChrome(
       aDocument, ToSupports(aElement), u"MozDOMPointerLock:Entered"_ns,
       CanBubble::eYes, Cancelable::eNo, /* DefaultAction */ nullptr);
+
+  return true;
 }
 
 class PointerLockRequest final : public Runnable {
@@ -14714,14 +14668,109 @@ class PointerLockRequest final : public Runnable {
       : mozilla::Runnable("PointerLockRequest"),
         mElement(do_GetWeakReference(aElement)),
         mDocument(do_GetWeakReference(aElement->OwnerDoc())),
-        mUserInputOrChromeCaller(aUserInputOrChromeCaller) {
-    MOZ_ASSERT(XRE_IsParentProcess());
-  }
+        mUserInputOrChromeCaller(aUserInputOrChromeCaller) {}
 
   NS_IMETHOD Run() final {
     nsCOMPtr<Element> element = do_QueryReferent(mElement);
     nsCOMPtr<Document> document = do_QueryReferent(mDocument);
-    StartSetPointerLock(element, document, mUserInputOrChromeCaller);
+
+    const char* error = nullptr;
+    if (!element || !document || !element->GetComposedDoc()) {
+      error = "PointerLockDeniedNotInDocument";
+    } else if (element->GetComposedDoc() != document) {
+      error = "PointerLockDeniedMovedDocument";
+    }
+    if (!error) {
+      nsCOMPtr<Element> pointerLockedElement =
+          do_QueryReferent(EventStateManager::sPointerLockedElement);
+      if (element == pointerLockedElement) {
+        DispatchPointerLockChange(document);
+        return NS_OK;
+      }
+      // Note, we must bypass focus change, so pass true as the last parameter!
+      error = GetPointerLockError(element, pointerLockedElement, true);
+      // Another element in the same document is requesting pointer lock,
+      // just grant it without user input check.
+      if (!error && pointerLockedElement) {
+        ChangePointerLockedElement(element, document, pointerLockedElement);
+        return NS_OK;
+      }
+    }
+    // If it is neither user input initiated, nor requested in fullscreen,
+    // it should be rejected.
+    if (!error && !mUserInputOrChromeCaller &&
+        !document->GetUnretargetedFullScreenElement()) {
+      error = "PointerLockDeniedNotInputDriven";
+    }
+
+    if (error) {
+      DispatchPointerLockError(document, error);
+      return NS_OK;
+    }
+
+    if (BrowserChild* browserChild =
+            BrowserChild::GetFrom(document->GetDocShell())) {
+      nsWeakPtr e = do_GetWeakReference(element);
+      nsWeakPtr doc = do_GetWeakReference(element->OwnerDoc());
+      nsWeakPtr bc = do_GetWeakReference(browserChild);
+      browserChild->SendRequestPointerLock(
+          [e, doc, bc](const nsCString& aError) {
+            nsCOMPtr<Document> document = do_QueryReferent(doc);
+            if (!aError.IsEmpty()) {
+              DispatchPointerLockError(document, aError.get());
+              return;
+            }
+
+            const char* error = nullptr;
+            auto autoCleanup = MakeScopeExit([&] {
+              if (error) {
+                DispatchPointerLockError(document, error);
+                // If we are failed to set pointer lock, notify parent to stop
+                // redirect mouse event to this process.
+                if (nsCOMPtr<nsIBrowserChild> browserChild =
+                        do_QueryReferent(bc)) {
+                  static_cast<BrowserChild*>(browserChild.get())
+                      ->SendReleasePointerLock();
+                }
+              }
+            });
+
+            nsCOMPtr<Element> element = do_QueryReferent(e);
+            if (!element || !document || !element->GetComposedDoc()) {
+              error = "PointerLockDeniedNotInDocument";
+              return;
+            }
+
+            if (element->GetComposedDoc() != document) {
+              error = "PointerLockDeniedMovedDocument";
+              return;
+            }
+
+            nsCOMPtr<Element> pointerLockedElement =
+                do_QueryReferent(EventStateManager::sPointerLockedElement);
+            error = GetPointerLockError(element, pointerLockedElement, true);
+            if (error) {
+              return;
+            }
+
+            if (!StartSetPointerLock(element, document)) {
+              error = "PointerLockDeniedFailedToLock";
+              return;
+            }
+          },
+          [doc](mozilla::ipc::ResponseRejectReason) {
+            // IPC layer error
+            nsCOMPtr<Document> document = do_QueryReferent(doc);
+            if (!document) {
+              return;
+            }
+
+            DispatchPointerLockError(document, "PointerLockDeniedFailedToLock");
+          });
+    } else {
+      StartSetPointerLock(element, document);
+    }
+
     return NS_OK;
   };
 
@@ -14749,30 +14798,9 @@ void Document::RequestPointerLock(Element* aElement, CallerType aCallerType) {
 
   bool userInputOrSystemCaller = HasValidTransientUserGestureActivation() ||
                                  aCallerType == CallerType::System;
-  if (BrowserChild* browserChild = BrowserChild::GetFrom(GetDocShell())) {
-    nsWeakPtr e = do_GetWeakReference(aElement);
-    nsWeakPtr doc = do_GetWeakReference(aElement->OwnerDoc());
-    browserChild->SendRequestPointerLock(
-        [e, doc, userInputOrSystemCaller](const nsCString& aError) {
-          nsCOMPtr<Document> document = do_QueryReferent(doc);
-          if (!aError.IsEmpty()) {
-            DispatchPointerLockError(document, aError.get());
-            return;
-          }
-
-          nsCOMPtr<Element> element = do_QueryReferent(e);
-          StartSetPointerLock(element, document, userInputOrSystemCaller);
-        },
-        [doc](mozilla::ipc::ResponseRejectReason) {
-          // IPC layer error
-          nsCOMPtr<Document> document = do_QueryReferent(doc);
-          DispatchPointerLockError(document, "PointerLockDeniedFailedToLock");
-        });
-  } else {
-    nsCOMPtr<nsIRunnable> request =
-        new PointerLockRequest(aElement, userInputOrSystemCaller);
-    Dispatch(TaskCategory::Other, request.forget());
-  }
+  nsCOMPtr<nsIRunnable> request =
+      new PointerLockRequest(aElement, userInputOrSystemCaller);
+  Dispatch(TaskCategory::Other, request.forget());
 }
 
 bool Document::SetPointerLock(Element* aElement, StyleCursorKind aCursorStyle) {
@@ -15616,7 +15644,9 @@ static CallState MarkDocumentTreeToBeInSyncOperation(
   return CallState::Continue;
 }
 
-nsAutoSyncOperation::nsAutoSyncOperation(Document* aDoc) {
+nsAutoSyncOperation::nsAutoSyncOperation(Document* aDoc,
+                                         SyncOperationBehavior aSyncBehavior)
+    : mSyncBehavior(aSyncBehavior) {
   mMicroTaskLevel = 0;
   CycleCollectedJSContext* ccjs = CycleCollectedJSContext::Get();
   if (ccjs) {
@@ -15631,6 +15661,13 @@ nsAutoSyncOperation::nsAutoSyncOperation(Document* aDoc) {
         }
       }
     }
+
+    mBrowsingContext = aDoc->GetBrowsingContext();
+    if (mBrowsingContext &&
+        mSyncBehavior == SyncOperationBehavior::eSuspendInput &&
+        InputTaskManager::CanSuspendInputEvent()) {
+      mBrowsingContext->Group()->IncInputEventSuspensionLevel();
+    }
   }
 }
 
@@ -15644,6 +15681,12 @@ nsAutoSyncOperation::~nsAutoSyncOperation() {
   CycleCollectedJSContext* ccjs = CycleCollectedJSContext::Get();
   if (ccjs) {
     ccjs->SetMicroTaskLevel(mMicroTaskLevel);
+  }
+
+  if (mBrowsingContext &&
+      mSyncBehavior == SyncOperationBehavior::eSuspendInput &&
+      InputTaskManager::CanSuspendInputEvent()) {
+    mBrowsingContext->Group()->DecInputEventSuspensionLevel();
   }
 }
 
@@ -16548,7 +16591,17 @@ already_AddRefed<mozilla::dom::Promise> Document::RequestStorageAccess(
   //         user for explicit permission. Reject if some rule is not fulfilled.
   if (CookieJarSettings()->GetRejectThirdPartyContexts()) {
     // Only do something special for third-party tracking content.
-    if (StorageDisabledByAntiTracking(this, nullptr)) {
+    uint32_t antiTrackingRejectedReason = 0;
+    if (StorageDisabledByAntiTracking(this, nullptr,
+                                      antiTrackingRejectedReason)) {
+      // If storage is disabled because of a custom cookie permission for the
+      // site, reject.
+      if (antiTrackingRejectedReason ==
+          nsIWebProgressListener::STATE_COOKIES_BLOCKED_BY_PERMISSION) {
+        promise->MaybeRejectWithUndefined();
+        return promise.forget();
+      }
+
       // Note: If this has returned true, the top-level document is guaranteed
       // to not be on the Content Blocking allow list.
       MOZ_ASSERT(!CookieJarSettings()->GetIsOnContentBlockingAllowList());

@@ -9,7 +9,6 @@ import {
   BasePing,
   ImpressionStatsPing,
   SessionPing,
-  SpocsFillPing,
   UndesiredPing,
   UserEventPing,
 } from "test/schemas/pings";
@@ -730,19 +729,17 @@ describe("TelemetryFeed", () => {
       assert.propertyVal(ping, "tiles", tiles);
       assert.propertyVal(ping.tiles[0], "shim", tiles[0].shim);
     });
-  });
-  describe("#createSpocsFillPing", () => {
-    it("should create a valid SPOCS Fill ping", async () => {
-      const spocFills = [
-        { id: 10001, displayed: 0, reason: "frequency_cap", full_recalc: 1 },
-        { id: 10002, displayed: 0, reason: "blocked_by_user", full_recalc: 1 },
-        { id: 10003, displayed: 1, reason: "n/a", full_recalc: 1 },
-      ];
-      const action = ac.DiscoveryStreamSpocsFill({ spoc_fills: spocFills });
-      const ping = await instance.createSpocsFillPing(action.data);
+    it("should not include client_id and session_id", async () => {
+      const tiles = [{ id: 10001 }, { id: 10002 }, { id: 10003 }];
+      const action = ac.ImpressionStats({ source: "POCKET", tiles });
+      const ping = await instance.createImpressionStats(
+        au.getPortIdOfSender(action),
+        action.data
+      );
 
-      assert.validate(ping, SpocsFillPing);
-      assert.propertyVal(ping, "spoc_fills", spocFills);
+      assert.validate(ping, ImpressionStatsPing);
+      assert.notProperty(ping, "client_id");
+      assert.notProperty(ping, "session_id");
     });
   });
   describe("#applyCFRPolicy", () => {
@@ -1519,21 +1516,6 @@ describe("TelemetryFeed", () => {
         "port123",
         data
       );
-    });
-    it("should send an event on a DISCOVERY_STREAM_SPOCS_FILL action", () => {
-      const sendEvent = sandbox.stub(instance, "sendStructuredIngestionEvent");
-      const eventCreator = sandbox.stub(instance, "createSpocsFillPing");
-      const spocFills = [
-        { id: 10001, displayed: 0, reason: "frequency_cap", full_recalc: 1 },
-        { id: 10002, displayed: 0, reason: "blocked_by_user", full_recalc: 1 },
-        { id: 10003, displayed: 1, reason: "n/a", full_recalc: 1 },
-      ];
-      const action = ac.DiscoveryStreamSpocsFill({ spoc_fills: spocFills });
-
-      instance.onAction(action);
-
-      assert.calledWith(eventCreator, action.data);
-      assert.calledWith(sendEvent, eventCreator.returnValue);
     });
   });
   describe("#handleNewTabInit", () => {

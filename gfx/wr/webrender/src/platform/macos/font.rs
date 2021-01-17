@@ -107,12 +107,17 @@ fn determine_font_smoothing_mode() -> Option<FontRenderMode> {
     gray_context.set_should_smooth_fonts(false);
     gray_context.set_should_antialias(true);
     gray_context.set_rgb_fill_color(1.0, 1.0, 1.0, 1.0);
-    // Lucida Grande 12 is the default fallback font in Firefox
-    let ct_font = core_text::font::new_from_name("Lucida Grande", 12.).unwrap();
-    let point = CGPoint { x: 0., y: 0. };
-    let glyph = 'X' as CGGlyph;
-    ct_font.draw_glyphs(&[glyph], &[point], smooth_context.clone());
-    ct_font.draw_glyphs(&[glyph], &[point], gray_context.clone());
+
+    // Autorelease pool for CTFont
+    objc::rc::autoreleasepool(|| {
+        // Lucida Grande 12 is the default fallback font in Firefox
+        let ct_font = core_text::font::new_from_name("Lucida Grande", 12.).unwrap();
+        let point = CGPoint { x: 0., y: 0. };
+        let glyph = 'X' as CGGlyph;
+        ct_font.draw_glyphs(&[glyph], &[point], smooth_context.clone());
+        ct_font.draw_glyphs(&[glyph], &[point], gray_context.clone());
+    });
+
     let mut mode = None;
     for (smooth, gray) in smooth_context.data().chunks(4).zip(gray_context.data().chunks(4)) {
         if smooth[0] != smooth[1] || smooth[1] != smooth[2] {
@@ -421,16 +426,19 @@ impl FontContext {
         size: f64,
         variations: &[FontVariation],
     ) -> Option<(CTFont, CTFontSymbolicTraits)> {
-        match self.ct_fonts.entry((font_key, FontSize::from_f64_px(size), variations.to_vec())) {
-            Entry::Occupied(entry) => Some((*entry.get()).clone()),
-            Entry::Vacant(entry) => {
-                let desc_or_font = self.desc_or_fonts.get(&font_key)?;
-                let ct_font = new_ct_font_with_variations(desc_or_font, size, variations);
-                let traits = ct_font.symbolic_traits();
-                entry.insert((ct_font.clone(), traits));
-                Some((ct_font, traits))
+        // Interacting with CoreText can create autorelease garbage.
+        objc::rc::autoreleasepool(|| {
+            match self.ct_fonts.entry((font_key, FontSize::from_f64_px(size), variations.to_vec())) {
+                Entry::Occupied(entry) => Some((*entry.get()).clone()),
+                Entry::Vacant(entry) => {
+                    let desc_or_font = self.desc_or_fonts.get(&font_key)?;
+                    let ct_font = new_ct_font_with_variations(desc_or_font, size, variations);
+                    let traits = ct_font.symbolic_traits();
+                    entry.insert((ct_font.clone(), traits));
+                    Some((ct_font, traits))
+                }
             }
-        }
+        })
     }
 
     pub fn get_glyph_index(&mut self, font_key: FontKey, ch: char) -> Option<u32> {
@@ -608,6 +616,7 @@ impl FontContext {
     }
 
     pub fn rasterize_glyph(&mut self, font: &FontInstance, key: &GlyphKey) -> GlyphRasterResult {
+        objc::rc::autoreleasepool(|| {
         let (x_scale, y_scale) = font.transform.compute_scale().unwrap_or((1.0, 1.0));
         let size = font.size.to_f64_px() * y_scale;
         let (ct_font, traits) =
@@ -851,7 +860,7 @@ impl FontContext {
                 GlyphType::Vector => font.get_glyph_format(),
             },
             bytes: rasterized_pixels,
-        })
+        })})
     }
 }
 

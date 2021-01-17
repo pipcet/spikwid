@@ -19,8 +19,8 @@
 
 #include "builtin/ModuleObject.h"
 #include "debugger/DebugAPI.h"
-#include "frontend/CompilationInfo.h"  // frontend::CompilationStencil, frontend::CompilationInfo, frontend::CompilationInfoVector
-#include "frontend/ParserAtom.h"       // XDRParserAtomData
+#include "frontend/CompilationInfo.h"  // frontend::BaseCompilationStencil, frontend::CompilationStencil, frontend::CompilationStencilSet
+#include "frontend/ParserAtom.h"       // frontend::ParserAtomEntry
 #include "js/BuildId.h"                // JS::BuildIdCharVector
 #include "vm/JSContext.h"
 #include "vm/JSScript.h"
@@ -170,8 +170,14 @@ XDRResult XDRState<mode>::codeCharsZ(XDRTranscodeString<char16_t>& buffer) {
   return XDRCodeCharsZ(this, buffer);
 }
 
-JS_PUBLIC_API bool JS::GetScriptTranscodingBuildId(
-    JS::BuildIdCharVector* buildId) {
+enum class XDRFormatType : uint8_t {
+  UseOption,
+  JSScript,
+  Stencil,
+};
+
+static bool GetScriptTranscodingBuildId(XDRFormatType formatType,
+                                        JS::BuildIdCharVector* buildId) {
   MOZ_ASSERT(buildId->empty());
   MOZ_ASSERT(GetBuildId);
 
@@ -182,7 +188,7 @@ JS_PUBLIC_API bool JS::GetScriptTranscodingBuildId(
   // Note: the buildId returned here is also used for the bytecode cache MIME
   // type so use plain ASCII characters.
 
-  if (!buildId->reserve(buildId->length() + 5)) {
+  if (!buildId->reserve(buildId->length() + 4)) {
     return false;
   }
 
@@ -193,17 +199,36 @@ JS_PUBLIC_API bool JS::GetScriptTranscodingBuildId(
   buildId->infallibleAppend(sizeof(uintptr_t) == 4 ? '4' : '8');
   buildId->infallibleAppend(MOZ_LITTLE_ENDIAN() ? 'l' : 'b');
 
-  // If off-thread parse global isn't used for single script decoding,
-  // we use stencil XDR instead of JSScript XDR.
-  buildId->infallibleAppend(js::UseOffThreadParseGlobal() ? '1' : '0');
+  // '0': Stencil
+  // '1': JSScript.
+  char formatChar = '0';
+  switch (formatType) {
+    case XDRFormatType::UseOption:
+      // If off-thread parse global isn't used for single script decoding,
+      // we use stencil XDR instead of JSScript XDR.
+      formatChar = js::UseOffThreadParseGlobal() ? '1' : '0';
+      break;
+    case XDRFormatType::JSScript:
+      formatChar = '1';
+      break;
+    case XDRFormatType::Stencil:
+      formatChar = '0';
+      break;
+  }
+  buildId->infallibleAppend(formatChar);
 
   return true;
 }
 
+JS_PUBLIC_API bool JS::GetScriptTranscodingBuildId(
+    JS::BuildIdCharVector* buildId) {
+  return GetScriptTranscodingBuildId(XDRFormatType::UseOption, buildId);
+}
+
 template <XDRMode mode>
-static XDRResult VersionCheck(XDRState<mode>* xdr) {
+static XDRResult VersionCheck(XDRState<mode>* xdr, XDRFormatType formatType) {
   JS::BuildIdCharVector buildId;
-  if (!JS::GetScriptTranscodingBuildId(&buildId)) {
+  if (!GetScriptTranscodingBuildId(formatType, &buildId)) {
     ReportOutOfMemory(xdr->cx());
     return xdr->fail(JS::TranscodeResult_Throw);
   }
@@ -299,9 +324,9 @@ static XDRResult AtomTable(XDRState<mode>* xdr) {
 
 template <XDRMode mode>
 static XDRResult ParserAtomTable(XDRState<mode>* xdr,
-                                 frontend::CompilationStencil& stencil) {
+                                 frontend::BaseCompilationStencil& stencil) {
   if (mode == XDR_ENCODE) {
-    uint32_t atomVectorLength = stencil.parserAtomData.length();
+    uint32_t atomVectorLength = stencil.parserAtomData.size();
     MOZ_TRY(XDRAtomCount(xdr, &atomVectorLength));
 
     uint32_t atomCount = 0;
@@ -315,16 +340,14 @@ static XDRResult ParserAtomTable(XDRState<mode>* xdr,
     }
     MOZ_TRY(XDRAtomCount(xdr, &atomCount));
 
-    for (const auto& entry : stencil.parserAtomData) {
+    for (auto& entry : stencil.parserAtomData) {
       if (!entry) {
         continue;
       }
       if (entry->isUsedByStencil()) {
-        const frontend::ParserAtom* atom = entry->asAtom();
-        uint32_t index = atom->toParserAtomIndex();
+        uint32_t index = entry->toParserAtomIndex();
         MOZ_TRY(xdr->codeUint32(&index));
-        MOZ_TRY(
-            XDRParserAtomDataAt(xdr, &atom, frontend::ParserAtomIndex(index)));
+        MOZ_TRY(XDRParserAtomEntry(xdr, &entry));
       }
     }
 
@@ -334,7 +357,8 @@ static XDRResult ParserAtomTable(XDRState<mode>* xdr,
   uint32_t atomVectorLength;
   MOZ_TRY(XDRAtomCount(xdr, &atomVectorLength));
 
-  if (!xdr->frontendAtoms().resize(xdr->cx(), atomVectorLength)) {
+  if (!xdr->frontendAtoms().allocate(xdr->cx(), xdr->stencilAlloc(),
+                                     atomVectorLength)) {
     return xdr->fail(JS::TranscodeResult_Throw);
   }
 
@@ -343,10 +367,11 @@ static XDRResult ParserAtomTable(XDRState<mode>* xdr,
   MOZ_ASSERT(!xdr->hasAtomTable());
 
   for (uint32_t i = 0; i < atomCount; i++) {
-    const frontend::ParserAtom* atom = nullptr;
+    frontend::ParserAtomEntry* entry = nullptr;
     uint32_t index;
     MOZ_TRY(xdr->codeUint32(&index));
-    MOZ_TRY(XDRParserAtomDataAt(xdr, &atom, frontend::ParserAtomIndex(index)));
+    MOZ_TRY(XDRParserAtomEntry(xdr, &entry));
+    xdr->frontendAtoms().set(frontend::ParserAtomIndex(index), entry);
   }
   xdr->finishAtomTable();
 
@@ -383,7 +408,7 @@ XDRResult XDRState<mode>::codeFunction(MutableHandleFunction funp,
     MOZ_ASSERT(funp->enclosingScope()->is<GlobalScope>());
   }
 
-  MOZ_TRY(VersionCheck(this));
+  MOZ_TRY(VersionCheck(this, XDRFormatType::JSScript));
   MOZ_TRY(XDRInterpretedFunction(this, scope, sourceObject, funp));
 
   guard.release();
@@ -416,7 +441,7 @@ XDRResult XDRState<mode>::codeScript(MutableHandleScript scriptp) {
   if (useHeader) {
     switchToHeaderBuf();
   }
-  MOZ_TRY(VersionCheck(this));
+  MOZ_TRY(VersionCheck(this, XDRFormatType::JSScript));
   MOZ_TRY(AtomTable(this));
   if (useHeader) {
     switchToMainBuf();
@@ -429,8 +454,7 @@ XDRResult XDRState<mode>::codeScript(MutableHandleScript scriptp) {
 }
 
 template <XDRMode mode>
-XDRResult XDRState<mode>::codeStencil(
-    frontend::CompilationInfo& compilationInfo) {
+XDRResult XDRState<mode>::codeStencil(frontend::CompilationStencil& stencil) {
 #ifdef DEBUG
   auto sanityCheck = mozilla::MakeScopeExit(
       [&] { MOZ_ASSERT(validateResultCode(cx(), resultCode())); });
@@ -440,33 +464,34 @@ XDRResult XDRState<mode>::codeStencil(
   if (mode == XDR_ENCODE) {
     switchToHeaderBuf();
   }
-  MOZ_TRY(VersionCheck(this));
+  MOZ_TRY(VersionCheck(this, XDRFormatType::Stencil));
 
   if (hasOptions()) {
-    MOZ_ASSERT(&options() == &compilationInfo.input.options);
+    MOZ_ASSERT(&options() == &stencil.input.options);
   }
-  MOZ_TRY(XDRCompilationInput(this, compilationInfo.input));
+  MOZ_TRY(XDRCompilationInput(this, stencil.input));
 
   // If we are incrementally encoding, the number of chunks are encoded in
   // XDRIncrementalStencilEncoder::linearize, after the header.
   if (mode == XDR_DECODE) {
     MOZ_TRY(XDRChunkCount(this, &nchunks()));
+    MOZ_TRY(align32());
   }
 
   if (mode == XDR_ENCODE) {
     switchToMainBuf();
   }
-  MOZ_TRY(ParserAtomTable(this, compilationInfo.stencil));
+  MOZ_TRY(ParserAtomTable(this, stencil));
 
   MOZ_ASSERT(isMainBuf());
-  MOZ_TRY(XDRCompilationStencil(this, compilationInfo.stencil));
+  MOZ_TRY(XDRCompilationStencil(this, stencil));
 
   return Ok();
 }
 
 template <XDRMode mode>
 XDRResult XDRState<mode>::codeFunctionStencil(
-    frontend::CompilationStencil& stencil) {
+    frontend::BaseCompilationStencil& stencil) {
 #ifdef DEBUG
   auto sanityCheck = mozilla::MakeScopeExit(
       [&] { MOZ_ASSERT(validateResultCode(cx(), resultCode())); });
@@ -479,7 +504,7 @@ XDRResult XDRState<mode>::codeFunctionStencil(
 
   MOZ_TRY(ParserAtomTable(this, stencil));
 
-  MOZ_TRY(XDRCompilationStencil(this, stencil));
+  MOZ_TRY(XDRBaseCompilationStencil(this, stencil));
 
   return Ok();
 }
@@ -711,10 +736,16 @@ XDRResult XDRIncrementalEncoder::linearize(JS::TranscodeBuffer& buffer) {
 }
 
 XDRResult XDRIncrementalStencilEncoder::linearize(JS::TranscodeBuffer& buffer) {
+  // NOTE: If buffer is empty, buffer.begin() doesn't point valid buffer.
+  MOZ_ASSERT_IF(!buffer.empty(),
+                JS::IsTranscodingBytecodeAligned(buffer.begin()));
+  MOZ_ASSERT(JS::IsTranscodingBytecodeOffsetAligned(buffer.length()));
+
   switchToHeaderBuf();
 
   uint32_t nchunks = encodedFunctions_.count() + 1;
   MOZ_TRY(XDRChunkCount(this, &nchunks));
+  MOZ_TRY(align32());
 
   switchToMainBuf();
 
@@ -735,34 +766,32 @@ void XDRDecoder::trace(JSTracer* trc) { atomTable_.trace(trc); }
 void XDRIncrementalEncoder::trace(JSTracer* trc) { atomMap_.trace(trc); }
 
 XDRResult XDRStencilDecoder::codeStencils(
-    frontend::CompilationInfoVector& compilationInfos) {
-  MOZ_ASSERT(compilationInfos.delazifications.length() == 0);
+    frontend::CompilationStencilSet& stencilSet) {
+  MOZ_ASSERT(stencilSet.delazifications.length() == 0);
 
-  frontend::ParserAtomVectorBuilder parserAtomBuilder(
-      cx()->runtime(), compilationInfos.initial.alloc,
-      compilationInfos.initial.stencil.parserAtomData);
+  frontend::ParserAtomSpanBuilder parserAtomBuilder(cx()->runtime(),
+                                                    stencilSet.parserAtomData);
   parserAtomBuilder_ = &parserAtomBuilder;
-  stencilAlloc_ = &compilationInfos.initial.alloc;
+  stencilAlloc_ = &stencilSet.alloc;
 
-  MOZ_TRY(codeStencil(compilationInfos.initial));
+  MOZ_TRY(codeStencil(stencilSet));
 
-  if (!compilationInfos.delazifications.reserve(nchunks_ - 1)) {
+  if (!stencilSet.delazifications.reserve(nchunks_ - 1)) {
     ReportOutOfMemory(cx());
     return fail(JS::TranscodeResult_Throw);
   }
 
-  // All delazification share CompilationInfoVector.allocForDelazifications.
-  stencilAlloc_ = &compilationInfos.allocForDelazifications;
+  // All delazification share CompilationStencilSet.allocForDelazifications.
+  stencilAlloc_ = &stencilSet.allocForDelazifications;
 
   for (size_t i = 1; i < nchunks_; i++) {
-    compilationInfos.delazifications.infallibleEmplaceBack();
-    auto& delazification = compilationInfos.delazifications[i - 1];
+    stencilSet.delazifications.infallibleEmplaceBack();
+    auto& delazification = stencilSet.delazifications[i - 1];
 
     hasFinishedAtomTable_ = false;
 
-    frontend::ParserAtomVectorBuilder parserAtomBuilder(
-        cx()->runtime(), compilationInfos.allocForDelazifications,
-        delazification.parserAtomData);
+    frontend::ParserAtomSpanBuilder parserAtomBuilder(
+        cx()->runtime(), delazification.parserAtomData);
     parserAtomBuilder_ = &parserAtomBuilder;
 
     MOZ_TRY(codeFunctionStencil(delazification));
@@ -772,29 +801,24 @@ XDRResult XDRStencilDecoder::codeStencils(
 }
 
 XDRResult XDRIncrementalStencilEncoder::codeStencils(
-    frontend::CompilationInfoVector& compilationInfos) {
+    frontend::CompilationStencilSet& stencilSet) {
   MOZ_ASSERT(encodedFunctions_.count() == 0);
 
-  MOZ_TRY(codeStencil(compilationInfos.initial));
+  MOZ_TRY(codeStencil(stencilSet));
 
-  for (auto& delazification : compilationInfos.delazifications) {
+  for (auto& delazification : stencilSet.delazifications) {
     MOZ_TRY(codeFunctionStencil(delazification));
   }
 
   return Ok();
 }
 
-/* static */
-XDRIncrementalStencilEncoder::FunctionKey
-XDRIncrementalStencilEncoder::toFunctionKey(const SourceExtent& extent) {
-  return (FunctionKey)extent.sourceStart << 32 | extent.sourceEnd;
-}
-
 XDRResultT<bool> XDRIncrementalStencilEncoder::checkAlreadyCoded(
-    const frontend::CompilationStencil& stencil) {
-  auto key = toFunctionKey(
-      stencil.scriptData[frontend::CompilationInfo::TopLevelIndex].extent);
+    const frontend::BaseCompilationStencil& stencil) {
+  static_assert(std::is_same_v<frontend::BaseCompilationStencil::FunctionKey,
+                               XDRIncrementalStencilEncoder::FunctionKey>);
 
+  auto key = stencil.functionKey;
   auto p = encodedFunctions_.lookupForAdd(key);
   if (p) {
     return true;

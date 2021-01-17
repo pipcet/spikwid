@@ -43,6 +43,7 @@ struct SkeletonUISettings {
   Vector<CSSPixelSpan> springs;
   bool maximized;
   bool menubarShown;
+  bool rtlEnabled;
 };
 
 enum class ThemeMode : uint32_t { Invalid, Default, Dark, Light };
@@ -54,6 +55,7 @@ struct ThemeColors {
   uint32_t chromeContentDividerColor;
   uint32_t tabLineColor;
   uint32_t urlbarColor;
+  uint32_t urlbarBorderColor;
   uint32_t animationColor;
 };
 

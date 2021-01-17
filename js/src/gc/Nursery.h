@@ -50,6 +50,7 @@ class JSDependentString;
 
 namespace js {
 
+struct StringStats;
 class AutoLockGCBgAlloc;
 class ObjectElements;
 class PlainObject;
@@ -102,7 +103,7 @@ class NurseryDecommitTask : public GCParallelTask {
   gc::Chunk* popChunk(const AutoLockHelperThreadState& lock);
 };
 
-class TenuringTracer : public JSTracer {
+class TenuringTracer final : public GenericTracer {
   friend class Nursery;
   Nursery& nursery_;
 
@@ -123,13 +124,24 @@ class TenuringTracer : public JSTracer {
 
   TenuringTracer(JSRuntime* rt, Nursery* nursery);
 
+  JSObject* onObjectEdge(JSObject* obj) override;
+  JSString* onStringEdge(JSString* str) override;
+  JS::Symbol* onSymbolEdge(JS::Symbol* sym) override;
+  JS::BigInt* onBigIntEdge(JS::BigInt* bi) override;
+  js::BaseScript* onScriptEdge(BaseScript* script) override;
+  js::Shape* onShapeEdge(Shape* shape) override;
+  js::RegExpShared* onRegExpSharedEdge(RegExpShared* shared) override;
+  js::ObjectGroup* onObjectGroupEdge(ObjectGroup* group) override;
+  js::BaseShape* onBaseShapeEdge(BaseShape* base) override;
+  js::jit::JitCode* onJitCodeEdge(jit::JitCode* code) override;
+  js::Scope* onScopeEdge(Scope* scope) override;
+
  public:
   Nursery& nursery() { return nursery_; }
 
   template <typename T>
   void traverse(T** thingp);
-  template <typename T>
-  void traverse(T* thingp);
+  void traverse(JS::Value* thingp);
 
   // The store buffers need to be able to call these directly.
   void traceObject(JSObject* src);
@@ -404,6 +416,8 @@ class Nursery {
   }
 
   bool shouldCollect() const;
+  bool isNearlyFull() const;
+  bool isUnderused() const;
 
   bool enableProfiling() const { return enableProfiling_; }
 
@@ -478,6 +492,9 @@ class Nursery {
   // Whether we will nursery-allocate BigInts.
   bool canAllocateBigInts_;
 
+  // Report how many strings were deduplicated.
+  bool reportDeduplications_;
+
   // Whether and why a collection of this nursery has been requested. This is
   // mutable as it is set by the store buffer, which otherwise cannot modify
   // anything in the nursery.
@@ -511,10 +528,11 @@ class Nursery {
     size_t nurseryUsedBytes = 0;
     size_t tenuredBytes = 0;
     size_t tenuredCells = 0;
+    mozilla::TimeStamp endTime;
   };
   PreviousGC previousGC;
 
-  mozilla::TimeStamp lastResizeTime;
+  bool hasRecentGrowthData;
   double smoothedGrowthFactor;
 
   // Calculate the promotion rate of the most recent minor GC.
@@ -732,12 +750,16 @@ class Nursery {
                      bool wasEmpty, double promotionRate);
 
   void printCollectionProfile(JS::GCReason reason, double promotionRate);
+  void printDeduplicationData(js::StringStats& prev, js::StringStats& curr);
 
   // Profile recording and printing.
   void maybeClearProfileDurations();
   void startProfile(ProfileKey key);
   void endProfile(ProfileKey key);
   static void printProfileDurations(const ProfileDurations& times);
+
+  mozilla::TimeStamp collectionStartTime() const;
+  mozilla::TimeStamp lastCollectionEndTime() const;
 
   friend class TenuringTracer;
   friend class gc::MinorCollectionTracer;

@@ -26,13 +26,11 @@ export const PrefsButton = ({ onClick, icon }) => (
 );
 
 export const PersonalizeButton = ({ onClick }) => (
-  <div className="button-wrapper">
-    <button
-      className="personalize-button"
-      onClick={onClick}
-      data-l10n-id="newtab-personalize-button-label"
-    />
-  </div>
+  <button
+    className="personalize-button"
+    onClick={onClick}
+    data-l10n-id="newtab-personalize-button-label"
+  />
 );
 
 // Returns a function will not be continuously triggered when called. The
@@ -215,6 +213,7 @@ export class BaseContent extends React.PureComponent {
         "fixed-search",
       prefs.showSearch && noSectionsEnabled && "only-search",
       showLogo && "visible-logo",
+      newNewtabExperienceEnabled && "newtab-experience",
     ]
       .filter(v => v)
       .join(" ");
@@ -222,7 +221,24 @@ export class BaseContent extends React.PureComponent {
     return (
       <div>
         {canShowCustomizationMenu ? (
-          <PersonalizeButton onClick={this.openCustomizationMenu} />
+          <span>
+            <PersonalizeButton onClick={this.openCustomizationMenu} />
+            <CSSTransition
+              timeout={0}
+              classNames="customize-animate"
+              in={showCustomizationMenu}
+              appear={true}
+            >
+              <CustomizeMenu
+                onClose={this.closeCustomizationMenu}
+                openPreferences={this.openPreferences}
+                setPref={this.setPref}
+                enabledSections={enabledSections}
+                pocketRegion={pocketRegion}
+                mayHaveSponsoredTopSites={mayHaveSponsoredTopSites}
+              />
+            </CSSTransition>
+          </span>
         ) : (
           <PrefsButton onClick={this.openPreferences} icon={prefsButtonIcon} />
         )}
@@ -257,22 +273,6 @@ export class BaseContent extends React.PureComponent {
             <ConfirmDialog />
           </main>
         </div>
-        <CSSTransition
-          timeout={250}
-          classNames="customize-animate"
-          in={showCustomizationMenu}
-          appear={true}
-          unmountOnExit={true}
-        >
-          <CustomizeMenu
-            onClose={this.closeCustomizationMenu}
-            openPreferences={this.openPreferences}
-            setPref={this.setPref}
-            enabledSections={enabledSections}
-            pocketRegion={pocketRegion}
-            mayHaveSponsoredTopSites={mayHaveSponsoredTopSites}
-          />
-        </CSSTransition>
       </div>
     );
   }

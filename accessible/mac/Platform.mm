@@ -120,7 +120,14 @@ void ProxyCaretMoveEvent(ProxyAccessible* aTarget, int32_t aOffset,
   }
 
   if (wrapper) {
-    [wrapper handleAccessibleEvent:nsIAccessibleEvent::EVENT_TEXT_CARET_MOVED];
+    if (mozTextAccessible* textAcc =
+            static_cast<mozTextAccessible*>([wrapper moxEditableAncestor])) {
+      [textAcc
+          handleAccessibleEvent:nsIAccessibleEvent::EVENT_TEXT_CARET_MOVED];
+    } else {
+      [wrapper
+          handleAccessibleEvent:nsIAccessibleEvent::EVENT_TEXT_CARET_MOVED];
+    }
   }
 }
 
@@ -188,7 +195,6 @@ void ProxyRoleChangedEvent(ProxyAccessible* aTarget, const a11y::role& aRole) {
 @implementation GeckoNSApplication (a11y)
 
 - (void)accessibilitySetValue:(id)value forAttribute:(NSString*)attribute {
-  NSLog(@"Checking a11y");
   if ([attribute isEqualToString:@"AXEnhancedUserInterface"]) {
     mozilla::a11y::sA11yShouldBeEnabled = ([value intValue] == 1);
 #if defined(MOZ_TELEMETRY_REPORTING)

@@ -7,6 +7,9 @@
 // _AboutLogins is only exported for testing
 var EXPORTED_SYMBOLS = ["AboutLoginsParent", "_AboutLogins"];
 
+const { setTimeout, clearTimeout } = ChromeUtils.import(
+  "resource://gre/modules/Timer.jsm"
+);
 const { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
 );
@@ -66,7 +69,7 @@ const SHOW_PASSWORD_SYNC_NOTIFICATION_PREF =
 // about:logins will always use the privileged content process,
 // even if it is disabled for other consumers such as about:newtab.
 const EXPECTED_ABOUTLOGINS_REMOTE_TYPE = E10SUtils.PRIVILEGEDABOUT_REMOTE_TYPE;
-
+let _passwordRemaskTimeout;
 const convertSubjectToLogin = subject => {
   subject.QueryInterface(Ci.nsILoginMetaInfo).QueryInterface(Ci.nsILoginInfo);
   const login = LoginHelper.loginToVanillaObject(subject);
@@ -215,14 +218,19 @@ class AboutLoginsParent extends JSWindowActorParent {
           messageText.value,
           captionText.value
         );
-        if (isAuthorized) {
-          const AUTH_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
-          AboutLogins._authExpirationTime = Date.now() + AUTH_TIMEOUT_MS;
-        }
         this.sendAsyncMessage("AboutLogins:MasterPasswordResponse", {
           result: isAuthorized,
           telemetryEvent,
         });
+        if (isAuthorized) {
+          const AUTH_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+          AboutLogins._authExpirationTime = Date.now() + AUTH_TIMEOUT_MS;
+          const remaskPasswords = () => {
+            this.sendAsyncMessage("AboutLogins:RemaskPassword");
+          };
+          clearTimeout(_passwordRemaskTimeout);
+          _passwordRemaskTimeout = setTimeout(remaskPasswords, AUTH_TIMEOUT_MS);
+        }
         break;
       }
       case "AboutLogins:Subscribe": {
@@ -390,23 +398,10 @@ class AboutLoginsParent extends JSWindowActorParent {
         break;
       }
       case "AboutLogins:ImportPasswords": {
-        let fp = Cc["@mozilla.org/filepicker;1"].createInstance(
-          Ci.nsIFilePicker
-        );
-        async function fpCallback(aResult) {
-          if (aResult != Ci.nsIFilePicker.returnCancel) {
-            await LoginCSVImport.importFromCSV(fp.file.path);
-            Services.telemetry.recordEvent(
-              "pwmgr",
-              "mgmt_menu_item_used",
-              "import_csv_complete"
-            );
-          }
-        }
         let [
           title,
           okButtonLabel,
-          csvFilterTitle,
+          filterTitle,
         ] = await AboutLoginsL10n.formatValues([
           {
             id: "about-logins-import-file-picker-title",
@@ -418,12 +413,23 @@ class AboutLoginsParent extends JSWindowActorParent {
             id: "about-logins-import-file-picker-csv-filter-title",
           },
         ]);
+        let { result, path } = await this.openFilePickerDialog(
+          title,
+          okButtonLabel,
+          filterTitle,
+          "*.csv",
+          ownerGlobal
+        );
 
-        fp.init(ownerGlobal, title, Ci.nsIFilePicker.modeOpen);
-        fp.appendFilter(csvFilterTitle, "*.csv");
-        fp.appendFilters(Ci.nsIFilePicker.filterAll);
-        fp.okButtonLabel = okButtonLabel;
-        fp.open(fpCallback);
+        if (result != Ci.nsIFilePicker.returnCancel) {
+          let summary = await LoginCSVImport.importFromCSV(path);
+          this.sendAsyncMessage("AboutLogins:ImportPasswordsDialog", summary);
+          Services.telemetry.recordEvent(
+            "pwmgr",
+            "mgmt_menu_item_used",
+            "import_csv_complete"
+          );
+        }
         break;
       }
       case "AboutLogins:RemoveAllLogins": {
@@ -446,6 +452,25 @@ class AboutLoginsParent extends JSWindowActorParent {
     }
 
     this.sendAsyncMessage("AboutLogins:ShowLoginItemError", messageObject);
+  }
+
+  async openFilePickerDialog(
+    title,
+    okButtonLabel,
+    filterTitle,
+    filterExtension,
+    ownerGlobal
+  ) {
+    return new Promise(resolve => {
+      let fp = Cc["@mozilla.org/filepicker;1"].createInstance(Ci.nsIFilePicker);
+      fp.init(ownerGlobal, title, Ci.nsIFilePicker.modeOpen);
+      fp.appendFilter(filterTitle, filterExtension);
+      fp.appendFilters(Ci.nsIFilePicker.filterAll);
+      fp.okButtonLabel = okButtonLabel;
+      fp.open(async result => {
+        resolve({ result, path: fp.file.path });
+      });
+    });
   }
 }
 

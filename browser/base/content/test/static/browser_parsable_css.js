@@ -92,19 +92,19 @@ if (
   });
 }
 
-if (Services.prefs.getBoolPref("layout.css.file-selector-button.enabled")) {
-  // System colors reserved to UA / chrome sheets
-  whitelist.push({
-    sourceName: /(?:res|gre-resources)\/forms\.css$/i,
-    errorMessage: /Expected color but found \u2018-moz.*/i,
-    platforms: ["linux"],
-    isFromDevTools: false,
-  });
-} else {
+// System colors reserved to UA / chrome sheets
+whitelist.push({
+  sourceName: /(?:res|gre-resources)\/forms\.css$/i,
+  errorMessage: /Expected color but found \u2018-moz.*/i,
+  platforms: ["linux"],
+  isFromDevTools: false,
+});
+
+if (!Services.prefs.getBoolPref("layout.css.autofill.enabled")) {
   // Reserved to UA sheets, behind a pref for content.
   whitelist.push({
     sourceName: /(?:res|gre-resources)\/forms\.css$/i,
-    errorMessage: /Unknown pseudo-.*file-selector-button/i,
+    errorMessage: /Unknown pseudo-.*autofill/i,
     isFromDevTools: false,
   });
 }

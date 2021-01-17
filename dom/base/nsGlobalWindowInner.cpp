@@ -1191,8 +1191,6 @@ void nsGlobalWindowInner::FreeInnerObjects() {
     mDocumentPartitionedPrincipal = mDoc->PartitionedPrincipal();
     mDocumentURI = mDoc->GetDocumentURI();
     mDocBaseURI = mDoc->GetDocBaseURI();
-    mDocContentBlockingAllowListPrincipal =
-        mDoc->GetContentBlockingAllowListPrincipal();
     mDocumentCsp = mDoc->GetCsp();
 
     while (mDoc->EventHandlingSuppressed()) {
@@ -1313,6 +1311,7 @@ void nsGlobalWindowInner::FreeInnerObjects() {
 
 #ifdef MOZ_GLEAN
   mGlean = nullptr;
+  mGleanPings = nullptr;
 #endif
 
   mParentTarget = nullptr;
@@ -1407,6 +1406,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(nsGlobalWindowInner)
 
 #ifdef MOZ_GLEAN
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mGlean)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mGleanPings)
 #endif
 
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mOuterWindow)
@@ -1504,6 +1504,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsGlobalWindowInner)
 
 #ifdef MOZ_GLEAN
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mGlean)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mGleanPings)
 #endif
 
   if (tmp->mOuterWindow) {
@@ -2831,6 +2832,14 @@ mozilla::glean::Glean* nsGlobalWindowInner::Glean() {
 
   return mGlean;
 }
+
+mozilla::glean::GleanPings* nsGlobalWindowInner::GleanPings() {
+  if (!mGleanPings) {
+    mGleanPings = new mozilla::glean::GleanPings();
+  }
+
+  return mGleanPings;
+}
 #endif
 
 Nullable<WindowProxyHolder> nsGlobalWindowInner::GetParent(
@@ -3528,7 +3537,7 @@ void nsGlobalWindowInner::CancelAnimationFrame(int32_t aHandle,
 }
 
 already_AddRefed<MediaQueryList> nsGlobalWindowInner::MatchMedia(
-    const nsAString& aMediaQueryList, CallerType aCallerType,
+    const nsACString& aMediaQueryList, CallerType aCallerType,
     ErrorResult& aError) {
   ENSURE_ACTIVE_DOCUMENT(aError, nullptr);
   return mDoc->MatchMedia(aMediaQueryList, aCallerType);
@@ -6202,7 +6211,7 @@ bool nsGlobalWindowInner::RunTimeoutHandler(Timeout* aTimeout,
     timeout->mScriptHandler->GetDescription(handlerDescription);
     str.Append(handlerDescription);
   }
-  AUTO_PROFILER_MARKER_TEXT("setTimeout callback", JS,
+  AUTO_PROFILER_MARKER_TEXT("setTimeout callback", DOM,
                             MarkerOptions(MarkerStack::TakeBacktrace(
                                               timeout->TakeProfilerBacktrace()),
                                           MarkerInnerWindowId(mWindowID)),
@@ -7547,12 +7556,6 @@ nsIURI* nsPIDOMWindowInner::GetDocumentURI() const {
 
 nsIURI* nsPIDOMWindowInner::GetDocBaseURI() const {
   return mDoc ? mDoc->GetDocBaseURI() : mDocBaseURI.get();
-}
-
-nsIPrincipal* nsPIDOMWindowInner::GetDocumentContentBlockingAllowListPrincipal()
-    const {
-  return mDoc ? mDoc->GetContentBlockingAllowListPrincipal()
-              : mDocContentBlockingAllowListPrincipal.get();
 }
 
 mozilla::dom::WindowContext* nsPIDOMWindowInner::GetWindowContext() const {

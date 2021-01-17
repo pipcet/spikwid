@@ -45,7 +45,7 @@
 #  include "frontend/TokenStream.h"
 #endif
 #include "frontend/BytecodeCompilation.h"
-#include "frontend/CompilationInfo.h"  // frontend::CompilationInfo, frontend::CompilationInfoVector
+#include "frontend/CompilationInfo.h"  // frontend::CompilationStencil, frontend::CompilationStencilSet
 #include "gc/Allocator.h"
 #include "gc/Zone.h"
 #include "jit/BaselineJIT.h"
@@ -53,6 +53,7 @@
 #include "jit/InlinableNatives.h"
 #include "jit/Invalidation.h"
 #include "jit/Ion.h"
+#include "jit/JitOptions.h"
 #include "jit/JitRuntime.h"
 #include "jit/TrialInlining.h"
 #include "js/Array.h"        // JS::NewArrayObject
@@ -491,20 +492,9 @@ static bool IsLCovEnabled(JSContext* cx, unsigned argc, Value* vp) {
   return true;
 }
 
-static bool IsTypeInferenceEnabled(JSContext* cx, unsigned argc, Value* vp) {
-  CallArgs args = CallArgsFromVp(argc, vp);
-  // TODO(no-TI): remove testing function.
-  args.rval().setBoolean(false);
-  return true;
-}
-
 static bool TrialInline(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
   args.rval().setUndefined();
-
-  if (!jit::JitOptions.warpBuilder) {
-    return true;
-  }
 
   FrameIter iter(cx);
   if (iter.done() || !iter.isBaseline() || iter.realm() != cx->realm()) {
@@ -554,7 +544,7 @@ static bool GC(JSContext* cx, unsigned argc, Value* vp) {
         return false;
       }
     } else if (arg.isObject()) {
-      PrepareZoneForGC(UncheckedUnwrap(&arg.toObject())->zone());
+      PrepareZoneForGC(cx, UncheckedUnwrap(&arg.toObject())->zone());
       zone = true;
     }
   }
@@ -620,6 +610,8 @@ static bool MinorGC(JSContext* cx, unsigned argc, Value* vp) {
   _("gcBytes", JSGC_BYTES, false)                                          \
   _("nurseryBytes", JSGC_NURSERY_BYTES, false)                             \
   _("gcNumber", JSGC_NUMBER, false)                                        \
+  _("majorGCNumber", JSGC_MAJOR_GC_NUMBER, false)                          \
+  _("minorGCNumber", JSGC_MINOR_GC_NUMBER, false)                          \
   _("mode", JSGC_MODE, true)                                               \
   _("unusedChunks", JSGC_UNUSED_CHUNKS, false)                             \
   _("totalChunks", JSGC_TOTAL_CHUNKS, false)                               \
@@ -875,6 +867,12 @@ static bool WasmSimdExperimentalEnabled(JSContext* cx, unsigned argc,
 #else
   args.rval().setBoolean(false);
 #endif
+  return true;
+}
+
+static bool WasmSimdWormholeEnabled(JSContext* cx, unsigned argc, Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  args.rval().setBoolean(wasm::SimdWormholeAvailable(cx));
   return true;
 }
 
@@ -1753,7 +1751,7 @@ static bool ScheduleZoneForGC(JSContext* cx, unsigned argc, Value* vp) {
   if (args[0].isObject()) {
     // Ensure that |zone| is collected during the next GC.
     Zone* zone = UncheckedUnwrap(&args[0].toObject())->zone();
-    PrepareZoneForGC(zone);
+    PrepareZoneForGC(cx, zone);
   } else if (args[0].isString()) {
     // This allows us to schedule the atoms zone for GC.
     Zone* zone = args[0].toString()->zoneFromAnyThread();
@@ -1762,7 +1760,7 @@ static bool ScheduleZoneForGC(JSContext* cx, unsigned argc, Value* vp) {
       ReportUsageErrorASCII(cx, callee, "Specified zone not accessible for GC");
       return false;
     }
-    PrepareZoneForGC(zone);
+    PrepareZoneForGC(cx, zone);
   } else {
     RootedObject callee(cx, &args.callee());
     ReportUsageErrorASCII(cx, callee,
@@ -3349,7 +3347,9 @@ static bool testingFunc_invalidate(JSContext* cx, unsigned argc, Value* vp) {
     while (!iter.isPhysicalJitFrame()) {
       ++iter;
     }
-    js::jit::Invalidate(cx, iter.script());
+    if (iter.script()->hasIonScript()) {
+      js::jit::Invalidate(cx, iter.script());
+    }
   }
 
   args.rval().setUndefined();
@@ -5006,19 +5006,19 @@ static bool CompileStencilXDR(JSContext* cx, uint32_t argc, Value* vp) {
   /* TODO: StencilXDR - Add option to select between full and syntax parse. */
   options.setForceFullParse();
 
-  Rooted<frontend::CompilationInfo> compilationInfo(
-      cx, frontend::CompilationInfo(cx, options));
-  if (!compilationInfo.get().input.initForGlobal(cx)) {
+  Rooted<frontend::CompilationStencil> stencil(
+      cx, frontend::CompilationStencil(cx, options));
+  if (!stencil.get().input.initForGlobal(cx)) {
     return false;
   }
-  if (!frontend::CompileGlobalScriptToStencil(cx, compilationInfo.get(), srcBuf,
+  if (!frontend::CompileGlobalScriptToStencil(cx, stencil.get(), srcBuf,
                                               ScopeKind::Global)) {
     return false;
   }
 
   /* Serialize the stencil to XDR. */
   JS::TranscodeBuffer xdrBytes;
-  if (!compilationInfo.get().serializeStencils(cx, xdrBytes)) {
+  if (!stencil.get().serializeStencils(cx, xdrBytes)) {
     return false;
   }
 
@@ -5056,21 +5056,21 @@ static bool EvalStencilXDR(JSContext* cx, uint32_t argc, Value* vp) {
   const char* filename = "compileStencilXDR-DATA.js";
   uint32_t lineno = 1;
 
-  /* Prepare the CompilationInfoVector for decoding. */
+  /* Prepare the CompilationStencilSet for decoding. */
   CompileOptions options(cx);
   options.setFileAndLine(filename, lineno);
   options.setForceFullParse();
 
-  Rooted<frontend::CompilationInfoVector> compilationInfos(
-      cx, frontend::CompilationInfoVector(cx, options));
-  if (!compilationInfos.get().initial.input.initForGlobal(cx)) {
+  Rooted<frontend::CompilationStencilSet> stencilSet(
+      cx, frontend::CompilationStencilSet(cx, options));
+  if (!stencilSet.get().input.initForGlobal(cx)) {
     return false;
   }
 
   /* Deserialize the stencil from XDR. */
   JS::TranscodeRange xdrRange(src->dataPointer(), src->byteLength().get());
   bool succeeded = false;
-  if (!compilationInfos.get().deserializeStencils(cx, xdrRange, &succeeded)) {
+  if (!stencilSet.get().deserializeStencils(cx, xdrRange, &succeeded)) {
     return false;
   }
   if (!succeeded) {
@@ -5081,8 +5081,8 @@ static bool EvalStencilXDR(JSContext* cx, uint32_t argc, Value* vp) {
   /* Instantiate the stencil. */
   Rooted<frontend::CompilationGCOutput> output(cx);
   Rooted<frontend::CompilationGCOutput> outputForDelazification(cx);
-  if (!compilationInfos.get().instantiateStencils(
-          cx, output.get(), outputForDelazification.get())) {
+  if (!stencilSet.get().instantiateStencils(cx, output.get(),
+                                            outputForDelazification.get())) {
     return false;
   }
 
@@ -6285,6 +6285,36 @@ static bool GetICUOptions(JSContext* cx, unsigned argc, Value* vp) {
   return true;
 }
 
+static bool IsSmallFunction(JSContext* cx, unsigned argc, Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  RootedObject callee(cx, &args.callee());
+
+  if (!args.requireAtLeast(cx, "IsSmallFunction", 1)) {
+    return false;
+  }
+
+  HandleValue arg = args[0];
+  if (!arg.isObject() || !arg.toObject().is<JSFunction>()) {
+    ReportUsageErrorASCII(cx, callee, "First argument must be a function");
+    return false;
+  }
+
+  RootedFunction fun(cx, &args[0].toObject().as<JSFunction>());
+  if (!fun->isInterpreted()) {
+    ReportUsageErrorASCII(cx, callee,
+                          "First argument must be an interpreted function");
+    return false;
+  }
+
+  JSScript* script = JSFunction::getOrCreateScript(cx, fun);
+  if (!script) {
+    return false;
+  }
+
+  args.rval().setBoolean(jit::JitOptions.isSmallFunction(script));
+  return true;
+}
+
 static bool PCCountProfiling_Start(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
 
@@ -6414,10 +6444,6 @@ static const JSFunctionSpecWithHelp TestingFunctions[] = {
     JS_FN_HELP("isLcovEnabled", ::IsLCovEnabled, 0, 0,
 "isLcovEnabled()",
 "  Return true if JS LCov support is enabled."),
-
-    JS_FN_HELP("isTypeInferenceEnabled", ::IsTypeInferenceEnabled, 0, 0,
-"isTypeInferenceEnabled()",
-"  Return true if Type Inference is enabled."),
 
   JS_FN_HELP("trialInline", TrialInline, 0, 0,
 "trialInline()",
@@ -6795,6 +6821,11 @@ gc::ZealModeHelpText),
     JS_FN_HELP("wasmSimdExperimentalEnabled", WasmSimdExperimentalEnabled, 0, 0,
 "wasmSimdExperimentalEnabled()",
 "  Returns a boolean indicating whether WebAssembly SIMD experimental instructions\n"
+"  are supported by the compilers and runtime."),
+
+    JS_FN_HELP("wasmSimdWormholeEnabled", WasmSimdWormholeEnabled, 0, 0,
+"wasmSimdWormholeEnabled()",
+"  Returns a boolean indicating whether WebAssembly SIMD wormhole instructions\n"
 "  are supported by the compilers and runtime."),
 
     JS_FN_HELP("wasmReftypesEnabled", WasmReftypesEnabled, 1, 0,
@@ -7285,6 +7316,10 @@ JS_FN_HELP("getICUOptions", GetICUOptions, 0, 0,
 "    tzdata: a string containing the tzdata version number, e.g. '2020a'\n"
 "    timezone: the ICU default time zone, e.g. 'America/Los_Angeles'\n"
 "    host-timezone: the host time zone, e.g. 'America/Los_Angeles'"),
+
+JS_FN_HELP("isSmallFunction", IsSmallFunction, 1, 0,
+"isSmallFunction(fun)",
+"  Returns true if a scripted function is small enough to be inlinable."),
 
     JS_FS_HELP_END
 };

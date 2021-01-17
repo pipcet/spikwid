@@ -610,6 +610,7 @@ void BrowserParent::DestroyInternal() {
   UnsetLastMouseRemoteTarget(this);
   UnsetPointerLockedRemoteTarget(this);
   PointerEventHandler::ReleasePointerCaptureRemoteTarget(this);
+  PresShell::ReleaseCapturingRemoteTarget(this);
 
   RemoveWindowListeners();
 
@@ -693,6 +694,7 @@ void BrowserParent::ActorDestroy(ActorDestroyReason why) {
   BrowserParent::UnsetLastMouseRemoteTarget(this);
   BrowserParent::UnsetPointerLockedRemoteTarget(this);
   PointerEventHandler::ReleasePointerCaptureRemoteTarget(this);
+  PresShell::ReleaseCapturingRemoteTarget(this);
 
   if (why == AbnormalShutdown) {
     // dom_reporting_header must also be enabled for the report to be sent.
@@ -2015,12 +2017,6 @@ void BrowserParent::SendRealTouchMoveEvent(
   MOZ_ASSERT(!ret || aEvent.HasBeenPostedToRemoteProcess());
 }
 
-void BrowserParent::SendPluginEvent(WidgetPluginEvent& aEvent) {
-  DebugOnly<bool> ret = PBrowserParent::SendPluginEvent(aEvent);
-  NS_WARNING_ASSERTION(ret, "PBrowserParent::SendPluginEvent() failed");
-  MOZ_ASSERT(!ret || aEvent.HasBeenPostedToRemoteProcess());
-}
-
 bool BrowserParent::SendHandleTap(TapType aType,
                                   const LayoutDevicePoint& aPoint,
                                   Modifiers aModifiers,
@@ -2693,7 +2689,6 @@ mozilla::ipc::IPCResult BrowserParent::RecvOnLocationChange(
 
   if (aWebProgressData && aWebProgressData->isTopLevel() &&
       aLocationChangeData.isSome()) {
-    nsCOMPtr<nsIPrincipal> contentBlockingAllowListPrincipal;
     Unused << browser->SetIsNavigating(aLocationChangeData->isNavigating());
     Unused << browser->UpdateForLocationChange(
         aLocation, aLocationChangeData->charset(),
@@ -3001,10 +2996,10 @@ bool BrowserParent::SendSelectionEvent(WidgetSelectionEvent& aEvent) {
   return true;
 }
 
-bool BrowserParent::SendPasteTransferable(const IPCDataTransfer& aDataTransfer,
-                                          const bool& aIsPrivateData,
-                                          nsIPrincipal* aRequestingPrincipal,
-                                          const uint32_t& aContentPolicyType) {
+bool BrowserParent::SendPasteTransferable(
+    const IPCDataTransfer& aDataTransfer, const bool& aIsPrivateData,
+    nsIPrincipal* aRequestingPrincipal,
+    const nsContentPolicyType& aContentPolicyType) {
   return PBrowserParent::SendPasteTransferable(
       aDataTransfer, aIsPrivateData, aRequestingPrincipal, aContentPolicyType);
 }
@@ -3130,65 +3125,11 @@ mozilla::ipc::IPCResult BrowserParent::RecvRequestIMEToCommitComposition(
   return IPC_OK();
 }
 
-mozilla::ipc::IPCResult BrowserParent::RecvStartPluginIME(
-    const WidgetKeyboardEvent& aKeyboardEvent, const int32_t& aPanelX,
-    const int32_t& aPanelY, nsString* aCommitted) {
-  nsCOMPtr<nsIWidget> widget = GetWidget();
-  if (!widget) {
-    return IPC_OK();
-  }
-  Unused << widget->StartPluginIME(aKeyboardEvent, (int32_t&)aPanelX,
-                                   (int32_t&)aPanelY, *aCommitted);
-  return IPC_OK();
-}
-
-mozilla::ipc::IPCResult BrowserParent::RecvSetPluginFocused(
-    const bool& aFocused) {
-  nsCOMPtr<nsIWidget> widget = GetWidget();
-  if (!widget) {
-    return IPC_OK();
-  }
-  widget->SetPluginFocused((bool&)aFocused);
-  return IPC_OK();
-}
-
-mozilla::ipc::IPCResult BrowserParent::RecvSetCandidateWindowForPlugin(
-    const CandidateWindowPosition& aPosition) {
-  nsCOMPtr<nsIWidget> widget = GetWidget();
-  if (!widget) {
-    return IPC_OK();
-  }
-
-  widget->SetCandidateWindowForPlugin(aPosition);
-  return IPC_OK();
-}
-
-mozilla::ipc::IPCResult BrowserParent::RecvEnableIMEForPlugin(
-    const bool& aEnable) {
-  nsCOMPtr<nsIWidget> widget = GetWidget();
-  if (!widget) {
-    return IPC_OK();
-  }
-  widget->EnableIMEForPlugin(aEnable);
-  return IPC_OK();
-}
-
-mozilla::ipc::IPCResult BrowserParent::RecvDefaultProcOfPluginEvent(
-    const WidgetPluginEvent& aEvent) {
-  nsCOMPtr<nsIWidget> widget = GetWidget();
-  if (!widget) {
-    return IPC_OK();
-  }
-
-  widget->DefaultProcOfPluginEvent(aEvent);
-  return IPC_OK();
-}
-
 mozilla::ipc::IPCResult BrowserParent::RecvGetInputContext(
     widget::IMEState* aState) {
   nsCOMPtr<nsIWidget> widget = GetWidget();
   if (!widget) {
-    *aState = widget::IMEState(IMEState::DISABLED,
+    *aState = widget::IMEState(IMEEnabled::Disabled,
                                IMEState::OPEN_STATE_NOT_SUPPORTED);
     return IPC_OK();
   }

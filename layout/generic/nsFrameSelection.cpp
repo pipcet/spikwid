@@ -15,8 +15,10 @@
 #include "mozilla/BasePrincipal.h"
 #include "mozilla/EventStates.h"
 #include "mozilla/HTMLEditor.h"
+#include "mozilla/Logging.h"
 #include "mozilla/PresShell.h"
 #include "mozilla/ScrollTypes.h"
+#include "mozilla/StaticAnalysisFunctions.h"
 #include "mozilla/StaticPrefs_bidi.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_layout.h"
@@ -85,6 +87,8 @@ static NS_DEFINE_CID(kFrameTraversalCID, NS_FRAMETRAVERSAL_CID);
 using namespace mozilla;
 using namespace mozilla::dom;
 using mozilla::layers::ScrollInputMethod;
+
+static LazyLogModule sFrameSelectionLog("FrameSelection");
 
 //#define DEBUG_TABLE 1
 
@@ -1240,6 +1244,16 @@ nsresult nsFrameSelection::HandleClick(nsIContent* aNewFocus,
                                        CaretAssociateHint aHint) {
   if (!aNewFocus) return NS_ERROR_INVALID_ARG;
 
+  if (MOZ_LOG_TEST(sFrameSelectionLog, LogLevel::Debug)) {
+    const int8_t index = GetIndexFromSelectionType(SelectionType::eNormal);
+    MOZ_LOG(sFrameSelectionLog, LogLevel::Debug,
+            ("%s: selection=%p, new focus=%p, offsets=(%u,%u), focus mode=%i",
+             __FUNCTION__,
+             mDomSelections[index] ? mDomSelections[index].get() : nullptr,
+             aNewFocus, aContentOffset, aContentEndOffset,
+             static_cast<int>(aFocusMode)));
+  }
+
   mDesiredCaretPos.Invalidate();
 
   if (aFocusMode != FocusMode::kExtendSelection) {
@@ -1304,8 +1318,8 @@ void nsFrameSelection::HandleDrag(nsIFrame* aFrame, const nsPoint& aPoint) {
   mMaintainedRange.AdjustContentOffsets(offsets, scrollViewStop);
 
   // TODO: no click has happened, rename `HandleClick`.
-  HandleClick(offsets.content, offsets.offset, offsets.offset,
-              FocusMode::kExtendSelection, offsets.associate);
+  HandleClick(MOZ_KnownLive(offsets.content) /* bug 1636889 */, offsets.offset,
+              offsets.offset, FocusMode::kExtendSelection, offsets.associate);
 }
 
 nsresult nsFrameSelection::StartAutoScrollTimer(nsIFrame* aFrame,
@@ -1913,7 +1927,8 @@ nsresult nsFrameSelection::PageMove(bool aForward, bool aExtend,
 
     const FocusMode focusMode =
         aExtend ? FocusMode::kExtendSelection : FocusMode::kCollapseToNewPoint;
-    HandleClick(offsets.content, offsets.offset, offsets.offset, focusMode,
+    HandleClick(MOZ_KnownLive(offsets.content) /* bug 1636889 */,
+                offsets.offset, offsets.offset, focusMode,
                 CARET_ASSOCIATE_AFTER);
 
     selectionChanged = selection->AnchorRef() != oldAnchor ||

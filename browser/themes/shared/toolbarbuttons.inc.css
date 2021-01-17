@@ -23,6 +23,8 @@
 
   --toolbarseparator-color: var(--lwt-toolbar-vertical-separator, rgba(0,0,0,.3));
 
+  --bookmark-block-padding: 4px;
+
   /* This default value of --toolbarbutton-height is defined to prevent
      CSS errors for an invalid variable. The value should not get used,
      as a more specific value should be set when the value will be used. */
@@ -31,10 +33,12 @@
 
 :root[uidensity=compact] {
   --toolbarbutton-outer-padding: 1px;
+  --bookmark-block-padding: 1px;
 }
 
 :root[uidensity=touch] {
   --toolbarbutton-inner-padding: 9px;
+  --bookmark-block-padding: 7px;
 }
 
 /* We use :-moz-lwtheme-* for toolbarbuttons that aren't inside a toolbar, and
@@ -75,6 +79,10 @@ toolbar[brighttext] {
 .toolbarbutton-1 > .toolbarbutton-icon,
 .toolbarbutton-1 > .toolbarbutton-badge-stack > .toolbarbutton-icon {
   width: 16px;
+}
+
+.toolbarbutton-combined-buttons-dropmarker > .toolbarbutton-icon {
+  width: 12px;
 }
 
 #TabsToolbar .toolbarbutton-1,
@@ -136,6 +144,13 @@ toolbar .toolbarbutton-1 > .toolbarbutton-icon {
   height: calc(2 * var(--toolbarbutton-inner-padding) + 16px);
 }
 
+toolbar .toolbarbutton-combined-buttons-dropmarker > .toolbarbutton-icon {
+  /* same height as regular buttons, but narrower, and for a 12x12 image */
+  padding-inline: 2px;
+  padding-block: calc(var(--toolbarbutton-inner-padding) + (16px - 12px) / 2);
+  width: calc(2 * 2px + 12px);
+}
+
 toolbar .toolbarbutton-1 > .toolbarbutton-text {
   padding-top: var(--toolbarbutton-vertical-text-padding);
   padding-bottom: 0;
@@ -185,7 +200,7 @@ toolbar .toolbarbutton-1:not([disabled=true], [checked], [open], :active):hover 
 
 #PersonalToolbar .toolbarbutton-1:not([disabled=true]):is([open],[checked],:hover:active),
 .findbar-button:not([disabled=true]):is([checked="true"],:hover:active),
-toolbarbutton.bookmark-item:not(.subviewbutton):hover:active:not([disabled="true"]),
+toolbarbutton.bookmark-item:hover:active:not(.subviewbutton, [disabled="true"]),
 toolbarbutton.bookmark-item[open="true"],
 toolbar .toolbarbutton-1:not([disabled=true]):is([open],[checked],:hover:active) > .toolbarbutton-icon,
 toolbar .toolbarbutton-1:not([disabled=true]):is([open],[checked],:hover:active) > .toolbarbutton-text,
@@ -307,7 +322,7 @@ toolbar .toolbarbutton-1:-moz-focusring {
 #personal-toolbar-empty-description,
 toolbarbutton.bookmark-item:not(.subviewbutton) {
   margin: 0 2px;
-  padding: 4px;
+  padding: var(--bookmark-block-padding) 4px;
 }
 
 toolbarbutton.bookmark-item:not(.subviewbutton) {
@@ -317,11 +332,14 @@ toolbarbutton.bookmark-item:not(.subviewbutton) {
 
 :root[uidensity=compact] toolbarbutton.bookmark-item:not(.subviewbutton) {
   margin-inline: 1px;
-  padding-block: 1px;
 }
 
-:root[uidensity=touch] toolbarbutton.bookmark-item:not(.subviewbutton) {
-  padding-block: 7px;
+/**
+ * Ensure that the description is always at least as big as a bookmarks item,
+ * where its icon is 16px (which may be more than inline text height);
+ */
+#personal-toolbar-empty-description {
+  min-height: calc(16px + 2 * var(--bookmark-block-padding));
 }
 
 #bookmarks-toolbar-placeholder {

@@ -685,14 +685,6 @@ nsresult SetDefaultPragmas(mozIStorageConnection& aConnection) {
   return NS_OK;
 }
 
-template <typename StepFunc>
-Result<Ok, nsresult> CollectWhileHasResult(mozIStorageStatement& aStmt,
-                                           StepFunc&& aStepFunc) {
-  return CollectWhile(
-      [&aStmt] { IDB_TRY_RETURN(MOZ_TO_RESULT_INVOKE(aStmt, ExecuteStep)); },
-      [&aStmt, &aStepFunc] { return aStepFunc(aStmt); });
-}
-
 nsresult SetJournalMode(mozIStorageConnection& aConnection) {
   MOZ_ASSERT(!NS_IsMainThread());
 
@@ -5124,8 +5116,8 @@ class QuotaClient final : public mozilla::dom::quota::Client {
 
     mCurrentMaintenance = nullptr;
 
-    QuotaClient::GetInstance()->MaybeRecordShutdownStep(
-        "Maintenance finished"_ns);
+    QuotaManager::GetRef().MaybeRecordShutdownStep(quota::Client::IDB,
+                                                   "Maintenance finished"_ns);
 
     ProcessMaintenanceQueue();
   }
@@ -10120,16 +10112,16 @@ void Database::CleanupMetadata() {
   MOZ_ALWAYS_TRUE(gLiveDatabaseHashtable->Get(Id(), &info));
   MOZ_ALWAYS_TRUE(info->mLiveDatabases.RemoveElement(this));
 
-  QuotaClient::GetInstance()->MaybeRecordShutdownStep(
-      "Live database entry removed"_ns);
+  QuotaManager::GetRef().MaybeRecordShutdownStep(
+      quota::Client::IDB, "Live database entry removed"_ns);
 
   if (info->mLiveDatabases.IsEmpty()) {
     MOZ_ASSERT(!info->mWaitingFactoryOp ||
                !info->mWaitingFactoryOp->HasBlockedDatabases());
     gLiveDatabaseHashtable->Remove(Id());
 
-    QuotaClient::GetInstance()->MaybeRecordShutdownStep(
-        "gLiveDatabaseHashtable entry removed"_ns);
+    QuotaManager::GetRef().MaybeRecordShutdownStep(
+        quota::Client::IDB, "gLiveDatabaseHashtable entry removed"_ns);
   }
 
   // Match the IncreaseBusyCount in OpenDatabaseOp::EnsureDatabaseActor().
@@ -12658,18 +12650,10 @@ nsresult FileManager::InitDirectory(nsIFile& aDirectory, nsIFile& aDatabaseFile,
                     MOZ_TO_RESULT_INVOKE(journalDirectory, IsDirectory));
     IDB_TRY(OkIf(isDirectory), NS_ERROR_FAILURE);
 
-    IDB_TRY_INSPECT(
-        const auto& entries,
-        MOZ_TO_RESULT_INVOKE_TYPED(nsCOMPtr<nsIDirectoryEnumerator>,
-                                   journalDirectory, GetDirectoryEntries));
-
     bool hasJournals = false;
 
-    IDB_TRY(CollectEach(
-        [&entries] {
-          IDB_TRY_RETURN(MOZ_TO_RESULT_INVOKE_TYPED(nsCOMPtr<nsIFile>, entries,
-                                                    GetNextFile));
-        },
+    IDB_TRY(CollectEachFile(
+        *journalDirectory,
         [&hasJournals](const nsCOMPtr<nsIFile>& file) -> Result<Ok, nsresult> {
           IDB_TRY_INSPECT(
               const auto& leafName,
@@ -12763,17 +12747,10 @@ Result<FileUsageType, nsresult> FileManager::GetUsage(nsIFile* aDirectory) {
     return FileUsageType{};
   }
 
-  IDB_TRY_INSPECT(const auto& entries,
-                  MOZ_TO_RESULT_INVOKE_TYPED(nsCOMPtr<nsIDirectoryEnumerator>,
-                                             aDirectory, GetDirectoryEntries));
-
   FileUsageType usage;
 
-  IDB_TRY(CollectEach(
-      [&entries] {
-        IDB_TRY_RETURN(MOZ_TO_RESULT_INVOKE_TYPED(nsCOMPtr<nsIFile>, entries,
-                                                  GetNextFile));
-      },
+  IDB_TRY(CollectEachFile(
+      *aDirectory,
       [&usage](const nsCOMPtr<nsIFile>& file) -> Result<Ok, nsresult> {
         IDB_TRY_INSPECT(const auto& leafName, MOZ_TO_RESULT_INVOKE_TYPED(
                                                   nsString, file, GetLeafName));
@@ -13021,16 +12998,8 @@ nsresult QuotaClient::UpgradeStorageFrom2_1To2_2(nsIFile* aDirectory) {
   AssertIsOnIOThread();
   MOZ_ASSERT(aDirectory);
 
-  IDB_TRY_INSPECT(const auto& entries,
-                  MOZ_TO_RESULT_INVOKE_TYPED(nsCOMPtr<nsIDirectoryEnumerator>,
-                                             aDirectory, GetDirectoryEntries));
-
-  IDB_TRY(CollectEach(
-      [&entries] {
-        IDB_TRY_RETURN(MOZ_TO_RESULT_INVOKE_TYPED(nsCOMPtr<nsIFile>, entries,
-                                                  GetNextFile));
-      },
-      [](const nsCOMPtr<nsIFile>& file) -> Result<Ok, nsresult> {
+  IDB_TRY(CollectEachFile(
+      *aDirectory, [](const nsCOMPtr<nsIFile>& file) -> Result<Ok, nsresult> {
         IDB_TRY_INSPECT(const auto& leafName, MOZ_TO_RESULT_INVOKE_TYPED(
                                                   nsString, file, GetLeafName));
 
@@ -13446,21 +13415,10 @@ QuotaClient::GetDatabaseFilenames(nsIFile& aDirectory,
                                   const AtomicBool& aCanceled) {
   AssertIsOnIOThread();
 
-  IDB_TRY_INSPECT(const auto& entries,
-                  MOZ_TO_RESULT_INVOKE_TYPED(nsCOMPtr<nsIDirectoryEnumerator>,
-                                             &aDirectory, GetDirectoryEntries));
-
   GetDatabaseFilenamesResult<ObsoleteFilenames> result;
 
-  IDB_TRY(CollectEach(
-      [&entries, &aCanceled]() -> Result<nsCOMPtr<nsIFile>, nsresult> {
-        if (aCanceled) {
-          return nsCOMPtr<nsIFile>{};
-        }
-
-        IDB_TRY_RETURN(MOZ_TO_RESULT_INVOKE_TYPED(nsCOMPtr<nsIFile>, entries,
-                                                  GetNextFile));
-      },
+  IDB_TRY(CollectEachFileAtomicCancelable(
+      aDirectory, aCanceled,
       [&result](const nsCOMPtr<nsIFile>& file) -> Result<Ok, nsresult> {
         IDB_TRY_INSPECT(const auto& leafName, MOZ_TO_RESULT_INVOKE_TYPED(
                                                   nsString, file, GetLeafName));
@@ -13902,21 +13860,9 @@ nsresult Maintenance::DirectoryWork() {
       }
     }
 
-    IDB_TRY_INSPECT(
-        const auto& persistenceDirEntries,
-        MOZ_TO_RESULT_INVOKE_TYPED(nsCOMPtr<nsIDirectoryEnumerator>,
-                                   persistenceDir, GetDirectoryEntries));
-
-    if (!persistenceDirEntries) {
-      continue;
-    }
-
     // Loop over "<origin>/idb" directories.
-    IDB_TRY(CollectEach(
-        [&persistenceDirEntries] {
-          IDB_TRY_RETURN(MOZ_TO_RESULT_INVOKE_TYPED(
-              nsCOMPtr<nsIFile>, persistenceDirEntries, GetNextFile));
-        },
+    IDB_TRY(CollectEachFile(
+        *persistenceDir,
         [this, &quotaManager, persistent, persistenceType, &idbDirName](
             const nsCOMPtr<nsIFile>& originDir) -> Result<Ok, nsresult> {
           if (NS_WARN_IF(QuotaClient::IsShuttingDownOnNonBackgroundThread()) ||
@@ -13941,17 +13887,17 @@ nsresult Maintenance::DirectoryWork() {
           // (GetDirectoryMetadata2WithRestore also checks if it's a valid
           // origin).
 
-          int64_t timestamp;
-          bool persisted;
-          QuotaInfo quotaInfo;
-          IDB_TRY(quotaManager->GetDirectoryMetadata2WithRestore(
-                      originDir, persistent, &timestamp, &persisted, quotaInfo),
-                  // Not much we can do here...
-                  Ok{});
+          IDB_TRY_INSPECT(
+              const auto& metadata,
+              quotaManager->GetDirectoryMetadataWithQuotaInfo2WithRestore(
+                  originDir, persistent),
+              // Not much we can do here...
+              Ok{});
 
           // Don't do any maintenance for private browsing databases, which are
           // only temporary.
-          if (OriginAttributes::IsPrivateBrowsing(quotaInfo.mOrigin)) {
+          if (OriginAttributes::IsPrivateBrowsing(
+                  metadata.mQuotaInfo.mOrigin)) {
             return Ok{};
           }
 
@@ -13964,7 +13910,8 @@ nsresult Maintenance::DirectoryWork() {
 
             IDB_TRY_UNWRAP(
                 const DebugOnly<bool> created,
-                quotaManager->EnsurePersistentOriginIsInitialized(quotaInfo)
+                quotaManager
+                    ->EnsurePersistentOriginIsInitialized(metadata.mQuotaInfo)
                     .map([](const auto& res) { return res.second; }),
                 // Not much we can do here...
                 Ok{});
@@ -13990,23 +13937,11 @@ nsresult Maintenance::DirectoryWork() {
 
           IDB_TRY(OkIf(isDirectory), Ok{});
 
-          IDB_TRY_INSPECT(
-              const auto& idbDirEntries,
-              MOZ_TO_RESULT_INVOKE_TYPED(nsCOMPtr<nsIDirectoryEnumerator>,
-                                         idbDir, GetDirectoryEntries));
-
-          if (!idbDirEntries) {
-            return Ok{};
-          }
-
           nsTArray<nsString> databasePaths;
 
           // Loop over files in the "idb" directory.
-          IDB_TRY(CollectEach(
-              [&idbDirEntries] {
-                IDB_TRY_RETURN(MOZ_TO_RESULT_INVOKE_TYPED(
-                    nsCOMPtr<nsIFile>, idbDirEntries, GetNextFile));
-              },
+          IDB_TRY(CollectEachFile(
+              *idbDir,
               [this, &databasePaths](
                   const nsCOMPtr<nsIFile>& idbDirFile) -> Result<Ok, nsresult> {
                 if (NS_WARN_IF(
@@ -14045,7 +13980,7 @@ nsresult Maintenance::DirectoryWork() {
               }));
 
           if (!databasePaths.IsEmpty()) {
-            mDirectoryInfos.EmplaceBack(persistenceType, quotaInfo,
+            mDirectoryInfos.EmplaceBack(persistenceType, metadata.mQuotaInfo,
                                         std::move(databasePaths));
           }
 
@@ -15815,11 +15750,12 @@ void FactoryOp::CleanupMetadata() {
   MOZ_ASSERT(gFactoryOps);
   gFactoryOps->RemoveElement(this);
 
-  if (auto* const quotaClient = QuotaClient::GetInstance()) {
-    quotaClient->MaybeRecordShutdownStep(
-        "An element was removed from gFactoryOps"_ns);
-  } else {
-    NS_WARNING("Cannot record shutdown step because QuotaClient is nullptr");
+  // We might get here even after QuotaManagerOpen failed, so we need to check
+  // if we have a quota manager. If we don't, we obviously are not in quota
+  // manager shutdown.
+  if (auto* const quotaManager = QuotaManager::Get()) {
+    quotaManager->MaybeRecordShutdownStep(
+        quota::Client::IDB, "An element was removed from gFactoryOps"_ns);
   }
 
   // Match the IncreaseBusyCount in AllocPBackgroundIDBFactoryRequestParent().

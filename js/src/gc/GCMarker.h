@@ -257,13 +257,15 @@ enum MarkingState : uint8_t {
   IterativeMarking
 };
 
-class GCMarker : public JSTracer {
+class GCMarker final : public JSTracer {
  public:
   explicit GCMarker(JSRuntime* rt);
   MOZ_MUST_USE bool init(JSGCMode gcMode);
 
   void setMaxCapacity(size_t maxCap) { stack.setMaxCapacity(maxCap); }
   size_t maxCapacity() const { return stack.maxCapacity(); }
+
+  bool isActive() const { return state != MarkingState::NotActive; }
 
   void start();
   void stop();

@@ -92,16 +92,6 @@ JS_FRIEND_API const JSClass* js::ProtoKeyToClass(JSProtoKey key) {
   return protoTable[key];
 }
 
-// This method is not in the header file to avoid having to include
-// WasmJS.h from GlobalObject.h. It is not generally perf
-// sensitive.
-WasmNamespaceObject& js::GlobalObject::getWebAssemblyNamespace() const {
-  Value v = getConstructor(JSProto_WebAssembly);
-  // only gets called from contexts where WebAssembly must be initialized
-  MOZ_ASSERT(v.isObject());
-  return v.toObject().as<WasmNamespaceObject>();
-}
-
 /* static */
 bool GlobalObject::skipDeselectedConstructor(JSContext* cx, JSProtoKey key) {
   switch (key) {
@@ -641,7 +631,7 @@ GlobalObject* GlobalObject::createInternal(JSContext* cx,
   MOZ_ASSERT(clasp->flags & JSCLASS_IS_GLOBAL);
   MOZ_ASSERT(clasp->isTrace(JS_GlobalObjectTraceHook));
 
-  JSObject* obj = NewSingletonObjectWithGivenProto(cx, clasp, nullptr);
+  JSObject* obj = NewTenuredObjectWithGivenProto(cx, clasp, nullptr);
   if (!obj) {
     return nullptr;
   }

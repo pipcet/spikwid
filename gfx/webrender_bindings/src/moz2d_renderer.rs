@@ -613,6 +613,19 @@ impl AsyncBlobImageRasterizer for Moz2dBlobRasterizer {
     }
 }
 
+// a cross platform wrapper that creates an autorelease pool
+// on macOS
+fn autoreleasepool<T, F: FnOnce() -> T>(f: F) -> T {
+    #[cfg(target_os = "macos")]
+    {
+        objc::rc::autoreleasepool(f)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        f()
+    }
+}
+
 fn rasterize_blob(job: Job) -> (BlobImageRequest, BlobImageResult) {
     let descriptor = job.descriptor;
     let buf_size =
@@ -626,31 +639,33 @@ fn rasterize_blob(job: Job) -> (BlobImageRequest, BlobImageResult) {
     };
     assert!(descriptor.rect.size.width > 0 && descriptor.rect.size.height > 0);
 
-    let result = unsafe {
-        if wr_moz2d_render_cb(
-            ByteSlice::new(&job.commands[..]),
-            descriptor.format,
-            &descriptor.rect,
-            &job.visible_rect,
-            job.tile_size,
-            &job.request.tile,
-            dirty_rect.as_ref(),
-            MutByteSlice::new(output.as_mut_slice()),
-        ) {
-            // We want the dirty rect local to the tile rather than the whole image.
-            // TODO(nical): move that up and avoid recomupting the tile bounds in the callback
-            let dirty_rect = job.dirty_rect.to_subrect_of(&descriptor.rect);
-            let tx: BlobToDeviceTranslation = (-descriptor.rect.origin.to_vector()).into();
-            let rasterized_rect = tx.transform_rect(&dirty_rect);
+    let result = autoreleasepool(|| {
+        unsafe {
+            if wr_moz2d_render_cb(
+                ByteSlice::new(&job.commands[..]),
+                descriptor.format,
+                &descriptor.rect,
+                &job.visible_rect,
+                job.tile_size,
+                &job.request.tile,
+                dirty_rect.as_ref(),
+                MutByteSlice::new(output.as_mut_slice()),
+            ) {
+                // We want the dirty rect local to the tile rather than the whole image.
+                // TODO(nical): move that up and avoid recomupting the tile bounds in the callback
+                let dirty_rect = job.dirty_rect.to_subrect_of(&descriptor.rect);
+                let tx: BlobToDeviceTranslation = (-descriptor.rect.origin.to_vector()).into();
+                let rasterized_rect = tx.transform_rect(&dirty_rect);
 
-            Ok(RasterizedBlobImage {
-                rasterized_rect,
-                data: Arc::new(output),
-            })
-        } else {
-            panic!("Moz2D replay problem");
+                Ok(RasterizedBlobImage {
+                    rasterized_rect,
+                    data: Arc::new(output),
+                })
+            } else {
+                panic!("Moz2D replay problem");
+            }
         }
-    };
+    });
 
     (job.request, result)
 }

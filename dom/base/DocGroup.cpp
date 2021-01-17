@@ -247,6 +247,11 @@ RefPtr<PerformanceInfoPromise> DocGroup::ReportPerformanceInfo() {
     }
 
     top = context->Top();
+
+    if (!top || !top->GetCurrentWindowContext()) {
+      continue;
+    }
+
     isTopLevel = context->IsTop();
     windowID = top->GetCurrentWindowContext()->OuterWindowId();
     break;

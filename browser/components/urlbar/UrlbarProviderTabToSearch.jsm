@@ -134,7 +134,6 @@ class ProviderTabToSearch extends UrlbarProvider {
       queryContext.searchString &&
       queryContext.tokens.length == 1 &&
       !queryContext.searchMode &&
-      UrlbarPrefs.get("update2") &&
       UrlbarPrefs.get("suggest.engines")
     );
   }
@@ -154,9 +153,12 @@ class ProviderTabToSearch extends UrlbarProvider {
    * describing the view update.
    *
    * @param {UrlbarResult} result The result whose view will be updated.
+   * @param {Map} idsByName
+   *   A Map from an element's name, as defined by the provider; to its ID in
+   *   the DOM, as defined by the browser.
    * @returns {object} An object describing the view update.
    */
-  getViewUpdate(result) {
+  getViewUpdate(result, idsByName) {
     return {
       icon: {
         attributes: {
@@ -397,7 +399,7 @@ function makeOnboardingResult(engine, satisfiesAutofillThreshold = false) {
     {
       engine: engine.name,
       url,
-      keywordOffer: UrlbarUtils.KEYWORD_OFFER.SHOW,
+      providesSearchMode: true,
       icon: UrlbarUtils.ICON.SEARCH_GLASS_INVERTED,
       dynamicType: DYNAMIC_RESULT_TYPE,
       satisfiesAutofillThreshold,
@@ -419,7 +421,7 @@ function makeResult(context, engine, satisfiesAutofillThreshold = false) {
     ...UrlbarResult.payloadAndSimpleHighlights(context.tokens, {
       engine: engine.name,
       url,
-      keywordOffer: UrlbarUtils.KEYWORD_OFFER.SHOW,
+      providesSearchMode: true,
       icon: UrlbarUtils.ICON.SEARCH_GLASS_INVERTED,
       query: "",
       satisfiesAutofillThreshold,

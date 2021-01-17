@@ -4891,15 +4891,21 @@ void ContainerState::ProcessDisplayItems(nsDisplayList* aList) {
         params.mCompositorASR = itemASR;
       }
 
-      if (itemType == DisplayItemType::TYPE_PERSPECTIVE) {
-        // Perspective items have a single child item, an nsDisplayTransform.
-        // If the perspective item is scrolled, but the perspective-inducing
-        // frame is outside the scroll frame (indicated by item->Frame()
-        // being outside that scroll frame), we have to take special care to
-        // make APZ scrolling work properly. APZ needs us to put the scroll
-        // frame's FrameMetrics on our child transform ContainerLayer instead.
-        // It's worth investigating whether this ASR adjustment can be done at
-        // display item creation time.
+      // Perspective items have a single child item, an nsDisplayTransform.
+      // If the perspective item is scrolled, but the perspective-inducing
+      // frame is outside the scroll frame (indicated by item->Frame()
+      // being outside that scroll frame), we have to take special care to
+      // make APZ scrolling work properly. APZ needs us to put the scroll
+      // frame's FrameMetrics on our child transform ContainerLayer instead.
+      // We make a similar adjustment for OwnLayer items built for frames
+      // with perspective transforms (e.g. when they have rounded corners).
+      // It's worth investigating whether this ASR adjustment can be done at
+      // display item creation time.
+      bool deferASRForPerspective =
+          itemType == DisplayItemType::TYPE_PERSPECTIVE ||
+          (itemType == DisplayItemType::TYPE_OWN_LAYER &&
+           item->Frame()->IsTransformed() && item->Frame()->HasPerspective());
+      if (deferASRForPerspective) {
         scrollMetadataASR = GetASRForPerspective(
             scrollMetadataASR,
             item->Frame()->GetContainingBlock(nsIFrame::SKIP_SCROLLED_FRAME));
@@ -5039,12 +5045,25 @@ void ContainerState::ProcessDisplayItems(nsDisplayList* aList) {
       NS_ASSERTION(FindIndexOfLayerIn(mNewChildLayers, ownLayer) < 0,
                    "Layer already in list???");
 
+      // NewLayerEntry::mClipChain is used by SetupScrollingMetadata() to
+      // populate any scroll clips in the scroll metadata. Perspective layers
+      // have their ASR adjusted such that a scroll metadata that would normally
+      // go on the perspective layer goes on its transform layer child instead.
+      // However, the transform item's clip chain does not contain the
+      // corresponding scroll clip, so we use the perspective item's clip
+      // chain instead.
+      const DisplayItemClipChain* clipChainForScrollClips = layerClipChain;
+      if (itemType == DisplayItemType::TYPE_TRANSFORM && mContainerItem &&
+          mContainerItem->GetType() == DisplayItemType::TYPE_PERSPECTIVE) {
+        clipChainForScrollClips = mContainerItem->GetClipChain();
+      }
+
       NewLayerEntry* newLayerEntry = mNewChildLayers.AppendElement();
       newLayerEntry->mLayer = ownLayer;
       newLayerEntry->mAnimatedGeometryRoot = itemAGR;
       newLayerEntry->mASR = itemASR;
       newLayerEntry->mScrollMetadataASR = scrollMetadataASR;
-      newLayerEntry->mClipChain = layerClipChain;
+      newLayerEntry->mClipChain = clipChainForScrollClips;
       newLayerEntry->mLayerState = layerState;
       if (itemType == DisplayItemType::TYPE_FIXED_POSITION) {
         newLayerEntry->mIsFixedToRootScrollFrame =

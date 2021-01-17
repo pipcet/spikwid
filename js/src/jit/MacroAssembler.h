@@ -847,7 +847,6 @@ class MacroAssembler : public MacroAssemblerSpecific {
 
   inline void move32To64ZeroExtend(Register src, Register64 dest) PER_ARCH;
 
-  // On x86, `dest` must be edx:eax for the sign extend operations.
   inline void move8To64SignExtend(Register src, Register64 dest) PER_ARCH;
   inline void move16To64SignExtend(Register src, Register64 dest) PER_ARCH;
   inline void move32To64SignExtend(Register src, Register64 dest) PER_ARCH;
@@ -875,6 +874,7 @@ class MacroAssembler : public MacroAssemblerSpecific {
   // Logical instructions
 
   inline void not32(Register reg) PER_SHARED_ARCH;
+  inline void notPtr(Register reg) PER_ARCH;
 
   inline void and32(Register src, Register dest) PER_SHARED_ARCH;
   inline void and32(Imm32 imm, Register dest) PER_SHARED_ARCH;
@@ -902,6 +902,8 @@ class MacroAssembler : public MacroAssemblerSpecific {
 
   inline void xor32(Register src, Register dest) PER_SHARED_ARCH;
   inline void xor32(Imm32 imm, Register dest) PER_SHARED_ARCH;
+  inline void xor32(Imm32 imm, const Address& dest) PER_SHARED_ARCH;
+  inline void xor32(const Address& src, Register dest) PER_SHARED_ARCH;
 
   inline void xorPtr(Register src, Register dest) PER_ARCH;
   inline void xorPtr(Imm32 imm, Register dest) PER_ARCH;
@@ -988,11 +990,12 @@ class MacroAssembler : public MacroAssemblerSpecific {
 
   inline void subDouble(FloatRegister src, FloatRegister dest) PER_SHARED_ARCH;
 
-  // On x86-shared, srcDest must be eax and edx will be clobbered.
   inline void mul32(Register rhs, Register srcDest) PER_SHARED_ARCH;
 
   inline void mul32(Register src1, Register src2, Register dest, Label* onOver)
       DEFINED_ON(arm64);
+
+  inline void mulPtr(Register rhs, Register srcDest) DEFINED_ON(x86, x64);
 
   inline void mul64(const Operand& src, const Register64& dest) DEFINED_ON(x64);
   inline void mul64(const Operand& src, const Register64& dest,
@@ -1115,7 +1118,7 @@ class MacroAssembler : public MacroAssemblerSpecific {
   void copySignDouble(FloatRegister lhs, FloatRegister rhs,
                       FloatRegister output) PER_SHARED_ARCH;
   void copySignFloat32(FloatRegister lhs, FloatRegister rhs,
-                       FloatRegister output) DEFINED_ON(x86_shared);
+                       FloatRegister output) DEFINED_ON(x86_shared, arm64);
 
   // Returns a random double in range [0, 1) in |dest|. The |rng| register must
   // hold a pointer to a mozilla::non_crypto::XorShift128PlusRNG.
@@ -1179,6 +1182,8 @@ class MacroAssembler : public MacroAssemblerSpecific {
   inline void rshift32(Register shift, Register srcDest) PER_SHARED_ARCH;
   inline void rshift32Arithmetic(Register shift,
                                  Register srcDest) PER_SHARED_ARCH;
+  inline void lshiftPtr(Register shift, Register srcDest) PER_ARCH;
+  inline void rshiftPtr(Register shift, Register srcDest) PER_ARCH;
 
   // These variants do not have the above constraint, but may emit some extra
   // instructions on x86_shared. They also handle shift >= 32 consistently by
@@ -1426,6 +1431,15 @@ class MacroAssembler : public MacroAssemblerSpecific {
   inline void branchNeg32(Condition cond, Register reg,
                           Label* label) PER_SHARED_ARCH;
 
+  inline void branchAddPtr(Condition cond, Register src, Register dest,
+                           Label* label) PER_SHARED_ARCH;
+
+  inline void branchSubPtr(Condition cond, Register src, Register dest,
+                           Label* label) PER_SHARED_ARCH;
+
+  inline void branchMulPtr(Condition cond, Register src, Register dest,
+                           Label* label) PER_SHARED_ARCH;
+
   inline void decBranchPtr(Condition cond, Register lhs, Imm32 rhs,
                            Label* label) PER_SHARED_ARCH;
 
@@ -1466,7 +1480,10 @@ class MacroAssembler : public MacroAssemblerSpecific {
   inline void branchLatin1String(Register string, Label* label);
   inline void branchTwoByteString(Register string, Label* label);
 
-  inline void branchIfNegativeBigInt(Register bigInt, Label* label);
+  inline void branchIfBigIntIsNegative(Register bigInt, Label* label);
+  inline void branchIfBigIntIsNonNegative(Register bigInt, Label* label);
+  inline void branchIfBigIntIsZero(Register bigInt, Label* label);
+  inline void branchIfBigIntIsNonZero(Register bigInt, Label* label);
 
   inline void branchTestFunctionFlags(Register fun, uint32_t flags,
                                       Condition cond, Label* label);
@@ -1576,9 +1593,6 @@ class MacroAssembler : public MacroAssemblerSpecific {
   void branchTestObjCompartment(Condition cond, Register obj,
                                 const JS::Compartment* compartment,
                                 Register scratch, Label* label);
-  void branchIfPretenuredGroup(Register group, Label* label);
-  void branchIfPretenuredGroup(const ObjectGroup* group, Register scratch,
-                               Label* label);
 
   void branchIfNonNativeObj(Register obj, Register scratch, Label* label);
 
@@ -2093,6 +2107,9 @@ class MacroAssembler : public MacroAssemblerSpecific {
   inline void interleaveHighInt32x4(FloatRegister rhs, FloatRegister lhsDest)
       DEFINED_ON(x86_shared);
 
+  inline void interleaveHighInt64x2(FloatRegister rhs, FloatRegister lhsDest)
+      DEFINED_ON(x86_shared);
+
   inline void interleaveLowInt8x16(FloatRegister rhs, FloatRegister lhsDest)
       DEFINED_ON(x86_shared);
 
@@ -2100,6 +2117,9 @@ class MacroAssembler : public MacroAssemblerSpecific {
       DEFINED_ON(x86_shared);
 
   inline void interleaveLowInt32x4(FloatRegister rhs, FloatRegister lhsDest)
+      DEFINED_ON(x86_shared);
+
+  inline void interleaveLowInt64x2(FloatRegister rhs, FloatRegister lhsDest)
       DEFINED_ON(x86_shared);
 
   // Permute - permute with immediate indices.
@@ -3440,6 +3460,10 @@ class MacroAssembler : public MacroAssemblerSpecific {
                             Register64 value, const BaseIndex& mem)
       DEFINED_ON(x64);
 
+  void wasmAtomicEffectOp64(const wasm::MemoryAccessDesc& access, AtomicOp op,
+                            Register64 value, const BaseIndex& mem,
+                            Register64 temp) DEFINED_ON(arm64);
+
   // ========================================================================
   // JS atomic operations.
   //
@@ -3678,10 +3702,11 @@ class MacroAssembler : public MacroAssemblerSpecific {
    */
   void addToCharPtr(Register chars, Register index, CharEncoding encoding);
 
- private:
+  /**
+   * Load the BigInt digits from |bigInt| into |digits|.
+   */
   void loadBigIntDigits(Register bigInt, Register digits);
 
- public:
   /**
    * Load the first [u]int64 value from |bigInt| into |dest|.
    */
@@ -3696,9 +3721,61 @@ class MacroAssembler : public MacroAssemblerSpecific {
   void loadFirstBigIntDigitOrZero(Register bigInt, Register dest);
 
   /**
-   * Initialize a BigInt from |dest|. Clobbers |val|!
+   * Load the number stored in |bigInt| into |dest|. Handles the case when the
+   * BigInt digits length is zero. Jumps to |fail| when the number can't be
+   * saved into a single pointer-sized register.
+   */
+  void loadBigInt(Register bigInt, Register dest, Label* fail);
+
+  /**
+   * Load the number stored in |bigInt| into |dest|. Doesn't handle the case
+   * when the BigInt digits length is zero. Jumps to |fail| when the number
+   * can't be saved into a single pointer-sized register.
+   */
+  void loadBigIntNonZero(Register bigInt, Register dest, Label* fail);
+
+  /**
+   * Load the absolute number stored in |bigInt| into |dest|. Handles the case
+   * when the BigInt digits length is zero. Jumps to |fail| when the number
+   * can't be saved into a single pointer-sized register.
+   */
+  void loadBigIntAbsolute(Register bigInt, Register dest, Label* fail);
+
+  /**
+   * In-place modifies the BigInt digit to a signed pointer-sized value. Jumps
+   * to |fail| when the digit exceeds the representable range.
+   */
+  void bigIntDigitToSignedPtr(Register bigInt, Register digit, Label* fail);
+
+  /**
+   * Initialize a BigInt from |val|. Clobbers |val|!
    */
   void initializeBigInt64(Scalar::Type type, Register bigInt, Register64 val);
+
+  /**
+   * Initialize a BigInt from the signed, pointer-sized register |val|.
+   * Clobbers |val|!
+   */
+  void initializeBigInt(Register bigInt, Register val);
+
+  /**
+   * Initialize a BigInt from the pointer-sized register |val|.
+   */
+  void initializeBigIntAbsolute(Register bigInt, Register val);
+
+  /**
+   * Copy a BigInt. Jumps to |fail| on allocation failure or when the BigInt
+   * digits need to be heap allocated.
+   */
+  void copyBigIntWithInlineDigits(Register src, Register dest, Register temp,
+                                  Label* fail, bool attemptNursery);
+
+  /**
+   * Compare a BigInt and an Int32 value. Falls through to the false case.
+   */
+  void compareBigIntAndInt32(JSOp op, Register bigInt, Register int32,
+                             Register scratch1, Register scratch2,
+                             Label* ifTrue, Label* ifFalse);
 
   void loadJSContext(Register dest);
 
@@ -4335,8 +4412,8 @@ class MacroAssembler : public MacroAssemblerSpecific {
                       IntConversionBehavior::ClampToUint8);
   }
 
-  MOZ_MUST_USE bool icBuildOOLFakeExitFrame(void* fakeReturnAddr,
-                                            AutoSaveLiveRegisters& save);
+  [[nodiscard]] bool icBuildOOLFakeExitFrame(void* fakeReturnAddr,
+                                             AutoSaveLiveRegisters& save);
 
   // Align the stack pointer based on the number of arguments which are pushed
   // on the stack, such that the JitFrameLayout would be correctly aligned on

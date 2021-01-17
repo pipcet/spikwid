@@ -44,19 +44,28 @@ GamepadEventChannelParent::Create() {
       .forget();
 }
 
-GamepadEventChannelParent::GamepadEventChannelParent() {
-  AssertIsOnBackgroundThread();
+GamepadEventChannelParent::GamepadEventChannelParent() : mIsShutdown{false} {
+  MOZ_DIAGNOSTIC_ASSERT(IsOnBackgroundThread());
 
   mBackgroundEventTarget = GetCurrentEventTarget();
 
-  GamepadPlatformService::AddChannelParent(
-      RefPtr<GamepadEventChannelParent>(this));
+  RefPtr<GamepadPlatformService> service =
+      GamepadPlatformService::GetParentService();
+  MOZ_ASSERT(service);
+
+  service->AddChannelParent(this);
 }
 
 void GamepadEventChannelParent::ActorDestroy(ActorDestroyReason aWhy) {
-  AssertIsOnBackgroundThread();
+  MOZ_DIAGNOSTIC_ASSERT(IsOnBackgroundThread());
+  MOZ_DIAGNOSTIC_ASSERT(!mIsShutdown);
 
-  GamepadPlatformService::RemoveChannelParent(this);
+  mIsShutdown = true;
+
+  RefPtr<GamepadPlatformService> service =
+      GamepadPlatformService::GetParentService();
+  MOZ_ASSERT(service);
+  service->RemoveChannelParent(this);
 }
 
 mozilla::ipc::IPCResult GamepadEventChannelParent::RecvVibrateHaptic(

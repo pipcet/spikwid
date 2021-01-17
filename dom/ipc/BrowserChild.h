@@ -390,8 +390,6 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
   mozilla::ipc::IPCResult RecvNativeSynthesisResponse(
       const uint64_t& aObserverId, const nsCString& aResponse);
 
-  mozilla::ipc::IPCResult RecvPluginEvent(const WidgetPluginEvent& aEvent);
-
   mozilla::ipc::IPCResult RecvCompositionEvent(
       const mozilla::WidgetCompositionEvent& aEvent);
 
@@ -410,7 +408,8 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
   MOZ_CAN_RUN_SCRIPT_BOUNDARY
   mozilla::ipc::IPCResult RecvPasteTransferable(
       const IPCDataTransfer& aDataTransfer, const bool& aIsPrivateData,
-      nsIPrincipal* aRequestingPrincipal, const uint32_t& aContentPolicyType);
+      nsIPrincipal* aRequestingPrincipal,
+      const nsContentPolicyType& aContentPolicyType);
 
   mozilla::ipc::IPCResult RecvActivateFrameEvent(const nsString& aType,
                                                  const bool& aCapture);
@@ -753,8 +752,6 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
       const layers::LayersId& aLayersId,
       const mozilla::layers::CompositorOptions& aCompositorOptions);
   void InitAPZState();
-
-  void InitVsyncChild();
 
   void DestroyWindow();
 

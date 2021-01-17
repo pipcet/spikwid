@@ -23,7 +23,8 @@ class NetworkEventWatcher {
    * Start watching for all network events related to a given Watcher Actor.
    *
    * @param WatcherActor watcherActor
-   *        The watcher actor from which we should observe network events
+   *        The watcher actor in the parent process from which we should
+   *        observe network events.
    * @param Object options
    *        Dictionary object with following attributes:
    *        - onAvailable: mandatory function
@@ -67,6 +68,22 @@ class NetworkEventWatcher {
   }
 
   /**
+   * Block requests based on the filters
+   * @param {Object} filters
+   */
+  blockRequest(filters) {
+    this.listener.blockRequest(filters);
+  }
+
+  /**
+   * Unblock requests based on the fitlers
+   * @param {Object} filters
+   */
+  unblockRequest(filters) {
+    this.listener.unblockRequest(filters);
+  }
+
+  /**
    * Calls the listener to set blocked urls
    *
    * @param {Array} urls
@@ -91,7 +108,7 @@ class NetworkEventWatcher {
   onNetworkEvent(event) {
     const { channelId } = event;
 
-    if (this.networkEvents.get(channelId)) {
+    if (this.networkEvents.has(channelId)) {
       throw new Error(
         `Got notified about channel ${channelId} more than once.`
       );

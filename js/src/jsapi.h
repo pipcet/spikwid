@@ -128,6 +128,8 @@ struct JSWrapObjectCallbacks {
   JSPreWrapCallback preWrap;
 };
 
+using JSDestroyZoneCallback = void (*)(JSFreeOp*, JS::Zone*);
+
 using JSDestroyCompartmentCallback = void (*)(JSFreeOp*, JS::Compartment*);
 
 using JSSizeOfIncludingThisCompartmentCallback =
@@ -327,6 +329,9 @@ JS_PUBLIC_API void SetHelperThreadTaskCallback(
     bool (*callback)(js::UniquePtr<js::RunnableTask>));
 
 extern JS_PUBLIC_API const char* JS_GetImplementationVersion(void);
+
+extern JS_PUBLIC_API void JS_SetDestroyZoneCallback(
+    JSContext* cx, JSDestroyZoneCallback callback);
 
 extern JS_PUBLIC_API void JS_SetDestroyCompartmentCallback(
     JSContext* cx, JSDestroyCompartmentCallback callback);
@@ -2627,7 +2632,6 @@ extern JS_PUBLIC_API void JS_SetOffthreadIonCompilationEnabled(JSContext* cx,
   Register(BASELINE_INTERPRETER_WARMUP_TRIGGER, "blinterp.warmup.trigger") \
   Register(BASELINE_WARMUP_TRIGGER, "baseline.warmup.trigger") \
   Register(ION_NORMAL_WARMUP_TRIGGER, "ion.warmup.trigger") \
-  Register(ION_FULL_WARMUP_TRIGGER, "ion.full.warmup.trigger") \
   Register(ION_GVN_ENABLE, "ion.gvn.enable") \
   Register(ION_FORCE_IC, "ion.forceinlineCaches") \
   Register(ION_ENABLE, "ion.enable") \

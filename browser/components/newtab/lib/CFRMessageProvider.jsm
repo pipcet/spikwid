@@ -840,7 +840,7 @@ const CFR_MESSAGES = [
         ],
       },
     },
-    targeting: "pageLoad >= 4 && firefoxVersion >= 71",
+    targeting: "pageLoad >= 0 && firefoxVersion >= 71",
     frequency: {
       lifetime: 2,
       custom: [{ period: 2 * 86400 * 1000, cap: 1 }],
@@ -931,7 +931,7 @@ const CFR_MESSAGES = [
         ],
       },
     },
-    targeting: "pageLoad >= 4",
+    targeting: "pageLoad >= 1",
     frequency: {
       lifetime: 7, // Length of privacy.contentBlocking.cfr-milestone.milestones pref
     },

@@ -84,7 +84,9 @@ enum If<'a> {
 enum Try<'a> {
     /// Next thing to parse is the `do` block.
     Do(Instruction<'a>),
-    /// Next thing to parse is the `catch` block.
+    /// Next thing to parse is `catch`/`catch_all`, or `unwind`.
+    CatchOrUnwind,
+    /// Next thing to parse is a `catch` block or `catch_all`.
     Catch,
     /// This `try` statement has finished parsing and if anything remains it's a
     /// syntax error.
@@ -195,8 +197,8 @@ impl<'a> ExpressionParser<'a> {
                     Level::Try(Try::Do(_)) => {
                         return Err(parser.error("previous `try` had no `do`"));
                     }
-                    Level::Try(Try::Catch) => {
-                        return Err(parser.error("previous `try` had no `catch`"));
+                    Level::Try(Try::CatchOrUnwind) => {
+                        return Err(parser.error("previous `try` had no `catch`, `catch_all`, or `unwind`"));
                     }
                     Level::Try(_) => {
                         self.instrs.push(Instruction::End(None));
@@ -305,7 +307,7 @@ impl<'a> ExpressionParser<'a> {
     /// than an `if` as the syntactic form is:
     ///
     /// ```wat
-    /// (try (do $do) (catch $catch))
+    /// (try (do $do) (catch $event $catch))
     /// ```
     ///
     /// where the `do` and `catch` keywords are mandatory, even for an empty
@@ -328,7 +330,7 @@ impl<'a> ExpressionParser<'a> {
             if parser.parse::<Option<kw::r#do>>()?.is_some() {
                 // The state is advanced here only if the parse succeeds in
                 // order to strictly require the keyword.
-                *i = Try::Catch;
+                *i = Try::CatchOrUnwind;
                 self.stack.push(Level::TryArm);
                 return Ok(true);
             }
@@ -338,15 +340,48 @@ impl<'a> ExpressionParser<'a> {
             return Ok(false);
         }
 
-        // `catch` handled similar to `do`, including requiring the keyword.
-        if let Try::Catch = i {
-            self.instrs.push(Instruction::Catch);
+        // After a try's `do`, there are several possible kinds of handlers.
+        if let Try::CatchOrUnwind = i {
+            // `catch` may be followed by more `catch`s or `catch_all`.
             if parser.parse::<Option<kw::catch>>()?.is_some() {
+                let evt = parser.parse::<ast::Index<'a>>()?;
+                self.instrs.push(Instruction::Catch(evt));
+                *i = Try::Catch;
+                self.stack.push(Level::TryArm);
+                return Ok(true);
+            }
+            // `catch_all` can only come at the end and has no argument.
+            if parser.parse::<Option<kw::catch_all>>()?.is_some() {
+                self.instrs.push(Instruction::CatchAll);
+                *i = Try::End;
+                self.stack.push(Level::TryArm);
+                return Ok(true);
+            }
+            // `unwind` is similar to `catch_all`.
+            if parser.parse::<Option<kw::unwind>>()?.is_some() {
+                self.instrs.push(Instruction::Unwind);
                 *i = Try::End;
                 self.stack.push(Level::TryArm);
                 return Ok(true);
             }
             return Ok(false);
+        }
+
+        if let Try::Catch = i {
+            if parser.parse::<Option<kw::catch>>()?.is_some() {
+                let evt = parser.parse::<ast::Index<'a>>()?;
+                self.instrs.push(Instruction::Catch(evt));
+                *i = Try::Catch;
+                self.stack.push(Level::TryArm);
+                return Ok(true);
+            }
+            if parser.parse::<Option<kw::catch_all>>()?.is_some() {
+                self.instrs.push(Instruction::CatchAll);
+                *i = Try::End;
+                self.stack.push(Level::TryArm);
+                return Ok(true);
+            }
+            return Err(parser.error("unexpected items after `catch`"));
         }
 
         Err(parser.error("too many payloads inside of `(try)`"))
@@ -924,7 +959,11 @@ instructions! {
         I16x8MinU : [0xfd, 0x97] : "i16x8.min_u",
         I16x8MaxS : [0xfd, 0x98] : "i16x8.max_s",
         I16x8MaxU : [0xfd, 0x99] : "i16x8.max_u",
+        I16x8ExtMulLowI8x16S : [0xfd, 0x9a] : "i16x8.extmul_low_i8x16_s",
         I16x8AvgrU : [0xfd, 0x9b] : "i16x8.avgr_u",
+        I16x8ExtMulHighI8x16S : [0xfd, 0x9d] : "i16x8.extmul_high_i8x16_s",
+        I16x8ExtMulLowI8x16U : [0xfd, 0x9e] : "i16x8.extmul_low_i8x16_u",
+        I16x8ExtMulHighI8x16U : [0xfd, 0x9f] : "i16x8.extmul_high_i8x16_u",
 
         I32x4Abs : [0xfd, 0xa0] : "i32x4.abs",
         I32x4Neg : [0xfd, 0xa1] : "i32x4.neg",
@@ -934,7 +973,7 @@ instructions! {
         I32x4WidenLowI16x8S : [0xfd, 0xa7] : "i32x4.widen_low_i16x8_s",
         I32x4WidenHighI16x8S : [0xfd, 0xa8] : "i32x4.widen_high_i16x8_s",
         I32x4WidenLowI16x8U : [0xfd, 0xa9] : "i32x4.widen_low_i16x8_u",
-        I32x4WidenHighI16x8u : [0xfd, 0xaa] : "i32x4.widen_high_i16x8_u",
+        I32x4WidenHighI16x8U : [0xfd, 0xaa] : "i32x4.widen_high_i16x8_u",
         I32x4Shl : [0xfd, 0xab] : "i32x4.shl",
         I32x4ShrS : [0xfd, 0xac] : "i32x4.shr_s",
         I32x4ShrU : [0xfd, 0xad] : "i32x4.shr_u",
@@ -946,6 +985,10 @@ instructions! {
         I32x4MaxS : [0xfd, 0xb8] : "i32x4.max_s",
         I32x4MaxU : [0xfd, 0xb9] : "i32x4.max_u",
         I32x4DotI16x8S : [0xfd, 0xba] : "i32x4.dot_i16x8_s",
+        I32x4ExtMulLowI16x8S : [0xfd, 0xbb] : "i32x4.extmul_low_i16x8_s",
+        I32x4ExtMulHighI16x8S : [0xfd, 0xbd] : "i32x4.extmul_high_i16x8_s",
+        I32x4ExtMulLowI16x8U : [0xfd, 0xbe] : "i32x4.extmul_low_i16x8_u",
+        I32x4ExtMulHighI16x8U : [0xfd, 0xbf] : "i32x4.extmul_high_i16x8_u",
 
         I64x2Neg : [0xfd, 0xc1] : "i64x2.neg",
         I64x2Shl : [0xfd, 0xcb] : "i64x2.shl",
@@ -953,7 +996,11 @@ instructions! {
         I64x2ShrU : [0xfd, 0xcd] : "i64x2.shr_u",
         I64x2Add : [0xfd, 0xce] : "i64x2.add",
         I64x2Sub : [0xfd, 0xd1] : "i64x2.sub",
+        I64x2ExtMulLowI32x4S : [0xfd, 0xd2] : "i64x2.extmul_low_i32x4_s",
+        I64x2ExtMulHighI32x4S : [0xfd, 0xd3] : "i64x2.extmul_high_i32x4_s",
         I64x2Mul : [0xfd, 0xd5] : "i64x2.mul",
+        I64x2ExtMulLowI32x4U : [0xfd, 0xd6] : "i64x2.extmul_low_i32x4_u",
+        I64x2ExtMulHighI32x4U : [0xfd, 0xd7] : "i64x2.extmul_high_i32x4_u",
 
         F32x4Ceil : [0xfd, 0xd8] : "f32x4.ceil",
         F32x4Floor : [0xfd, 0xd9] : "f32x4.floor",
@@ -997,11 +1044,12 @@ instructions! {
         V128Load64Zero(MemArg<8>) : [0xfd, 0xfd] : "v128.load64_zero",
 
         // Exception handling proposal
+        CatchAll : [0x05] : "catch_all", // Reuses the else opcode.
         Try(BlockType<'a>) : [0x06] : "try",
-        Catch : [0x07] : "catch",
+        Catch(ast::Index<'a>) : [0x07] : "catch",
         Throw(ast::Index<'a>) : [0x08] : "throw",
-        Rethrow : [0x09] : "rethrow",
-        BrOnExn(BrOnExn<'a>) : [0x0a] : "br_on_exn",
+        Rethrow(ast::Index<'a>) : [0x09] : "rethrow",
+        Unwind : [0x0a] : "unwind",
     }
 }
 

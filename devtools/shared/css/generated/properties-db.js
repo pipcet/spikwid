@@ -454,6 +454,7 @@ exports.CSS_PROPERTIES = {
       "auto",
       "conic-gradient",
       "fill",
+      "image-set",
       "inherit",
       "initial",
       "linear-gradient",
@@ -1740,6 +1741,7 @@ exports.CSS_PROPERTIES = {
       "auto",
       "conic-gradient",
       "fill",
+      "image-set",
       "inherit",
       "initial",
       "linear-gradient",
@@ -2161,6 +2163,7 @@ exports.CSS_PROPERTIES = {
       "cover",
       "exclude",
       "fill-box",
+      "image-set",
       "inherit",
       "initial",
       "intersect",
@@ -2249,6 +2252,7 @@ exports.CSS_PROPERTIES = {
       "-webkit-repeating-linear-gradient",
       "-webkit-repeating-radial-gradient",
       "conic-gradient",
+      "image-set",
       "inherit",
       "initial",
       "linear-gradient",
@@ -3542,6 +3546,7 @@ exports.CSS_PROPERTIES = {
       "fixed",
       "hsl",
       "hsla",
+      "image-set",
       "inherit",
       "initial",
       "left",
@@ -3676,6 +3681,7 @@ exports.CSS_PROPERTIES = {
       "-webkit-repeating-linear-gradient",
       "-webkit-repeating-radial-gradient",
       "conic-gradient",
+      "image-set",
       "inherit",
       "initial",
       "linear-gradient",
@@ -4379,6 +4385,7 @@ exports.CSS_PROPERTIES = {
       "auto",
       "conic-gradient",
       "fill",
+      "image-set",
       "inherit",
       "initial",
       "linear-gradient",
@@ -4461,6 +4468,7 @@ exports.CSS_PROPERTIES = {
       "-webkit-repeating-linear-gradient",
       "-webkit-repeating-radial-gradient",
       "conic-gradient",
+      "image-set",
       "inherit",
       "initial",
       "linear-gradient",
@@ -7418,8 +7426,21 @@ exports.CSS_PROPERTIES = {
       "list-style-image",
       "list-style-type"
     ],
-    "supports": [],
+    "supports": [
+      "gradient"
+    ],
     "values": [
+      "-moz-element",
+      "-moz-image-rect",
+      "-moz-linear-gradient",
+      "-moz-radial-gradient",
+      "-moz-repeating-linear-gradient",
+      "-moz-repeating-radial-gradient",
+      "-webkit-gradient",
+      "-webkit-linear-gradient",
+      "-webkit-radial-gradient",
+      "-webkit-repeating-linear-gradient",
+      "-webkit-repeating-radial-gradient",
       "arabic-indic",
       "armenian",
       "bengali",
@@ -7429,6 +7450,7 @@ exports.CSS_PROPERTIES = {
       "cjk-earthly-branch",
       "cjk-heavenly-stem",
       "cjk-ideographic",
+      "conic-gradient",
       "decimal",
       "decimal-leading-zero",
       "devanagari",
@@ -7442,6 +7464,7 @@ exports.CSS_PROPERTIES = {
       "hebrew",
       "hiragana",
       "hiragana-iroha",
+      "image-set",
       "inherit",
       "initial",
       "inside",
@@ -7455,6 +7478,7 @@ exports.CSS_PROPERTIES = {
       "korean-hanja-formal",
       "korean-hanja-informal",
       "lao",
+      "linear-gradient",
       "lower-alpha",
       "lower-armenian",
       "lower-greek",
@@ -7467,6 +7491,10 @@ exports.CSS_PROPERTIES = {
       "oriya",
       "outside",
       "persian",
+      "radial-gradient",
+      "repeating-conic-gradient",
+      "repeating-linear-gradient",
+      "repeating-radial-gradient",
       "revert",
       "simp-chinese-formal",
       "simp-chinese-informal",
@@ -7491,11 +7519,31 @@ exports.CSS_PROPERTIES = {
     "subproperties": [
       "list-style-image"
     ],
-    "supports": [],
+    "supports": [
+      "gradient"
+    ],
     "values": [
+      "-moz-element",
+      "-moz-image-rect",
+      "-moz-linear-gradient",
+      "-moz-radial-gradient",
+      "-moz-repeating-linear-gradient",
+      "-moz-repeating-radial-gradient",
+      "-webkit-gradient",
+      "-webkit-linear-gradient",
+      "-webkit-radial-gradient",
+      "-webkit-repeating-linear-gradient",
+      "-webkit-repeating-radial-gradient",
+      "conic-gradient",
+      "image-set",
       "inherit",
       "initial",
+      "linear-gradient",
       "none",
+      "radial-gradient",
+      "repeating-conic-gradient",
+      "repeating-linear-gradient",
+      "repeating-radial-gradient",
       "revert",
       "unset",
       "url"
@@ -7847,6 +7895,7 @@ exports.CSS_PROPERTIES = {
       "cover",
       "exclude",
       "fill-box",
+      "image-set",
       "inherit",
       "initial",
       "intersect",
@@ -7935,6 +7984,7 @@ exports.CSS_PROPERTIES = {
       "-webkit-repeating-linear-gradient",
       "-webkit-repeating-radial-gradient",
       "conic-gradient",
+      "image-set",
       "inherit",
       "initial",
       "linear-gradient",
@@ -9769,6 +9819,7 @@ exports.CSS_PROPERTIES = {
       "conic-gradient",
       "content-box",
       "ellipse",
+      "image-set",
       "inherit",
       "initial",
       "inset",
@@ -10978,18 +11029,6 @@ exports.PREFERENCES = [
     "layout.css.scroll-anchoring.enabled"
   ],
   [
-    "text-decoration-skip-ink",
-    "layout.css.text-decoration-skip-ink.enabled"
-  ],
-  [
-    "text-justify",
-    "layout.css.text-justify.enabled"
-  ],
-  [
-    "text-underline-position",
-    "layout.css.text-underline-position.enabled"
-  ],
-  [
     "touch-action",
     "layout.css.touch_action.enabled"
   ],
@@ -11066,20 +11105,12 @@ exports.PREFERENCES = [
     "layout.css.individual-transform.enabled"
   ],
   [
-    "text-decoration-thickness",
-    "layout.css.text-decoration-thickness.enabled"
-  ],
-  [
     "translate",
     "layout.css.individual-transform.enabled"
   ],
   [
     "offset-distance",
     "layout.css.motion-path.enabled"
-  ],
-  [
-    "text-underline-offset",
-    "layout.css.text-underline-offset.enabled"
   ],
   [
     "overflow-clip-box",

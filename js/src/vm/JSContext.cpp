@@ -303,6 +303,9 @@ void js::ReportOverRecursed(JSContext* maybecx, unsigned errorNumber) {
     } else {
       maybecx->addPendingOverRecursed();
     }
+#ifdef DEBUG
+    maybecx->hadOverRecursed_ = true;
+#endif
   }
 }
 
@@ -915,8 +918,6 @@ JSContext::JSContext(JSRuntime* runtime, const JS::ContextOptions& options)
       compactingDisabledCount(this, 0),
       frontendCollectionPool_(this),
       suppressProfilerSampling(false),
-      wasmTriedToInstallSignalHandlers(false),
-      wasmHaveSignalHandlers(false),
       tempLifoAlloc_(this, (size_t)TEMP_LIFO_ALLOC_PRIMARY_CHUNK_SIZE),
       debuggerMutations(this, 0),
       ionPcScriptCache(this, nullptr),
@@ -924,6 +925,9 @@ JSContext::JSContext(JSRuntime* runtime, const JS::ContextOptions& options)
       unwrappedException_(this),
       unwrappedExceptionStack_(this),
       overRecursed_(this, false),
+#ifdef DEBUG
+      hadOverRecursed_(this, false),
+#endif
       propagatingForcedReturn_(this, false),
       reportGranularity(this, JS_DEFAULT_JITREPORT_GRANULARITY),
       resolvingList(this, nullptr),
@@ -1122,6 +1126,7 @@ size_t JSContext::sizeOfExcludingThis(
    * added later.
    */
   return cycleDetectorVector().sizeOfExcludingThis(mallocSizeOf) +
+         wasm_.sizeOfExcludingThis(mallocSizeOf) +
          irregexp::IsolateSizeOfIncludingThis(isolate, mallocSizeOf);
 }
 

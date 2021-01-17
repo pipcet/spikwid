@@ -994,7 +994,7 @@ nsIOService::NewChannelFromURI(nsIURI* aURI, nsINode* aLoadingNode,
                                nsIPrincipal* aLoadingPrincipal,
                                nsIPrincipal* aTriggeringPrincipal,
                                uint32_t aSecurityFlags,
-                               uint32_t aContentPolicyType,
+                               nsContentPolicyType aContentPolicyType,
                                nsIChannel** result) {
   return NewChannelFromURIWithProxyFlags(aURI,
                                          nullptr,  // aProxyURI
@@ -1008,7 +1008,8 @@ nsresult nsIOService::NewChannelFromURIWithClientAndController(
     nsIPrincipal* aTriggeringPrincipal,
     const Maybe<ClientInfo>& aLoadingClientInfo,
     const Maybe<ServiceWorkerDescriptor>& aController, uint32_t aSecurityFlags,
-    uint32_t aContentPolicyType, uint32_t aSandboxFlags, nsIChannel** aResult) {
+    nsContentPolicyType aContentPolicyType, uint32_t aSandboxFlags,
+    nsIChannel** aResult) {
   return NewChannelFromURIWithProxyFlagsInternal(
       aURI,
       nullptr,  // aProxyURI
@@ -1032,7 +1033,8 @@ nsresult nsIOService::NewChannelFromURIWithProxyFlagsInternal(
     nsIPrincipal* aTriggeringPrincipal,
     const Maybe<ClientInfo>& aLoadingClientInfo,
     const Maybe<ServiceWorkerDescriptor>& aController, uint32_t aSecurityFlags,
-    uint32_t aContentPolicyType, uint32_t aSandboxFlags, nsIChannel** result) {
+    nsContentPolicyType aContentPolicyType, uint32_t aSandboxFlags,
+    nsIChannel** result) {
   nsCOMPtr<nsILoadInfo> loadInfo = new LoadInfo(
       aLoadingPrincipal, aTriggeringPrincipal, aLoadingNode, aSecurityFlags,
       aContentPolicyType, aLoadingClientInfo, aController, aSandboxFlags);
@@ -1116,7 +1118,7 @@ nsIOService::NewChannelFromURIWithProxyFlags(
     nsIURI* aURI, nsIURI* aProxyURI, uint32_t aProxyFlags,
     nsINode* aLoadingNode, nsIPrincipal* aLoadingPrincipal,
     nsIPrincipal* aTriggeringPrincipal, uint32_t aSecurityFlags,
-    uint32_t aContentPolicyType, nsIChannel** result) {
+    nsContentPolicyType aContentPolicyType, nsIChannel** result) {
   return NewChannelFromURIWithProxyFlagsInternal(
       aURI, aProxyURI, aProxyFlags, aLoadingNode, aLoadingPrincipal,
       aTriggeringPrincipal, Maybe<ClientInfo>(),
@@ -1129,7 +1131,8 @@ nsIOService::NewChannel(const nsACString& aSpec, const char* aCharset,
                         nsIURI* aBaseURI, nsINode* aLoadingNode,
                         nsIPrincipal* aLoadingPrincipal,
                         nsIPrincipal* aTriggeringPrincipal,
-                        uint32_t aSecurityFlags, uint32_t aContentPolicyType,
+                        uint32_t aSecurityFlags,
+                        nsContentPolicyType aContentPolicyType,
                         nsIChannel** result) {
   nsresult rv;
   nsCOMPtr<nsIURI> uri;

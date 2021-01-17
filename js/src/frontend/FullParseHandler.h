@@ -178,7 +178,8 @@ class FullParseHandler {
     return new_<NumericLiteral>(value, decimalPoint, pos);
   }
 
-  BigIntLiteralType newBigInt(BigIntIndex index, CompilationStencil& stencil,
+  BigIntLiteralType newBigInt(BigIntIndex index,
+                              BaseCompilationStencil& stencil,
                               const TokenPos& pos) {
     return new_<BigIntLiteral>(index, stencil, pos);
   }
@@ -879,7 +880,7 @@ class FullParseHandler {
     return new_<ModuleNode>(pos);
   }
 
-  LexicalScopeNodeType newLexicalScope(ParserLexicalScopeData* bindings,
+  LexicalScopeNodeType newLexicalScope(LexicalScope::ParserData* bindings,
                                        Node body,
                                        ScopeKind kind = ScopeKind::Lexical) {
     return new_<LexicalScopeNode>(bindings, body, kind);

@@ -84,12 +84,6 @@ add_task(async function test_remove_many() {
     onVisits(aVisits) {
       Assert.ok(false, "Unexpected call to onVisits " + aVisits.length);
     },
-    onTitleChanged(aURI) {
-      Assert.ok(false, "Unexpected call to onTitleChanged " + aURI.spec);
-    },
-    onClearHistory() {
-      Assert.ok(false, "Unexpected call to onClearHistory");
-    },
     onFrecencyChanged(aURI) {
       let origin = pages.find(x => x.uri.spec == aURI.spec);
       Assert.ok(origin);
@@ -130,6 +124,29 @@ add_task(async function test_remove_many() {
   };
   PlacesUtils.history.addObserver(observer);
 
+  const placesEventListener = events => {
+    for (const event of events) {
+      switch (event.type) {
+        case "page-title-changed": {
+          Assert.ok(
+            false,
+            "Unexpected page-title-changed event happens on " + event.url
+          );
+          break;
+        }
+        case "history-cleared": {
+          Assert.ok(false, "Unexpected history-cleared event happens");
+          break;
+        }
+      }
+    }
+  };
+
+  PlacesObservers.addListener(
+    ["page-title-changed", "history-cleared"],
+    placesEventListener
+  );
+
   info("Removing the pages and checking the callbacks");
 
   let removed = await PlacesUtils.history.remove(keys, page => {
@@ -145,6 +162,10 @@ add_task(async function test_remove_many() {
   Assert.ok(removed, "Something was removed");
 
   PlacesUtils.history.removeObserver(observer);
+  PlacesObservers.removeListener(
+    ["page-title-changed", "history-cleared"],
+    placesEventListener
+  );
 
   info("Checking out results");
   // By now the observers should have been called.
