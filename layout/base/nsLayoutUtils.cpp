@@ -28,6 +28,7 @@
 #include "ImageRegion.h"
 #include "imgIContainer.h"
 #include "imgIRequest.h"
+#include "Layers.h"
 #include "LayoutLogging.h"
 #include "MobileViewportManager.h"
 #include "mozilla/AccessibleCaretEventHub.h"
@@ -1421,10 +1422,18 @@ static nsIFrame* GetNearestScrollableOrOverflowClipFrame(
       aFrame,
       "GetNearestScrollableOrOverflowClipFrame expects a non-null frame");
 
-  for (nsIFrame* f = aFrame; f;
-       f = (aFlags & nsLayoutUtils::SCROLLABLE_SAME_DOC)
-               ? f->GetParent()
-               : nsLayoutUtils::GetCrossDocParentFrame(f)) {
+  auto GetNextFrame = [aFlags](const nsIFrame* aFrame) -> nsIFrame* {
+    if (aFlags & nsLayoutUtils::SCROLLABLE_FOLLOW_OOF_TO_PLACEHOLDER) {
+      return (aFlags & nsLayoutUtils::SCROLLABLE_SAME_DOC)
+                 ? nsLayoutUtils::GetParentOrPlaceholderFor(aFrame)
+                 : nsLayoutUtils::GetParentOrPlaceholderForCrossDoc(aFrame);
+    }
+    return (aFlags & nsLayoutUtils::SCROLLABLE_SAME_DOC)
+               ? aFrame->GetParent()
+               : nsLayoutUtils::GetCrossDocParentFrame(aFrame);
+  };
+
+  for (nsIFrame* f = aFrame; f; f = GetNextFrame(f)) {
     if (aClipFrameCheck && aClipFrameCheck(f)) {
       return f;
     }
@@ -2640,8 +2649,7 @@ struct AutoNestedPaintCount {
 #endif
 
 nsIFrame* nsLayoutUtils::GetFrameForPoint(
-    RelativeTo aRelativeTo, nsPoint aPt,
-    EnumSet<FrameForPointOption> aOptions) {
+    RelativeTo aRelativeTo, nsPoint aPt, const FrameForPointOptions& aOptions) {
   AUTO_PROFILER_LABEL("nsLayoutUtils::GetFrameForPoint", LAYOUT);
 
   nsresult rv;
@@ -2652,9 +2660,10 @@ nsIFrame* nsLayoutUtils::GetFrameForPoint(
   return outFrames.Length() ? outFrames.ElementAt(0) : nullptr;
 }
 
-nsresult nsLayoutUtils::GetFramesForArea(
-    RelativeTo aRelativeTo, const nsRect& aRect,
-    nsTArray<nsIFrame*>& aOutFrames, EnumSet<FrameForPointOption> aOptions) {
+nsresult nsLayoutUtils::GetFramesForArea(RelativeTo aRelativeTo,
+                                         const nsRect& aRect,
+                                         nsTArray<nsIFrame*>& aOutFrames,
+                                         const FrameForPointOptions& aOptions) {
   AUTO_PROFILER_LABEL("nsLayoutUtils::GetFramesForArea", LAYOUT);
 
   nsIFrame* frame = const_cast<nsIFrame*>(aRelativeTo.mFrame);
@@ -2664,10 +2673,10 @@ nsresult nsLayoutUtils::GetFramesForArea(
   builder.BeginFrame();
   nsDisplayList list;
 
-  if (aOptions.contains(FrameForPointOption::IgnorePaintSuppression)) {
+  if (aOptions.mBits.contains(FrameForPointOption::IgnorePaintSuppression)) {
     builder.IgnorePaintSuppression();
   }
-  if (aOptions.contains(FrameForPointOption::IgnoreRootScrollFrame)) {
+  if (aOptions.mBits.contains(FrameForPointOption::IgnoreRootScrollFrame)) {
     nsIFrame* rootScrollFrame = frame->PresShell()->GetRootScrollFrame();
     if (rootScrollFrame) {
       builder.SetIgnoreScrollFrame(rootScrollFrame);
@@ -2676,12 +2685,13 @@ nsresult nsLayoutUtils::GetFramesForArea(
   if (aRelativeTo.mViewportType == ViewportType::Layout) {
     builder.SetIsRelativeToLayoutViewport();
   }
-  if (aOptions.contains(FrameForPointOption::IgnoreCrossDoc)) {
+  if (aOptions.mBits.contains(FrameForPointOption::IgnoreCrossDoc)) {
     builder.SetDescendIntoSubdocuments(false);
   }
 
-  builder.SetHitTestIsForVisibility(
-      aOptions.contains(FrameForPointOption::OnlyVisible));
+  if (aOptions.mBits.contains(FrameForPointOption::OnlyVisible)) {
+    builder.SetHitTestIsForVisibility(aOptions.mVisibleThreshold);
+  }
 
   builder.EnterPresShell(frame);
 
@@ -2788,7 +2798,8 @@ nsIScrollableFrame* nsLayoutUtils::GetAsyncScrollableAncestorFrame(
     nsIFrame* aTarget) {
   uint32_t flags = nsLayoutUtils::SCROLLABLE_ALWAYS_MATCH_ROOT |
                    nsLayoutUtils::SCROLLABLE_ONLY_ASYNC_SCROLLABLE |
-                   nsLayoutUtils::SCROLLABLE_FIXEDPOS_FINDS_ROOT;
+                   nsLayoutUtils::SCROLLABLE_FIXEDPOS_FINDS_ROOT |
+                   nsLayoutUtils::SCROLLABLE_FOLLOW_OOF_TO_PLACEHOLDER;
   return nsLayoutUtils::GetNearestScrollableFrame(aTarget, flags);
 }
 
@@ -3147,10 +3158,8 @@ nsresult nsLayoutUtils::PaintFrame(gfxContext* aRenderingContext,
     builder->IgnorePaintSuppression();
   }
 
-  if (nsIDocShell* doc = presContext->GetDocShell()) {
-    bool isActive = false;
-    doc->GetIsActive(&isActive);
-    builder->SetInActiveDocShell(isActive);
+  if (BrowsingContext* bc = presContext->Document()->GetBrowsingContext()) {
+    builder->SetInActiveDocShell(bc->IsActive());
   }
 
   nsRect rootInkOverflow = aFrame->InkOverflowRectRelativeToSelf();
@@ -4130,7 +4139,8 @@ nsIFrame* nsLayoutUtils::GetParentOrPlaceholderFor(const nsIFrame* aFrame) {
   return aFrame->GetParent();
 }
 
-nsIFrame* nsLayoutUtils::GetParentOrPlaceholderForCrossDoc(nsIFrame* aFrame) {
+nsIFrame* nsLayoutUtils::GetParentOrPlaceholderForCrossDoc(
+    const nsIFrame* aFrame) {
   nsIFrame* f = GetParentOrPlaceholderFor(aFrame);
   if (f) return f;
   return GetCrossDocParentFrame(aFrame);
@@ -4338,12 +4348,16 @@ static bool GetPercentBSize(const LengthPercentage& aStyle, nsIFrame* aFrame,
                  "unknown min block-size unit");
   }
 
-  // Now adjust h for box-sizing styles on the parent.  We never ignore padding
-  // here.  That could conceivably cause some problems with fieldsets (which are
-  // the one place that wants to ignore padding), but solving that here without
-  // hardcoding a check for f being a fieldset-content frame is a bit of a pain.
-  nscoord bSizeTakenByBoxSizing =
-      GetBSizeTakenByBoxSizing(pos->mBoxSizing, f, aHorizontalAxis, false);
+  // Ignore padding if we're an abspos box, as percentages in that case resolve
+  // against the padding box.
+  //
+  // TODO: This could conceivably cause some problems with fieldsets (which are
+  // the other place that wants to ignore padding), but solving that here
+  // without hardcoding a check for f being a fieldset-content frame is a bit of
+  // a pain.
+  const bool ignorePadding = aFrame->IsAbsolutelyPositioned();
+  nscoord bSizeTakenByBoxSizing = GetBSizeTakenByBoxSizing(
+      pos->mBoxSizing, f, aHorizontalAxis, ignorePadding);
   h = std::max(0, h - bSizeTakenByBoxSizing);
 
   aResult = std::max(aStyle.Resolve(h), 0);
@@ -4535,54 +4549,6 @@ static bool GetIntrinsicCoord(const SizeOrMaxSize& aStyle,
 static int32_t gNoiseIndent = 0;
 #endif
 
-// Return true for form controls whose minimum intrinsic inline-size
-// shrinks to 0 when they have a percentage inline-size (but not
-// percentage max-inline-size).  (Proper replaced elements, whose
-// intrinsic minimium inline-size shrinks to 0 for both percentage
-// inline-size and percentage max-inline-size, are handled elsewhere.)
-inline static bool FormControlShrinksForPercentISize(nsIFrame* aFrame) {
-  if (!aFrame->IsFrameOfType(nsIFrame::eReplaced)) {
-    // Quick test to reject most frames.
-    return false;
-  }
-
-  LayoutFrameType fType = aFrame->Type();
-  if (fType == LayoutFrameType::Meter || fType == LayoutFrameType::Progress ||
-      fType == LayoutFrameType::Range) {
-    // progress, meter and range do have this shrinking behavior
-    // FIXME: Maybe these should be nsIFormControlFrame?
-    return true;
-  }
-
-  if (!static_cast<nsIFormControlFrame*>(do_QueryFrame(aFrame))) {
-    // Not a form control.  This includes fieldsets, which do not
-    // shrink.
-    return false;
-  }
-
-  if (fType == LayoutFrameType::GfxButtonControl ||
-      fType == LayoutFrameType::HTMLButtonControl) {
-    // Buttons don't have this shrinking behavior.  (Note that color
-    // inputs do, even though they inherit from button, so we can't use
-    // do_QueryFrame here.)
-    return false;
-  }
-
-  return true;
-}
-
-// https://drafts.csswg.org/css-sizing-3/#percentage-sizing
-// Return true if the above spec's rule for replaced boxes applies.
-// XXX bug 1463700 will make this match the spec...
-static bool IsReplacedBoxResolvedAgainstZero(
-    nsIFrame* aFrame, const StyleSize& aStyleSize,
-    const StyleMaxSize& aStyleMaxSize) {
-  const bool sizeHasPercent = aStyleSize.HasPercent();
-  return ((sizeHasPercent || aStyleMaxSize.HasPercent()) &&
-          aFrame->IsFrameOfType(nsIFrame::eReplacedSizing)) ||
-         (sizeHasPercent && FormControlShrinksForPercentISize(aFrame));
-}
-
 /**
  * Add aOffsets which describes what to add on outside of the content box
  * aContentSize (controlled by 'box-sizing') and apply min/max properties.
@@ -4635,7 +4601,7 @@ static nscoord AddIntrinsicSizeOffset(
 
   nscoord size;
   if (aType == IntrinsicISizeType::MinISize &&
-      ::IsReplacedBoxResolvedAgainstZero(aFrame, aStyleSize, aStyleMaxSize)) {
+      aFrame->IsPercentageResolvedAgainstZero(aStyleSize, aStyleMaxSize)) {
     // XXX bug 1463700: this doesn't handle calc() according to spec
     result = 0;  // let |min| handle padding/border/margin
   } else if (GetAbsoluteCoord(aStyleSize, size) ||
@@ -4880,9 +4846,10 @@ nscoord nsLayoutUtils::IntrinsicForAxis(
         AddStateBitToAncestors(
             aFrame, NS_FRAME_DESCENDANT_INTRINSIC_ISIZE_DEPENDS_ON_BSIZE);
 
+        const bool ignorePadding =
+            (aFlags & IGNORE_PADDING) || aFrame->IsAbsolutelyPositioned();
         nscoord bSizeTakenByBoxSizing = GetDefiniteSizeTakenByBoxSizing(
-            boxSizing, aFrame, !isInlineAxis, aFlags & IGNORE_PADDING,
-            aPercentageBasis);
+            boxSizing, aFrame, !isInlineAxis, ignorePadding, aPercentageBasis);
         // NOTE: This is only the minContentSize if we've been passed
         // MIN_INTRINSIC_ISIZE (which is fine, because this should only be used
         // inside a check for that flag).
@@ -5042,7 +5009,7 @@ nscoord nsLayoutUtils::MinSizeContributionForAxis(
         // We have a definite width/height.  This is the "specified size" in:
         // https://drafts.csswg.org/css-grid/#min-size-auto
         fixedMinSize = &minSize;
-      } else if (::IsReplacedBoxResolvedAgainstZero(aFrame, size, maxSize)) {
+      } else if (aFrame->IsPercentageResolvedAgainstZero(size, maxSize)) {
         // XXX bug 1463700: this doesn't handle calc() according to spec
         minSize = 0;
         fixedMinSize = &minSize;
@@ -8040,6 +8007,9 @@ nsRect nsLayoutUtils::CalculateScrollableRectForFrame(
     contentBounds.height += aScrollableFrame->GetScrollPortRect().height;
   } else {
     contentBounds = aRootFrame->GetRect();
+    // Clamp to (0, 0) if there is no corresponding scrollable frame for the
+    // given |aRootFrame|.
+    contentBounds.MoveTo(0, 0);
   }
   return contentBounds;
 }
@@ -8866,33 +8836,40 @@ nsBlockFrame* nsLayoutUtils::GetFloatContainingBlock(nsIFrame* aFrame) {
   return static_cast<nsBlockFrame*>(ancestor);
 }
 
-// The implementation of this calculation is adapted from
+// The implementations of this calculation are adapted from
 // Element::GetBoundingClientRect().
 /* static */
 CSSRect nsLayoutUtils::GetBoundingContentRect(
     const nsIContent* aContent, const nsIScrollableFrame* aRootScrollFrame) {
-  CSSRect result;
   if (nsIFrame* frame = aContent->GetPrimaryFrame()) {
-    nsIFrame* relativeTo = aRootScrollFrame->GetScrolledFrame();
-    result = CSSRect::FromAppUnits(nsLayoutUtils::GetAllInFlowRectsUnion(
-        frame, relativeTo, nsLayoutUtils::RECTS_ACCOUNT_FOR_TRANSFORMS));
+    return GetBoundingFrameRect(frame, aRootScrollFrame);
+  }
+  return CSSRect();
+}
 
-    // If the element is contained in a scrollable frame that is not
-    // the root scroll frame, make sure to clip the result so that it is
-    // not larger than the containing scrollable frame's bounds.
-    nsIScrollableFrame* scrollFrame =
-        nsLayoutUtils::GetNearestScrollableFrame(frame);
-    if (scrollFrame && scrollFrame != aRootScrollFrame) {
-      nsIFrame* subFrame = do_QueryFrame(scrollFrame);
-      MOZ_ASSERT(subFrame);
-      // Get the bounds of the scroll frame in the same coordinate space
-      // as |result|.
-      CSSRect subFrameRect =
-          CSSRect::FromAppUnits(nsLayoutUtils::TransformFrameRectToAncestor(
-              subFrame, subFrame->GetRectRelativeToSelf(), relativeTo));
+/* static */
+CSSRect nsLayoutUtils::GetBoundingFrameRect(
+    nsIFrame* aFrame, const nsIScrollableFrame* aRootScrollFrame) {
+  CSSRect result;
+  nsIFrame* relativeTo = aRootScrollFrame->GetScrolledFrame();
+  result = CSSRect::FromAppUnits(nsLayoutUtils::GetAllInFlowRectsUnion(
+      aFrame, relativeTo, nsLayoutUtils::RECTS_ACCOUNT_FOR_TRANSFORMS));
 
-      result = subFrameRect.Intersect(result);
-    }
+  // If the element is contained in a scrollable frame that is not
+  // the root scroll frame, make sure to clip the result so that it is
+  // not larger than the containing scrollable frame's bounds.
+  nsIScrollableFrame* scrollFrame =
+      nsLayoutUtils::GetNearestScrollableFrame(aFrame);
+  if (scrollFrame && scrollFrame != aRootScrollFrame) {
+    nsIFrame* subFrame = do_QueryFrame(scrollFrame);
+    MOZ_ASSERT(subFrame);
+    // Get the bounds of the scroll frame in the same coordinate space
+    // as |result|.
+    CSSRect subFrameRect =
+        CSSRect::FromAppUnits(nsLayoutUtils::TransformFrameRectToAncestor(
+            subFrame, subFrame->GetRectRelativeToSelf(), relativeTo));
+
+    result = subFrameRect.Intersect(result);
   }
   return result;
 }

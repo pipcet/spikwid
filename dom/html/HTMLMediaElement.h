@@ -44,6 +44,8 @@ typedef uint16_t nsMediaReadyState;
 typedef uint32_t SuspendTypes;
 typedef uint32_t AudibleChangedReasons;
 
+class nsIStreamListener;
+
 namespace mozilla {
 class AbstractThread;
 class ChannelMediaDecoder;
@@ -360,6 +362,18 @@ class HTMLMediaElement : public nsGenericHTMLElement,
    * whether it's appropriate to fire an error event.
    */
   void NotifyLoadError(const nsACString& aErrorDetails = nsCString());
+
+  /**
+   * Called by one of our associated MediaTrackLists (audio/video) when a
+   * MediaTrack is added.
+   */
+  void NotifyMediaTrackAdded(dom::MediaTrack* aTrack);
+
+  /**
+   * Called by one of our associated MediaTrackLists (audio/video) when a
+   * MediaTrack is removed.
+   */
+  void NotifyMediaTrackRemoved(dom::MediaTrack* aTrack);
 
   /**
    * Called by one of our associated MediaTrackLists (audio/video) when an

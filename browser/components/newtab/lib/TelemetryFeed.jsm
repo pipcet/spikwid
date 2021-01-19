@@ -118,18 +118,15 @@ XPCOMUtils.defineLazyGetter(
 );
 
 this.TelemetryFeed = class TelemetryFeed {
-  constructor({ isParentProcess = true } = {}) {
+  constructor() {
     this.sessions = new Map();
     this._prefs = new Prefs();
+    this._impressionId = this.getOrCreateImpressionId();
     this._aboutHomeSeen = false;
     this._classifySite = classifySite;
     this._addWindowListeners = this._addWindowListeners.bind(this);
     this._browserOpenNewtabStart = null;
     this.handleEvent = this.handleEvent.bind(this);
-    if (isParentProcess && !this._prefs.get(PREF_IMPRESSION_ID)) {
-      const id = String(gUUIDGenerator.generateUUID());
-      this._prefs.set(PREF_IMPRESSION_ID, id);
-    }
   }
 
   get telemetryEnabled() {
@@ -231,8 +228,13 @@ this.TelemetryFeed = class TelemetryFeed {
     return pinnedTabs;
   }
 
-  get _impressionId() {
-    return this._prefs.get(PREF_IMPRESSION_ID);
+  getOrCreateImpressionId() {
+    let impressionId = this._prefs.get(PREF_IMPRESSION_ID);
+    if (!impressionId) {
+      impressionId = String(gUUIDGenerator.generateUUID());
+      this._prefs.set(PREF_IMPRESSION_ID, impressionId);
+    }
+    return impressionId;
   }
 
   browserOpenNewtabStart() {
@@ -546,19 +548,13 @@ this.TelemetryFeed = class TelemetryFeed {
    * @return {obj}    A telemetry ping
    */
   createImpressionStats(portID, data) {
-    return Object.assign(this.createPing(portID), data, {
-      action: "activity_stream_impression_stats",
+    let ping = Object.assign(this.createPing(portID), data, {
       impression_id: this._impressionId,
-      client_id: "n/a",
-      session_id: "n/a",
     });
-  }
-
-  createSpocsFillPing(data) {
-    return Object.assign(this.createPing(null), data, {
-      impression_id: this._impressionId,
-      session_id: "n/a",
-    });
+    // Make sure `session_id` and `client_id` are not in the ping.
+    delete ping.session_id;
+    delete ping.client_id;
+    return ping;
   }
 
   createUserEvent(action) {
@@ -576,12 +572,6 @@ this.TelemetryFeed = class TelemetryFeed {
       action.data,
       { action: "activity_stream_undesired_event" }
     );
-  }
-
-  createPerformanceEvent(action) {
-    return Object.assign(this.createPing(), action.data, {
-      action: "activity_stream_performance_event",
-    });
   }
 
   createSessionEndEvent(session) {
@@ -945,9 +935,6 @@ this.TelemetryFeed = class TelemetryFeed {
           action.data
         );
         break;
-      case at.DISCOVERY_STREAM_SPOCS_FILL:
-        this.handleDiscoveryStreamSpocsFill(action.data);
-        break;
       case at.TELEMETRY_UNDESIRED_EVENT:
         this.handleUndesiredEvent(action);
         break;
@@ -966,9 +953,6 @@ this.TelemetryFeed = class TelemetryFeed {
       // Intentional fall-through
       case at.AS_ROUTER_TELEMETRY_USER_EVENT:
         this.handleASRouterUserEvent(action);
-        break;
-      case at.TELEMETRY_PERFORMANCE_EVENT:
-        this.sendEvent(this.createPerformanceEvent(action));
         break;
       case at.UNINIT:
         this.uninit();
@@ -1036,38 +1020,6 @@ this.TelemetryFeed = class TelemetryFeed {
     );
     loadedContentSets[data.source] = loadedContents;
     session.loadedContentSets = loadedContentSets;
-  }
-
-  /**
-   * Handl SPOCS Fill actions from Discovery Stream.
-   *
-   * @param {Object} data
-   *   The SPOCS Fill event structured as:
-   *   {
-   *     spoc_fills: [
-   *       {
-   *         id: 123,
-   *         displayed: 0,
-   *         reason: "frequency_cap",
-   *         full_recalc: 1
-   *        },
-   *        {
-   *          id: 124,
-   *          displayed: 1,
-   *          reason: "n/a",
-   *          full_recalc: 1
-   *        }
-   *      ]
-   *    }
-   */
-  handleDiscoveryStreamSpocsFill(data) {
-    const payload = this.createSpocsFillPing(data);
-    this.sendStructuredIngestionEvent(
-      payload,
-      STRUCTURED_INGESTION_NAMESPACE_AS,
-      "spoc-fills",
-      "1"
-    );
   }
 
   /**

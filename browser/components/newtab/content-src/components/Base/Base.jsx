@@ -13,6 +13,7 @@ import { CustomizeMenu } from "content-src/components/CustomizeMenu/CustomizeMen
 import React from "react";
 import { Search } from "content-src/components/Search/Search";
 import { Sections } from "content-src/components/Sections/Sections";
+import { CSSTransition } from "react-transition-group";
 
 export const PrefsButton = ({ onClick, icon }) => (
   <div className="prefs-button">
@@ -22,6 +23,14 @@ export const PrefsButton = ({ onClick, icon }) => (
       data-l10n-id="newtab-settings-button"
     />
   </div>
+);
+
+export const PersonalizeButton = ({ onClick }) => (
+  <button
+    className="personalize-button"
+    onClick={onClick}
+    data-l10n-id="newtab-personalize-button-label"
+  />
 );
 
 // Returns a function will not be continuously triggered when called. The
@@ -106,6 +115,7 @@ export class BaseContent extends React.PureComponent {
     this.openCustomizationMenu = this.openCustomizationMenu.bind(this);
     this.closeCustomizationMenu = this.closeCustomizationMenu.bind(this);
     this.onWindowScroll = debounce(this.onWindowScroll.bind(this), 5);
+    this.setPref = this.setPref.bind(this);
     this.state = { fixedSearch: false, customizeMenuVisible: false };
   }
 
@@ -144,6 +154,10 @@ export class BaseContent extends React.PureComponent {
     this.setState({ customizeMenuVisible: false });
   }
 
+  setPref(pref, value) {
+    this.props.dispatch(ac.SetPref(pref, value));
+  }
+
   render() {
     const { props } = this;
     const { App } = props;
@@ -166,12 +180,28 @@ export class BaseContent extends React.PureComponent {
       !pocketEnabled &&
       filteredSections.filter(section => section.enabled).length === 0;
     const searchHandoffEnabled = prefs["improvesearch.handoffToAwesomebar"];
-    const showLogo = prefs["logowordmark.alwaysVisible"] && !pocketEnabled;
+    const showLogo =
+      prefs["logowordmark.alwaysVisible"] &&
+      (!prefs["feeds.section.topstories"] ||
+        (!prefs["feeds.system.topstories"] && prefs.region));
 
     const customizationMenuEnabled = prefs["customizationMenu.enabled"];
     const newNewtabExperienceEnabled = prefs["newNewtabExperience.enabled"];
     const canShowCustomizationMenu =
       customizationMenuEnabled || newNewtabExperienceEnabled;
+    const showCustomizationMenu =
+      canShowCustomizationMenu && this.state.customizeMenuVisible;
+    const enabledSections = {
+      topSitesEnabled: prefs["feeds.topsites"],
+      pocketEnabled: prefs["feeds.section.topstories"],
+      snippetsEnabled: prefs["feeds.snippets"],
+      highlightsEnabled: prefs["feeds.section.highlights"],
+      showSponsoredTopSitesEnabled: prefs.showSponsoredTopSites,
+      showSponsoredPocketEnabled: prefs.showSponsored,
+      topSitesRowsCount: prefs.topSitesRows,
+    };
+    const pocketRegion = prefs["feeds.system.topstories"];
+    const { mayHaveSponsoredTopSites } = prefs;
 
     const outerClassName = [
       "outer-wrapper",
@@ -183,12 +213,35 @@ export class BaseContent extends React.PureComponent {
         "fixed-search",
       prefs.showSearch && noSectionsEnabled && "only-search",
       showLogo && "visible-logo",
+      newNewtabExperienceEnabled && "newtab-experience",
     ]
       .filter(v => v)
       .join(" ");
 
     return (
       <div>
+        {canShowCustomizationMenu ? (
+          <span>
+            <PersonalizeButton onClick={this.openCustomizationMenu} />
+            <CSSTransition
+              timeout={0}
+              classNames="customize-animate"
+              in={showCustomizationMenu}
+              appear={true}
+            >
+              <CustomizeMenu
+                onClose={this.closeCustomizationMenu}
+                openPreferences={this.openPreferences}
+                setPref={this.setPref}
+                enabledSections={enabledSections}
+                pocketRegion={pocketRegion}
+                mayHaveSponsoredTopSites={mayHaveSponsoredTopSites}
+              />
+            </CSSTransition>
+          </span>
+        ) : (
+          <PrefsButton onClick={this.openPreferences} icon={prefsButtonIcon} />
+        )}
         <div className={outerClassName}>
           <main>
             {prefs.showSearch && (
@@ -220,18 +273,6 @@ export class BaseContent extends React.PureComponent {
             <ConfirmDialog />
           </main>
         </div>
-        <PrefsButton
-          onClick={
-            canShowCustomizationMenu
-              ? this.openCustomizationMenu
-              : this.openPreferences
-          }
-          icon={prefsButtonIcon}
-        />
-
-        {canShowCustomizationMenu && this.state.customizeMenuVisible && (
-          <CustomizeMenu onClose={this.closeCustomizationMenu} />
-        )}
       </div>
     );
   }

@@ -8,6 +8,7 @@ function run_test() {
   test_methods_calling();
   test_constructors();
   test_rtf_formatBestUnit();
+  test_datetimeformat();
 
   ok(true);
 }
@@ -24,16 +25,19 @@ function test_methods_calling() {
   Services.intl.getDisplayNames("ar");
   Services.intl.getLocaleInfo("de");
   new Services.intl.DateTimeFormat("fr");
+  new Services.intl.ListFormat("fr");
+  new Services.intl.Locale("fr");
   new Services.intl.RelativeTimeFormat("fr");
   ok(true);
 }
 
 function test_constructors() {
   let constructors = [
+    "Collator",
     "DateTimeFormat",
+    "ListFormat",
     "NumberFormat",
     "PluralRules",
-    "Collator",
   ];
 
   constructors.forEach(constructor => {
@@ -41,20 +45,6 @@ function test_constructors() {
     let obj2 = new Services.intl[constructor]();
 
     equal(typeof obj, typeof obj2);
-
-    Assert.throws(() => {
-      // This is an observable difference between Intl and mozIntl.
-      //
-      // Old ECMA402 APIs (edition 1 and 2) allowed for constructors to be called
-      // as functions.
-      // Starting from ed.3 all new constructors are throwing when called without |new|.
-      //
-      // All MozIntl APIs do not implement the legacy behavior and throw
-      // when called without |new|.
-      //
-      // For more information see https://github.com/tc39/ecma402/pull/84 .
-      Services.intl[constructor]();
-    }, /class constructors must be invoked with |new|/);
   });
 }
 
@@ -161,4 +151,19 @@ function test_rtf_formatBestUnit() {
 
     testRTFBestUnit(anchor, "2098-01-02 18:30", "in 82 years");
   }
+}
+
+function test_datetimeformat() {
+  Services.prefs.setStringPref(
+    "intl.date_time.pattern_override.date_long",
+    "yyyy年M月d日"
+  );
+
+  let formatted = new Services.intl.DateTimeFormat("ja", {
+    dateStyle: "long",
+  }).format(new Date("2020-12-08 21:00:05"));
+
+  equal(formatted, "2020年12月8日");
+
+  Services.prefs.clearUserPref("intl.date_time.pattern_override.date_long");
 }

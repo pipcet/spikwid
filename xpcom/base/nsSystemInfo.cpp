@@ -29,6 +29,7 @@
 #    include <wscapi.h>
 #  endif  // __MINGW32__
 #  include "base/scoped_handle_win.h"
+#  include "mozilla/DynamicallyLinkedFunctionPtr.h"
 #  include "nsAppDirectoryServiceDefs.h"
 #  include "nsDirectoryServiceDefs.h"
 #  include "nsDirectoryServiceUtils.h"
@@ -523,6 +524,25 @@ static nsresult GetAppleModelId(nsAutoCString& aModelId) {
   aModelId.Truncate(numChars - 1);
   return NS_OK;
 }
+
+static nsresult ProcessIsRosettaTranslated(bool& isRosetta) {
+#  if defined(__aarch64__)
+  // There is no need to call sysctlbyname() if we are running as arm64.
+  isRosetta = false;
+#  else
+  int ret = 0;
+  size_t size = sizeof(ret);
+  if (sysctlbyname("sysctl.proc_translated", &ret, &size, NULL, 0) == -1) {
+    if (errno != ENOENT) {
+      fprintf(stderr, "Failed to check for translation environment\n");
+    }
+    isRosetta = false;
+  } else {
+    isRosetta = (ret == 1);
+  }
+#  endif
+  return NS_OK;
+}
 #endif
 
 using namespace mozilla;
@@ -835,6 +855,13 @@ nsresult CollectProcessInfo(ProcessInfo& info) {
   return NS_OK;
 }
 
+#if defined(XP_WIN) && (_WIN32_WINNT < 0x0A00)
+WINBASEAPI
+BOOL WINAPI IsUserCetAvailableInEnvironment(_In_ DWORD UserCetEnvironment);
+
+#  define USER_CET_ENVIRONMENT_WIN32_PROCESS 0x00000000
+#endif
+
 nsresult nsSystemInfo::Init() {
   // check that it is called from the main thread on all platforms.
   MOZ_ASSERT(NS_IsMainThread());
@@ -931,12 +958,29 @@ nsresult nsSystemInfo::Init() {
     }
   }
 #  endif  // __MINGW32__
+
+  mozilla::DynamicallyLinkedFunctionPtr<decltype(
+      &IsUserCetAvailableInEnvironment)>
+      isUserCetAvailable(L"api-ms-win-core-sysinfo-l1-2-6.dll",
+                         "IsUserCetAvailableInEnvironment");
+  bool hasUserCET = isUserCetAvailable &&
+                    isUserCetAvailable(USER_CET_ENVIRONMENT_WIN32_PROCESS);
+  rv = SetPropertyAsBool(u"hasUserCET"_ns, hasUserCET);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+
 #endif
 
 #if defined(XP_MACOSX)
   nsAutoCString modelId;
   if (NS_SUCCEEDED(GetAppleModelId(modelId))) {
     rv = SetPropertyAsACString(u"appleModelId"_ns, modelId);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+  bool isRosetta;
+  if (NS_SUCCEEDED(ProcessIsRosettaTranslated(isRosetta))) {
+    rv = SetPropertyAsBool(u"rosettaStatus"_ns, isRosetta);
     NS_ENSURE_SUCCESS(rv, rv);
   }
 #endif

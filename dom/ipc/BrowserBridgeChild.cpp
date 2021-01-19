@@ -17,9 +17,11 @@
 #include "mozilla/dom/BrowserBridgeHost.h"
 #include "mozilla/dom/BrowsingContext.h"
 #include "mozilla/dom/MozFrameLoaderOwnerBinding.h"
+#include "mozilla/PresShell.h"
 #include "nsFocusManager.h"
 #include "nsFrameLoader.h"
 #include "nsFrameLoaderOwner.h"
+#include "nsObjectLoadingContent.h"
 #include "nsQueryObject.h"
 #include "nsSubDocumentFrame.h"
 #include "nsView.h"
@@ -247,11 +249,10 @@ mozilla::ipc::IPCResult BrowserBridgeChild::RecvIntrinsicSizeOrRatioChanged(
     const Maybe<IntrinsicSize>& aIntrinsicSize,
     const Maybe<AspectRatio>& aIntrinsicRatio) {
   if (RefPtr<Element> owner = mFrameLoader->GetOwnerContent()) {
-    if (nsIFrame* f = owner->GetPrimaryFrame()) {
-      if (nsSubDocumentFrame* sdf = do_QueryFrame(f)) {
-        sdf->SubdocumentIntrinsicSizeOrRatioChanged(aIntrinsicSize,
-                                                    aIntrinsicRatio);
-      }
+    if (nsCOMPtr<nsIObjectLoadingContent> olc = do_QueryInterface(owner)) {
+      static_cast<nsObjectLoadingContent*>(olc.get())
+          ->SubdocumentIntrinsicSizeOrRatioChanged(aIntrinsicSize,
+                                                   aIntrinsicRatio);
     }
   }
   return IPC_OK();

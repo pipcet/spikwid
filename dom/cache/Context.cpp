@@ -18,6 +18,7 @@
 #include "mozIStorageConnection.h"
 #include "nsIPrincipal.h"
 #include "nsIRunnable.h"
+#include "nsIThread.h"
 #include "nsThreadUtils.h"
 
 namespace {
@@ -42,6 +43,7 @@ class NullAction final : public Action {
 namespace mozilla::dom::cache {
 
 using mozilla::dom::quota::AssertIsOnIOThread;
+using mozilla::dom::quota::DirectoryLock;
 using mozilla::dom::quota::OpenDirectoryListener;
 using mozilla::dom::quota::PERSISTENCE_TYPE_DEFAULT;
 using mozilla::dom::quota::PersistenceType;
@@ -107,6 +109,12 @@ class Context::QuotaInitRunnable final : public nsIRunnable,
     MOZ_DIAGNOSTIC_ASSERT(mTarget);
     MOZ_DIAGNOSTIC_ASSERT(mInitiatingEventTarget);
     MOZ_DIAGNOSTIC_ASSERT(mInitAction);
+  }
+
+  Maybe<DirectoryLock&> MaybeDirectoryLockRef() const {
+    NS_ASSERT_OWNINGTHREAD(QuotaInitRunnable);
+
+    return ToMaybeRef(mDirectoryLock.get());
   }
 
   nsresult Dispatch() {
@@ -556,7 +564,7 @@ class Context::ActionRunnable final : public nsIRunnable,
     NS_ASSERT_OWNINGTHREAD(ActionRunnable);
     MOZ_DIAGNOSTIC_ASSERT(mContext);
     MOZ_DIAGNOSTIC_ASSERT(mAction);
-    mContext->RemoveActivity(this);
+    mContext->RemoveActivity(*this);
     mContext = nullptr;
     mAction = nullptr;
   }
@@ -818,6 +826,25 @@ void Context::Dispatch(SafeRefPtr<Action> aAction) {
   DispatchAction(std::move(aAction));
 }
 
+Maybe<DirectoryLock&> Context::MaybeDirectoryLockRef() const {
+  NS_ASSERT_OWNINGTHREAD(Context);
+
+  if (mState == STATE_CONTEXT_PREINIT) {
+    MOZ_DIAGNOSTIC_ASSERT(!mInitRunnable);
+    MOZ_DIAGNOSTIC_ASSERT(!mDirectoryLock);
+
+    return Nothing();
+  }
+
+  if (mState == STATE_CONTEXT_INIT) {
+    MOZ_DIAGNOSTIC_ASSERT(!mDirectoryLock);
+
+    return mInitRunnable->MaybeDirectoryLockRef();
+  }
+
+  return ToMaybeRef(mDirectoryLock.get());
+}
+
 void Context::CancelAll() {
   NS_ASSERT_OWNINGTHREAD(Context);
 
@@ -836,7 +863,7 @@ void Context::CancelAll() {
 
   mState = STATE_CONTEXT_CANCELED;
   mPendingActions.Clear();
-  for (auto* activity : mActivityList.ForwardRange()) {
+  for (const auto& activity : mActivityList.ForwardRange()) {
     activity->Cancel();
   }
   AllowToClose();
@@ -869,7 +896,7 @@ void Context::CancelForCacheId(CacheId aCacheId) {
   });
 
   // Cancel activities and let them remove themselves
-  for (auto* activity : mActivityList.ForwardRange()) {
+  for (const auto& activity : mActivityList.ForwardRange()) {
     if (activity->MatchesCacheId(aCacheId)) {
       activity->Cancel();
     }
@@ -957,7 +984,7 @@ void Context::DispatchAction(SafeRefPtr<Action> aAction, bool aDoomData) {
     // for this invariant violation.
     MOZ_CRASH("Failed to dispatch ActionRunnable to target thread.");
   }
-  AddActivity(runnable.unsafeGetRawPtr());
+  AddActivity(*runnable);
 }
 
 void Context::OnQuotaInit(nsresult aRv, const QuotaInfo& aQuotaInfo,
@@ -1001,18 +1028,16 @@ void Context::OnQuotaInit(nsresult aRv, const QuotaInfo& aQuotaInfo,
   mPendingActions.Clear();
 }
 
-void Context::AddActivity(Activity* aActivity) {
+void Context::AddActivity(Activity& aActivity) {
   NS_ASSERT_OWNINGTHREAD(Context);
-  MOZ_DIAGNOSTIC_ASSERT(aActivity);
-  MOZ_ASSERT(!mActivityList.Contains(aActivity));
-  mActivityList.AppendElement(aActivity);
+  MOZ_ASSERT(!mActivityList.Contains(&aActivity));
+  mActivityList.AppendElement(WrapNotNullUnchecked(&aActivity));
 }
 
-void Context::RemoveActivity(Activity* aActivity) {
+void Context::RemoveActivity(Activity& aActivity) {
   NS_ASSERT_OWNINGTHREAD(Context);
-  MOZ_DIAGNOSTIC_ASSERT(aActivity);
-  MOZ_ALWAYS_TRUE(mActivityList.RemoveElement(aActivity));
-  MOZ_ASSERT(!mActivityList.Contains(aActivity));
+  MOZ_ALWAYS_TRUE(mActivityList.RemoveElement(&aActivity));
+  MOZ_ASSERT(!mActivityList.Contains(&aActivity));
 }
 
 void Context::NoteOrphanedData() {

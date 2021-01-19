@@ -4,7 +4,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "mozilla/glean/Uuid.h"
+#include "mozilla/glean/bindings/Uuid.h"
 
 #include "nsString.h"
 #include "mozilla/Components.h"
@@ -17,21 +17,20 @@ NS_IMPL_ISUPPORTS_CI(GleanUuid, nsIGleanUuid)
 
 NS_IMETHODIMP
 GleanUuid::Set(const nsACString& aValue) {
-  this->mUuid.Set(aValue);
+  mUuid.Set(aValue);
   return NS_OK;
 }
 
 NS_IMETHODIMP
 GleanUuid::GenerateAndSet() {
-  this->mUuid.GenerateAndSet();
+  mUuid.GenerateAndSet();
   return NS_OK;
 }
 
 NS_IMETHODIMP
 GleanUuid::TestGetValue(const nsACString& aStorageName, JSContext* aCx,
                         JS::MutableHandleValue aResult) {
-  auto result =
-      this->mUuid.TestGetValue(PromiseFlatCString(aStorageName).get());
+  auto result = mUuid.TestGetValue(aStorageName);
   if (result.isNothing()) {
     aResult.set(JS::UndefinedValue());
   } else {

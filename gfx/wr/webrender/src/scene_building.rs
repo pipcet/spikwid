@@ -330,25 +330,10 @@ impl<'a> SceneBuilder<'a> {
         builder.build_all(&root_pipeline);
 
         // Construct the picture cache primitive instance(s) from the tile cache builder
-        let (tile_cache_config, prim_list) = builder.tile_cache_builder.build(
+        let (tile_cache_config, tile_cache_pictures) = builder.tile_cache_builder.build(
             &builder.config,
-            &mut builder.interners,
             &mut builder.clip_store,
             &mut builder.prim_store,
-        );
-
-        let root_pic_index = PictureIndex(builder.prim_store.pictures
-            .alloc()
-            .init(PicturePrimitive::new_image(
-                None,
-                Picture3DContext::Out,
-                true,
-                PrimitiveFlags::IS_BACKFACE_VISIBLE,
-                RasterSpace::Screen,
-                prim_list,
-                ROOT_SPATIAL_NODE_INDEX,
-                PictureOptions::default(),
-            ))
         );
 
         BuiltScene {
@@ -360,9 +345,9 @@ impl<'a> SceneBuilder<'a> {
             spatial_tree: builder.spatial_tree,
             prim_store: builder.prim_store,
             clip_store: builder.clip_store,
-            root_pic_index,
             config: builder.config,
             tile_cache_config,
+            tile_cache_pictures,
         }
     }
 
@@ -727,7 +712,7 @@ impl<'a> SceneBuilder<'a> {
         self.add_scroll_frame(
             SpatialId::root_scroll_node(iframe_pipeline_id),
             spatial_node_index,
-            Some(ExternalScrollId(0, iframe_pipeline_id)),
+            ExternalScrollId(0, iframe_pipeline_id),
             iframe_pipeline_id,
             &iframe_rect,
             &bounds.size,
@@ -1981,7 +1966,7 @@ impl<'a> SceneBuilder<'a> {
         self.add_scroll_frame(
             SpatialId::root_scroll_node(pipeline_id),
             spatial_node_index,
-            Some(ExternalScrollId(0, pipeline_id)),
+            ExternalScrollId(0, pipeline_id),
             pipeline_id,
             &viewport_rect,
             &viewport_rect.size,
@@ -2190,7 +2175,7 @@ impl<'a> SceneBuilder<'a> {
         &mut self,
         new_node_id: SpatialId,
         parent_node_index: SpatialNodeIndex,
-        external_id: Option<ExternalScrollId>,
+        external_id: ExternalScrollId,
         pipeline_id: PipelineId,
         frame_rect: &LayoutRect,
         content_size: &LayoutSize,

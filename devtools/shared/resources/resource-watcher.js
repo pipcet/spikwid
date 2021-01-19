@@ -270,7 +270,11 @@ class ResourceWatcher {
       // Watcher actor, we have to unregister and re-register the resource
       // types. This will force calling `Resources.watchResources` on the new top
       // level target.
-      for (const resourceType of this._listenerCount.keys()) {
+      for (const resourceType of Object.values(ResourceWatcher.TYPES)) {
+        // ...which has at least one listener...
+        if (!this._listenerCount.get(resourceType)) {
+          continue;
+        }
         await this._stopListening(resourceType, { bypassListenerCount: true });
         resources.push(resourceType);
       }
@@ -294,9 +298,6 @@ class ResourceWatcher {
         // ...request existing resource and new one to come from this one target
         // *but* only do that for backward compat, where we don't have the watcher API
         // (See bug 1626647)
-        if (this.hasResourceWatcherSupport(resourceType)) {
-          continue;
-        }
         await this._watchResourcesForTarget(targetFront, resourceType);
       }
     }
@@ -445,13 +446,6 @@ class ResourceWatcher {
         continue;
       }
 
-      if (watcherFront) {
-        targetFront = await this._getTargetForWatcherResource(existingResource);
-        if (!targetFront) {
-          continue;
-        }
-      }
-
       if (resourceUpdates) {
         Object.assign(existingResource, resourceUpdates);
       }
@@ -482,13 +476,6 @@ class ResourceWatcher {
   async _onResourceDestroyed({ targetFront, watcherFront }, resources) {
     for (const resource of resources) {
       const { resourceType, resourceId } = resource;
-
-      if (watcherFront) {
-        targetFront = await this._getTargetForWatcherResource(resource);
-        if (!targetFront) {
-          continue;
-        }
-      }
 
       let index = -1;
       if (resourceId) {
@@ -615,8 +602,31 @@ class ResourceWatcher {
     );
   }
 
+  /**
+   * Tells if the server supports listening to the given resource type
+   * via the watcher actor's watchResources method.
+   *
+   * @return {Boolean} True, if the server supports this type.
+   */
   hasResourceWatcherSupport(resourceType) {
     return this.watcherFront?.traits?.resources?.[resourceType];
+  }
+
+  /**
+   * Tells if the server supports listening to the given resource type
+   * via the watcher actor's watchResources method, and that, for a specific
+   * target.
+   *
+   * @return {Boolean} True, if the server supports this type.
+   */
+  _hasResourceWatcherSupportForTarget(resourceType, targetFront) {
+    // First check if the watcher supports this target type.
+    // If it doesn't, no resource type can be listened via the Watcher actor for this target.
+    if (!this.targetList.hasTargetWatcherSupport(targetFront.targetType)) {
+      return false;
+    }
+
+    return this.hasResourceWatcherSupport(resourceType);
   }
 
   /**
@@ -648,7 +658,19 @@ class ResourceWatcher {
     // this resource type, use this API
     if (this.hasResourceWatcherSupport(resourceType)) {
       await this.watcherFront.watchResources([resourceType]);
-      return;
+
+      // Bug 1678385: In order to support watching for JS Source resource
+      // for service workers and parent process workers, which aren't supported yet
+      // by the watcher actor, we do not bail out here and allow to execute
+      // the legacy listener for these targets.
+      // Once bug 1608848 is fixed, we can remove this and always return.
+      // If this isn't fixed soon, we may add other resources we want to see
+      // being fetched from these targets.
+      const shouldRunLegacyListeners =
+        resourceType == ResourceWatcher.TYPES.SOURCE;
+      if (!shouldRunLegacyListeners) {
+        return;
+      }
     }
     // Otherwise, fallback on backward compat mode and use LegacyListeners.
 
@@ -677,6 +699,12 @@ class ResourceWatcher {
    * type of resource from a given target.
    */
   _watchResourcesForTarget(targetFront, resourceType) {
+    if (this._hasResourceWatcherSupportForTarget(resourceType, targetFront)) {
+      // This resource / target pair should already be handled by the watcher,
+      // no need to start legacy listeners.
+      return Promise.resolve();
+    }
+
     if (targetFront.isDestroyed()) {
       return Promise.resolve();
     }
@@ -726,8 +754,16 @@ class ResourceWatcher {
     // If the server supports the Watcher API and the Watcher supports
     // this resource type, use this API
     if (this.hasResourceWatcherSupport(resourceType)) {
-      this.watcherFront.unwatchResources([resourceType]);
-      return;
+      if (!this.watcherFront.isDestroyed()) {
+        this.watcherFront.unwatchResources([resourceType]);
+      }
+
+      // See comment in `_startListening`
+      const shouldRunLegacyListeners =
+        resourceType == ResourceWatcher.TYPES.SOURCE;
+      if (!shouldRunLegacyListeners) {
+        return;
+      }
     }
     // Otherwise, fallback on backward compat mode and use LegacyListeners.
 
@@ -743,6 +779,10 @@ class ResourceWatcher {
    * Backward compatibility code, reverse of _watchResourcesForTarget.
    */
   _unwatchResourcesForTarget(targetFront, resourceType) {
+    if (this._hasResourceWatcherSupportForTarget(resourceType, targetFront)) {
+      // This resource / target pair should already be handled by the watcher,
+      // no need to stop legacy listeners.
+    }
     // Is there really a point in:
     // - unregistering `onAvailable` RDP event callbacks from target-scoped actors?
     // - calling `stopListeners()` as we are most likely closing the toolbox and destroying everything?
@@ -846,8 +886,6 @@ const ResourceTransformers = {
     .ERROR_MESSAGE]: require("devtools/shared/resources/transformers/error-messages"),
   [ResourceWatcher.TYPES
     .LOCAL_STORAGE]: require("devtools/shared/resources/transformers/storage-local-storage.js"),
-  [ResourceWatcher.TYPES
-    .ROOT_NODE]: require("devtools/shared/resources/transformers/root-node"),
   [ResourceWatcher.TYPES
     .SESSION_STORAGE]: require("devtools/shared/resources/transformers/storage-session-storage.js"),
   [ResourceWatcher.TYPES

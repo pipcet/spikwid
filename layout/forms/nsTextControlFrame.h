@@ -9,7 +9,6 @@
 
 #include "mozilla/Attributes.h"
 #include "mozilla/TextControlElement.h"
-#include "mozilla/dom/Element.h"
 #include "nsContainerFrame.h"
 #include "nsIAnonymousContentCreator.h"
 #include "nsIContent.h"
@@ -136,7 +135,7 @@ class nsTextControlFrame : public nsContainerFrame,
                         const nsDisplayListSet& aLists) override;
 
   //==== BEGIN NSIFORMCONTROLFRAME
-  void SetFocus(bool aOn, bool aRepaint) override;
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY void SetFocus(bool aOn, bool aRepaint) override;
   MOZ_CAN_RUN_SCRIPT_BOUNDARY nsresult
   SetFormProperty(nsAtom* aName, const nsAString& aValue) override;
 

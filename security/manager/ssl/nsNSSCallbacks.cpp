@@ -18,6 +18,8 @@
 #include "mozilla/Telemetry.h"
 #include "mozilla/Unused.h"
 #include "nsContentUtils.h"
+#include "nsIChannel.h"
+#include "nsIHttpChannel.h"
 #include "nsIHttpChannelInternal.h"
 #include "nsIPrompt.h"
 #include "nsIProtocolProxyService.h"
@@ -720,11 +722,7 @@ static void PreliminaryHandshakeDone(PRFileDesc* fd) {
       infoObject->SetKEAKeyBits(channelInfo.keaKeyBits);
       infoObject->SetMACAlgorithmUsed(cipherInfo.macAlgorithm);
       infoObject->mIsDelegatedCredential = channelInfo.peerDelegCred;
-
-      if (infoObject->mIsDelegatedCredential) {
-        Telemetry::ScalarAdd(
-            Telemetry::ScalarID::SECURITY_TLS_DELEGATED_CREDENTIALS_TXN, 1);
-      }
+      infoObject->mIsAcceptedEch = channelInfo.echAccepted;
     }
   }
 
@@ -1183,10 +1181,8 @@ nsresult IsCertificateDistrustImminent(
   // to be removed in Firefox 63, when the validity period check will also be
   // removed from the code in NSSCertDBTrustDomain.
   if (CertDNIsInList(nssRootCert.get(), RootSymantecDNs)) {
-    static const PRTime NULL_TIME = 0;
-
-    rv = CheckForSymantecDistrust(intCerts, eeCert, NULL_TIME,
-                                  RootAppleAndGoogleSPKIs, isDistrusted);
+    rv = CheckForSymantecDistrust(intCerts, RootAppleAndGoogleSPKIs,
+                                  isDistrusted);
     if (NS_FAILED(rv)) {
       return rv;
     }

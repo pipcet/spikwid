@@ -31,6 +31,7 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/SchedulerGroup.h"
 #include "mozilla/Services.h"
+#include "mozilla/SpinEventLoopUntil.h"
 #include "mozilla/StaticPrefs_threads.h"
 #include "mozilla/TaskController.h"
 #include "nsXPCOMPrivate.h"
@@ -38,6 +39,7 @@
 #include "mozilla/Telemetry.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/Unused.h"
+#include "mozilla/dom/DocGroup.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "nsThreadSyncDispatch.h"
 #include "nsServiceManagerUtils.h"
@@ -1171,7 +1173,11 @@ nsThread::ProcessNextEvent(bool aMayWait, bool* aResult) {
 
       LOG(("THRD(%p) running [%p]\n", this, event.get()));
 
-      LogRunnable::Run log(event);
+      Maybe<LogRunnable::Run> log;
+
+      if (!usingTaskController) {
+        log.emplace(event);
+      }
 
       // Delay event processing to encourage whoever dispatched this event
       // to run.

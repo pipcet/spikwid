@@ -4,6 +4,23 @@
 
 "use strict";
 
+function selectedTextEventPromises(stateChangeType) {
+  return [
+    waitForMacEventWithInfo("AXSelectedTextChanged", (elem, info) => {
+      return (
+        info.AXTextStateChangeType == stateChangeType &&
+        elem.getAttributeValue("AXDOMIdentifier") == "body"
+      );
+    }),
+    waitForMacEventWithInfo("AXSelectedTextChanged", (elem, info) => {
+      return (
+        info.AXTextStateChangeType == stateChangeType &&
+        elem.getAttributeValue("AXDOMIdentifier") == "input"
+      );
+    }),
+  ];
+}
+
 async function testInput(browser, accDoc) {
   let input = getNativeInterface(accDoc, "input");
 
@@ -24,18 +41,16 @@ async function testInput(browser, accDoc) {
 
   let evt = Promise.all([
     waitForMacEvent("AXFocusedUIElementChanged", "input"),
-    waitForMacEvent("AXSelectedTextChanged", "body"),
-    waitForMacEvent("AXSelectedTextChanged", "input"),
+    ...selectedTextEventPromises(AXTextStateChangeTypeSelectionMove),
   ]);
   await SpecialPowers.spawn(browser, [], () => {
     content.document.getElementById("input").focus();
   });
   await evt;
 
-  evt = Promise.all([
-    waitForMacEvent("AXSelectedTextChanged", "body"),
-    waitForMacEvent("AXSelectedTextChanged", "input"),
-  ]);
+  evt = Promise.all(
+    selectedTextEventPromises(AXTextStateChangeTypeSelectionExtend)
+  );
   await SpecialPowers.spawn(browser, [], () => {
     let elm = content.document.getElementById("input");
     if (elm.setSelectionRange) {
@@ -70,10 +85,9 @@ async function testInput(browser, accDoc) {
     "AXSelectedTextRange is settable"
   );
 
-  evt = Promise.all([
-    waitForMacEvent("AXSelectedTextChanged"),
-    waitForMacEvent("AXSelectedTextChanged"),
-  ]);
+  evt = Promise.all(
+    selectedTextEventPromises(AXTextStateChangeTypeSelectionExtend)
+  );
   input.setAttributeValue("AXSelectedTextRange", NSRange(1, 7));
   await evt;
 
@@ -175,6 +189,37 @@ addAccessibleTask(
       ),
       "r Fudd is the",
       "Correct text is selected in document"
+    );
+  }
+);
+
+/**
+ * test nested content editables and their ancestor getters.
+ */
+addAccessibleTask(
+  `<div id="outer" role="textbox" contenteditable="true">
+     <p id="p">Bob <a href="#" id="link">Loblaw's</a></p>
+     <div id="inner" role="textbox" contenteditable="true">
+       Law <a href="#" id="inner_link">Blog</a>
+     </div>
+   </div>`,
+  (browser, accDoc) => {
+    let link = getNativeInterface(accDoc, "link");
+    let innerLink = getNativeInterface(accDoc, "inner_link");
+
+    let idmatches = (elem, id) => {
+      is(elem.getAttributeValue("AXDOMIdentifier"), id, "Matches ID");
+    };
+
+    idmatches(link.getAttributeValue("AXEditableAncestor"), "outer");
+    idmatches(link.getAttributeValue("AXFocusableAncestor"), "outer");
+    idmatches(link.getAttributeValue("AXHighestEditableAncestor"), "outer");
+
+    idmatches(innerLink.getAttributeValue("AXEditableAncestor"), "inner");
+    idmatches(innerLink.getAttributeValue("AXFocusableAncestor"), "inner");
+    idmatches(
+      innerLink.getAttributeValue("AXHighestEditableAncestor"),
+      "outer"
     );
   }
 );

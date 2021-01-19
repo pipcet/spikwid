@@ -7,18 +7,14 @@
 #ifndef mozilla_glean_GleanString_h
 #define mozilla_glean_GleanString_h
 
+#include "mozilla/Maybe.h"
 #include "nsIGleanMetrics.h"
+#include "mozilla/glean/fog_ffi_generated.h"
 #include "nsString.h"
 
 namespace mozilla::glean {
 
 namespace impl {
-extern "C" {
-void fog_string_set(uint32_t aId, const nsACString& aValue);
-uint32_t fog_string_test_has_value(uint32_t aId, const char* aStorageName);
-void fog_string_test_get_value(uint32_t aId, const char* aStorageName,
-                               nsACString& aValue);
-}
 
 class StringMetric {
  public:
@@ -32,7 +28,7 @@ class StringMetric {
    *
    * @param aValue The string to set the metric to.
    */
-  void Set(const nsACString& aValue) const { fog_string_set(mId, aValue); }
+  void Set(const nsACString& aValue) const { fog_string_set(mId, &aValue); }
 
   /**
    * **Test-only API**
@@ -46,14 +42,18 @@ class StringMetric {
    * This doesn't clear the stored value.
    * Parent process only. Panics in child processes.
    *
+   * @param aPingName The (optional) name of the ping to retrieve the metric
+   *        for. Defaults to the first value in `send_in_pings`.
+   *
    * @return value of the stored metric, or Nothing() if there is no value.
    */
-  Maybe<nsCString> TestGetValue(const char* aStorageName) const {
-    if (!fog_string_test_has_value(mId, aStorageName)) {
+  Maybe<nsCString> TestGetValue(
+      const nsACString& aPingName = nsCString()) const {
+    if (!fog_string_test_has_value(mId, &aPingName)) {
       return Nothing();
     }
     nsCString ret;
-    fog_string_test_get_value(mId, aStorageName, ret);
+    fog_string_test_get_value(mId, &aPingName, &ret);
     return Some(ret);
   }
 

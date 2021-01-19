@@ -23,6 +23,7 @@
 #include "nsTArray.h"
 #include "nsIPrintSettingsWin.h"
 
+#include "nsComponentManagerUtils.h"
 #include "nsPrinterWin.h"
 #include "nsReadableUtils.h"
 #include "nsString.h"
@@ -276,7 +277,7 @@ already_AddRefed<PrintTarget> nsDeviceContextSpecWin::MakePrintTarget() {
     mPrintSettings->GetToFileName(filename);
 
     double width, height;
-    mPrintSettings->GetEffectivePageSize(&width, &height);
+    mPrintSettings->GetEffectiveSheetSize(&width, &height);
     if (width <= 0 || height <= 0) {
       return nullptr;
     }

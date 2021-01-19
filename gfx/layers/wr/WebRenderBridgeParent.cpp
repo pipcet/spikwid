@@ -8,10 +8,13 @@
 
 #include "CompositableHost.h"
 #include "gfxEnv.h"
+#include "gfxPlatform.h"
 #include "gfxOTSUtils.h"
 #include "GeckoProfiler.h"
 #include "GLContext.h"
 #include "GLContextProvider.h"
+#include "GLLibraryLoader.h"
+#include "Layers.h"
 #include "nsExceptionHandler.h"
 #include "mozilla/Range.h"
 #include "mozilla/StaticPrefs_gfx.h"
@@ -32,6 +35,7 @@
 #include "mozilla/layers/SharedSurfacesParent.h"
 #include "mozilla/layers/TextureHost.h"
 #include "mozilla/layers/AsyncImagePipelineManager.h"
+#include "mozilla/layers/UiCompositorControllerParent.h"
 #include "mozilla/layers/WebRenderImageHost.h"
 #include "mozilla/layers/WebRenderTextureHost.h"
 #include "mozilla/Telemetry.h"
@@ -114,11 +118,7 @@ bool is_glcontext_angle(void* glcontext_ptr) {
 }
 
 const char* gfx_wr_resource_path_override() {
-  const char* resourcePath = PR_GetEnv("WR_RESOURCE_PATH");
-  if (!resourcePath || resourcePath[0] == '\0') {
-    return nullptr;
-  }
-  return resourcePath;
+  return gfxPlatform::WebRenderResourcePathOverride();
 }
 
 bool gfx_wr_use_optimized_shaders() {
@@ -172,6 +172,41 @@ void record_telemetry_time(mozilla::wr::TelemetryProbe aProbe,
       MOZ_ASSERT(false);
       break;
   }
+}
+
+static CrashReporter::Annotation FromWrCrashAnnotation(
+    mozilla::wr::CrashAnnotation aAnnotation) {
+  switch (aAnnotation) {
+    case mozilla::wr::CrashAnnotation::CompileShader:
+      return CrashReporter::Annotation::GraphicsCompileShader;
+    default:
+      MOZ_ASSERT_UNREACHABLE("Unhandled annotation!");
+      return CrashReporter::Annotation::Count;
+  }
+}
+
+extern "C" {
+
+void gfx_wr_set_crash_annotation(mozilla::wr::CrashAnnotation aAnnotation,
+                                 const char* aValue) {
+  MOZ_ASSERT(aValue);
+
+  auto annotation = FromWrCrashAnnotation(aAnnotation);
+  if (annotation == CrashReporter::Annotation::Count) {
+    return;
+  }
+
+  CrashReporter::AnnotateCrashReport(annotation, nsDependentCString(aValue));
+}
+
+void gfx_wr_clear_crash_annotation(mozilla::wr::CrashAnnotation aAnnotation) {
+  auto annotation = FromWrCrashAnnotation(aAnnotation);
+  if (annotation == CrashReporter::Annotation::Count) {
+    return;
+  }
+
+  CrashReporter::RemoveCrashReportAnnotation(annotation);
+}
 }
 
 namespace mozilla {
@@ -395,6 +430,11 @@ void WebRenderBridgeParent::Destroy() {
     return;
   }
   mDestroyed = true;
+  if (mWebRenderBridgeRef) {
+    // Break mutual reference
+    mWebRenderBridgeRef->Clear();
+    mWebRenderBridgeRef = nullptr;
+  }
   ClearResources();
 }
 
@@ -885,23 +925,22 @@ WebRenderBridgeParent::GetCollectedFrames() {
 }
 
 void WebRenderBridgeParent::AddPendingScrollPayload(
-    CompositionPayload& aPayload,
-    const std::pair<wr::PipelineId, wr::Epoch>& aKey) {
+    CompositionPayload& aPayload, const VsyncId& aCompositeStartId) {
   auto pendingScrollPayloads = mPendingScrollPayloads.Lock();
   nsTArray<CompositionPayload>* payloads =
-      pendingScrollPayloads->LookupOrAdd(aKey);
+      pendingScrollPayloads->LookupOrAdd(aCompositeStartId.mId);
 
   payloads->AppendElement(aPayload);
 }
 
 nsTArray<CompositionPayload> WebRenderBridgeParent::TakePendingScrollPayload(
-    const std::pair<wr::PipelineId, wr::Epoch>& aKey) {
+    const VsyncId& aCompositeStartId) {
   auto pendingScrollPayloads = mPendingScrollPayloads.Lock();
   nsTArray<CompositionPayload> payload;
   if (nsTArray<CompositionPayload>* storedPayload =
-          pendingScrollPayloads->Get(aKey)) {
+          pendingScrollPayloads->Get(aCompositeStartId.mId)) {
     payload.AppendElements(std::move(*storedPayload));
-    pendingScrollPayloads->Remove(aKey);
+    pendingScrollPayloads->Remove(aCompositeStartId.mId);
   }
   return payload;
 }
@@ -2083,7 +2122,7 @@ void WebRenderBridgeParent::MaybeGenerateFrame(VsyncId aId,
 #endif
 
   MOZ_ASSERT(generateFrame);
-  fastTxn.GenerateFrame();
+  fastTxn.GenerateFrame(aId);
   mApi->SendTransaction(fastTxn);
 
 #if defined(MOZ_WIDGET_ANDROID)
@@ -2241,7 +2280,7 @@ TransactionId WebRenderBridgeParent::FlushTransactionIdsForEpoch(
       aUiController->NotifyFirstPaint();
     }
 
-    RecordCompositionPayloadsPresented(transactionId.mPayloads);
+    RecordCompositionPayloadsPresented(aEndTime, transactionId.mPayloads);
 
     id = transactionId.mId;
     mPendingTransactionIds.pop_front();
@@ -2462,6 +2501,39 @@ void WebRenderBridgeParent::ExtractImageCompositeNotifications(
     return;
   }
   mAsyncImageManager->FlushImageNotifications(aNotifications);
+}
+
+RefPtr<WebRenderBridgeParentRef>
+WebRenderBridgeParent::GetWebRenderBridgeParentRef() {
+  if (mDestroyed) {
+    return nullptr;
+  }
+
+  if (!mWebRenderBridgeRef) {
+    mWebRenderBridgeRef = new WebRenderBridgeParentRef(this);
+  }
+  return mWebRenderBridgeRef;
+}
+
+WebRenderBridgeParentRef::WebRenderBridgeParentRef(
+    WebRenderBridgeParent* aWebRenderBridge)
+    : mWebRenderBridge(aWebRenderBridge) {
+  MOZ_ASSERT(CompositorThreadHolder::IsInCompositorThread());
+  MOZ_ASSERT(mWebRenderBridge);
+}
+
+RefPtr<WebRenderBridgeParent> WebRenderBridgeParentRef::WrBridge() {
+  return mWebRenderBridge;
+}
+
+void WebRenderBridgeParentRef::Clear() {
+  MOZ_ASSERT(CompositorThreadHolder::IsInCompositorThread());
+  mWebRenderBridge = nullptr;
+}
+
+WebRenderBridgeParentRef::~WebRenderBridgeParentRef() {
+  MOZ_ASSERT(CompositorThreadHolder::IsInCompositorThread());
+  MOZ_ASSERT(!mWebRenderBridge);
 }
 
 }  // namespace layers

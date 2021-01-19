@@ -64,6 +64,9 @@ class KnowsCompositor {
   // The sync object for the global content device.
   RefPtr<SyncObjectClient> GetSyncObject() {
     auto lock = mData.Lock();
+    if (lock.ref().mSyncObject) {
+      lock.ref().mSyncObject->EnsureInitialized();
+    }
     return lock.ref().mSyncObject;
   }
 
@@ -142,6 +145,16 @@ class KnowsCompositor {
                layers::LayersBackend::LAYERS_WR &&
            lock.ref().mTextureFactoryIdentifier.mWebRenderBackend ==
                WebRenderBackend::SOFTWARE;
+  }
+
+  bool UsingSoftwareWebRenderD3D11() const {
+    auto lock = mData.Lock();
+    return lock.ref().mTextureFactoryIdentifier.mParentBackend ==
+               layers::LayersBackend::LAYERS_WR &&
+           lock.ref().mTextureFactoryIdentifier.mWebRenderBackend ==
+               WebRenderBackend::SOFTWARE &&
+           lock.ref().mTextureFactoryIdentifier.mWebRenderCompositor ==
+               layers::WebRenderCompositor::D3D11;
   }
 
   TextureFactoryIdentifier GetTextureFactoryIdentifier() const {

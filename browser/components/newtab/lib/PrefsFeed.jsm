@@ -29,6 +29,12 @@ ChromeUtils.defineModuleGetter(
   "resource://messaging-system/experiments/ExperimentAPI.jsm"
 );
 
+ChromeUtils.defineModuleGetter(
+  this,
+  "Region",
+  "resource://gre/modules/Region.jsm"
+);
+
 this.PrefsFeed = class PrefsFeed {
   constructor(prefMap) {
     this._prefMap = prefMap;
@@ -143,6 +149,16 @@ this.PrefsFeed = class PrefsFeed {
     values.isPrivateBrowsingEnabled = PrivateBrowsingUtils.enabled;
     values.platform = AppConstants.platform;
 
+    // Save the geo pref if we have it
+    if (Region.home) {
+      values.region = Region.home;
+      this.geo = values.region;
+    } else if (this.geo !== "") {
+      // Watch for geo changes and use a dummy value for now
+      Services.obs.addObserver(this, Region.REGION_TOPIC);
+      this.geo = "";
+    }
+
     // Get the firefox accounts url for links and to send firstrun metrics to.
     values.fxa_endpoint = Services.prefs.getStringPref(
       "browser.newtabpage.activity-stream.fxaccounts.endpoint",
@@ -166,6 +182,10 @@ this.PrefsFeed = class PrefsFeed {
     this._prefMap.set("improvesearch.topSiteSearchShortcuts", {
       value: searchTopSiteExperimentPrefValue,
     });
+
+    values.mayHaveSponsoredTopSites = Services.prefs.getBoolPref(
+      "browser.topsites.useRemoteSetting"
+    );
 
     // Read the pref for search hand-off from firefox.js and store it
     // in our interal list of prefs to watch
@@ -196,6 +216,8 @@ this.PrefsFeed = class PrefsFeed {
     this._setIntPref(values, "discoverystream.personalization.version", 1);
     this._setIntPref(values, "discoverystream.personalization.overrideVersion");
     this._setStringPref(values, "discoverystream.spocs-endpoint", "");
+    this._setStringPref(values, "discoverystream.spocs-endpoint-query", "");
+    this._setStringPref(values, "newNewtabExperience.colors", "");
 
     // Set the initial state of all prefs in redux
     this.store.dispatch(
@@ -209,9 +231,16 @@ this.PrefsFeed = class PrefsFeed {
     );
   }
 
+  uninit() {
+    this.removeListeners();
+  }
+
   removeListeners() {
     this._prefs.ignoreBranch(this);
     ExperimentAPI.off(this.onExperimentUpdated);
+    if (this.geo === "") {
+      Services.obs.removeObserver(this, Region.REGION_TOPIC);
+    }
   }
 
   async _setIndexedDBPref(id, value) {
@@ -223,13 +252,28 @@ this.PrefsFeed = class PrefsFeed {
     }
   }
 
+  observe(subject, topic, data) {
+    switch (topic) {
+      case Region.REGION_TOPIC:
+        if (data === Region.REGION_UPDATED) {
+          this.store.dispatch(
+            ac.BroadcastToContent({
+              type: at.PREF_CHANGED,
+              data: { name: "region", value: Region.home },
+            })
+          );
+        }
+        break;
+    }
+  }
+
   onAction(action) {
     switch (action.type) {
       case at.INIT:
         this.init();
         break;
       case at.UNINIT:
-        this.removeListeners();
+        this.uninit();
         break;
       case at.CLEAR_PREF:
         Services.prefs.clearUserPref(this._prefs._branchStr + action.data.name);

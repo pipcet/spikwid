@@ -146,9 +146,7 @@ let executeScriptFn = dispatch(executeScript);
 let sendKeysToElementFn = dispatch(sendKeysToElement);
 
 function startListeners() {
-  if (!MarionettePrefs.useActors) {
-    eventDispatcher.enable();
-  }
+  eventDispatcher.enable();
 
   addMessageListener("Marionette:actionChain", actionChainFn);
   addMessageListener("Marionette:clearElement", clearElementFn);
@@ -190,9 +188,7 @@ function startListeners() {
 }
 
 function deregister() {
-  if (!MarionettePrefs.useActors) {
-    eventDispatcher.disable();
-  }
+  eventDispatcher.disable();
 
   removeMessageListener("Marionette:actionChain", actionChainFn);
   removeMessageListener("Marionette:clearElement", clearElementFn);
@@ -245,12 +241,6 @@ function deleteSession() {
   curContainer.frame.focus();
 
   legacyactions.touchIds = {};
-  if (action.inputStateMap !== undefined) {
-    action.inputStateMap.clear();
-  }
-  if (action.inputsToCancel !== undefined) {
-    action.inputsToCancel.length = 0;
-  }
 }
 
 /**
@@ -772,8 +762,6 @@ function switchToParentFrame(msg) {
 /**
  * Switch to the specified frame.
  *
- * @param {boolean=} focus
- *     Focus the frame if set to true. Defaults to false.
  * @param {(string|Object)=} element
  *     A web element reference of the frame or its element id.
  * @param {number=} id
@@ -781,7 +769,7 @@ function switchToParentFrame(msg) {
  *     If both element and id are not defined, switch to top-level frame.
  */
 function switchToFrame({ json }) {
-  let { commandID, element, focus, id } = json;
+  let { commandID, element, id } = json;
 
   let foundFrame;
   let wantedFrame = null;
@@ -802,10 +790,6 @@ function switchToFrame({ json }) {
     sendSyncMessage("Marionette:switchedToFrame", {
       browsingContextId: curContainer.id,
     });
-
-    if (focus) {
-      curContainer.frame.focus();
-    }
 
     sendOk(commandID);
     return;
@@ -868,10 +852,6 @@ function switchToFrame({ json }) {
               browsingContextId: curContainer.id,
             });
 
-            if (focus) {
-              curContainer.frame.focus();
-            }
-
             sendOk(commandID);
             return;
           }
@@ -902,10 +882,6 @@ function switchToFrame({ json }) {
   sendSyncMessage("Marionette:switchedToFrame", {
     browsingContextId: curContainer.id,
   });
-
-  if (focus) {
-    curContainer.frame.focus();
-  }
 
   sendOk(commandID);
 }
@@ -1071,8 +1047,6 @@ function registerSelf() {
 
   sandboxes.clear();
   legacyactions.mouseEventsOnly = false;
-  action.inputStateMap = new Map();
-  action.inputsToCancel = [];
 
   let reply = sendSyncMessage("Marionette:Register", {
     frameId: contentId,

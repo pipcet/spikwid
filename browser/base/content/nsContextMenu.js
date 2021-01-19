@@ -228,7 +228,6 @@ class nsContextMenu {
     this.onSpellcheckable = context.onSpellcheckable;
     this.onTextInput = context.onTextInput;
     this.onVideo = context.onVideo;
-    this.hasPasteEventListeners = context.hasPasteEventListeners;
 
     this.target = context.target;
     this.targetIdentifier = context.targetIdentifier;
@@ -446,7 +445,6 @@ class nsContextMenu {
       this.onTextInput ||
       this.onLink ||
       this.isContentSelected ||
-      this.hasPasteEventListeners ||
       this.onImage ||
       this.onCanvas ||
       this.onVideo ||
@@ -459,6 +457,16 @@ class nsContextMenu {
       "context-savelink",
       this.onSaveableLink || this.onPlainTextLink
     );
+    if (
+      (this.onSaveableLink || this.onPlainTextLink) &&
+      Services.policies.status === Services.policies.ACTIVE
+    ) {
+      this.setItemAttr(
+        "context-savelink",
+        "disabled",
+        !WebsiteFilter.isAllowed(this.linkURL)
+      );
+    }
 
     // Save image depends on having loaded its content, video and audio don't.
     this.showItem("context-saveimage", this.onLoadedImage || this.onCanvas);
@@ -758,15 +766,9 @@ class nsContextMenu {
     this.showItem("context-sep-undo", this.onTextInput);
     this.showItem("context-cut", this.onTextInput);
     this.showItem("context-copy", this.isContentSelected || this.onTextInput);
-    this.showItem(
-      "context-paste",
-      this.hasPasteEventListeners || this.onTextInput
-    );
+    this.showItem("context-paste", this.onTextInput);
     this.showItem("context-delete", this.onTextInput);
-    this.showItem(
-      "context-sep-paste",
-      this.hasPasteEventListeners || this.onTextInput
-    );
+    this.showItem("context-sep-paste", this.onTextInput);
     this.showItem(
       "context-selectall",
       !(
@@ -1434,6 +1436,7 @@ class nsContextMenu {
     bypassCache,
     doc,
     referrerInfo,
+    cookieJarSettings,
     windowID,
     linkDownload,
     isContentWindowPrivate
@@ -1469,7 +1472,26 @@ class nsContextMenu {
             );
 
             const title = bundle.GetStringFromName("downloadErrorAlertTitle");
-            const msg = bundle.GetStringFromName("downloadErrorGeneric");
+            let msg = bundle.GetStringFromName("downloadErrorGeneric");
+
+            try {
+              const channel = aRequest.QueryInterface(Ci.nsIChannel);
+              const reason = channel.loadInfo.requestBlockingReason;
+              if (
+                reason == Ci.nsILoadInfo.BLOCKING_REASON_EXTENSION_WEBREQUEST
+              ) {
+                try {
+                  const properties = channel.QueryInterface(Ci.nsIPropertyBag);
+                  const id = properties.getProperty("cancelledByExtension");
+                  msg = bundle.formatStringFromName("downloadErrorBlockedBy", [
+                    WebExtensionPolicy.getByID(id).name,
+                  ]);
+                } catch (err) {
+                  // "cancelledByExtension" doesn't have to be available.
+                  msg = bundle.GetStringFromName("downloadErrorExtension");
+                }
+              }
+            } catch (ex) {}
 
             let window = Services.wm.getOuterWindowWithId(windowID);
             Services.prompt.alert(window, title, msg);
@@ -1502,6 +1524,7 @@ class nsContextMenu {
             bypassCache,
             false,
             referrerInfo,
+            cookieJarSettings,
             doc,
             isContentWindowPrivate,
             this._triggeringPrincipal
@@ -1587,6 +1610,8 @@ class nsContextMenu {
       if (channel instanceof Ci.nsIHttpChannelInternal) {
         channel.forceAllowThirdPartyCookie = true;
       }
+
+      channel.loadInfo.cookieJarSettings = cookieJarSettings;
     }
 
     // fallback to the old way if we don't see the headers quickly
@@ -1618,6 +1643,7 @@ class nsContextMenu {
       true,
       this.ownerDoc,
       referrerInfo,
+      this.contentData.cookieJarSettings,
       this.frameOuterWindowID,
       this.linkDownload,
       isContentWindowPrivate
@@ -1911,7 +1937,8 @@ class nsContextMenu {
   printFrame() {
     PrintUtils.startPrintWindow(
       "context_print_frame",
-      this.actor.browsingContext
+      this.actor.browsingContext,
+      { printFrameOnly: true }
     );
   }
 
@@ -1919,8 +1946,7 @@ class nsContextMenu {
     PrintUtils.startPrintWindow(
       "context_print_selection",
       this.actor.browsingContext,
-      /* aOpenWindowInfo = */ null,
-      /* aPrintSelectionOnly = */ true
+      { printSelectionOnly: true }
     );
   }
 

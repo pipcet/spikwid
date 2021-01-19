@@ -11,6 +11,7 @@ categories:
     source_doc:
         - browser
         - dom
+        - editor
         - layout
         - gfx
         - devtools
@@ -34,6 +35,7 @@ categories:
         - tools/moztreedocs
     testing_doc:
         - testing/testing-policy
+        - testing/ci-configs
         - testing/marionette
         - testing/geckodriver
         - web-platform

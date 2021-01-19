@@ -9,6 +9,8 @@
  * handling of loads in it, recursion-checking).
  */
 
+#include "nsFrameLoader.h"
+
 #include "base/basictypes.h"
 
 #include "prenv.h"
@@ -30,7 +32,6 @@
 #include "nsUnicharUtils.h"
 #include "nsIScriptGlobalObject.h"
 #include "nsIScriptSecurityManager.h"
-#include "nsFrameLoader.h"
 #include "nsFrameLoaderOwner.h"
 #include "nsIFrame.h"
 #include "nsIScrollableFrame.h"
@@ -77,6 +78,7 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/PresShell.h"
 #include "mozilla/PresShellInlines.h"
+#include "mozilla/ScopeExit.h"
 #include "mozilla/StaticPrefs_fission.h"
 #include "mozilla/Unused.h"
 #include "mozilla/dom/ChromeMessageSender.h"
@@ -2064,6 +2066,8 @@ bool nsFrameLoader::OwnerIsMozBrowserFrame() {
   return browserFrame ? browserFrame->GetReallyIsBrowser() : false;
 }
 
+nsIContent* nsFrameLoader::GetParentObject() const { return mOwnerContent; }
+
 void nsFrameLoader::AssertSafeToInit() {
   MOZ_DIAGNOSTIC_ASSERT(nsContentUtils::IsSafeToRunScript() ||
                             mOwnerContent->OwnerDoc()->IsStaticDocument(),
@@ -2212,6 +2216,8 @@ nsresult nsFrameLoader::MaybeCreateDocShell() {
     sandboxFlags = iframe->GetSandboxFlags();
   }
   ApplySandboxFlags(sandboxFlags);
+  MOZ_ALWAYS_SUCCEEDS(mPendingBrowsingContext->SetInitialSandboxFlags(
+      mPendingBrowsingContext->GetSandboxFlags()));
 
   if (OwnerIsMozBrowserFrame()) {
     // For inproc frames, set the docshell properties.
@@ -2665,6 +2671,14 @@ bool nsFrameLoader::TryRemoteBrowser() {
   }
 
   return false;
+}
+
+nsIFrame* nsFrameLoader::GetPrimaryFrameOfOwningContent() const {
+  return mOwnerContent ? mOwnerContent->GetPrimaryFrame() : nullptr;
+}
+
+Document* nsFrameLoader::GetOwnerDoc() const {
+  return mOwnerContent ? mOwnerContent->OwnerDoc() : nullptr;
 }
 
 bool nsFrameLoader::IsRemoteFrame() {
@@ -3226,6 +3240,8 @@ already_AddRefed<Promise> nsFrameLoader::PrintPreview(
       info.mSheetCount = aInfo.sheetCount();
       info.mTotalPageCount = aInfo.totalPageCount();
       info.mHasSelection = aInfo.hasSelection();
+      info.mHasSelfSelection = aInfo.hasSelfSelection();
+      info.mIsEmpty = aInfo.isEmpty();
       promise->MaybeResolve(info);
     } else {
       promise->MaybeRejectWithUnknownError("Print preview failed");
@@ -3475,6 +3491,10 @@ void nsFrameLoader::StartPersistence(
   if (!context->GetDocShell() && XRE_IsParentProcess()) {
     CanonicalBrowsingContext* canonical =
         CanonicalBrowsingContext::Cast(context);
+    if (!canonical->GetCurrentWindowGlobal()) {
+      aRecv->OnError(NS_ERROR_NO_CONTENT);
+      return;
+    }
     RefPtr<BrowserParent> browserParent =
         canonical->GetCurrentWindowGlobal()->GetBrowserParent();
     browserParent->StartPersistence(canonical, aRecv, aRv);

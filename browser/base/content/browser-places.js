@@ -19,6 +19,18 @@ XPCOMUtils.defineLazyPreferenceGetter(
   "browser.newtabpage.enabled",
   false
 );
+XPCOMUtils.defineLazyPreferenceGetter(
+  this,
+  "SHOW_OTHER_BOOKMARKS",
+  "browser.toolbars.bookmarks.showOtherBookmarks",
+  true,
+  (aPref, aPrevVal, aNewVal) => {
+    BookmarkingUI.maybeShowOtherBookmarksFolder();
+    document
+      .getElementById("PlacesToolbar")
+      ?._placesView?.updateNodesVisibility();
+  }
+);
 ChromeUtils.defineModuleGetter(
   this,
   "PanelMultiView",
@@ -1579,19 +1591,17 @@ var BookmarkingUI = {
 
     this._initMobileBookmarks(document.getElementById("BMB_mobileBookmarks"));
 
-    this.selectLabel(
+    this.updateLabel(
       "BMB_viewBookmarksSidebar",
       SidebarUI.currentID == "viewBookmarksSidebar"
     );
-    this.selectLabel("BMB_viewBookmarksToolbar", !this.toolbar.collapsed);
+    this.updateLabel("BMB_viewBookmarksToolbar", !this.toolbar.collapsed);
   },
 
-  selectLabel(elementId, visible) {
+  updateLabel(elementId, visible) {
     let element = PanelMultiView.getViewNode(document, elementId);
-    element.setAttribute(
-      "label",
-      element.getAttribute(visible ? "label-hide" : "label-show")
-    );
+    let l10nID = element.getAttribute("data-l10n-id");
+    document.l10n.setAttributes(element, l10nID, { isVisible: !!visible });
   },
 
   toggleBookmarksToolbar(reason) {
@@ -1656,17 +1666,17 @@ var BookmarkingUI = {
     let menuItems = [
       [
         showOnNewTabMenuItem,
-        "toolbar-context-menu-bookmarks-toolbar-on-new-tab",
+        "toolbar-context-menu-bookmarks-toolbar-on-new-tab-2",
         "newtab",
       ],
       [
         alwaysShowMenuItem,
-        "toolbar-context-menu-bookmarks-toolbar-always-show",
+        "toolbar-context-menu-bookmarks-toolbar-always-show-2",
         "always",
       ],
       [
         alwaysHideMenuItem,
-        "toolbar-context-menu-bookmarks-toolbar-never-show",
+        "toolbar-context-menu-bookmarks-toolbar-never-show-2",
         "never",
       ],
     ];
@@ -1711,15 +1721,16 @@ var BookmarkingUI = {
     // to ensure the toolbar has height.
     if (!this.toolbar.hasAttribute("initialized")) {
       emptyMsg.hidden = false;
+      emptyMsg.setAttribute("nowidth", "");
       return;
     }
 
     // Do we have visible kids?
     let hasVisibleChildren = !!this.toolbar.querySelector(
       `:scope > toolbarpaletteitem > toolbarbutton:not([hidden]),
-       :scope > toolbarpaletteitem > toolbaritem:not([hidden]):not(#personal-bookmarks),
+       :scope > toolbarpaletteitem > toolbaritem:not([hidden], #personal-bookmarks),
        :scope > toolbarbutton:not([hidden]),
-       :scope > toolbaritem:not([hidden]):not(#personal-bookmarks)`
+       :scope > toolbaritem:not([hidden], #personal-bookmarks)`
     );
 
     if (!hasVisibleChildren) {
@@ -1738,6 +1749,7 @@ var BookmarkingUI = {
           ));
     }
     emptyMsg.hidden = hasVisibleChildren;
+    emptyMsg.toggleAttribute("nowidth", !hasVisibleChildren);
   },
 
   openLibraryIfLinkClicked(event) {
@@ -2031,12 +2043,15 @@ var BookmarkingUI = {
       document.l10n.setAttributes(menuItem, menuItemL10nId);
     }
 
+    let panelMenuItemL10nId = isStarred
+      ? "library-bookmarks-bookmark-edit"
+      : "library-bookmarks-bookmark-this-page";
     let panelMenuToolbarButton = PanelMultiView.getViewNode(
       document,
       "panelMenuBookmarkThisPage"
     );
     if (panelMenuToolbarButton) {
-      document.l10n.setAttributes(panelMenuToolbarButton, menuItemL10nId);
+      document.l10n.setAttributes(panelMenuToolbarButton, panelMenuItemL10nId);
     }
 
     // Localize the context menu item element.
@@ -2217,15 +2232,15 @@ var BookmarkingUI = {
     let placement = CustomizableUI.getPlacementOfWidget(
       this.BOOKMARK_BUTTON_ID
     );
-    this.selectLabel(
+    this.updateLabel(
       "panelMenu_toggleBookmarksMenu",
       placement && placement.area == CustomizableUI.AREA_NAVBAR
     );
-    this.selectLabel(
+    this.updateLabel(
       "panelMenu_viewBookmarksSidebar",
       SidebarUI.currentID == "viewBookmarksSidebar"
     );
-    this.selectLabel("panelMenu_viewBookmarksToolbar", !this.toolbar.collapsed);
+    this.updateLabel("panelMenu_viewBookmarksToolbar", !this.toolbar.collapsed);
     PanelUI.showSubView("PanelUI-bookmarkingTools", triggerNode);
   },
 
@@ -2299,12 +2314,6 @@ var BookmarkingUI = {
               }
             }
           }
-          if (ev.parentGuid == PlacesUtils.bookmarks.toolbarGuid) {
-            Services.telemetry.scalarAdd(
-              "browser.engagement.bookmarks_toolbar_bookmark_added",
-              1
-            );
-          }
           break;
         case "bookmark-removed":
           // If one of the tracked bookmarks has been removed, unregister it.
@@ -2358,7 +2367,6 @@ var BookmarkingUI = {
   onBeginUpdateBatch() {},
   onEndUpdateBatch() {},
   onBeforeItemRemoved() {},
-  onItemVisited() {},
   onItemMoved(
     aItemId,
     aProperty,
@@ -2383,12 +2391,6 @@ var BookmarkingUI = {
     if (hasMovedToToolbar || hasMovedOutOfToolbar) {
       this.updateEmptyToolbarMessage();
     }
-    if (hasMovedToToolbar) {
-      Services.telemetry.scalarAdd(
-        "browser.engagement.bookmarks_toolbar_bookmark_added",
-        1
-      );
-    }
   },
 
   onWidgetUnderflow(aNode, aContainer) {
@@ -2403,35 +2405,36 @@ var BookmarkingUI = {
   },
 
   async maybeShowOtherBookmarksFolder() {
-    // otherBookmarks may be null if personal-bookmarks is in the palette.
-    let otherBookmarks = document.getElementById("OtherBookmarks");
+    // PlacesToolbar._placesView can be undefined if the toolbar isn't initialized,
+    // collapsed, or hidden in some other way.
+    let toolbar = document.getElementById("PlacesToolbar");
 
     // Only show the "Other Bookmarks" folder in the toolbar if pref is enabled.
-    if (!gBookmarksToolbar2h2020 || !otherBookmarks) {
+    if (!gBookmarksToolbar2h2020 || !toolbar?._placesView) {
       return;
     }
 
     let unfiledGuid = PlacesUtils.bookmarks.unfiledGuid;
     let numberOfBookmarks = PlacesUtils.getChildCountForFolder(unfiledGuid);
     let placement = CustomizableUI.getPlacementOfWidget("personal-bookmarks");
-    let showOtherBookmarksEnabled = Services.prefs.getBoolPref(
-      "browser.toolbars.bookmarks.showOtherBookmarks",
-      true
-    );
+    let otherBookmarks = document.getElementById("OtherBookmarks");
 
     if (
       numberOfBookmarks > 0 &&
-      showOtherBookmarksEnabled &&
+      SHOW_OTHER_BOOKMARKS &&
       placement?.area == CustomizableUI.AREA_BOOKMARKS
     ) {
-      let otherBookmarksPopup = document.getElementById("OtherBookmarksPopup");
       let result = PlacesUtils.getFolderContents(unfiledGuid);
       let node = result.root;
-      otherBookmarksPopup._placesNode = PlacesUtils.asContainer(node);
-      otherBookmarks._placesNode = PlacesUtils.asContainer(node);
 
+      // Build the "Other Bookmarks" button if it doesn't exist.
+      if (!otherBookmarks) {
+        this.buildOtherBookmarksFolder(node);
+      }
+
+      otherBookmarks = document.getElementById("OtherBookmarks");
       otherBookmarks.hidden = false;
-    } else {
+    } else if (otherBookmarks) {
       otherBookmarks.hidden = true;
     }
   },
@@ -2444,17 +2447,12 @@ var BookmarkingUI = {
       return null;
     }
 
-    let showOtherBookmarksMenuItem = Services.prefs.getBoolPref(
-      "browser.toolbars.bookmarks.showOtherBookmarks",
-      true
-    );
-
     let menuItem = document.createXULElement("menuitem");
 
     menuItem.setAttribute("id", "show-other-bookmarks_PersonalToolbar");
     menuItem.setAttribute("toolbarId", "PersonalToolbar");
     menuItem.setAttribute("type", "checkbox");
-    menuItem.setAttribute("checked", showOtherBookmarksMenuItem);
+    menuItem.setAttribute("checked", SHOW_OTHER_BOOKMARKS);
     menuItem.setAttribute("selectiontype", "none|single");
 
     MozXULElement.insertFTLIfNeeded("browser/toolbarContextMenu.ftl");
@@ -2465,13 +2463,46 @@ var BookmarkingUI = {
     menuItem.addEventListener("command", () => {
       Services.prefs.setBoolPref(
         "browser.toolbars.bookmarks.showOtherBookmarks",
-        !showOtherBookmarksMenuItem
+        !SHOW_OTHER_BOOKMARKS
       );
-
-      BookmarkingUI.maybeShowOtherBookmarksFolder();
     });
 
     return menuItem;
+  },
+
+  buildOtherBookmarksFolder(node) {
+    let otherBookmarksButton = document.createXULElement("toolbarbutton");
+    otherBookmarksButton.setAttribute("type", "menu");
+    otherBookmarksButton.setAttribute("container", "true");
+    otherBookmarksButton.setAttribute(
+      "onpopupshowing",
+      "document.getElementById('PlacesToolbar')._placesView._onOtherBookmarksPopupShowing(event);"
+    );
+    otherBookmarksButton.id = "OtherBookmarks";
+    otherBookmarksButton.className = "bookmark-item";
+    otherBookmarksButton.hidden = "true";
+
+    MozXULElement.insertFTLIfNeeded("browser/places.ftl");
+    document.l10n.setAttributes(otherBookmarksButton, "other-bookmarks-folder");
+
+    let otherBookmarksPopup = document.createXULElement("menupopup", {
+      is: "places-popup",
+    });
+    otherBookmarksPopup.setAttribute("placespopup", "true");
+    otherBookmarksPopup.setAttribute("context", "placesContext");
+    otherBookmarksPopup.id = "OtherBookmarksPopup";
+
+    otherBookmarksPopup._placesNode = PlacesUtils.asContainer(node);
+    otherBookmarksButton._placesNode = PlacesUtils.asContainer(node);
+
+    otherBookmarksButton.appendChild(otherBookmarksPopup);
+
+    let chevronButton = document.getElementById("PlacesChevron");
+    chevronButton.parentNode.append(otherBookmarksButton);
+
+    let placesToolbar = document.getElementById("PlacesToolbar");
+    placesToolbar._placesView._otherBookmarks = otherBookmarksButton;
+    placesToolbar._placesView._otherBookmarksPopup = otherBookmarksPopup;
   },
 
   QueryInterface: ChromeUtils.generateQI(["nsINavBookmarkObserver"]),

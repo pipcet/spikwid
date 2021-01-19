@@ -722,7 +722,7 @@ function handleRequest(req, res) {
         });
       }
 
-      // for use with test_esni_dns_fetch.js
+      // for use with test_dns_by_type_resolve.js
       if (packet.questions[0].type == "TXT") {
         answers.push({
           name: packet.questions[0].name,
@@ -734,19 +734,6 @@ function handleRequest(req, res) {
             "62586B67646D39705932556761584D6762586B676347467A63336476636D513D",
             "hex"
           ),
-        });
-      } else if (packet.questions[0].type == "HTTPS") {
-        answers.push({
-          name: packet.questions[0].name,
-          type: packet.questions[0].type,
-          ttl: 55,
-          class: "IN",
-          flush: false,
-          data: {
-            priority: 1,
-            name: "some.domain.stuff.",
-            values: [{ key: "echconfig", value: "testytestystringstring" }],
-          },
         });
       }
 
@@ -912,6 +899,12 @@ function handleRequest(req, res) {
       let packet = dnsPacket.decode(payload);
       let answers = [];
       if (packet.questions[0].type == "HTTPS") {
+        let priority = 1;
+        // Set an invalid priority to test the case when receiving a corrupted
+        // response.
+        if (packet.questions[0].name === "foo.notexisted.com") {
+          priority = 0;
+        }
         answers.push({
           name: packet.questions[0].name,
           type: packet.questions[0].type,
@@ -919,7 +912,7 @@ function handleRequest(req, res) {
           class: "IN",
           flush: false,
           data: {
-            priority: 1,
+            priority,
             name: "foo.example.com",
             values: [
               { key: "alpn", value: "h2" },
@@ -1036,8 +1029,8 @@ function handleRequest(req, res) {
     // it's just meant to be this slow - the test doesn't care about the actual response
     return;
   }
-  // for use with test_esni_dns_fetch.js
-  else if (u.pathname === "/esni-dns-push") {
+  // for use with test_dns_by_type_resolve.js
+  else if (u.pathname === "/txt-dns-push") {
     // _esni_push.example.com has A entry 127.0.0.1
     let rContent = Buffer.from(
       "0000010000010001000000000A5F65736E695F70757368076578616D706C6503636F6D0000010001C00C000100010000003700047F000001",

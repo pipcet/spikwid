@@ -87,11 +87,9 @@ profiler_capture_backtrace() {
 
 #else  // !MOZ_GECKO_PROFILER
 
-#  include "js/AllocationRecording.h"
-#  include "js/ProfilingFrameIterator.h"
+#  include "js/ProfilingCategory.h"
 #  include "js/ProfilingStack.h"
 #  include "js/RootingAPI.h"
-#  include "js/TypeDecls.h"
 #  include "mozilla/Assertions.h"
 #  include "mozilla/Atomics.h"
 #  include "mozilla/Attributes.h"
@@ -109,6 +107,12 @@ profiler_capture_backtrace() {
 
 class ProfilerBacktrace;
 class ProfilerCodeAddressService;
+struct JSContext;
+
+namespace JS {
+struct RecordAllocationInfo;
+}
+
 namespace mozilla {
 class ProfileBufferControlledChunkManager;
 class ProfileChunkedBuffer;
@@ -197,7 +201,9 @@ class Vector;
           "Have the IPC layer track cross-process messages")                   \
                                                                                \
     MACRO(18, "audiocallbacktracing", AudioCallbackTracing,                    \
-          "Audio callback tracing")
+          "Audio callback tracing")                                            \
+                                                                               \
+    MACRO(19, "cpu", CPUUtilization, "CPU utilization")
 
 struct ProfilerFeature {
 #  define DECLARE(n_, str_, Name_, desc_)                     \
@@ -728,17 +734,17 @@ struct ProfilerBufferInfo {
   // Buffer capacity in number of 8-byte entries.
   uint32_t mEntryCount;
   // Sampling stats: Interval between successive samplings.
-  ProfilerStats mIntervalsNs;
+  ProfilerStats mIntervalsUs;
   // Sampling stats: Total sampling duration. (Split detail below.)
-  ProfilerStats mOverheadsNs;
+  ProfilerStats mOverheadsUs;
   // Sampling stats: Time to acquire the lock before sampling.
-  ProfilerStats mLockingsNs;
+  ProfilerStats mLockingsUs;
   // Sampling stats: Time to discard expired data.
-  ProfilerStats mCleaningsNs;
+  ProfilerStats mCleaningsUs;
   // Sampling stats: Time to collect counter data.
-  ProfilerStats mCountersNs;
+  ProfilerStats mCountersUs;
   // Sampling stats: Time to sample thread stacks.
-  ProfilerStats mThreadsNs;
+  ProfilerStats mThreadsUs;
 };
 
 // Get information about the current buffer status.

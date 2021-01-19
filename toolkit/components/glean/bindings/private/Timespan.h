@@ -7,17 +7,13 @@
 #ifndef mozilla_glean_GleanTimespan_h
 #define mozilla_glean_GleanTimespan_h
 
+#include "mozilla/Maybe.h"
 #include "nsIGleanMetrics.h"
+#include "mozilla/glean/fog_ffi_generated.h"
 
 namespace mozilla::glean {
 
 namespace impl {
-extern "C" {
-void fog_timespan_start(uint32_t aId);
-void fog_timespan_stop(uint32_t aId);
-uint32_t fog_timespan_test_has_value(uint32_t aId, const char* aStorageName);
-int64_t fog_timespan_test_get_value(uint32_t aId, const char* aStorageName);
-}
 
 class TimespanMetric {
  public:
@@ -54,13 +50,16 @@ class TimespanMetric {
    * This doesn't clear the stored value.
    * Parent process only. Panics in child processes.
    *
+   * @param aPingName The (optional) name of the ping to retrieve the metric
+   *        for. Defaults to the first value in `send_in_pings`.
+   *
    * @return value of the stored metric, or Nothing() if there is no value.
    */
-  Maybe<int64_t> TestGetValue(const char* aStorageName) const {
-    if (!fog_timespan_test_has_value(mId, aStorageName)) {
+  Maybe<int64_t> TestGetValue(const nsACString& aPingName = nsCString()) const {
+    if (!fog_timespan_test_has_value(mId, &aPingName)) {
       return Nothing();
     }
-    return Some(fog_timespan_test_get_value(mId, aStorageName));
+    return Some(fog_timespan_test_get_value(mId, &aPingName));
   }
 
  private:

@@ -512,7 +512,7 @@ BEGIN_TEST(testScriptSourceCompression_offThread) {
   // Force off-thread even though if this is a small file.
   options.forceAsync = true;
 
-  CHECK(JS::CompileOffThread(cx, options, source, callback, &monitor, &token));
+  CHECK(token = JS::CompileOffThread(cx, options, source, callback, &monitor));
 
   {
     // Finish any active GC in case it is blocking off-thread work.

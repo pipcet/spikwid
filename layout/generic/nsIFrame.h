@@ -54,16 +54,19 @@
 #include "LayoutConstants.h"
 #include "mozilla/layout/FrameChildList.h"
 #include "mozilla/AspectRatio.h"
+#include "mozilla/Attributes.h"
+#include "mozilla/EventForwards.h"
 #include "mozilla/Maybe.h"
+#include "mozilla/RelativeTo.h"
 #include "mozilla/Result.h"
 #include "mozilla/SmallPointerArray.h"
-#include "mozilla/PresShell.h"
 #include "mozilla/ToString.h"
 #include "mozilla/WritingModes.h"
 #include "nsDirection.h"
 #include "nsFrameList.h"
 #include "nsFrameState.h"
 #include "mozilla/ReflowInput.h"
+#include "nsIContent.h"
 #include "nsITheme.h"
 #include "nsQueryFrame.h"
 #include "mozilla/ComputedStyle.h"
@@ -72,9 +75,11 @@
 #include "nsChangeHint.h"
 #include "mozilla/ComputedStyleInlines.h"
 #include "mozilla/EnumSet.h"
+#include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/CompositorHitTestInfo.h"
 #include "mozilla/gfx/MatrixFwd.h"
 #include "nsDisplayItemTypes.h"
+#include "nsPresContext.h"
 
 #ifdef ACCESSIBILITY
 #  include "mozilla/a11y/AccTypes.h"
@@ -102,6 +107,7 @@ class nsAtom;
 class nsView;
 class nsFrameSelection;
 class nsIWidget;
+class nsIScrollableFrame;
 class nsISelectionController;
 class nsBoxLayoutState;
 class nsBoxLayout;
@@ -119,6 +125,7 @@ class nsAbsoluteContainingBlock;
 class nsContainerFrame;
 class nsPlaceholderFrame;
 class nsStyleChangeList;
+class nsViewManager;
 class nsWindowSizes;
 
 struct nsBoxLayoutMetrics;
@@ -133,6 +140,10 @@ class EventStates;
 class ServoRestyleState;
 class DisplayItemData;
 class EffectSet;
+class LazyLogModule;
+class PresShell;
+class WidgetGUIEvent;
+class WidgetMouseEvent;
 
 namespace layers {
 class Layer;
@@ -627,8 +638,6 @@ class nsIFrame : public nsQueryFrame {
   using ReflowInput = mozilla::ReflowInput;
   using ReflowOutput = mozilla::ReflowOutput;
   using Visibility = mozilla::Visibility;
-  using StyleFlexBasis = mozilla::StyleFlexBasis;
-  using StyleSize = mozilla::StyleSize;
   using LengthPercentage = mozilla::LengthPercentage;
   using StyleExtremumLength = mozilla::StyleExtremumLength;
 
@@ -2136,16 +2145,26 @@ class nsIFrame : public nsQueryFrame {
                                mozilla::WidgetGUIEvent* aEvent,
                                nsEventStatus* aEventStatus);
 
-  nsresult SelectByTypeAtPoint(nsPresContext* aPresContext,
-                               const nsPoint& aPoint,
-                               nsSelectionAmount aBeginAmountType,
-                               nsSelectionAmount aEndAmountType,
-                               uint32_t aSelectFlags);
+  /**
+   * Search for selectable content at point and attempt to select
+   * based on the start and end selection behaviours.
+   *
+   * @param aPresContext Presentation context
+   * @param aPoint Point at which selection will occur. Coordinates
+   * should be relative to this frame.
+   * @param aBeginAmountType, aEndAmountType Selection behavior, see
+   * nsIFrame for definitions.
+   * @param aSelectFlags Selection flags defined in nsIFrame.h.
+   * @return success or failure at finding suitable content to select.
+   */
+  MOZ_CAN_RUN_SCRIPT nsresult
+  SelectByTypeAtPoint(nsPresContext* aPresContext, const nsPoint& aPoint,
+                      nsSelectionAmount aBeginAmountType,
+                      nsSelectionAmount aEndAmountType, uint32_t aSelectFlags);
 
-  nsresult PeekBackwardAndForward(nsSelectionAmount aAmountBack,
-                                  nsSelectionAmount aAmountForward,
-                                  int32_t aStartPos, bool aJumpLines,
-                                  uint32_t aSelectFlags);
+  MOZ_CAN_RUN_SCRIPT nsresult PeekBackwardAndForward(
+      nsSelectionAmount aAmountBack, nsSelectionAmount aAmountForward,
+      int32_t aStartPos, bool aJumpLines, uint32_t aSelectFlags);
 
   enum { SELECT_ACCUMULATE = 0x01 };
 
@@ -2156,23 +2175,22 @@ class nsIFrame : public nsQueryFrame {
 
   // Selection Methods
 
-  NS_IMETHOD HandlePress(nsPresContext* aPresContext,
-                         mozilla::WidgetGUIEvent* aEvent,
-                         nsEventStatus* aEventStatus);
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY NS_IMETHOD
+  HandlePress(nsPresContext* aPresContext, mozilla::WidgetGUIEvent* aEvent,
+              nsEventStatus* aEventStatus);
 
-  NS_IMETHOD HandleMultiplePress(nsPresContext* aPresContext,
-                                 mozilla::WidgetGUIEvent* aEvent,
-                                 nsEventStatus* aEventStatus,
-                                 bool aControlHeld);
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY NS_IMETHOD HandleMultiplePress(
+      nsPresContext* aPresContext, mozilla::WidgetGUIEvent* aEvent,
+      nsEventStatus* aEventStatus, bool aControlHeld);
 
   MOZ_CAN_RUN_SCRIPT
   NS_IMETHOD HandleDrag(nsPresContext* aPresContext,
                         mozilla::WidgetGUIEvent* aEvent,
                         nsEventStatus* aEventStatus);
 
-  NS_IMETHOD HandleRelease(nsPresContext* aPresContext,
-                           mozilla::WidgetGUIEvent* aEvent,
-                           nsEventStatus* aEventStatus);
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY NS_IMETHOD
+  HandleRelease(nsPresContext* aPresContext, mozilla::WidgetGUIEvent* aEvent,
+                nsEventStatus* aEventStatus);
 
   // Test if we are selecting a table object:
   //  Most table/cell selection requires that Ctrl (Cmd on Mac) key is down
@@ -3292,6 +3310,24 @@ class nsIFrame : public nsQueryFrame {
   }
 
   /**
+   * Return true if this frame's preferred size property or max size property
+   * contains a percentage value that should be resolved against zero when
+   * calculating its min-content contribution in the corresponding axis.
+   *
+   * This is a special case for webcompat required by CSS Sizing 3 §5.2.1c
+   * https://drafts.csswg.org/css-sizing-3/#replaced-percentage-min-contribution,
+   * and applies only to some replaced elements and form control elements. See
+   * CSS Sizing 3 §5.2.2 for the list of elements this rule applies to.
+   * https://drafts.csswg.org/css-sizing-3/#min-content-zero
+   *
+   * Bug 1463700: some callers may not match the spec by resolving the entire
+   * preferred size property or max size property against zero.
+   */
+  bool IsPercentageResolvedAgainstZero(
+      const mozilla::StyleSize& aStyleSize,
+      const mozilla::StyleMaxSize& aStyleMaxSize) const;
+
+  /**
    * Returns true if the frame is a block wrapper.
    */
   bool IsBlockWrapper() const;
@@ -3664,23 +3700,12 @@ class nsIFrame : public nsQueryFrame {
    * @note (See also bug 743402, comment 11) GetSkipSides() checks to see
    *       if this frame has a previous or next continuation to determine
    *       if a side should be skipped.
-   *       Unfortunately, this only works after reflow has been completed. In
-   *       lieu of this, during reflow, a SkipSidesDuringReflow parameter can
-   *       be passed in, indicating that it should be used to determine if sides
-   *       should be skipped during reflow.
-   *
-   * FIXME(emilio, bug 1677917): That's wrong, fix BlockReflowInput and remove
-   * SkipSidesDuringReflow and related code.
+   *       So this only works after the entire frame tree has been reflowed.
+   *       During reflow, if this frame can be split in the block axis, you
+   *       should use nsSplittableFrame::PreReflowBlockLevelLogicalSkipSides().
    */
   Sides GetSkipSides() const;
-
-  struct SkipSidesDuringReflow {
-    const ReflowInput& mReflowInput;
-    const nscoord mConsumedBSize = NS_UNCONSTRAINEDSIZE;
-  };
-
-  virtual LogicalSides GetLogicalSkipSides(
-      const Maybe<SkipSidesDuringReflow>& = Nothing()) const {
+  virtual LogicalSides GetLogicalSkipSides() const {
     return LogicalSides(mWritingMode);
   }
 
@@ -4185,6 +4210,17 @@ class nsIFrame : public nsQueryFrame {
                                     const nsStyleEffects* aEffects,
                                     const nsSize& aSize) const;
 
+  struct Focusable {
+    bool mFocusable = false;
+    // The computed tab index:
+    //         < 0 if not tabbable
+    //         == 0 if in normal tab order
+    //         > 0 can be tabbed to in the order specified by this value
+    int32_t mTabIndex = -1;
+
+    explicit operator bool() const { return mFocusable; }
+  };
+
   /**
    * Check if this frame is focusable and in the current tab order.
    * Tabbable is indicated by a nonnegative tabindex & is a subset of focusable.
@@ -4196,15 +4232,10 @@ class nsIFrame : public nsQueryFrame {
    * Also, depending on the pref accessibility.tabfocus some widgets may be
    * focusable but removed from the tab order. This is the default on
    * Mac OS X, where fewer items are focusable.
-   * @param  [in, optional] aTabIndex the computed tab index
-   *         < 0 if not tabbable
-   *         == 0 if in normal tab order
-   *         > 0 can be tabbed to in the order specified by this value
    * @param  [in, optional] aWithMouse, is this focus query for mouse clicking
    * @return whether the frame is focusable via mouse, kbd or script.
    */
-  virtual bool IsFocusable(int32_t* aTabIndex = nullptr,
-                           bool aWithMouse = false);
+  [[nodiscard]] Focusable IsFocusable(bool aWithMouse = false);
 
   // BOX LAYOUT METHODS
   // These methods have been migrated from nsIBox and are in the process of
@@ -4307,6 +4338,9 @@ class nsIFrame : public nsQueryFrame {
   static nsIFrame* GetParentXULBox(const nsIFrame* aFrame);
 
  protected:
+  // Helper for IsFocusable.
+  bool IsFocusableDueToScrollFrame();
+
   /**
    * Returns true if this box clips its children, e.g., if this box is an
    * scrollbox.
@@ -4406,34 +4440,18 @@ class nsIFrame : public nsQueryFrame {
    * Flag a child PresShell as painted so that it will get its paint count
    * incremented during empty transactions.
    */
-  void AddPaintedPresShell(mozilla::PresShell* aPresShell) {
-    PaintedPresShellList()->AppendElement(do_GetWeakReference(aPresShell));
-  }
+  void AddPaintedPresShell(mozilla::PresShell* aPresShell);
 
   /**
    * Increment the paint count of all child PresShells that were painted during
    * the last repaint.
    */
-  void UpdatePaintCountForPaintedPresShells() {
-    for (nsWeakPtr& item : *PaintedPresShellList()) {
-      if (RefPtr<mozilla::PresShell> presShell = do_QueryReferent(item)) {
-        presShell->IncrementPaintCount();
-      }
-    }
-  }
+  void UpdatePaintCountForPaintedPresShells();
 
   /**
    * @return true if we painted @aPresShell during the last repaint.
    */
-  bool DidPaintPresShell(mozilla::PresShell* aPresShell) {
-    for (nsWeakPtr& item : *PaintedPresShellList()) {
-      RefPtr<mozilla::PresShell> presShell = do_QueryReferent(item);
-      if (presShell == aPresShell) {
-        return true;
-      }
-    }
-    return false;
-  }
+  bool DidPaintPresShell(mozilla::PresShell* aPresShell);
 
   /**
    * Accessors for the absolute containing block.
@@ -5469,13 +5487,7 @@ class MOZ_NONHEAP_CLASS AutoWeakFrame {
 
   operator nsIFrame*() { return mFrame; }
 
-  void Clear(mozilla::PresShell* aPresShell) {
-    if (aPresShell) {
-      aPresShell->RemoveAutoWeakFrame(this);
-    }
-    mFrame = nullptr;
-    mPrev = nullptr;
-  }
+  void Clear(mozilla::PresShell* aPresShell);
 
   bool IsAlive() const { return !!mFrame; }
 
@@ -5485,9 +5497,7 @@ class MOZ_NONHEAP_CLASS AutoWeakFrame {
 
   void SetPreviousWeakFrame(AutoWeakFrame* aPrev) { mPrev = aPrev; }
 
-  ~AutoWeakFrame() {
-    Clear(mFrame ? mFrame->PresContext()->GetPresShell() : nullptr);
-  }
+  ~AutoWeakFrame();
 
  private:
   // Not available for the heap!
@@ -5541,12 +5551,7 @@ class MOZ_HEAP_CLASS WeakFrame {
   nsIFrame* operator->() { return mFrame; }
   operator nsIFrame*() { return mFrame; }
 
-  void Clear(mozilla::PresShell* aPresShell) {
-    if (aPresShell) {
-      aPresShell->RemoveWeakFrame(this);
-    }
-    mFrame = nullptr;
-  }
+  void Clear(mozilla::PresShell* aPresShell);
 
   bool IsAlive() const { return !!mFrame; }
   nsIFrame* GetFrame() const { return mFrame; }

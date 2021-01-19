@@ -200,11 +200,6 @@ void nsNSSSocketInfo::NoteTimeUntilReady() {
   // This will include TCP and proxy tunnel wait time
   Telemetry::AccumulateTimeDelta(Telemetry::SSL_TIME_UNTIL_READY,
                                  mSocketCreationTimestamp, TimeStamp::Now());
-  if (mIsDelegatedCredential) {
-    Telemetry::AccumulateTimeDelta(
-        Telemetry::TLS_DELEGATED_CREDENTIALS_TIME_UNTIL_READY_MS,
-        mSocketCreationTimestamp, TimeStamp::Now());
-  }
   MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
           ("[%p] nsNSSSocketInfo::NoteTimeUntilReady\n", mFd));
 }
@@ -737,45 +732,33 @@ NS_IMETHODIMP
 nsNSSSocketInfo::SetEchConfig(const nsACString& aEchConfig) {
   mEchConfig = aEchConfig;
 
-#if 0
   if (mEchConfig.Length()) {
-    nsAutoCString echBin;
-    if (NS_OK != Base64Decode(mEchConfig, echBin)) {
-      MOZ_LOG(gPIPNSSLog, LogLevel::Error,
-              ("[%p] Invalid EchConfig record. Couldn't base64 decode\n",
-               (void*)mFd));
-      return NS_OK;
-    }
-
-    if (SECSuccess != SSL_SetClientEchConfigs(
-                          mFd, reinterpret_cast<const PRUint8*>(echBin.get()),
-                          echBin.Length())) {
+    if (SECSuccess !=
+        SSL_SetClientEchConfigs(
+            mFd, reinterpret_cast<const PRUint8*>(aEchConfig.BeginReading()),
+            aEchConfig.Length())) {
       MOZ_LOG(gPIPNSSLog, LogLevel::Error,
               ("[%p] Invalid EchConfig record %s\n", (void*)mFd,
                PR_ErrorToName(PR_GetError())));
       return NS_OK;
     }
   }
-#endif
   return NS_OK;
 }
 
 NS_IMETHODIMP
 nsNSSSocketInfo::GetRetryEchConfig(nsACString& aEchConfig) {
-#if 0
   if (!mFd) {
     return NS_ERROR_FAILURE;
   }
 
-  SECItem* item = nullptr;
-  SECStatus rv = SSL_GetEchRetryConfigs(mFd, &item);
+  ScopedAutoSECItem retryConfigItem;
+  SECStatus rv = SSL_GetEchRetryConfigs(mFd, &retryConfigItem);
   if (rv != SECSuccess) {
     return NS_ERROR_FAILURE;
   }
-
-  UniqueSECItem retryConfigItem(item);
-  memcpy(aEchConfig.BeginWriting(), retryConfigItem->data, retryConfigItem->len);
-#endif
+  aEchConfig = nsCString(reinterpret_cast<const char*>(retryConfigItem.data),
+                         retryConfigItem.len);
   return NS_OK;
 }
 
@@ -1437,7 +1420,7 @@ PrefObserver::Observe(nsISupports* aSubject, const char* aTopic,
     } else if (prefName.EqualsLiteral("security.tls.version.fallback-limit")) {
       mOwner->loadVersionFallbackLimit();
     } else if (prefName.EqualsLiteral("security.tls.insecure_fallback_hosts")) {
-      // Changes to the whitelist on the public side will update the pref.
+      // Changes to the allowlist on the public side will update the pref.
       // Don't propagate the changes to the private side.
       if (mOwner->isPublic()) {
         mOwner->initInsecureFallbackSites();
@@ -1615,14 +1598,7 @@ void nsSSLIOLayerHelpers::setInsecureFallbackSites(const nsCString& str) {
 
   mInsecureFallbackSites.Clear();
 
-  if (str.IsEmpty()) {
-    return;
-  }
-
-  nsCCharSeparatedTokenizer toker(str, ',');
-
-  while (toker.hasMoreTokens()) {
-    const nsACString& host = toker.nextToken();
+  for (const nsACString& host : nsCCharSeparatedTokenizer(str, ',').ToRange()) {
     if (!host.IsEmpty()) {
       mInsecureFallbackSites.PutEntry(host);
     }
@@ -1656,10 +1632,9 @@ FallbackPrefRemover::Run() {
   MOZ_ASSERT(NS_IsMainThread());
   nsAutoCString oldValue;
   Preferences::GetCString("security.tls.insecure_fallback_hosts", oldValue);
-  nsCCharSeparatedTokenizer toker(oldValue, ',');
   nsCString newValue;
-  while (toker.hasMoreTokens()) {
-    const nsACString& host = toker.nextToken();
+  for (const nsACString& host :
+       nsCCharSeparatedTokenizer(oldValue, ',').ToRange()) {
     if (host.Equals(mHost)) {
       continue;
     }

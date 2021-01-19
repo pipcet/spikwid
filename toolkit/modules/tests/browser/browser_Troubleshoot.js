@@ -180,6 +180,10 @@ const SNAPSHOT_SCHEMA = {
           required: true,
           type: "string",
         },
+        rosetta: {
+          required: false,
+          type: "boolean",
+        },
         vendor: {
           type: "string",
         },
@@ -975,6 +979,12 @@ const SNAPSHOT_SCHEMA = {
           type: "string",
         },
       },
+    },
+    thirdPartyModules: {
+      required:
+        AppConstants.platform == "win" &&
+        Services.prefs.getBoolPref("browser.enableAboutThirdParty"),
+      type: "array",
     },
   },
 };

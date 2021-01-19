@@ -165,10 +165,27 @@ function testMarkerIntegrity(accDoc, expectedMarkerValues) {
       expectedMarkerValues[count].style
     );
 
+    let prevMarker = marker;
     marker = macDoc.getParameterizedAttributeValue(
       "AXNextTextMarkerForTextMarker",
       marker
     );
+
+    if (marker) {
+      let range = macDoc.getParameterizedAttributeValue(
+        "AXTextMarkerRangeForUnorderedTextMarkers",
+        [prevMarker, marker]
+      );
+      is(
+        macDoc.getParameterizedAttributeValue(
+          "AXLengthForTextMarkerRange",
+          range
+        ),
+        1,
+        "marker moved one character"
+      );
+    }
+
     count++;
   }
 
@@ -243,5 +260,23 @@ addAccessibleTask(
       [end, start]
     );
     is(stringForRange(macDoc, range), "ello good");
+  }
+);
+
+addAccessibleTask(
+  `<input id="input" value=""><a href="#">goodbye</a>`,
+  async (browser, accDoc) => {
+    let macDoc = accDoc.nativeInterface.QueryInterface(
+      Ci.nsIAccessibleMacInterface
+    );
+
+    let input = getNativeInterface(accDoc, "input");
+
+    let range = macDoc.getParameterizedAttributeValue(
+      "AXTextMarkerRangeForUIElement",
+      input
+    );
+
+    is(stringForRange(macDoc, range), "", "string value is correct");
   }
 );

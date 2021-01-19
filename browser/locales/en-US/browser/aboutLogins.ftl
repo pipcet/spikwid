@@ -75,6 +75,7 @@ login-item-new-login-title = Create New Login
 login-item-edit-button = Edit
 about-logins-login-item-remove-button = Remove
 login-item-origin-label = Website address
+login-item-tooltip-message = Make sure this matches the exact address of the website where you log in.
 login-item-origin =
   .placeholder = https://www.example.com
 login-item-username-label = Username
@@ -161,7 +162,12 @@ about-logins-confirm-remove-dialog-title = Remove this login?
 confirm-delete-dialog-message = This action cannot be undone.
 about-logins-confirm-remove-dialog-confirm-button = Remove
 
-about-logins-confirm-remove-all-dialog-confirm-button = Remove All
+about-logins-confirm-remove-all-dialog-confirm-button-label =
+  { $count ->
+     [1] Remove
+    *[other] Remove All
+  }
+
 about-logins-confirm-remove-all-dialog-checkbox-label =
   { $count ->
      [1] Yes, remove this login
@@ -193,6 +199,9 @@ about-logins-confirm-remove-all-sync-dialog-message=
 about-logins-confirm-export-dialog-title = Export logins and passwords
 about-logins-confirm-export-dialog-message = Your passwords will be saved as readable text (e.g., BadP@ssw0rd) so anyone who can open the exported file can view them.
 about-logins-confirm-export-dialog-confirm-button = Export…
+
+about-logins-alert-import-title = Import Complete
+about-logins-alert-import-message = View detailed import summary
 
 confirm-discard-changes-dialog-title = Discard unsaved changes?
 confirm-discard-changes-dialog-message = All unsaved changes will be lost.
@@ -257,3 +266,28 @@ about-logins-import-file-picker-csv-filter-title =
       [macos] CSV Document
      *[other] CSV File
   }
+
+##
+## Variables:
+##  $count (number) - The number of affected elements
+
+about-logins-import-dialog-title = Import Complete
+about-logins-import-dialog-items-added =
+  { $count ->
+     *[other] <span>New logins added:</span> <span data-l10n-name="count">{ $count }</span>
+  }
+
+about-logins-import-dialog-items-modified =
+  { $count ->
+     *[other] <span>Existing logins updated:</span> <span data-l10n-name="count">{ $count }</span>
+  }
+
+about-logins-import-dialog-items-no-change =
+  { $count ->
+     *[other] <span>Duplicate logins found:</span> <span data-l10n-name="count">{ $count }</span> <span data-l10n-name="meta">(not imported)</span>
+  }
+about-logins-import-dialog-items-error =
+  { $count ->
+      *[other] <span>Errors:</span> <span data-l10n-name="count">{ $count }</span> <span data-l10n-name="meta">(not imported)</span>
+  }
+about-logins-import-dialog-done = Done

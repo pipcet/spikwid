@@ -134,6 +134,15 @@ inline NSString* ToNSString(id aValue) {
   return (lineNumber >= 0) ? [NSNumber numberWithInt:lineNumber] : nil;
 }
 
+- (NSString*)moxRole {
+  if ([self ARIARole] == nsGkAtoms::textbox ||
+      [self stateWithMask:states::MULTI_LINE]) {
+    return NSAccessibilityTextAreaRole;
+  }
+
+  return [super moxRole];
+}
+
 - (NSString*)moxSubrole {
   MOZ_ASSERT(!mGeckoAccessible.IsNull());
 
@@ -171,10 +180,8 @@ inline NSString* ToNSString(id aValue) {
     return nil;
   }
 
-  GeckoTextMarker startMarker =
-      GeckoTextMarker::MarkerFromIndex(mGeckoAccessible, 0);
-
-  GeckoTextMarkerRange fromStartToSelection(startMarker, selection.mStart);
+  GeckoTextMarkerRange fromStartToSelection(
+      GeckoTextMarker(mGeckoAccessible, 0), selection.mStart);
 
   return [NSValue valueWithRange:NSMakeRange(fromStartToSelection.Length(),
                                              selection.Length())];
@@ -268,6 +275,10 @@ inline NSString* ToNSString(id aValue) {
 - (NSString*)moxStringForRange:(NSValue*)range {
   GeckoTextMarkerRange markerRange = [self textMarkerRangeFromRange:range];
 
+  if (!markerRange.IsValid()) {
+    return nil;
+  }
+
   return markerRange.Text();
 }
 
@@ -297,24 +308,6 @@ inline NSString* ToNSString(id aValue) {
 }
 
 #pragma mark - mozAccessible
-
-enum AXTextEditType {
-  AXTextEditTypeUnknown,
-  AXTextEditTypeDelete,
-  AXTextEditTypeInsert,
-  AXTextEditTypeTyping,
-  AXTextEditTypeDictation,
-  AXTextEditTypeCut,
-  AXTextEditTypePaste,
-  AXTextEditTypeAttributesChange
-};
-
-enum AXTextStateChangeType {
-  AXTextStateChangeTypeUnknown,
-  AXTextStateChangeTypeEdit,
-  AXTextStateChangeTypeSelectionMove,
-  AXTextStateChangeTypeSelectionExtend
-};
 
 - (void)handleAccessibleTextChangeEvent:(NSString*)change
                                inserted:(BOOL)isInserted
@@ -378,7 +371,7 @@ enum AXTextStateChangeType {
   GeckoTextMarkerRange selection =
       [static_cast<MOXTextMarkerDelegate*>(delegate) selection];
 
-  if (!selection.Crop(mGeckoAccessible)) {
+  if (!selection.IsValid() || !selection.Crop(mGeckoAccessible)) {
     // The selection is not in this accessible. Return invalid range.
     return GeckoTextMarkerRange();
   }

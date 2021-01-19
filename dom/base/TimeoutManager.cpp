@@ -8,6 +8,7 @@
 #include "nsGlobalWindow.h"
 #include "mozilla/Logging.h"
 #include "mozilla/PerformanceCounter.h"
+#include "mozilla/ScopeExit.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_privacy.h"
 #include "mozilla/Telemetry.h"
@@ -15,6 +16,7 @@
 #include "mozilla/TimeStamp.h"
 #include "nsINamed.h"
 #include "mozilla/dom/DocGroup.h"
+#include "mozilla/dom/Document.h"
 #include "mozilla/dom/PopupBlocker.h"
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/TimeoutHandler.h"
@@ -892,30 +894,6 @@ void TimeoutManager::RunTimeout(const TimeStamp& aNow,
 #endif
         // This timeout is good to run.
         bool timeout_was_cleared = window->RunTimeoutHandler(timeout, scx);
-#if MOZ_GECKO_PROFILER
-        if (profiler_can_accept_markers()) {
-          TimeDuration elapsed = now - timeout->SubmitTime();
-          TimeDuration target = timeout->When() - timeout->SubmitTime();
-          TimeDuration delta = now - timeout->When();
-          TimeDuration runtime = TimeStamp::Now() - now;
-          nsPrintfCString marker(
-              "%sset%s() for %dms (original target time was %dms (%dms "
-              "delta)); runtime = %dms",
-              aProcessIdle ? "Deferred " : "",
-              timeout->mIsInterval ? "Interval" : "Timeout",
-              int(elapsed.ToMilliseconds()), int(target.ToMilliseconds()),
-              int(delta.ToMilliseconds()), int(runtime.ToMilliseconds()));
-          // don't have end before start...
-          PROFILER_MARKER_TEXT(
-              "setTimeout", DOM,
-              MarkerOptions(
-                  MarkerTiming::Interval(
-                      delta.ToMilliseconds() >= 0 ? timeout->When() : now, now),
-                  MarkerInnerWindowId(mWindow.WindowID())),
-              marker);
-        }
-#endif
-
         MOZ_LOG(gTimeoutLog, LogLevel::Debug,
                 ("Run%s(TimeoutManager=%p, timeout=%p) returned %d\n",
                  timeout->mIsInterval ? "Interval" : "Timeout", this,

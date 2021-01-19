@@ -7,18 +7,19 @@
 #ifndef mozilla_dom_BrowsingContext_h
 #define mozilla_dom_BrowsingContext_h
 
+#include <tuple>
 #include "GVAutoplayRequestUtils.h"
+#include "mozilla/ErrorResult.h"
 #include "mozilla/HalScreenConfiguration.h"
 #include "mozilla/LinkedList.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/Span.h"
 #include "mozilla/Tuple.h"
-#include "mozilla/WeakPtr.h"
 #include "mozilla/dom/BindingDeclarations.h"
-#include "mozilla/dom/FeaturePolicy.h"
 #include "mozilla/dom/LocationBase.h"
 #include "mozilla/dom/MaybeDiscarded.h"
+#include "mozilla/dom/PopupBlocker.h"
 #include "mozilla/dom/UserActivation.h"
 #include "mozilla/dom/BrowsingContextBinding.h"
 #include "mozilla/dom/ScreenOrientationBinding.h"
@@ -63,6 +64,7 @@ class CanonicalBrowsingContext;
 class ChildSHistory;
 class ContentParent;
 class Element;
+struct LoadingSessionHistoryInfo;
 template <typename>
 struct Nullable;
 template <typename T>
@@ -73,6 +75,13 @@ class StructuredCloneHolder;
 class WindowContext;
 struct WindowPostMessageOptions;
 class WindowProxyHolder;
+
+enum class ExplicitActiveStatus : uint8_t {
+  None,
+  Active,
+  Inactive,
+  EndGuard_,
+};
 
 // Fields are, by default, settable by any process and readable by any process.
 // Racy sets will be resolved as-if they occurred in the order the parent
@@ -89,7 +98,7 @@ class WindowProxyHolder;
 #define MOZ_EACH_BC_FIELD(FIELD)                                             \
   FIELD(Name, nsString)                                                      \
   FIELD(Closed, bool)                                                        \
-  FIELD(IsActive, bool)                                                      \
+  FIELD(ExplicitActive, ExplicitActiveStatus)                                \
   /* Top()-only. If true, new-playing media will be suspended when in an     \
    * inactive browsing context. */                                           \
   FIELD(SuspendMediaWhenInactive, bool)                                      \
@@ -109,15 +118,12 @@ class WindowProxyHolder;
   FIELD(CurrentInnerWindowId, uint64_t)                                      \
   FIELD(HadOriginalOpener, bool)                                             \
   FIELD(IsPopupSpam, bool)                                                   \
-  /* Controls whether the BrowsingContext is currently considered to be      \
-   * activated by a gesture */                                               \
-  FIELD(UserActivationState, UserActivation::State)                          \
   /* Hold the audio muted state and should be used on top level browsing     \
    * contexts only */                                                        \
   FIELD(Muted, bool)                                                         \
-  FIELD(FeaturePolicy, RefPtr<mozilla::dom::FeaturePolicy>)                  \
   /* See nsSandboxFlags.h for the possible flags. */                         \
   FIELD(SandboxFlags, uint32_t)                                              \
+  FIELD(InitialSandboxFlags, uint32_t)                                       \
   /* A non-zero unique identifier for the browser element that is hosting    \
    * this                                                                    \
    * BrowsingContext tree. Every BrowsingContext in the element's tree will  \
@@ -347,11 +353,11 @@ class BrowsingContext : public nsILoadContext, public nsWrapperCache {
   void DisplayLoadError(const nsAString& aURI);
 
   // Determine if the current BrowsingContext is in the BFCache.
-  bool IsCached();
+  bool IsCached() const;
 
   // Check that this browsing context is targetable for navigations (i.e. that
   // it is neither closed, cached, nor discarded).
-  bool IsTargetable();
+  bool IsTargetable() const;
 
   // True if this browsing context is inactive and is able to be suspended.
   bool InactiveForSuspend() const;
@@ -483,6 +489,13 @@ class BrowsingContext : public nsILoadContext, public nsWrapperCache {
 
   bool SuspendMediaWhenInactive() const {
     return GetSuspendMediaWhenInactive();
+  }
+
+  bool IsActive() const;
+  void SetIsActive(bool aIsActive, mozilla::ErrorResult& aRv) {
+    SetExplicitActive(aIsActive ? ExplicitActiveStatus::Active
+                                : ExplicitActiveStatus::Inactive,
+                      aRv);
   }
 
   bool AuthorStyleDisabledDefault() const {
@@ -711,6 +724,10 @@ class BrowsingContext : public nsILoadContext, public nsWrapperCache {
   // context or any of its ancestors.
   bool IsPopupAllowed();
 
+  void SessionHistoryCommit(const LoadingSessionHistoryInfo& aInfo,
+                            uint32_t aLoadType, bool aHadActiveEntry,
+                            bool aPersist, bool aCloneEntryChildren);
+
   // Set a new active entry on this browsing context. This is used for
   // implementing history.pushState/replaceState and same document navigations.
   // The new active entry will be linked to the current active entry through
@@ -760,6 +777,12 @@ class BrowsingContext : public nsILoadContext, public nsWrapperCache {
   void ResetLocationChangeRateLimit();
 
   mozilla::dom::DisplayMode DisplayMode() { return Top()->GetDisplayMode(); }
+
+  // Returns canFocus, isActive
+  std::tuple<bool, bool> CanFocusCheck(CallerType aCallerType);
+
+  PopupBlocker::PopupControlState RevisePopupAbuseLevel(
+      PopupBlocker::PopupControlState aControl);
 
  protected:
   virtual ~BrowsingContext();
@@ -861,7 +884,7 @@ class BrowsingContext : public nsILoadContext, public nsWrapperCache {
               ContentParent* aSource);
   void DidSet(FieldIndex<IDX_DisplayMode>, enum DisplayMode aOldValue);
 
-  void DidSet(FieldIndex<IDX_IsActive>, bool aOldValue);
+  void DidSet(FieldIndex<IDX_ExplicitActive>, ExplicitActiveStatus aOldValue);
 
   bool CanSet(FieldIndex<IDX_IsActiveBrowserWindowInternal>, const bool& aValue,
               ContentParent* aSource);

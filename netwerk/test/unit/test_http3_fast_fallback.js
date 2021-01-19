@@ -72,7 +72,7 @@ function setup() {
 }
 
 setup();
-registerCleanupFunction(() => {
+registerCleanupFunction(async () => {
   prefs.clearUserPref("network.security.esni.enabled");
   prefs.clearUserPref("network.http.spdy.enabled");
   prefs.clearUserPref("network.http.spdy.enabled.http2");
@@ -101,7 +101,7 @@ registerCleanupFunction(() => {
   Services.prefs.clearUserPref("network.http.http3.backup_timer_delay");
   Services.prefs.clearUserPref("network.http.speculative-parallel-limit");
   if (trrServer) {
-    trrServer.stop();
+    await trrServer.stop();
   }
 });
 
@@ -338,7 +338,7 @@ add_task(async function testFastfallback() {
   ]);
 
   let chan = makeChan(`https://test.fastfallback.com/server-timing`);
-  let [req, resp] = await channelOpenPromise(chan);
+  let [req] = await channelOpenPromise(chan);
   Assert.equal(req.protocolVersion, "h2");
   let internal = req.QueryInterface(Ci.nsIHttpChannelInternal);
   Assert.equal(internal.remotePort, h2Port);
@@ -421,7 +421,7 @@ add_task(async function testFastfallback1() {
   ]);
 
   let chan = makeChan(`https://test.fastfallback.org/server-timing`);
-  let [req, resp] = await channelOpenPromise(chan);
+  let [req] = await channelOpenPromise(chan);
   Assert.equal(req.protocolVersion, "h2");
   let internal = req.QueryInterface(Ci.nsIHttpChannelInternal);
   Assert.equal(internal.remotePort, h2Port);
@@ -519,7 +519,7 @@ add_task(async function testFastfallbackWithEchConfig() {
   ]);
 
   let chan = makeChan(`https://test.ech.org/server-timing`);
-  let [req, resp] = await channelOpenPromise(chan);
+  let [req] = await channelOpenPromise(chan);
   Assert.equal(req.protocolVersion, "h2");
   let internal = req.QueryInterface(Ci.nsIHttpChannelInternal);
   Assert.equal(internal.remotePort, h2Port);

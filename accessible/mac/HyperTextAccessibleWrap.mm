@@ -79,6 +79,12 @@ bool HyperTextIterator::NormalizeForward() {
       mCurrentContainer = mCurrentContainer->Parent()->AsHyperText();
       mCurrentStartOffset = endOffset;
 
+      if (mCurrentContainer == mEndContainer &&
+          mCurrentStartOffset >= mEndOffset) {
+        // Reached end boundary.
+        return false;
+      }
+
       // Call NormalizeForward recursively to get top-most link if at the end of
       // one, or innermost link if at the beginning.
       NormalizeForward();
@@ -90,12 +96,25 @@ bool HyperTextIterator::NormalizeForward() {
 
     // If there is a link at this offset, mutate into it.
     if (link && link->IsHyperText()) {
+      if (mCurrentStartOffset > 0 &&
+          mCurrentContainer->LinkIndexAtOffset(mCurrentStartOffset) ==
+              mCurrentContainer->LinkIndexAtOffset(mCurrentStartOffset - 1)) {
+        MOZ_ASSERT_UNREACHABLE("Same link for previous offset");
+        return false;
+      }
+
       mCurrentContainer = link->AsHyperText();
       if (link->IsHTMLListItem()) {
         Accessible* bullet = link->AsHTMLListItem()->Bullet();
         mCurrentStartOffset = bullet ? nsAccUtils::TextLength(bullet) : 0;
       } else {
         mCurrentStartOffset = 0;
+      }
+
+      if (mCurrentContainer == mEndContainer &&
+          mCurrentStartOffset >= mEndOffset) {
+        // Reached end boundary.
+        return false;
       }
 
       // Call NormalizeForward recursively to get top-most embedding ancestor
@@ -524,7 +543,9 @@ void HyperTextAccessibleWrap::RangeOfChild(Accessible* aChild,
 Accessible* HyperTextAccessibleWrap::LeafAtOffset(int32_t aOffset) {
   HyperTextAccessible* text = this;
   Accessible* child = nullptr;
-  int32_t innerOffset = aOffset;
+  // The offset needed should "attach" the previous accessible if
+  // in between two accessibles.
+  int32_t innerOffset = aOffset > 0 ? aOffset - 1 : aOffset;
   do {
     int32_t childIdx = text->GetChildIndexAtOffset(innerOffset);
     if (childIdx == -1) {

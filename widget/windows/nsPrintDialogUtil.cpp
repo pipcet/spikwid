@@ -28,6 +28,7 @@ WIN_LIBS=                                       \
 #include <commdlg.h>
 
 #include "mozilla/BackgroundHangMonitor.h"
+#include "mozilla/ScopeExit.h"
 #include "nsString.h"
 #include "nsReadableUtils.h"
 #include "nsIPrintSettings.h"
@@ -213,8 +214,8 @@ static nsresult ShowNativePrintDialog(HWND aHWnd,
   prntdlg.hDevMode = autoDevMode.get();
   prntdlg.hDevNames = hDevNames;
   prntdlg.hDC = nullptr;
-  prntdlg.Flags =
-      PD_ALLPAGES | PD_RETURNIC | PD_USEDEVMODECOPIESANDCOLLATE | PD_COLLATE;
+  prntdlg.Flags = PD_ALLPAGES | PD_RETURNIC | PD_USEDEVMODECOPIESANDCOLLATE |
+                  PD_COLLATE | PD_NOCURRENTPAGE;
 
   // If there is a current selection then enable the "Selection" radio button
   if (!aPrintSettings->GetIsPrintSelectionRBEnabled()) {

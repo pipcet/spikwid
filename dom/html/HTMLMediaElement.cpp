@@ -56,6 +56,7 @@
 #include "mozilla/NotNull.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/PresShell.h"
+#include "mozilla/ScopeExit.h"
 #include "mozilla/Sprintf.h"
 #include "mozilla/StaticPrefs_media.h"
 #include "mozilla/SVGObserverUtils.h"
@@ -100,10 +101,12 @@
 #include "nsIDocShell.h"
 #include "mozilla/dom/Document.h"
 #include "nsIFrame.h"
+#include "nsIHttpChannel.h"
 #include "nsIObserverService.h"
 #include "nsIRequest.h"
 #include "nsIScriptError.h"
 #include "nsISupportsPrimitives.h"
+#include "nsIThreadRetargetableStreamListener.h"
 #include "nsITimer.h"
 #include "nsJSUtils.h"
 #include "nsLayoutUtils.h"
@@ -2297,6 +2300,7 @@ void HTMLMediaElement::AbortExistingLoads() {
     }
     ChangeNetworkState(NETWORK_EMPTY);
     RemoveMediaTracks();
+    UpdateOutputTrackSources();
     ChangeReadyState(HAVE_NOTHING);
 
     // TODO: Apply the rules for text track cue rendering Bug 865407
@@ -2624,6 +2628,16 @@ void HTMLMediaElement::NotifyLoadError(const nsACString& aErrorDetails) {
   } else {
     NS_WARNING("Should know the source we were loading from!");
   }
+}
+
+void HTMLMediaElement::NotifyMediaTrackAdded(dom::MediaTrack* aTrack) {
+  // The set of tracks changed.
+  mWatchManager.ManualNotify(&HTMLMediaElement::UpdateOutputTrackSources);
+}
+
+void HTMLMediaElement::NotifyMediaTrackRemoved(dom::MediaTrack* aTrack) {
+  // The set of tracks changed.
+  mWatchManager.ManualNotify(&HTMLMediaElement::UpdateOutputTrackSources);
 }
 
 void HTMLMediaElement::NotifyMediaTrackEnabled(dom::MediaTrack* aTrack) {
@@ -3557,7 +3571,15 @@ void HTMLMediaElement::UpdateOutputTrackSources() {
   }
 
   if (mDecoder) {
-    mDecoder->SetOutputCaptured(mTracksCaptured.Ref());
+    if (!mTracksCaptured.Ref()) {
+      mDecoder->SetOutputCaptureState(MediaDecoder::OutputCaptureState::None);
+    } else if (!AudioTracks() || !VideoTracks() || !shouldHaveTrackSources) {
+      // We've been unlinked, or tracks are not yet known.
+      mDecoder->SetOutputCaptureState(MediaDecoder::OutputCaptureState::Halt);
+    } else {
+      mDecoder->SetOutputCaptureState(MediaDecoder::OutputCaptureState::Capture,
+                                      mTracksCaptured.Ref().get());
+    }
   }
 
   // Start with all MediaTracks
@@ -3664,6 +3686,9 @@ void HTMLMediaElement::UpdateOutputTrackSources() {
     mOutputStreams.RemoveElementAt(i);
     if (mOutputStreams.IsEmpty()) {
       mTracksCaptured = nullptr;
+      // mTracksCaptured is one of the Watchables triggering this method.
+      // Unsetting it here means we'll run through this method again very soon.
+      return;
     }
   }
 
@@ -6523,7 +6548,7 @@ bool HTMLMediaElement::IsBeingDestroyed() {
 
 bool HTMLMediaElement::ShouldBeSuspendedByInactiveDocShell() const {
   BrowsingContext* bc = OwnerDoc()->GetBrowsingContext();
-  return bc && !bc->GetIsActive() && bc->Top()->GetSuspendMediaWhenInactive();
+  return bc && !bc->IsActive() && bc->Top()->GetSuspendMediaWhenInactive();
 }
 
 void HTMLMediaElement::NotifyOwnerDocumentActivityChanged() {

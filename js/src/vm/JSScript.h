@@ -26,6 +26,7 @@
 
 #include "jstypes.h"
 
+#include "frontend/ScriptIndex.h"  // ScriptIndex
 #include "frontend/SourceNotes.h"  // SrcNote
 #include "gc/Barrier.h"
 #include "gc/Rooting.h"
@@ -42,10 +43,10 @@
 #include "vm/GeneratorAndAsyncKind.h"  // GeneratorKind, FunctionAsyncKind
 #include "vm/JSAtom.h"
 #include "vm/NativeObject.h"
-#include "vm/Scope.h"
+#include "vm/ScopeKind.h"  // ScopeKind
 #include "vm/Shape.h"
 #include "vm/SharedImmutableStringsCache.h"
-#include "vm/SharedStencil.h"  // js::GCThingIndex, js::SourceExtent, js::SharedImmutableScriptData
+#include "vm/SharedStencil.h"  // js::GCThingIndex, js::SourceExtent, js::SharedImmutableScriptData, MemberInitializers
 #include "vm/Time.h"
 
 namespace JS {
@@ -55,6 +56,9 @@ class SourceText;
 }  // namespace JS
 
 namespace js {
+
+class VarScope;
+class LexicalScope;
 
 namespace coverage {
 class LCovSource;
@@ -76,10 +80,9 @@ class Shape;
 class DebugScript;
 
 namespace frontend {
-struct CompilationInfo;
 struct CompilationStencil;
+struct BaseCompilationStencil;
 struct CompilationGCOutput;
-class ScriptStencil;
 }  // namespace frontend
 
 class ScriptCounts {
@@ -170,6 +173,12 @@ using ScriptLCovMap = HashMap<BaseScript*, ScriptLCovEntry,
 #ifdef MOZ_VTUNE
 using ScriptVTuneIdMap = HashMap<BaseScript*, uint32_t,
                                  DefaultHasher<BaseScript*>, SystemAllocPolicy>;
+#endif
+#ifdef JS_CACHEIR_SPEW
+using ScriptFinalWarmUpCountEntry = mozilla::Tuple<uint32_t, char*>;
+using ScriptFinalWarmUpCountMap =
+    HashMap<BaseScript*, ScriptFinalWarmUpCountEntry,
+            DefaultHasher<BaseScript*>, SystemAllocPolicy>;
 #endif
 
 using UniqueDebugScript = js::UniquePtr<DebugScript, JS::FreePolicy>;
@@ -1023,7 +1032,7 @@ class ScriptSource {
   // instantiating stencil (so, corresponding canonical ScriptSourceObject
   // gets created).
   bool xdrEncodeInitialStencil(
-      JSContext* cx, frontend::CompilationInfo& compilationInfo,
+      JSContext* cx, frontend::CompilationStencil& stencil,
       UniquePtr<XDRIncrementalEncoderBase>& xdrEncoder);
 
   // Create a new XDR encoder, and encode the stencils.
@@ -1032,7 +1041,7 @@ class ScriptSource {
   // instantiating stencil (so, corresponding canonical ScriptSourceObject
   // gets created).
   bool xdrEncodeStencils(JSContext* cx,
-                         frontend::CompilationInfoVector& compilationInfos,
+                         frontend::CompilationStencilSet& stencilSet,
                          UniquePtr<XDRIncrementalEncoderBase>& xdrEncoder);
 
   void setIncrementalEncoder(XDRIncrementalEncoderBase* xdrEncoder);
@@ -1049,13 +1058,13 @@ class ScriptSource {
   // Encode a delazified function's stencil.  In case of errors, the XDR
   // encoder is freed.
   bool xdrEncodeFunctionStencil(JSContext* cx,
-                                frontend::CompilationStencil& stencil);
+                                frontend::BaseCompilationStencil& stencil);
 
  private:
   // Encode a delazified function's stencil.  In case of errors, the passed
   // XDR encoder is freed.
   bool xdrEncodeFunctionStencilWith(
-      JSContext* cx, frontend::CompilationStencil& stencil,
+      JSContext* cx, frontend::BaseCompilationStencil& stencil,
       UniquePtr<XDRIncrementalEncoderBase>& xdrEncoder);
 
  public:
@@ -1088,8 +1097,8 @@ class ScriptSource {
  public:
   template <XDRMode mode>
   static MOZ_MUST_USE XDRResult
-  XDR(XDRState<mode>* xdr, const mozilla::Maybe<JS::CompileOptions>& options,
-      MutableHandle<ScriptSourceHolder> ss);
+  XDR(XDRState<mode>* xdr, const JS::ReadOnlyCompileOptions* maybeOptions,
+      MutableHandle<ScriptSourceHolder> holder);
 
   void trace(JSTracer* trc);
 };
@@ -1327,31 +1336,6 @@ class ScriptWarmUpData {
 static_assert(sizeof(ScriptWarmUpData) == sizeof(uintptr_t),
               "JIT code depends on ScriptWarmUpData being pointer-sized");
 
-struct MemberInitializers {
-  static constexpr uint32_t MaxInitializers = INT32_MAX;
-
-#ifdef DEBUG
-  bool valid = false;
-#endif
-
-  // This struct will eventually have a vector of constant values for optimizing
-  // field initializers.
-  uint32_t numMemberInitializers = 0;
-
-  explicit MemberInitializers(uint32_t numMemberInitializers)
-      :
-#ifdef DEBUG
-        valid(true),
-#endif
-        numMemberInitializers(numMemberInitializers) {
-  }
-
-  static MemberInitializers Invalid() { return MemberInitializers(); }
-
- private:
-  MemberInitializers() = default;
-};
-
 // [SMDOC] - JSScript data layout (unshared)
 //
 // PrivateScriptData stores variable-length data associated with a script.
@@ -1422,9 +1406,10 @@ class alignas(uintptr_t) PrivateScriptData final : public TrailingArray {
                     js::MutableHandle<JS::GCVector<js::Scope*>> scopes);
 
   static bool InitFromStencil(JSContext* cx, js::HandleScript script,
-                              js::frontend::CompilationInfo& compilationInfo,
+                              js::frontend::CompilationInput& input,
+                              js::frontend::BaseCompilationStencil& stencil,
                               js::frontend::CompilationGCOutput& gcOutput,
-                              const js::frontend::ScriptStencil& scriptStencil);
+                              const js::frontend::ScriptIndex scriptIndex);
 
   void trace(JSTracer* trc);
 
@@ -1706,20 +1691,22 @@ class BaseScript : public gc::TenuredCellWithNonGCPointer<uint8_t> {
   IMMUTABLE_FLAG_GETTER(hasMappedArgsObj, HasMappedArgsObj)
 
   MUTABLE_FLAG_GETTER_SETTER(hasRunOnce, HasRunOnce)
-  MUTABLE_FLAG_GETTER_SETTER(hasBeenCloned, HasBeenCloned)
   MUTABLE_FLAG_GETTER_SETTER(hasScriptCounts, HasScriptCounts)
   MUTABLE_FLAG_GETTER_SETTER(hasDebugScript, HasDebugScript)
   MUTABLE_FLAG_GETTER_SETTER(needsArgsAnalysis, NeedsArgsAnalysis)
   // NeedsArgsObj: custom logic below.
   MUTABLE_FLAG_GETTER_SETTER(allowRelazify, AllowRelazify)
   MUTABLE_FLAG_GETTER_SETTER(spewEnabled, SpewEnabled)
+  MUTABLE_FLAG_GETTER_SETTER(needsFinalWarmUpCount, NeedsFinalWarmUpCount)
   MUTABLE_FLAG_GETTER_SETTER(failedBoundsCheck, FailedBoundsCheck)
   MUTABLE_FLAG_GETTER_SETTER(failedShapeGuard, FailedShapeGuard)
-  MUTABLE_FLAG_GETTER_SETTER(hadLICMBailout, HadLICMBailout)
-  MUTABLE_FLAG_GETTER_SETTER(hadOverflowBailout, HadOverflowBailout)
+  MUTABLE_FLAG_GETTER_SETTER(hadLICMInvalidation, HadLICMInvalidation)
+  MUTABLE_FLAG_GETTER_SETTER(hadEagerTruncationBailout,
+                             HadEagerTruncationBailout)
   MUTABLE_FLAG_GETTER_SETTER(uninlineable, Uninlineable)
   MUTABLE_FLAG_GETTER_SETTER(failedLexicalCheck, FailedLexicalCheck)
   MUTABLE_FLAG_GETTER_SETTER(hadSpeculativePhiBailout, HadSpeculativePhiBailout)
+  MUTABLE_FLAG_GETTER_SETTER(isInlinableLargeFunction, IsInlinableLargeFunction)
 
 #undef IMMUTABLE_FLAG_GETTER
 #undef MUTABLE_FLAG_GETTER_SETTER
@@ -1751,20 +1738,7 @@ class BaseScript : public gc::TenuredCellWithNonGCPointer<uint8_t> {
     return warmUpData_.isEnclosingScope();
   }
 
-  Scope* enclosingScope() const {
-    MOZ_ASSERT(!warmUpData_.isEnclosingScript(),
-               "Enclosing scope is not computed yet");
-
-    if (warmUpData_.isEnclosingScope()) {
-      return warmUpData_.toEnclosingScope();
-    }
-
-    MOZ_ASSERT(data_, "Script doesn't seem to be compiled");
-
-    return gcthings()[js::GCThingIndex::outermostScopeIndex()]
-        .as<Scope>()
-        .enclosing();
-  }
+  Scope* enclosingScope() const;
   void setEnclosingScope(Scope* enclosingScope);
   Scope* releaseEnclosingScope();
 
@@ -1929,9 +1903,10 @@ class JSScript : public js::BaseScript {
 
   friend bool js::PrivateScriptData::InitFromStencil(
       JSContext* cx, js::HandleScript script,
-      js::frontend::CompilationInfo& compilationInfo,
+      js::frontend::CompilationInput& input,
+      js::frontend::BaseCompilationStencil& stencil,
       js::frontend::CompilationGCOutput& gcOutput,
-      const js::frontend::ScriptStencil& scriptStencil);
+      const js::frontend::ScriptIndex scriptIndex);
 
  private:
   using js::BaseScript::BaseScript;
@@ -1956,18 +1931,18 @@ class JSScript : public js::BaseScript {
 
  public:
   static bool fullyInitFromStencil(
-      JSContext* cx, js::frontend::CompilationInfo& compilationInfo,
+      JSContext* cx, js::frontend::CompilationInput& input,
+      js::frontend::BaseCompilationStencil& stencil,
       js::frontend::CompilationGCOutput& gcOutput, js::HandleScript script,
-      const js::frontend::ScriptStencil& scriptStencil,
-      js::HandleFunction function);
+      const js::frontend::ScriptIndex scriptIndex);
 
   // Allocate a JSScript and initialize it with bytecode. This consumes
   // allocations within the stencil.
   static JSScript* fromStencil(JSContext* cx,
-                               js::frontend::CompilationInfo& compilationInfo,
+                               js::frontend::CompilationInput& input,
+                               js::frontend::CompilationStencil& stencil,
                                js::frontend::CompilationGCOutput& gcOutput,
-                               const js::frontend::ScriptStencil& scriptStencil,
-                               js::HandleFunction function);
+                               const js::frontend::ScriptIndex scriptIndex);
 
 #ifdef DEBUG
  private:
@@ -2049,40 +2024,18 @@ class JSScript : public js::BaseScript {
 
   // Number of fixed slots reserved for slots that are always live. Only
   // nonzero for function or module code.
-  size_t numAlwaysLiveFixedSlots() const {
-    if (bodyScope()->is<js::FunctionScope>()) {
-      return bodyScope()->as<js::FunctionScope>().nextFrameSlot();
-    }
-    if (bodyScope()->is<js::ModuleScope>()) {
-      return bodyScope()->as<js::ModuleScope>().nextFrameSlot();
-    }
-    return 0;
-  }
+  size_t numAlwaysLiveFixedSlots() const;
 
   // Calculate the number of fixed slots that are live at a particular bytecode.
   size_t calculateLiveFixed(jsbytecode* pc);
 
   size_t nslots() const { return immutableScriptData()->nslots; }
 
-  unsigned numArgs() const {
-    if (bodyScope()->is<js::FunctionScope>()) {
-      return bodyScope()
-          ->as<js::FunctionScope>()
-          .numPositionalFormalParameters();
-    }
-    return 0;
-  }
+  unsigned numArgs() const;
 
   inline js::Shape* initialEnvironmentShape() const;
 
-  bool functionHasParameterExprs() const {
-    // Only functions have parameters.
-    js::Scope* scope = bodyScope();
-    if (!scope->is<js::FunctionScope>()) {
-      return false;
-    }
-    return scope->as<js::FunctionScope>().hasParameterExprs();
-  }
+  bool functionHasParameterExprs() const;
 
   bool functionAllowsParameterRedeclaration() const {
     // Parameter redeclaration is only allowed for non-strict functions with
@@ -2149,14 +2102,9 @@ class JSScript : public js::BaseScript {
 
   bool isRelazifiable() const { return isRelazifiableImpl(); }
 
-  js::ModuleObject* module() const {
-    if (bodyScope()->is<js::ModuleScope>()) {
-      return bodyScope()->as<js::ModuleScope>().module();
-    }
-    return nullptr;
-  }
+  js::ModuleObject* module() const;
 
-  bool isGlobalCode() const { return bodyScope()->is<js::GlobalScope>(); }
+  bool isGlobalCode() const;
 
   // Returns true if the script may read formal arguments on the stack
   // directly, via lazy arguments or a rest parameter.
@@ -2172,12 +2120,7 @@ class JSScript : public js::BaseScript {
 
  public:
   /* Return whether this is a 'direct eval' script in a function scope. */
-  bool isDirectEvalInFunction() const {
-    if (!isForEval()) {
-      return false;
-    }
-    return bodyScope()->hasOnChain(js::ScopeKind::Function);
-  }
+  bool isDirectEvalInFunction() const;
 
   /*
    * Return whether this script is a top-level script.
@@ -2230,32 +2173,9 @@ class JSScript : public js::BaseScript {
     return res;
   }
 
-  js::VarScope* functionExtraBodyVarScope() const {
-    MOZ_ASSERT(functionHasExtraBodyVarScope());
-    for (JS::GCCellPtr gcThing : gcthings()) {
-      if (!gcThing.is<js::Scope>()) {
-        continue;
-      }
-      js::Scope* scope = &gcThing.as<js::Scope>();
-      if (scope->kind() == js::ScopeKind::FunctionBodyVar) {
-        return &scope->as<js::VarScope>();
-      }
-    }
-    MOZ_CRASH("Function extra body var scope not found");
-  }
+  js::VarScope* functionExtraBodyVarScope() const;
 
-  bool needsBodyEnvironment() const {
-    for (JS::GCCellPtr gcThing : gcthings()) {
-      if (!gcThing.is<js::Scope>()) {
-        continue;
-      }
-      js::Scope* scope = &gcThing.as<js::Scope>();
-      if (ScopeKindIsInBody(scope->kind()) && scope->hasEnvironment()) {
-        return true;
-      }
-    }
-    return false;
-  }
+  bool needsBodyEnvironment() const;
 
   inline js::LexicalScope* maybeNamedLambdaScope() const;
 
@@ -2519,6 +2439,11 @@ extern const js::SrcNote* GetSrcNote(JSContext* cx, JSScript* script,
 extern jsbytecode* LineNumberToPC(JSScript* script, unsigned lineno);
 
 extern JS_FRIEND_API unsigned GetScriptLineExtent(JSScript* script);
+
+#ifdef JS_CACHEIR_SPEW
+void maybeUpdateWarmUpCount(JSScript* script);
+void maybeSpewScriptFinalWarmUpCount(JSScript* script);
+#endif
 
 } /* namespace js */
 

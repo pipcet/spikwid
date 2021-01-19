@@ -10,7 +10,6 @@
 #include "vm/EnvironmentObject.h"
 
 #include "vm/JSObject-inl.h"
-#include "vm/TypeInference-inl.h"
 
 namespace js {
 
@@ -44,7 +43,6 @@ inline const Value& EnvironmentObject::aliasedBinding(
 
 inline void EnvironmentObject::setAliasedBinding(JSContext* cx, uint32_t slot,
                                                  const Value& v) {
-  MOZ_ASSERT(!isSingleton());
   setSlot(slot, v);
 }
 

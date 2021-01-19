@@ -276,7 +276,11 @@ pref("browser.startup.firstrunSkipsHomepage", true);
 // Show a skeleton UI window prior to loading libxul. Only visible for windows
 // users as it is not implemented anywhere else.
 #if defined(XP_WIN)
+#ifdef NIGHTLY_BUILD
+pref("browser.startup.preXulSkeletonUI", true);
+#else
 pref("browser.startup.preXulSkeletonUI", false);
+#endif
 #endif
 
 // Don't create the hidden window during startup on
@@ -352,14 +356,6 @@ pref("browser.urlbar.openintab", false);
 // If true, we show tail suggestions when available.
 pref("browser.urlbar.richSuggestions.tail", true);
 
-// Whether the Urlbar can enter search mode. Also controls the other
-// urlbar.update2 prefs.
-pref("browser.urlbar.update2", true);
-
-// Whether horizontal key navigation with left/right is disabled for urlbar's
-// one-off buttons.
-pref("browser.urlbar.update2.disableOneOffsHorizontalKeyNavigation", true);
-
 // Controls the empty search behavior in Search Mode:
 //  0 - Show nothing
 //  1 - Show search history
@@ -372,26 +368,24 @@ pref("browser.urlbar.shortcuts.bookmarks", true);
 pref("browser.urlbar.shortcuts.tabs", true);
 pref("browser.urlbar.shortcuts.history", true);
 
-// Whether the urlbar one-offs act as search filters instead of executing a
-// search immediately.
-pref("browser.urlbar.update2.oneOffsRefresh", true);
-
-// Whether browsing history that is recognized as a previous search should
-// be restyled and deduped against form history. This only happens when
-// search mode is active.
-pref("browser.urlbar.update2.restyleBrowsingHistoryAsSearch", true);
-
-// Whether we display a tab-to-complete result when the user types an engine
-// name.
-pref("browser.urlbar.update2.tabToComplete", true);
-
 pref("browser.urlbar.eventTelemetry.enabled", false);
+
+// When we send events to Urlbar extensions, we wait this amount of time in
+// milliseconds for them to respond before timing out.
+pref("browser.urlbar.extension.timeout", 400);
 
 // Controls when to DNS resolve single word search strings, after they were
 // searched for. If the string is resolved as a valid host, show a
 // "Did you mean to go to 'host'" prompt.
 // 0 - never resolve; 1 - use heuristics (default); 2 - always resolve
 pref("browser.urlbar.dnsResolveSingleWordsAfterSearch", 1);
+
+// Whether IME composition should close the results panel.
+// The default value is true because some IME open a picker panel, and we end
+// up with two panels on top of each other. Since for now we can't detect that
+// we leave this choice to the user, hopefully in the future this can be flipped
+// for everyone.
+pref("browser.urlbar.imeCompositionClosesPanel", true);
 
 pref("browser.altClickSave", false);
 
@@ -579,6 +573,12 @@ pref("browser.tabs.remote.separatePrivilegedContentProcess", true);
 // for certain mozilla webpages (which are listed in the pref
 // browser.tabs.remote.separatedMozillaDomains).
 pref("browser.tabs.remote.separatePrivilegedMozillaWebContentProcess", true);
+
+#ifdef NIGHTLY_BUILD
+pref("browser.tabs.tooltipsShowPid", true);
+#else
+pref("browser.tabs.tooltipsShowPid", false);
+#endif
 
 // allow_eval_* is enabled on Firefox Desktop only at this
 // point in time
@@ -829,18 +829,13 @@ pref("browser.preferences.defaultPerformanceSettings.enabled", true);
 
 pref("browser.preferences.exposeHTTPSOnly", true);
 
-pref("browser.download.show_plugins_in_list", true);
-pref("browser.download.hide_plugins_without_extensions", true);
+pref("browser.proton.enabled", false);
 
 // Backspace and Shift+Backspace behavior
 // 0 goes Back/Forward
 // 1 act like PgUp/PgDown
 // 2 and other values, nothing
-#ifdef UNIX_BUT_NOT_MAC
-  pref("browser.backspace_action", 2);
-#else
-  pref("browser.backspace_action", 0);
-#endif
+pref("browser.backspace_action", 2);
 
 pref("intl.regional_prefs.use_os_locales", false);
 
@@ -1277,6 +1272,7 @@ pref("services.sync.prefs.sync.browser.urlbar.suggest.history", true);
 pref("services.sync.prefs.sync.browser.urlbar.suggest.openpage", true);
 pref("services.sync.prefs.sync.browser.urlbar.suggest.searches", true);
 pref("services.sync.prefs.sync.browser.urlbar.suggest.topsites", true);
+pref("services.sync.prefs.sync.browser.urlbar.suggest.engines", true);
 pref("services.sync.prefs.sync.dom.disable_open_during_load", true);
 pref("services.sync.prefs.sync.dom.disable_window_flip", true);
 pref("services.sync.prefs.sync.dom.disable_window_move_resize", true);
@@ -1348,21 +1344,29 @@ pref("services.sync.syncedTabs.showRemoteIcons", true);
 // preference is a string so that localizers can alter it.
 pref("browser.menu.showCharacterEncoding", "chrome://browser/locale/browser.properties");
 
-// Allow using tab-modal prompts when possible.
-pref("prompts.tab_modal.enabled", true);
-
 // Whether prompts should be content modal (1) tab modal (2) or window modal(3) by default
 // This is a fallback value for when prompt callers do not specify a modalType.
 pref("prompts.defaultModalType", 3);
 
 pref("browser.topsites.useRemoteSetting", false);
 
-pref("browser.partnerlink.attributionURL", "https://topsites.services.mozilla.com/cid/amzn_2020_a1");
+// The base URL for the Quick Suggest anonymizing proxy. To make a request to
+// the proxy, include a campaign ID in the path.
+pref("browser.partnerlink.attributionURL", "https://topsites.services.mozilla.com/cid/");
+pref("browser.partnerlink.campaign.topsites", "amzn_2020_a1");
 
 // Whether to show tab level system prompts opened via nsIPrompt(Service) as
 // SubDialogs in the TabDialogBox (true) or as TabModalPrompt in the
 // TabModalPromptBox (false).
 pref("prompts.tabChromePromptSubDialog", true);
+
+// Whether to show the dialogs opened at the content level, such as
+// alert() or prompt(), using a SubDialogManager in the TabDialogBox.
+#ifdef EARLY_BETA_OR_EARLIER
+  pref("prompts.contentPromptSubDialog", true);
+#else
+  pref("prompts.contentPromptSubDialog", false);
+#endif
 
 // Activates preloading of the new tab url.
 pref("browser.newtab.preload", true);
@@ -1373,6 +1377,7 @@ pref("browser.newtabpage.activity-stream.newNewtabExperience.enabled", false);
 // A preference which allows us to enable the fly out customization overlay
 // on the newtab page.
 pref("browser.newtabpage.activity-stream.customizationMenu.enabled", false);
+pref("browser.newtabpage.activity-stream.newNewtabExperience.colors", "#0090ED,#FF4F5F,#2AC3A2,#FF7139,#A172FF,#FFA437,#FF2A8A,#FFD567");
 
 // Activity Stream prefs that control to which page to redirect
 #ifndef RELEASE_OR_BETA
@@ -1397,6 +1402,10 @@ pref("browser.newtabpage.activity-stream.asrouter.providers.message-groups", "{\
 pref("browser.newtabpage.activity-stream.asrouter.providers.snippets", "{\"id\":\"snippets\",\"enabled\":true,\"type\":\"remote\",\"url\":\"\",\"updateCycleInMs\":14400000}");
 pref("browser.newtabpage.activity-stream.asrouter.providers.messaging-experiments", "{\"id\":\"messaging-experiments\",\"enabled\":true,\"type\":\"remote-experiments\",\"messageGroups\":[\"cfr\",\"whats-new-panel\",\"moments-page\",\"snippets\",\"cfr-fxa\",\"aboutwelcome\"],\"updateCycleInMs\":3600000}");
 
+// ASRouter user prefs
+pref("browser.newtabpage.activity-stream.asrouter.userprefs.cfr.addons", true);
+pref("browser.newtabpage.activity-stream.asrouter.userprefs.cfr.features", true);
+
 // The pref that controls if ASRouter uses the remote fluent files.
 // It's enabled by default, but could be disabled to force ASRouter to use the local files.
 pref("browser.newtabpage.activity-stream.asrouter.useRemoteL10n", true);
@@ -1405,6 +1414,7 @@ pref("browser.newtabpage.activity-stream.asrouter.useRemoteL10n", true);
 pref("browser.newtabpage.activity-stream.discoverystream.enabled", true);
 pref("browser.newtabpage.activity-stream.discoverystream.hardcoded-basic-layout", false);
 pref("browser.newtabpage.activity-stream.discoverystream.spocs-endpoint", "");
+pref("browser.newtabpage.activity-stream.discoverystream.spocs-endpoint-query", "");
 
 // List of regions that do not get stories, regardless of locale-list-config.
 pref("browser.newtabpage.activity-stream.discoverystream.region-stories-block", "FR");
@@ -1424,7 +1434,7 @@ pref("browser.newtabpage.activity-stream.discoverystream.region-basic-config", "
 
 // Allows Pocket story collections to be dismissed.
 pref("browser.newtabpage.activity-stream.discoverystream.isCollectionDismissible", true);
-pref("browser.newtabpage.activity-stream.discoverystream.personalization.version", 1);
+pref("browser.newtabpage.activity-stream.discoverystream.personalization.version", 2);
 // Configurable keys used by personalization version 2.
 pref("browser.newtabpage.activity-stream.discoverystream.personalization.modelKeys", "nb_model_arts_and_entertainment, nb_model_autos_and_vehicles, nb_model_beauty_and_fitness, nb_model_blogging_resources_and_services, nb_model_books_and_literature, nb_model_business_and_industrial, nb_model_computers_and_electronics, nb_model_finance, nb_model_food_and_drink, nb_model_games, nb_model_health, nb_model_hobbies_and_leisure, nb_model_home_and_garden, nb_model_internet_and_telecom, nb_model_jobs_and_education, nb_model_law_and_government, nb_model_online_communities, nb_model_people_and_society, nb_model_pets_and_animals, nb_model_real_estate, nb_model_reference, nb_model_science, nb_model_shopping, nb_model_sports, nb_model_travel");
 // System pref to allow Pocket stories personalization to be turned on/off.
@@ -1442,7 +1452,7 @@ pref("browser.newtabpage.activity-stream.feeds.section.topstories", true);
   pref("browser.newtabpage.activity-stream.improvesearch.handoffToAwesomebar", false);
 #endif
 
-pref("browser.newtabpage.activity-stream.logowordmark.alwaysVisible", true);
+pref("browser.newtabpage.activity-stream.logowordmark.alwaysVisible", false);
 
 // Used to display triplet cards on newtab
 pref("trailhead.firstrun.newtab.triplets", "");
@@ -1461,6 +1471,7 @@ pref("browser.messaging-system.personalized-cfr.score-threshold", 5000);
 // See Console.jsm LOG_LEVELS for all possible values
 pref("messaging-system.log", "warn");
 pref("messaging-system.rsexperimentloader.enabled", true);
+pref("messaging-system.rsexperimentloader.collection_id", "nimbus-desktop-experiments");
 
 // Enable the DOM fullscreen API.
 pref("full-screen-api.enabled", true);
@@ -1692,8 +1703,8 @@ pref("browser.contentblocking.fingerprinting.preferences.ui.enabled", true);
   // Enable cookieBehavior = BEHAVIOR_REJECT_TRACKER_AND_PARTITION_FOREIGN as an option in the custom category ui
   pref("browser.contentblocking.reject-and-isolate-cookies.preferences.ui.enabled", true);
 #endif
-// State Partitioning MVP UI. Disabled by default for now.
-pref("browser.contentblocking.state-partitioning.mvp.ui.enabled", false);
+// State Partitioning MVP UI.
+pref("browser.contentblocking.state-partitioning.mvp.ui.enabled", true);
 
 // Possible values for browser.contentblocking.features.strict pref:
 //   Tracking Protection:
@@ -1719,12 +1730,7 @@ pref("browser.contentblocking.state-partitioning.mvp.ui.enabled", false);
 //     "cookieBehavior4": cookie behaviour BEHAVIOR_REJECT_TRACKER
 //     "cookieBehavior5": cookie behaviour BEHAVIOR_REJECT_TRACKER_AND_PARTITION_FOREIGN
 // One value from each section must be included in the browser.contentblocking.features.strict pref.
-#ifdef NIGHTLY_BUILD
-// Enable Dynamic First-Party Isolation in Nightly.
-pref("browser.contentblocking.features.strict", "tp,tpPrivate,cookieBehavior5,cm,fp,stp");
-#else
-pref("browser.contentblocking.features.strict", "tp,tpPrivate,cookieBehavior4,cm,fp,stp");
-#endif
+pref("browser.contentblocking.features.strict", "tp,tpPrivate,cookieBehavior5,cm,fp,stp,lvl2");
 
 // Hide the "Change Block List" link for trackers/tracking content in the custom
 // Content Blocking/ETP panel. By default, it will not be visible. There is also
@@ -1779,7 +1785,7 @@ pref("browser.contentblocking.report.cryptominer.url", "");
 pref("browser.contentblocking.cfr-milestone.enabled", true);
 pref("browser.contentblocking.cfr-milestone.milestone-achieved", 0);
 // Milestones should always be in increasing order
-pref("browser.contentblocking.cfr-milestone.milestones", "[1000, 5000, 10000, 25000, 50000, 100000, 500000]");
+pref("browser.contentblocking.cfr-milestone.milestones", "[1000, 5000, 10000, 25000, 50000, 100000, 250000, 314159, 500000, 750000, 1000000, 1250000, 1500000, 1750000, 2000000, 2250000, 2500000, 8675309]");
 
 // Enables the new Protections Panel.
 #ifdef NIGHTLY_BUILD
@@ -1986,7 +1992,7 @@ pref("extensions.formautofill.loglevel", "Warn");
 
 pref("toolkit.osKeyStore.loglevel", "Warn");
 
-pref("extensions.formautofill.supportedCountries", "US");
+pref("extensions.formautofill.supportedCountries", "US,CA");
 pref("extensions.formautofill.supportRTL", false);
 
 // Whether or not to restore a session with lazy-browser tabs.
@@ -2031,9 +2037,6 @@ pref("app.normandy.onsync_skew_sec", 600);
   pref("app.shield.optoutstudies.enabled", false);
 #endif
 
-// Web apps support
-pref("browser.ssb.enabled", false);
-
 // Multi-lingual preferences
 #if defined(RELEASE_OR_BETA) && !defined(MOZ_DEV_EDITION)
   pref("intl.multilingual.enabled", true);
@@ -2064,6 +2067,11 @@ pref("browser.discovery.containers.enabled", false);
 pref("browser.discovery.sites", "");
 
 pref("browser.engagement.recent_visited_origins.expiry", 86400); // 24 * 60 * 60 (24 hours in seconds)
+pref("browser.engagement.downloads-button.has-used", false);
+pref("browser.engagement.fxa-toolbar-menu-button.has-used", false);
+pref("browser.engagement.home-button.has-used", false);
+pref("browser.engagement.sidebar-button.has-used", false);
+pref("browser.engagement.library-button.has-used", false);
 
 pref("browser.aboutConfig.showWarning", false);
 
@@ -2080,13 +2088,7 @@ pref("browser.toolbars.bookmarks.visibility", "newtab");
 pref("browser.toolbars.bookmarks.showOtherBookmarks", true);
 
 // When true, this pref will always show the bookmarks bar on
-// the New Tab Page, allowing showing/hiding via keyboard shortcut,
-// and other functionality to improve the usage of the Bookmarks Toolbar.
-#ifdef EARLY_BETA_OR_EARLIER
 pref("browser.toolbars.bookmarks.2h2020", false);
-#else
-pref("browser.toolbars.bookmarks.2h2020", false);
-#endif
 
 // Prefs to control the Firefox Account toolbar menu.
 // This pref will surface existing Firefox Account information
@@ -2141,6 +2143,7 @@ pref("devtools.command-button-screenshot.enabled", false);
 pref("devtools.command-button-rulers.enabled", false);
 pref("devtools.command-button-measure.enabled", false);
 pref("devtools.command-button-noautohide.enabled", false);
+pref("devtools.command-button-errorcount.enabled", true);
 #ifndef MOZILLA_OFFICIAL
   pref("devtools.command-button-fission-prefs.enabled", true);
 #endif
@@ -2516,3 +2519,7 @@ pref("devtools.popup.disable_autohide", false);
 
 // FirstStartup service time-out in ms
 pref("first-startup.timeout", 30000);
+pref("default-browser-agent.enabled", false);
+pref("app.normandy.test-prefs.bool", false);
+pref("app.normandy.test-prefs.integer", 0);
+pref("app.normandy.test-prefs.string", "");

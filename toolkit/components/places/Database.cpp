@@ -6,6 +6,7 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/ScopeExit.h"
+#include "mozilla/SpinEventLoopUntil.h"
 #include "mozilla/JSONWriter.h"
 
 #include "Database.h"
@@ -65,18 +66,6 @@
 #define PREF_DISABLE_DURABILITY "places.database.disableDurability"
 #define ENV_ALLOW_CORRUPTION \
   "ALLOW_PLACES_DATABASE_TO_LOSE_DATA_AND_BECOME_CORRUPT"
-
-// The maximum url length we can store in history.
-// We do not add to history URLs longer than this value.
-#define PREF_HISTORY_MAXURLLEN "places.history.maxUrlLength"
-// This number is mostly a guess based on various facts:
-// * IE didn't support urls longer than 2083 chars
-// * Sitemaps protocol used to support a maximum of 2048 chars
-// * Various SEO guides suggest to not go over 2000 chars
-// * Various apps/services are known to have issues over 2000 chars
-// * RFC 2616 - HTTP/1.1 suggests being cautious about depending
-//   on URI lengths above 255 bytes
-#define PREF_HISTORY_MAXURLLEN_DEFAULT 2000
 
 #define PREF_MIGRATE_V52_ORIGIN_FRECENCIES \
   "places.database.migrateV52OriginFrecencies"
@@ -2477,18 +2466,6 @@ Database::Observe(nsISupports* aSubject, const char* aTopic,
     }
   }
   return NS_OK;
-}
-
-uint32_t Database::MaxUrlLength() {
-  MOZ_ASSERT(NS_IsMainThread());
-  if (!mMaxUrlLength) {
-    mMaxUrlLength = Preferences::GetInt(PREF_HISTORY_MAXURLLEN,
-                                        PREF_HISTORY_MAXURLLEN_DEFAULT);
-    if (mMaxUrlLength < 255 || mMaxUrlLength > INT32_MAX) {
-      mMaxUrlLength = PREF_HISTORY_MAXURLLEN_DEFAULT;
-    }
-  }
-  return mMaxUrlLength;
 }
 
 }  // namespace places

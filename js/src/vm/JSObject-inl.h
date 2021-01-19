@@ -14,6 +14,7 @@
 #include "vm/EnvironmentObject.h"
 #include "vm/JSFunction.h"
 #include "vm/Probes.h"
+#include "vm/TypedArrayObject.h"
 
 #include "gc/FreeOp-inl.h"
 #include "gc/Marking-inl.h"
@@ -113,18 +114,8 @@ inline void JSObject::finalize(JSFreeOp* fop) {
   if (nobj->hasDynamicElements()) {
     js::ObjectElements* elements = nobj->getElementsHeader();
     size_t size = elements->numAllocatedElements() * sizeof(js::HeapSlot);
-    if (elements->isCopyOnWrite()) {
-      if (elements->ownerObject() == this) {
-        // Don't free the elements until object finalization finishes,
-        // so that other objects can access these elements while they
-        // are themselves finalized.
-        MOZ_ASSERT(elements->numShiftedElements() == 0);
-        fop->freeLater(this, elements, size, js::MemoryUse::ObjectElements);
-      }
-    } else {
-      fop->free_(this, nobj->getUnshiftedElementsHeader(), size,
-                 js::MemoryUse::ObjectElements);
-    }
+    fop->free_(this, nobj->getUnshiftedElementsHeader(), size,
+               js::MemoryUse::ObjectElements);
   }
 }
 
@@ -149,21 +140,8 @@ js::NativeObject::updateDictionaryListPointerAfterMinorGC(NativeObject* old) {
   }
 }
 
-/* static */ inline js::ObjectGroup* JSObject::getGroup(JSContext* cx,
-                                                        js::HandleObject obj) {
-  MOZ_ASSERT(cx->compartment() == obj->compartment());
-  if (obj->hasLazyGroup()) {
-    if (cx->compartment() != obj->compartment()) {
-      MOZ_CRASH();
-    }
-    return makeLazyGroup(cx, obj);
-  }
-  return obj->groupRaw();
-}
-
 inline void JSObject::setGroup(js::ObjectGroup* group) {
   MOZ_RELEASE_ASSERT(group);
-  MOZ_ASSERT(!isSingleton());
   MOZ_ASSERT(maybeCCWRealm() == group->realm());
   setGroupRaw(group);
 }
@@ -202,6 +180,21 @@ inline bool ClassCanHaveFixedData(const JSClass* clasp) {
   return !clasp->isNative() || clasp == &js::ArrayBufferObject::class_ ||
          js::IsTypedArrayClass(clasp);
 }
+
+class MOZ_RAII AutoSuppressAllocationMetadataBuilder {
+  JS::Zone* zone;
+  bool saved;
+
+ public:
+  explicit AutoSuppressAllocationMetadataBuilder(JSContext* cx)
+      : zone(cx->zone()), saved(zone->suppressAllocationMetadataBuilder) {
+    zone->suppressAllocationMetadataBuilder = true;
+  }
+
+  ~AutoSuppressAllocationMetadataBuilder() {
+    zone->suppressAllocationMetadataBuilder = saved;
+  }
+};
 
 // This function is meant to be called from allocation fast paths.
 //
@@ -435,14 +428,6 @@ inline T* NewObjectWithGivenTaggedProto(JSContext* cx,
                                                                         proto);
 }
 
-template <typename T>
-inline T* NewSingletonObjectWithGivenTaggedProtoAndKind(
-    JSContext* cx, Handle<TaggedProto> proto, gc::AllocKind allocKind) {
-  JSObject* obj = NewObjectWithGivenTaggedProto(cx, &T::class_, proto,
-                                                allocKind, SingletonObject, 0);
-  return obj ? &obj->as<T>() : nullptr;
-}
-
 inline JSObject* NewObjectWithGivenProto(
     JSContext* cx, const JSClass* clasp, HandleObject proto,
     gc::AllocKind allocKind, NewObjectKind newKind = GenericObject) {
@@ -463,22 +448,9 @@ inline JSObject* NewTenuredObjectWithGivenProto(JSContext* cx,
                                                       AsTaggedProto(proto));
 }
 
-inline JSObject* NewSingletonObjectWithGivenProto(JSContext* cx,
-                                                  const JSClass* clasp,
-                                                  HandleObject proto) {
-  return NewObjectWithGivenTaggedProto<SingletonObject>(cx, clasp,
-                                                        AsTaggedProto(proto));
-}
-
 template <typename T>
 inline T* NewObjectWithGivenProto(JSContext* cx, HandleObject proto) {
   return detail::NewObjectWithGivenTaggedProtoForKind<T, GenericObject>(
-      cx, AsTaggedProto(proto));
-}
-
-template <typename T>
-inline T* NewSingletonObjectWithGivenProto(JSContext* cx, HandleObject proto) {
-  return detail::NewObjectWithGivenTaggedProtoForKind<T, SingletonObject>(
       cx, AsTaggedProto(proto));
 }
 

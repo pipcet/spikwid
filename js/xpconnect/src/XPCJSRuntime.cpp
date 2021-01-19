@@ -53,6 +53,7 @@
 #include "js/MemoryMetrics.h"
 #include "js/Object.h"  // JS::GetClass
 #include "js/Stream.h"  // JS::AbortSignalIsAborted, JS::InitPipeToHandling
+#include "js/SliceBudget.h"
 #include "js/UbiNode.h"
 #include "js/UbiNodeUtils.h"
 #include "js/friend/UsageStatistics.h"  // JS_TELEMETRY_*, JS_SetAccumulateTelemetryCallback
@@ -145,7 +146,7 @@ const char* const XPCJSRuntime::mStrings[] = {
 class AsyncFreeSnowWhite : public Runnable {
  public:
   NS_IMETHOD Run() override {
-    AUTO_PROFILER_LABEL("AsyncFreeSnowWhite::Run", GCCC);
+    AUTO_PROFILER_LABEL("AsyncFreeSnowWhite::Run", GCCC_FreeSnowWhite);
 
     TimeStamp start = TimeStamp::Now();
     // 2 ms budget, given that kICCSliceBudget is only 3 ms
@@ -1422,9 +1423,6 @@ static void ReportZoneStats(const JS::ZoneStats& zStats,
                  zStats.regExpSharedsMallocHeap,
                  "Shared compiled regexp data.");
 
-  ZRREPORT_BYTES(pathPrefix + "type-pool"_ns, zStats.typePool,
-                 "Type sets and related data.");
-
   ZRREPORT_BYTES(pathPrefix + "regexp-zone"_ns, zStats.regexpZone,
                  "The regexp zone and regexp data.");
 
@@ -1784,19 +1782,7 @@ static void ReportRealmStats(const JS::RealmStats& realmStats,
                  "The IonMonkey JIT's compilation data (IonScripts).");
 
   ZRREPORT_BYTES(realmJSPathPrefix + "jit-scripts"_ns, realmStats.jitScripts,
-                 "JIT and Type Inference data associated with scripts.");
-
-  ZRREPORT_BYTES(realmJSPathPrefix + "type-inference/allocation-site-tables"_ns,
-                 realmStats.typeInferenceAllocationSiteTables,
-                 "Tables of type objects associated with allocation sites.");
-
-  ZRREPORT_BYTES(realmJSPathPrefix + "type-inference/array-type-tables"_ns,
-                 realmStats.typeInferenceArrayTypeTables,
-                 "Tables of type objects associated with array literals.");
-
-  ZRREPORT_BYTES(realmJSPathPrefix + "type-inference/object-type-tables"_ns,
-                 realmStats.typeInferenceObjectTypeTables,
-                 "Tables of type objects associated with object literals.");
+                 "JIT data associated with scripts.");
 
   ZRREPORT_BYTES(realmJSPathPrefix + "realm-object"_ns, realmStats.realmObject,
                  "The JS::Realm object itself.");
@@ -2665,6 +2651,9 @@ static void SetUseCounterCallback(JSObject* obj, JSUseCounter counter) {
       break;
     case JSUseCounter::WASM:
       SetUseCounter(obj, eUseCounter_custom_JS_wasm);
+      break;
+    case JSUseCounter::WASM_DUPLICATE_IMPORTS:
+      SetUseCounter(obj, eUseCounter_custom_JS_wasm_duplicate_imports);
       break;
     default:
       MOZ_ASSERT_UNREACHABLE("Unexpected JSUseCounter id");

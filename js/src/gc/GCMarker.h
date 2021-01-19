@@ -257,13 +257,15 @@ enum MarkingState : uint8_t {
   IterativeMarking
 };
 
-class GCMarker : public JSTracer {
+class GCMarker final : public JSTracer {
  public:
   explicit GCMarker(JSRuntime* rt);
   MOZ_MUST_USE bool init(JSGCMode gcMode);
 
   void setMaxCapacity(size_t maxCap) { stack.setMaxCapacity(maxCap); }
   size_t maxCapacity() const { return stack.maxCapacity(); }
+
+  bool isActive() const { return state != MarkingState::NotActive; }
 
   void start();
   void stop();
@@ -289,6 +291,15 @@ class GCMarker : public JSTracer {
   void traverseStringEdge(S source, JSString* target) {
     traverseEdge(source, target);
   }
+
+  template <typename S, typename T>
+  void checkTraversedEdge(S source, T* target);
+
+#ifdef DEBUG
+  // We can't check atom marking if the helper thread lock is already held by
+  // the current thread. This allows us to disable the check.
+  void setCheckAtomMarking(bool check);
+#endif
 
   /*
    * Care must be taken changing the mark color from gray to black. The cycle
@@ -500,6 +511,12 @@ class GCMarker : public JSTracer {
 
   /* Assert that start and stop are called with correct ordering. */
   MainThreadOrGCTaskData<bool> started;
+
+  /*
+   * Whether to check that atoms traversed are present in atom marking
+   * bitmap.
+   */
+  MainThreadOrGCTaskData<bool> checkAtomMarking;
 
   /* The test marking queue might want to be marking a particular color. */
   mozilla::Maybe<js::gc::MarkColor> queueMarkColor;

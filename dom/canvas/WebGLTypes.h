@@ -12,13 +12,19 @@
 #include <vector>
 
 #include "GLDefs.h"
+#include "ImageContainer.h"
 #include "mozilla/Casting.h"
 #include "mozilla/CheckedInt.h"
+#include "mozilla/MathAlgorithms.h"
 #include "mozilla/Range.h"
 #include "mozilla/RefCounted.h"
+#include "mozilla/ResultVariant.h"
+#include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/BuildConstants.h"
 #include "mozilla/gfx/Point.h"
+#include "mozilla/gfx/Rect.h"
 #include "mozilla/ipc/Shmem.h"
+#include "mozilla/layers/LayersSurfaces.h"
 #include "gfxTypes.h"
 
 #include "nsTArray.h"
@@ -293,6 +299,8 @@ class UniqueBuffer {
 namespace webgl {
 struct FormatUsageInfo;
 
+static constexpr GLenum kErrorPerfWarning = 0x10001;
+
 struct SampleableInfo final {
   const char* incompleteReason = nullptr;
   uint32_t levels = 0;
@@ -378,8 +386,10 @@ struct WebGLContextOptions {
 
 // -
 
-template <typename T>
+template <typename _T>
 struct avec2 {
+  using T = _T;
+
   T x = T();
   T y = T();
 
@@ -405,10 +415,55 @@ struct avec2 {
 
   bool operator==(const avec2& rhs) const { return x == rhs.x && y == rhs.y; }
   bool operator!=(const avec2& rhs) const { return !(*this == rhs); }
+
+#define _(OP)                                 \
+  avec2 operator OP(const avec2& rhs) const { \
+    return {x OP rhs.x, y OP rhs.y};          \
+  }                                           \
+  avec2 operator OP(const T rhs) const { return {x OP rhs, y OP rhs}; }
+
+  _(+)
+  _(-)
+  _(*)
+  _(/)
+
+#undef _
+
+  avec2 Clamp(const avec2& min, const avec2& max) const {
+    return {mozilla::Clamp(x, min.x, max.x), mozilla::Clamp(y, min.y, max.y)};
+  }
+
+  // mozilla::Clamp doesn't work on floats, so be clear that this is a min+max
+  // helper.
+  avec2 ClampMinMax(const avec2& min, const avec2& max) const {
+    const auto ClampScalar = [](const T v, const T min, const T max) {
+      return std::max(min, std::min(v, max));
+    };
+    return {ClampScalar(x, min.x, max.x), ClampScalar(y, min.y, max.y)};
+  }
+
+  template <typename U>
+  U StaticCast() const {
+    return {static_cast<typename U::T>(x), static_cast<typename U::T>(y)};
+  }
 };
 
 template <typename T>
+avec2<T> MinExtents(const avec2<T>& a, const avec2<T>& b) {
+  return {std::min(a.x, b.x), std::min(a.y, b.y)};
+}
+
+template <typename T>
+avec2<T> MaxExtents(const avec2<T>& a, const avec2<T>& b) {
+  return {std::max(a.x, b.x), std::max(a.y, b.y)};
+}
+
+// -
+
+template <typename _T>
 struct avec3 {
+  using T = _T;
+
   T x = T();
   T y = T();
   T z = T();
@@ -440,6 +495,8 @@ typedef avec2<int32_t> ivec2;
 typedef avec3<int32_t> ivec3;
 typedef avec2<uint32_t> uvec2;
 typedef avec3<uint32_t> uvec3;
+
+inline ivec2 AsVec(const gfx::IntSize& s) { return {s.width, s.height}; }
 
 // -
 
@@ -482,11 +539,16 @@ struct ReadPixelsDesc final {
   PixelPackState packState;
 };
 
-class ExtensionBits final {
+// -
+
+template <typename E>
+class EnumMask {
+ public:
   uint64_t mBits = 0;
 
+ private:
   struct BitRef final {
-    ExtensionBits& bits;
+    EnumMask& bits;
     const uint64_t mask;
 
     explicit operator bool() const { return bits.mBits & mask; }
@@ -501,14 +563,16 @@ class ExtensionBits final {
     }
   };
 
-  uint64_t Mask(const WebGLExtensionID i) const {
+  uint64_t Mask(const E i) const {
     return uint64_t{1} << static_cast<uint64_t>(i);
   }
 
  public:
-  BitRef operator[](const WebGLExtensionID i) { return {*this, Mask(i)}; }
-  bool operator[](const WebGLExtensionID i) const { return mBits & Mask(i); }
+  BitRef operator[](const E i) { return {*this, Mask(i)}; }
+  bool operator[](const E i) const { return mBits & Mask(i); }
 };
+
+class ExtensionBits : public EnumMask<WebGLExtensionID> {};
 
 // -
 
@@ -568,6 +632,7 @@ struct InitContextResult final {
   std::string error;
   WebGLContextOptions options;
   webgl::Limits limits;
+  EnumMask<layers::SurfaceDescriptor::Type> uploadableSdTypes;
 };
 
 // -
@@ -916,9 +981,8 @@ struct WebGLPixelStore final {
   void Apply(gl::GLContext&, bool isWebgl2, const uvec3& uploadSize) const;
   bool AssertCurrent(gl::GLContext&, bool isWebgl2) const;
 
-  WebGLPixelStore ForUseWith(
-      const GLenum target, const uvec3& uploadSize,
-      const Maybe<gfx::IntSize>& structuredSrcSize) const {
+  WebGLPixelStore ForUseWith(const GLenum target, const uvec3& uploadSize,
+                             const Maybe<uvec2>& structuredSrcSize) const {
     auto ret = *this;
 
     if (!IsTexTarget3D(target)) {
@@ -927,7 +991,7 @@ struct WebGLPixelStore final {
     }
 
     if (structuredSrcSize) {
-      ret.mUnpackRowLength = structuredSrcSize->width;
+      ret.mUnpackRowLength = structuredSrcSize->x;
     }
 
     if (!ret.mUnpackRowLength) {
@@ -989,8 +1053,11 @@ struct TexUnpackBlobDesc final {
 
   Maybe<RawBuffer<>> cpuData;
   Maybe<uint64_t> pboOffset;
+
+  uvec2 imageSize;
   RefPtr<layers::Image> image;
-  RefPtr<gfx::DataSourceSurface> surf;
+  Maybe<layers::SurfaceDescriptor> sd;
+  RefPtr<gfx::DataSourceSurface> dataSurf;
 
   WebGLPixelStore unpacking;
 

@@ -556,7 +556,7 @@ static AspectRatio ComputeIntrinsicRatio(imgIContainer* aImage,
     if (ratio.auto_ && ratio.HasRatio()) {
       // Return the mapped intrinsic aspect ratio stored in
       // nsStylePosition::mAspectRatio.
-      return ratio.ratio.AsRatio().ToLayoutRatio();
+      return ratio.ratio.AsRatio().ToLayoutRatio(UseBoxSizing::Yes);
     }
   }
   if (aFrame.ShouldShowBrokenImageIcon()) {
@@ -2457,8 +2457,7 @@ void nsImageFrame::List(FILE* out, const char* aPrefix,
 }
 #endif
 
-nsIFrame::LogicalSides nsImageFrame::GetLogicalSkipSides(
-    const Maybe<SkipSidesDuringReflow>&) const {
+LogicalSides nsImageFrame::GetLogicalSkipSides() const {
   LogicalSides skip(mWritingMode);
   if (MOZ_UNLIKELY(StyleBorder()->mBoxDecorationBreak ==
                    StyleBoxDecorationBreak::Clone)) {

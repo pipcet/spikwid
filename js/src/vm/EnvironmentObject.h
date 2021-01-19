@@ -256,8 +256,6 @@ extern PropertyName* EnvironmentCoordinateNameSlow(JSScript* script,
  */
 // clang-format on
 
-enum class IsSingletonEnv { Yes, No };
-
 class EnvironmentObject : public NativeObject {
  protected:
   // The enclosing environment. Either another EnvironmentObject, a
@@ -346,6 +344,12 @@ class CallObject : public EnvironmentObject {
   static CallObject* create(JSContext* cx, AbstractFramePtr frame);
 
   static CallObject* createHollowForDebug(JSContext* cx, HandleFunction callee);
+
+  // If `env` or any enclosing environment is a CallObject, return that
+  // CallObject; else null.
+  //
+  // `env` may be a DebugEnvironmentProxy, but not a hollow environment.
+  static CallObject* find(JSObject* env);
 
   /*
    * When an aliased formal (var accessed by nested closures) is also
@@ -519,9 +523,10 @@ class LexicalEnvironmentObject : public EnvironmentObject {
   static constexpr uint32_t BASESHAPE_FLAGS = BaseShape::NOT_EXTENSIBLE;
 
  private:
-  static LexicalEnvironmentObject* createTemplateObject(
-      JSContext* cx, HandleShape shape, HandleObject enclosing,
-      gc::InitialHeap heap, IsSingletonEnv isSingleton);
+  static LexicalEnvironmentObject* createTemplateObject(JSContext* cx,
+                                                        HandleShape shape,
+                                                        HandleObject enclosing,
+                                                        gc::InitialHeap heap);
 
   void initThisObject(JSObject* obj) {
     MOZ_ASSERT(isGlobal() || !isSyntactic());

@@ -14,18 +14,25 @@ export class _CustomizeMenu extends React.PureComponent {
       <div className="customize-menu">
         <button
           onClick={this.props.onClose}
-          className="button done close-button"
-        >
-          Done
-        </button>
+          className="close-button"
+          data-l10n-id="newtab-custom-close-button"
+        />
         <ThemesSection />
         <BackgroundsSection />
-        <ContentSection />
+        <ContentSection
+          openPreferences={this.props.openPreferences}
+          setPref={this.props.setPref}
+          enabledSections={this.props.enabledSections}
+          pocketRegion={this.props.pocketRegion}
+          mayHaveSponsoredTopSites={this.props.mayHaveSponsoredTopSites}
+          mayHaveSponsoredStories={this.props.DiscoveryStream.config.show_spocs}
+          dispatch={this.props.dispatch}
+        />
       </div>
     );
   }
 }
 
-export const CustomizeMenu = connect(state => state.CustomizeMenu)(
-  _CustomizeMenu
-);
+export const CustomizeMenu = connect(state => ({
+  DiscoveryStream: state.DiscoveryStream,
+}))(_CustomizeMenu);

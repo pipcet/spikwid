@@ -28,6 +28,8 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.jsm",
   PlacesUIUtils: "resource:///modules/PlacesUIUtils.jsm",
   PlacesUtils: "resource://gre/modules/PlacesUtils.jsm",
+  SearchSuggestionController:
+    "resource://gre/modules/SearchSuggestionController.jsm",
   Services: "resource://gre/modules/Services.jsm",
   UrlbarPrefs: "resource:///modules/UrlbarPrefs.jsm",
   UrlbarProvidersManager: "resource:///modules/UrlbarProvidersManager.jsm",
@@ -160,18 +162,6 @@ var UrlbarUtils = {
     SUGGESTED: 2,
   },
 
-  // "Keyword offers" are search results with keywords that enter search mode
-  // when the user picks them.  Depending on the use case, a keyword offer can
-  // visually show or hide the keyword itself in its result.  For example,
-  // typing "@" by itself will show keyword offers for all engines with @
-  // aliases, and those results will preview their search modes. When a keyword
-  // offer is a heuristic -- like an autofilled @  alias -- usually it hides
-  // its keyword since the user is already typing it.
-  KEYWORD_OFFER: {
-    SHOW: 1,
-    HIDE: 2,
-  },
-
   // UnifiedComplete's autocomplete results store their titles and tags together
   // in their comments.  This separator is used to separate them.  When we
   // rewrite UnifiedComplete for quantumbar, we should stop using this old hack
@@ -293,8 +283,7 @@ var UrlbarUtils = {
       return { url, postData, mayInheritPrincipal };
     }
 
-    await Services.search.init();
-    let engine = Services.search.getEngineByAlias(keyword);
+    let engine = await Services.search.getEngineByAlias(keyword);
     if (engine) {
       let submission = engine.getSubmission(param, null, "keyword");
       return {
@@ -385,7 +374,10 @@ var UrlbarUtils = {
    *          The array is sorted by match indexes ascending.
    */
   getTokenMatches(tokens, str, highlightType) {
-    str = str.toLocaleLowerCase();
+    // Only search a portion of the string, because not more than a certain
+    // amount of characters are visible in the UI, matching over what is visible
+    // would be expensive and pointless.
+    str = str.substring(0, UrlbarUtils.MAX_TEXT_LENGTH).toLocaleLowerCase();
     // To generate non-overlapping ranges, we start from a 0-filled array with
     // the same length of the string, and use it as a collision marker, setting
     // 1 where the text should be highlighted.
@@ -584,10 +576,6 @@ var UrlbarUtils = {
    *   setSearchMode documentation for details.
    */
   searchModeForToken(token) {
-    if (!UrlbarPrefs.get("update2")) {
-      return null;
-    }
-
     if (token == UrlbarTokenizer.RESTRICT.SEARCH) {
       return {
         engineName: UrlbarSearchUtils.getDefaultEngine(this.isPrivate).name,
@@ -852,7 +840,8 @@ var UrlbarUtils = {
     if (!searchString) {
       throw new Error("Must pass a non-null search string");
     }
-    let context = new UrlbarQueryContext({
+
+    let options = {
       allowAutofill: false,
       isPrivate: PrivateBrowsingUtils.isWindowPrivate(window),
       maxResults: 1,
@@ -862,7 +851,15 @@ var UrlbarUtils = {
       ),
       allowSearchSuggestions: false,
       providers: ["UnifiedComplete", "HeuristicFallback"],
-    });
+    };
+    if (window.gURLBar.searchMode) {
+      let searchMode = window.gURLBar.searchMode;
+      options.searchMode = searchMode;
+      if (searchMode.source) {
+        options.sources = [searchMode.source];
+      }
+    }
+    let context = new UrlbarQueryContext(options);
     await UrlbarProvidersManager.startQuery(context);
     if (!context.heuristicResult) {
       throw new Error("There should always be an heuristic result");
@@ -925,7 +922,13 @@ var UrlbarUtils = {
     // If the user types a search engine alias without a search string,
     // we have an empty search string and we can't bump it.
     // We also don't want to add history in private browsing mode.
-    if (!value || input.isPrivate) {
+    // Finally we don't want to store extremely long strings that would not be
+    // particularly useful to the user.
+    if (
+      !value ||
+      input.isPrivate ||
+      value.length > SearchSuggestionController.SEARCH_HISTORY_MAX_VALUE_LENGTH
+    ) {
       return Promise.resolve();
     }
     return new Promise((resolve, reject) => {
@@ -999,94 +1002,6 @@ var UrlbarUtils = {
     }
     return "unknown";
   },
-
-  /**
-   * Decodes the given URI for displaying it in the address bar without losing
-   * information, such that hitting Enter again will load the same URI.
-   *
-   * @param {nsIURI} aURI
-   *   The URI to decode
-   * @returns {string}
-   *   The decoded URI string
-   */
-  losslessDecodeURI(aURI) {
-    const scheme = aURI.scheme;
-    let value = aURI.displaySpec;
-
-    // Try to decode as UTF-8 if there's no encoding sequence that we would break.
-    if (!/%25(?:3B|2F|3F|3A|40|26|3D|2B|24|2C|23)/i.test(value)) {
-      let decodeASCIIOnly = !["https", "http", "file", "ftp"].includes(scheme);
-      if (decodeASCIIOnly) {
-        // This only decodes ascii characters (hex) 20-7e, except 25 (%).
-        // This avoids both cases stipulated below (%-related issues, and \r, \n
-        // and \t, which would be %0d, %0a and %09, respectively) as well as any
-        // non-US-ascii characters.
-        value = value.replace(
-          /%(2[0-4]|2[6-9a-f]|[3-6][0-9a-f]|7[0-9a-e])/g,
-          decodeURI
-        );
-      } else {
-        try {
-          value = decodeURI(value)
-            // decodeURI decodes %25 to %, which creates unintended encoding
-            // sequences. Re-encode it, unless it's part of a sequence that
-            // survived decodeURI, i.e. one for:
-            // ';', '/', '?', ':', '@', '&', '=', '+', '$', ',', '#'
-            // (RFC 3987 section 3.2)
-            .replace(
-              /%(?!3B|2F|3F|3A|40|26|3D|2B|24|2C|23)/gi,
-              encodeURIComponent
-            );
-        } catch (e) {}
-      }
-    }
-
-    // Encode potentially invisible characters:
-    //   U+0000-001F: C0/C1 control characters
-    //   U+007F-009F: commands
-    //   U+00A0, U+1680, U+2000-200A, U+202F, U+205F, U+3000: other spaces
-    //   U+2028-2029: line and paragraph separators
-    //   U+2800: braille empty pattern
-    //   U+FFFC: object replacement character
-    // Encode any trailing whitespace that may be part of a pasted URL, so that it
-    // doesn't get eaten away by the location bar (bug 410726).
-    // Encode all adjacent space chars (U+0020), to prevent spoofing attempts
-    // where they would push part of the URL to overflow the location bar
-    // (bug 1395508). A single space, or the last space if the are many, is
-    // preserved to maintain readability of certain urls. We only do this for the
-    // common space, because others may be eaten when copied to the clipboard, so
-    // it's safer to preserve them encoded.
-    value = value.replace(
-      // eslint-disable-next-line no-control-regex
-      /[\u0000-\u001f\u007f-\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u2800\u3000\ufffc]|[\r\n\t]|\u0020(?=\u0020)|\s$/g,
-      encodeURIComponent
-    );
-
-    // Encode characters that are ignorable, can't be rendered usefully, or may
-    // confuse users.
-    //
-    // Default ignorable characters; ZWNJ (U+200C) and ZWJ (U+200D) are excluded
-    // per bug 582186:
-    //   U+00AD, U+034F, U+06DD, U+070F, U+115F-1160, U+17B4, U+17B5, U+180B-180E,
-    //   U+2060, U+FEFF, U+200B, U+2060-206F, U+3164, U+FE00-FE0F, U+FFA0,
-    //   U+FFF0-FFFB, U+1D173-1D17A (U+D834 + DD73-DD7A),
-    //   U+E0000-E0FFF (U+DB40-DB43 + U+DC00-DFFF)
-    // Bidi control characters (RFC 3987 sections 3.2 and 4.1 paragraph 6):
-    //   U+061C, U+200E, U+200F, U+202A-202E, U+2066-2069
-    // Other format characters in the Cf category that are unlikely to be rendered
-    // usefully:
-    //   U+0600-0605, U+08E2, U+110BD (U+D804 + U+DCBD),
-    //   U+110CD (U+D804 + U+DCCD), U+13430-13438 (U+D80D + U+DC30-DC38),
-    //   U+1BCA0-1BCA3 (U+D82F + U+DCA0-DCA3)
-    // Mimicking UI parts:
-    //   U+1F50F-1F513 (U+D83D + U+DD0F-DD13), U+1F6E1 (U+D83D + U+DEE1)
-    value = value.replace(
-      // eslint-disable-next-line no-misleading-character-class
-      /[\u00ad\u034f\u061c\u06dd\u070f\u115f\u1160\u17b4\u17b5\u180b-\u180e\u200b\u200e\u200f\u202a-\u202e\u2060-\u206f\u3164\u0600-\u0605\u08e2\ufe00-\ufe0f\ufeff\uffa0\ufff0-\ufffb]|\ud804[\udcbd\udccd]|\ud80d[\udc30-\udc38]|\ud82f[\udca0-\udca3]|\ud834[\udd73-\udd7a]|[\udb40-\udb43][\udc00-\udfff]|\ud83d[\udd0f-\udd13\udee1]/g,
-      encodeURIComponent
-    );
-    return value;
-  },
 };
 
 XPCOMUtils.defineLazyGetter(UrlbarUtils.ICON, "DEFAULT", () => {
@@ -1149,11 +1064,11 @@ UrlbarUtils.RESULT_PAYLOAD_SCHEMA = {
       keyword: {
         type: "string",
       },
-      keywordOffer: {
-        type: "number", // UrlbarUtils.KEYWORD_OFFER
-      },
       lowerCaseSuggestion: {
         type: "string",
+      },
+      providesSearchMode: {
+        type: "boolean",
       },
       query: {
         type: "string",
@@ -1356,6 +1271,12 @@ UrlbarUtils.RESULT_PAYLOAD_SCHEMA = {
     properties: {
       dynamicType: {
         type: "string",
+      },
+      // If `shouldNavigate` is `true` and the payload contains a `url`
+      // property, when the result is selected the browser will navigate to the
+      // `url`.
+      shouldNavigate: {
+        type: "boolean",
       },
     },
   },
@@ -1703,6 +1624,12 @@ class UrlbarProvider {
    *
    * @param {UrlbarResult} result
    *   The result whose view will be updated.
+   * @param {Map} idsByName
+   *   A Map from an element's name, as defined by the provider; to its ID in
+   *   the DOM, as defined by the browser. The browser manages element IDs for
+   *   dynamic results to prevent collisions. However, a provider may need to
+   *   access the IDs of the elements created for its results. For example, to
+   *   set various `aria` attributes.
    * @returns {object}
    *   A view update object as described above.  The names of properties are the
    *   the names of elements declared in the view template.  The values of
@@ -1712,7 +1639,8 @@ class UrlbarProvider {
    *
    *   {object} [attributes]
    *     A mapping from attribute names to values.  Each name-value pair results
-   *     in an attribute being added to the element.
+   *     in an attribute being added to the element.  The `id` attribute is
+   *     reserved and cannot be set by the provider.
    *   {object} [style]
    *     A plain object that can be used to add inline styles to the element,
    *     like `display: none`.   `element.style` is updated for each name-value
@@ -1723,7 +1651,7 @@ class UrlbarProvider {
    *   {string} [textContent]
    *     A string that will be set as `element.textContent`.
    */
-  getViewUpdate(result) {
+  getViewUpdate(result, idsByName) {
     return null;
   }
 

@@ -19,6 +19,7 @@
 #include "mozilla/IMEStateManager.h"
 #include "mozilla/IntegerPrintfMacros.h"
 #include "mozilla/PresShell.h"
+#include "mozilla/StaticAnalysisFunctions.h"
 #include "mozilla/StaticPrefs_layout.h"
 #include "nsCaret.h"
 #include "nsContainerFrame.h"
@@ -29,6 +30,9 @@
 #include "nsFrameSelection.h"
 #include "nsGenericHTMLElement.h"
 #include "nsIHapticFeedback.h"
+#include "nsIScrollableFrame.h"
+#include "nsLayoutUtils.h"
+#include "nsServiceManagerUtils.h"
 
 namespace mozilla {
 
@@ -112,7 +116,8 @@ nsresult AccessibleCaretManager::OnSelectionChanged(Document* aDoc,
   }
 
   // Move the cursor by JavaScript or unknown internal call.
-  if (aReason == nsISelectionListener::NO_REASON) {
+  if (aReason == nsISelectionListener::NO_REASON ||
+      aReason == nsISelectionListener::JS_REASON) {
     auto mode = static_cast<ScriptUpdateMode>(
         StaticPrefs::layout_accessiblecaret_script_change_update_mode());
     if (mode == kScriptAlwaysShow || (mode == kScriptUpdateVisible &&
@@ -627,7 +632,8 @@ nsresult AccessibleCaretManager::SelectWordOrShortcut(const nsPoint& aPoint) {
       if (theFrame && theFrame != ptFrame) {
         SetSelectionDragState(true);
         frameSelection->HandleClick(
-            offsets.content, offsets.StartOffset(), offsets.EndOffset(),
+            MOZ_KnownLive(offsets.content) /* bug 1636889 */,
+            offsets.StartOffset(), offsets.EndOffset(),
             nsFrameSelection::FocusMode::kCollapseToNewPoint,
             offsets.associate);
         SetSelectionDragState(false);
@@ -677,10 +683,6 @@ void AccessibleCaretManager::OnScrollStart() {
 }
 
 void AccessibleCaretManager::OnScrollEnd() {
-  if (mLastUpdateCaretMode != GetCaretMode()) {
-    return;
-  }
-
   AutoRestore<bool> saveAllowFlushingLayout(mAllowFlushingLayout);
   mAllowFlushingLayout = false;
 
@@ -712,10 +714,6 @@ void AccessibleCaretManager::OnScrollEnd() {
 }
 
 void AccessibleCaretManager::OnScrollPositionChanged() {
-  if (mLastUpdateCaretMode != GetCaretMode()) {
-    return;
-  }
-
   AutoRestore<bool> saveAllowFlushingLayout(mAllowFlushingLayout);
   mAllowFlushingLayout = false;
 
@@ -740,10 +738,6 @@ void AccessibleCaretManager::OnScrollPositionChanged() {
 }
 
 void AccessibleCaretManager::OnReflow() {
-  if (mLastUpdateCaretMode != GetCaretMode()) {
-    return;
-  }
-
   AutoRestore<bool> saveAllowFlushingLayout(mAllowFlushingLayout);
   mAllowFlushingLayout = false;
 
@@ -843,17 +837,17 @@ Element* AccessibleCaretManager::GetEditingHostForFrame(
 }
 
 AccessibleCaretManager::CaretMode AccessibleCaretManager::GetCaretMode() const {
-  Selection* selection = GetSelection();
+  const Selection* selection = GetSelection();
   if (!selection) {
     return CaretMode::None;
   }
 
-  uint32_t rangeCount = selection->RangeCount();
+  const uint32_t rangeCount = selection->RangeCount();
   if (rangeCount <= 0) {
     return CaretMode::None;
   }
 
-  nsFocusManager* fm = nsFocusManager::GetFocusManager();
+  const nsFocusManager* fm = nsFocusManager::GetFocusManager();
   MOZ_ASSERT(fm);
   if (fm->GetFocusedWindow() != mPresShell->GetDocument()->GetWindow()) {
     // Hide carets if the window is not focused.
@@ -872,7 +866,7 @@ nsIFrame* AccessibleCaretManager::GetFocusableFrame(nsIFrame* aFrame) const {
   // Look for the nearest enclosing focusable frame.
   nsIFrame* focusableFrame = aFrame;
   while (focusableFrame) {
-    if (focusableFrame->IsFocusable(nullptr, true)) {
+    if (focusableFrame->IsFocusable(/* aWithMouse = */ true)) {
       break;
     }
     focusableFrame = focusableFrame->GetParent();
@@ -882,7 +876,7 @@ nsIFrame* AccessibleCaretManager::GetFocusableFrame(nsIFrame* aFrame) const {
 
 void AccessibleCaretManager::ChangeFocusToOrClearOldFocus(
     nsIFrame* aFrame) const {
-  nsFocusManager* fm = nsFocusManager::GetFocusManager();
+  RefPtr<nsFocusManager> fm = nsFocusManager::GetFocusManager();
   MOZ_ASSERT(fm);
 
   if (aFrame) {
@@ -901,9 +895,12 @@ void AccessibleCaretManager::ChangeFocusToOrClearOldFocus(
 
 nsresult AccessibleCaretManager::SelectWord(nsIFrame* aFrame,
                                             const nsPoint& aPoint) const {
+  AC_LOGV("%s", __FUNCTION__);
+
   SetSelectionDragState(true);
-  nsresult rs = aFrame->SelectByTypeAtPoint(
-      mPresShell->GetPresContext(), aPoint, eSelectWord, eSelectWord, 0);
+  const RefPtr<nsPresContext> pinnedPresContext{mPresShell->GetPresContext()};
+  nsresult rs = aFrame->SelectByTypeAtPoint(pinnedPresContext, aPoint,
+                                            eSelectWord, eSelectWord, 0);
 
   SetSelectionDragState(false);
   ClearMaintainedSelection();
@@ -1257,8 +1254,9 @@ nsresult AccessibleCaretManager::DragCaretInternal(const nsPoint& aPoint) {
       (GetCaretMode() == CaretMode::Selection)
           ? nsFrameSelection::FocusMode::kExtendSelection
           : nsFrameSelection::FocusMode::kCollapseToNewPoint;
-  fs->HandleClick(offsets.content, offsets.StartOffset(), offsets.EndOffset(),
-                  focusMode, offsets.associate);
+  fs->HandleClick(MOZ_KnownLive(offsets.content) /* bug 1636889 */,
+                  offsets.StartOffset(), offsets.EndOffset(), focusMode,
+                  offsets.associate);
   return NS_OK;
 }
 

@@ -11,6 +11,7 @@
 #include "ActiveLayerTracker.h"
 #include "base/compiler_specific.h"
 #include "DisplayItemClip.h"
+#include "Layers.h"
 #include "nsCOMPtr.h"
 #include "nsIContentViewer.h"
 #include "nsPresContext.h"
@@ -44,6 +45,7 @@
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/PresShell.h"
+#include "mozilla/ScopeExit.h"
 #include "mozilla/ScrollbarPreferences.h"
 #include "mozilla/SVGOuterSVGFrame.h"
 #include "mozilla/ViewportUtils.h"
@@ -4403,11 +4405,6 @@ Maybe<ScrollMetadata> ScrollFrameHelper::ComputeScrollMetadata(
     return Nothing();
   }
 
-  if (!nsLayoutUtils::UsesAsyncScrolling(mOuter)) {
-    // Return early, since if we don't use APZ we don't need FrameMetrics.
-    return Nothing();
-  }
-
   Maybe<nsRect> parentLayerClip;
   if (aClip && mAddClipRectToLayer) {
     parentLayerClip = Some(aClip->GetClipRect());
@@ -6250,27 +6247,31 @@ class MOZ_RAII AutoMinimumScaleSizeChangeDetector final {
 };
 
 nsSize ScrollFrameHelper::TrueOuterSize(nsDisplayListBuilder* aBuilder) const {
-  if (RefPtr<MobileViewportManager> manager =
-          mOuter->PresShell()->GetMobileViewportManager()) {
-    LayoutDeviceIntSize displaySize = manager->DisplaySize();
-
-    MOZ_ASSERT(aBuilder);
-    // In case of WebRender, we expand the outer size to include the dynamic
-    // toolbar area here.
-    // In case of non WebRender, we expand the size dynamically in
-    // MoveScrollbarForLayerMargin in AsyncCompositionManager.cpp.
-    LayerManager* layerManager = aBuilder->GetWidgetLayerManager();
-    if (layerManager &&
-        layerManager->GetBackendType() == layers::LayersBackend::LAYERS_WR) {
-      displaySize.height += ViewAs<LayoutDevicePixel>(
-          mOuter->PresContext()->GetDynamicToolbarMaxHeight(),
-          PixelCastJustification::LayoutDeviceIsScreenForBounds);
-    }
-
-    return LayoutDeviceSize::ToAppUnits(
-        displaySize, mOuter->PresContext()->AppUnitsPerDevPixel());
+  if (!mOuter->PresShell()->UsesMobileViewportSizing()) {
+    return mOuter->GetSize();
   }
-  return mOuter->GetSize();
+
+  RefPtr<MobileViewportManager> manager =
+      mOuter->PresShell()->GetMobileViewportManager();
+  MOZ_ASSERT(manager);
+
+  LayoutDeviceIntSize displaySize = manager->DisplaySize();
+
+  MOZ_ASSERT(aBuilder);
+  // In case of WebRender, we expand the outer size to include the dynamic
+  // toolbar area here.
+  // In case of non WebRender, we expand the size dynamically in
+  // MoveScrollbarForLayerMargin in AsyncCompositionManager.cpp.
+  LayerManager* layerManager = aBuilder->GetWidgetLayerManager();
+  if (layerManager &&
+      layerManager->GetBackendType() == layers::LayersBackend::LAYERS_WR) {
+    displaySize.height += ViewAs<LayoutDevicePixel>(
+        mOuter->PresContext()->GetDynamicToolbarMaxHeight(),
+        PixelCastJustification::LayoutDeviceIsScreenForBounds);
+  }
+
+  return LayoutDeviceSize::ToAppUnits(
+      displaySize, mOuter->PresContext()->AppUnitsPerDevPixel());
 }
 
 void ScrollFrameHelper::UpdateMinimumScaleSize(

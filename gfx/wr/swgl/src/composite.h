@@ -32,8 +32,7 @@ static NO_INLINE void scale_blit(Texture& srctex, const IntRect& srcReq,
   // Limit dest sampling bounds to overlap source bounds
   dstBounds.intersect(srcBounds);
   // Compute the clipped bounds, relative to dstBounds.
-  IntRect clippedDest = dstBounds.intersection(clipRect);
-  clippedDest.offset(-dstBounds.x0, -dstBounds.y0);
+  IntRect clippedDest = dstBounds.intersection(clipRect) - dstBounds.origin();
   // Check if clipped sampling bounds are empty
   if (clippedDest.is_empty()) {
     return;
@@ -60,8 +59,7 @@ static NO_INLINE void scale_blit(Texture& srctex, const IntRect& srcReq,
   src += bpp * (fracX / dstWidth);
   fracY %= dstHeight;
   fracX %= dstWidth;
-  for (int rows = clippedDest.height(); rows > 0;
-       rows--) {
+  for (int rows = clippedDest.height(); rows > 0; rows--) {
     if (srcWidth == dstWidth) {
       // No scaling, so just do a fast copy.
       memcpy(dest, src, span * bpp);
@@ -69,13 +67,16 @@ static NO_INLINE void scale_blit(Texture& srctex, const IntRect& srcReq,
       // Do scaling with different source and dest widths.
       switch (bpp) {
         case 1:
-          scale_row((uint8_t*)dest, dstWidth, (uint8_t*)src, srcWidth, span, fracX);
+          scale_row((uint8_t*)dest, dstWidth, (uint8_t*)src, srcWidth, span,
+                    fracX);
           break;
         case 2:
-          scale_row((uint16_t*)dest, dstWidth, (uint16_t*)src, srcWidth, span, fracX);
+          scale_row((uint16_t*)dest, dstWidth, (uint16_t*)src, srcWidth, span,
+                    fracX);
           break;
         case 4:
-          scale_row((uint32_t*)dest, dstWidth, (uint32_t*)src, srcWidth, span, fracX);
+          scale_row((uint32_t*)dest, dstWidth, (uint32_t*)src, srcWidth, span,
+                    fracX);
           break;
         default:
           assert(false);
@@ -175,8 +176,7 @@ static NO_INLINE void linear_blit(Texture& srctex, const IntRect& srcReq,
     destStride = -destStride;
   }
   int span = dstBounds.width();
-  for (int rows = dstBounds.height(); rows > 0;
-       rows--) {
+  for (int rows = dstBounds.height(); rows > 0; rows--) {
     switch (bpp) {
       case 1:
         linear_row_blit((uint8_t*)dest, span, srcUV, srcDUV.x, srcZOffset,
@@ -253,8 +253,7 @@ static NO_INLINE void linear_composite(Texture& srctex, const IntRect& srcReq,
     destStride = -destStride;
   }
   int span = dstBounds.width();
-  for (int rows = dstBounds.height(); rows > 0;
-       rows--) {
+  for (int rows = dstBounds.height(); rows > 0; rows--) {
     linear_row_composite((uint32_t*)dest, span, srcUV, srcDUV.x, &sampler);
     dest += destStride;
     srcUV.y += srcDUV.y;
@@ -289,12 +288,12 @@ void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
   if (invertY) {
     swap(dstY0, dstY1);
   }
-  IntRect srcReq = {srcX0, srcY0, srcX1, srcY1};
-  IntRect dstReq = {dstX0, dstY0, dstX1, dstY1};
-  IntRect clipRect = {0, 0, dstReq.width(), dstReq.height()};
+  IntRect srcReq = IntRect{srcX0, srcY0, srcX1, srcY1} - srctex.offset;
+  IntRect dstReq = IntRect{dstX0, dstY0, dstX1, dstY1} - dsttex.offset;
   if (srcReq.is_empty() || dstReq.is_empty()) {
     return;
   }
+  IntRect clipRect = {0, 0, dstReq.width(), dstReq.height()};
   prepare_texture(srctex);
   prepare_texture(dsttex, &dstReq);
   if (!srcReq.same_size(dstReq) && srctex.width >= 2 && filter == GL_LINEAR &&
@@ -314,6 +313,7 @@ typedef Texture LockedTexture;
 LockedTexture* LockTexture(GLuint texId) {
   Texture& tex = ctx->textures[texId];
   if (!tex.buf) {
+    assert(tex.buf != nullptr);
     return nullptr;
   }
   if (__sync_fetch_and_add(&tex.locked, 1) == 0) {
@@ -329,6 +329,8 @@ LockedTexture* LockFramebuffer(GLuint fboId) {
   // Only allow locking a framebuffer if it has a valid color attachment and
   // only if targeting the first layer.
   if (!fb.color_attachment || fb.layer > 0) {
+    assert(fb.color_attachment != 0);
+    assert(fb.layer == 0);
     return nullptr;
   }
   return LockTexture(fb.color_attachment);
@@ -383,7 +385,8 @@ static void unscaled_row_composite(uint32_t* dest, const uint32_t* src,
 
 static NO_INLINE void unscaled_composite(Texture& srctex, const IntRect& srcReq,
                                          Texture& dsttex, const IntRect& dstReq,
-                                         bool invertY, const IntRect& clipRect) {
+                                         bool invertY,
+                                         const IntRect& clipRect) {
   IntRect bounds = dsttex.sample_bounds(dstReq, invertY);
   bounds.intersect(clipRect);
   bounds.intersect(srctex.sample_bounds(srcReq));
@@ -394,8 +397,7 @@ static NO_INLINE void unscaled_composite(Texture& srctex, const IntRect& srcReq,
   if (invertY) {
     destStride = -destStride;
   }
-  for (int rows = bounds.height(); rows > 0;
-       rows--) {
+  for (int rows = bounds.height(); rows > 0; rows--) {
     unscaled_row_composite((uint32_t*)dest, (const uint32_t*)src,
                            bounds.width());
     dest += destStride;
@@ -411,8 +413,8 @@ static NO_INLINE void unscaled_composite(Texture& srctex, const IntRect& srcReq,
 void Composite(LockedTexture* lockedDst, LockedTexture* lockedSrc, GLint srcX,
                GLint srcY, GLsizei srcWidth, GLsizei srcHeight, GLint dstX,
                GLint dstY, GLsizei dstWidth, GLsizei dstHeight,
-               GLboolean opaque, GLboolean flip, GLenum filter,
-               GLint clipX, GLint clipY, GLsizei clipWidth, GLsizei clipHeight) {
+               GLboolean opaque, GLboolean flip, GLenum filter, GLint clipX,
+               GLint clipY, GLsizei clipWidth, GLsizei clipHeight) {
   if (!lockedDst || !lockedSrc) {
     return;
   }
@@ -421,13 +423,13 @@ void Composite(LockedTexture* lockedDst, LockedTexture* lockedSrc, GLint srcX,
   assert(srctex.bpp() == 4);
   assert(dsttex.bpp() == 4);
 
-  IntRect srcReq = {srcX, srcY, srcX + srcWidth, srcY + srcHeight};
-  IntRect dstReq = {dstX, dstY, dstX + dstWidth, dstY + dstHeight};
+  IntRect srcReq =
+      IntRect{srcX, srcY, srcX + srcWidth, srcY + srcHeight} - srctex.offset;
+  IntRect dstReq =
+      IntRect{dstX, dstY, dstX + dstWidth, dstY + dstHeight} - dsttex.offset;
   // Compute clip rect as relative to the dstReq, as that's the same coords
   // as used for the sampling bounds.
-  IntRect clipRect = {clipX - dstX,
-                      clipY - dstY,
-                      clipX - dstX + clipWidth,
+  IntRect clipRect = {clipX - dstX, clipY - dstY, clipX - dstX + clipWidth,
                       clipY - dstY + clipHeight};
 
   if (opaque) {
@@ -841,8 +843,7 @@ static void linear_convert_yuv(Texture& ytex, Texture& utex, Texture& vtex,
     destStride = -destStride;
   }
   int span = dstBounds.width();
-  for (int rows = dstBounds.height(); rows > 0;
-       rows--) {
+  for (int rows = dstBounds.height(); rows > 0; rows--) {
     switch (colorSpace) {
       case REC_601:
         linear_row_yuv<REC_601>((uint32_t*)dest, span, srcUV, srcDUV.x,
@@ -881,7 +882,8 @@ void CompositeYUV(LockedTexture* lockedDst, LockedTexture* lockedY,
                   YUVColorSpace colorSpace, GLuint colorDepth, GLint srcX,
                   GLint srcY, GLsizei srcWidth, GLsizei srcHeight, GLint dstX,
                   GLint dstY, GLsizei dstWidth, GLsizei dstHeight,
-                  GLboolean flip, GLint clipX, GLint clipY, GLsizei clipWidth, GLsizei clipHeight) {
+                  GLboolean flip, GLint clipX, GLint clipY, GLsizei clipWidth,
+                  GLsizei clipHeight) {
   if (!lockedDst || !lockedY || !lockedU || !lockedV) {
     return;
   }
@@ -896,15 +898,16 @@ void CompositeYUV(LockedTexture* lockedDst, LockedTexture* lockedY,
          (ytex.bpp() == 2 && colorDepth > 8));
   // assert(ytex.width == utex.width && ytex.height == utex.height);
   assert(utex.width == vtex.width && utex.height == vtex.height);
+  assert(ytex.offset == utex.offset && ytex.offset == vtex.offset);
   assert(dsttex.bpp() == 4);
 
-  IntRect srcReq = {srcX, srcY, srcX + srcWidth, srcY + srcHeight};
-  IntRect dstReq = {dstX, dstY, dstX + dstWidth, dstY + dstHeight};
+  IntRect srcReq =
+      IntRect{srcX, srcY, srcX + srcWidth, srcY + srcHeight} - ytex.offset;
+  IntRect dstReq =
+      IntRect{dstX, dstY, dstX + dstWidth, dstY + dstHeight} - dsttex.offset;
   // Compute clip rect as relative to the dstReq, as that's the same coords
   // as used for the sampling bounds.
-  IntRect clipRect = {clipX - dstX,
-                      clipY - dstY,
-                      clipX - dstX + clipWidth,
+  IntRect clipRect = {clipX - dstX, clipY - dstY, clipX - dstX + clipWidth,
                       clipY - dstY + clipHeight};
   // For now, always use a linear filter path that would be required for
   // scaling. Further fast-paths for non-scaled video might be desirable in the

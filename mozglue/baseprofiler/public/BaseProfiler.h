@@ -184,7 +184,9 @@ class SpliceableJSONWriter;
           "Have the IPC layer track cross-process messages")                   \
                                                                                \
     MACRO(18, "audiocallbacktracing", AudioCallbackTracing,                    \
-          "Audio callback tracing")
+          "Audio callback tracing")                                            \
+                                                                               \
+    MACRO(19, "cpu", CPUUtilization, "CPU utilization")
 
 struct ProfilerFeature {
 #  define DECLARE(n_, str_, Name_, desc_)                     \
@@ -591,18 +593,18 @@ struct ProfilerBufferInfo {
   uint64_t mRangeEnd;
   // Buffer capacity in number of 8-byte entries.
   uint32_t mEntryCount;
-  // Sampling stats: Interval (ns) between successive samplings.
-  ProfilerStats mIntervalsNs;
-  // Sampling stats: Total duration (ns) of each sampling. (Split detail below.)
-  ProfilerStats mOverheadsNs;
-  // Sampling stats: Time (ns) to acquire the lock before sampling.
-  ProfilerStats mLockingsNs;
-  // Sampling stats: Time (ns) to discard expired data.
-  ProfilerStats mCleaningsNs;
-  // Sampling stats: Time (ns) to collect counter data.
-  ProfilerStats mCountersNs;
-  // Sampling stats: Time (ns) to sample thread stacks.
-  ProfilerStats mThreadsNs;
+  // Sampling stats: Interval (us) between successive samplings.
+  ProfilerStats mIntervalsUs;
+  // Sampling stats: Total duration (us) of each sampling. (Split detail below.)
+  ProfilerStats mOverheadsUs;
+  // Sampling stats: Time (us) to acquire the lock before sampling.
+  ProfilerStats mLockingsUs;
+  // Sampling stats: Time (us) to discard expired data.
+  ProfilerStats mCleaningsUs;
+  // Sampling stats: Time (us) to collect counter data.
+  ProfilerStats mCountersUs;
+  // Sampling stats: Time (us) to sample thread stacks.
+  ProfilerStats mThreadsUs;
 };
 
 // Get information about the current buffer status.

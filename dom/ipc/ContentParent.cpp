@@ -15,6 +15,8 @@
 
 #include "chrome/common/process_watcher.h"
 #include "mozilla/Result.h"
+#include "mozilla/XREAppData.h"
+#include "nsComponentManagerUtils.h"
 #include "nsIBrowserDOMWindow.h"
 
 #ifdef ACCESSIBILITY
@@ -28,6 +30,7 @@
 #  include "mozilla/a11y/AccessibleWrap.h"
 #  include "mozilla/a11y/Compatibility.h"
 #endif
+#include <map>
 #include <utility>
 
 #include "BrowserParent.h"
@@ -35,7 +38,6 @@
 #include "Geolocation.h"
 #include "GfxInfoBase.h"
 #include "MMPrinter.h"
-#include "PDMFactory.h"
 #include "PreallocatedProcessManager.h"
 #include "ProcessPriorityManager.h"
 #include "SandboxHal.h"
@@ -70,6 +72,7 @@
 #include "mozilla/Sprintf.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_media.h"
+#include "mozilla/StaticPrefs_widget.h"
 #include "mozilla/StyleSheet.h"
 #include "mozilla/StyleSheetInlines.h"
 #include "mozilla/Telemetry.h"
@@ -134,6 +137,7 @@
 #include "mozilla/ipc/BackgroundChild.h"
 #include "mozilla/ipc/BackgroundParent.h"
 #include "mozilla/ipc/CrashReporterHost.h"
+#include "mozilla/ipc/Endpoint.h"
 #include "mozilla/ipc/FileDescriptorSetParent.h"
 #include "mozilla/ipc/FileDescriptorUtils.h"
 #include "mozilla/ipc/IPCStreamAlloc.h"
@@ -155,6 +159,7 @@
 #include "mozilla/net/PCookieServiceParent.h"
 #include "mozilla/plugins/PluginBridge.h"
 #include "mozilla/RemoteLazyInputStreamParent.h"
+#include "mozilla/widget/RemoteLookAndFeel.h"
 #include "mozilla/widget/ScreenManager.h"
 #include "nsAnonymousTemporaryFile.h"
 #include "nsAppRunner.h"
@@ -361,6 +366,9 @@ extern FileDescriptor CreateAudioIPCConnection();
 namespace dom {
 
 LazyLogModule gProcessLog("Process");
+
+static std::map<RemoteDecodeIn, PDMFactory::MediaCodecsSupported>
+    sCodecsSupported;
 
 /* static */
 LogModule* ContentParent::GetLog() { return gProcessLog; }
@@ -660,6 +668,10 @@ void ContentParent::StartUp() {
   if (!XRE_IsParentProcess()) {
     return;
   }
+
+  // From this point on, NS_WARNING, NS_ASSERTION, etc. should print out the
+  // PID along with the warning.
+  nsDebugImpl::SetMultiprocessMode("Parent");
 
   // Note: This reporter measures all ContentParents.
   RegisterStrongMemoryReporter(new ContentParentsMemoryReporter());
@@ -1285,9 +1297,108 @@ mozilla::ipc::IPCResult ContentParent::RecvUngrabPointer(
 #endif
 }
 
+bool ContentParent::ValidatePrincipal(
+    nsIPrincipal* aPrincipal,
+    const EnumSet<ValidatePrincipalOptions>& aOptions) {
+  // If there is no principal, then there is nothing to validate!
+  if (!aPrincipal) {
+    return aOptions.contains(ValidatePrincipalOptions::AllowNullPtr);
+  }
+
+  // We currently do not track relationships between specific null principals
+  // and content processes, so we can not validate much here - just allow all
+  // null principals we see because they are generally safe anyway!
+  if (aPrincipal->GetIsNullPrincipal()) {
+    return true;
+  }
+
+  // Only allow the system principal if the passed in options flags
+  // request permitting the system principal.
+  if (aPrincipal->IsSystemPrincipal()) {
+    return aOptions.contains(ValidatePrincipalOptions::AllowSystem);
+  }
+
+  // XXXckerschb: we should eliminate the resource carve-out here and always
+  // validate the Principal, see Bug 1686200: Investigate Principal for pdf.js
+  if (aPrincipal->SchemeIs("resource")) {
+    return true;
+  }
+
+  // Validate each inner principal individually, allowing us to catch expanded
+  // principals containing the system principal, etc.
+  if (aPrincipal->GetIsExpandedPrincipal()) {
+    if (!aOptions.contains(ValidatePrincipalOptions::AllowExpanded)) {
+      return false;
+    }
+    // FIXME: There are more constraints on expanded principals in-practice,
+    // such as the structure of extension expanded principals. This may need
+    // to be investigated more in the future.
+    nsCOMPtr<nsIExpandedPrincipal> expandedPrincipal =
+        do_QueryInterface(aPrincipal);
+    const auto& allowList = expandedPrincipal->AllowList();
+    for (const auto& innerPrincipal : allowList) {
+      if (!ValidatePrincipal(innerPrincipal, aOptions)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // A URI with a file:// scheme can never load in a non-file content process
+  // due to sandboxing.
+  if (aPrincipal->SchemeIs("file")) {
+    return mRemoteType == FILE_REMOTE_TYPE;
+  }
+
+  if (aPrincipal->SchemeIs("about")) {
+    uint32_t flags = 0;
+    if (NS_FAILED(aPrincipal->GetAboutModuleFlags(&flags))) {
+      return false;
+    }
+
+    // Block principals for about: URIs which can't load in this process.
+    if (!(flags & (nsIAboutModule::URI_CAN_LOAD_IN_CHILD |
+                   nsIAboutModule::URI_MUST_LOAD_IN_CHILD))) {
+      return false;
+    }
+    if (flags & nsIAboutModule::URI_MUST_LOAD_IN_EXTENSION_PROCESS) {
+      return mRemoteType == EXTENSION_REMOTE_TYPE;
+    }
+    return true;
+  }
+
+  if (RemoteTypePrefix(mRemoteType) != FISSION_WEB_REMOTE_TYPE) {
+    return true;
+  }
+
+  // Web content can contain extension content frames, so a content process may
+  // send us an extension's principal.
+  auto* addonPolicy = BasePrincipal::Cast(aPrincipal)->AddonPolicy();
+  if (addonPolicy) {
+    return true;
+  }
+
+  // Ensure that the expected site-origin matches the one specified by our
+  // mRemoteTypeIsolationPrincipal.
+  nsAutoCString siteOriginNoSuffix;
+  if (NS_FAILED(aPrincipal->GetSiteOriginNoSuffix(siteOriginNoSuffix))) {
+    return false;
+  }
+  nsAutoCString remoteTypeSiteOriginNoSuffix;
+  if (NS_FAILED(mRemoteTypeIsolationPrincipal->GetSiteOriginNoSuffix(
+          remoteTypeSiteOriginNoSuffix))) {
+    return false;
+  }
+
+  return remoteTypeSiteOriginNoSuffix.Equals(siteOriginNoSuffix);
+}
+
 mozilla::ipc::IPCResult ContentParent::RecvRemovePermission(
     const IPC::Principal& aPrincipal, const nsCString& aPermissionType,
     nsresult* aRv) {
+  if (!ValidatePrincipal(aPrincipal)) {
+    return IPC_FAIL(this, "receiving unexpected principal");
+  }
   *aRv = Permissions::RemovePermission(aPrincipal, aPermissionType);
   return IPC_OK();
 }
@@ -1474,6 +1585,31 @@ void ContentParent::BroadcastStringBundle(
 void ContentParent::BroadcastFontListChanged() {
   for (auto* cp : AllProcesses(eLive)) {
     Unused << cp->SendFontListChanged();
+  }
+}
+
+static LookAndFeelData GetLookAndFeelData() {
+  if (StaticPrefs::widget_remote_look_and_feel_AtStartup()) {
+    return *RemoteLookAndFeel::ExtractData();
+  }
+  return LookAndFeel::GetCache();
+}
+
+void ContentParent::BroadcastThemeUpdate(widget::ThemeChangeKind aKind) {
+  LookAndFeelData lnfData = GetLookAndFeelData();
+
+  for (auto* cp : AllProcesses(eLive)) {
+    Unused << cp->SendThemeChanged(lnfData, aKind);
+  }
+}
+
+/*static */
+void ContentParent::BroadcastMediaCodecsSupportedUpdate(
+    RemoteDecodeIn aLocation,
+    const PDMFactory::MediaCodecsSupported& aSupported) {
+  sCodecsSupported[aLocation] = aSupported;
+  for (auto* cp : AllProcesses(eAll)) {
+    Unused << cp->SendUpdateMediaCodecsSupported(aLocation, aSupported);
   }
 }
 
@@ -2573,10 +2709,6 @@ ContentParent::ContentParent(const nsACString& aRemoteType, int32_t aJSPluginID)
 
   mMessageManager = nsFrameMessageManager::NewProcessMessageManager(true);
 
-  // From this point on, NS_WARNING, NS_ASSERTION, etc. should print out the
-  // PID along with the warning.
-  nsDebugImpl::SetMultiprocessMode("Parent");
-
 #if defined(XP_WIN)
   if (XRE_IsParentProcess()) {
     audio::AudioNotificationSender::Init();
@@ -2727,7 +2859,7 @@ bool ContentParent::InitInternal(ProcessPriority aInitialPriority) {
   nsTArray<SystemFontListEntry> fontList;
   gfxPlatform::GetPlatform()->ReadSystemFontList(&fontList);
 
-  LookAndFeelCache lnfCache = LookAndFeel::GetCache();
+  LookAndFeelData lnfData = GetLookAndFeelData();
 
   // If the shared fontlist is in use, collect its shmem block handles to pass
   // to the child.
@@ -2768,9 +2900,9 @@ bool ContentParent::InitInternal(ProcessPriority aInitialPriority) {
   // Send the dynamic scalar definitions to the new process.
   TelemetryIPC::GetDynamicScalarDefinitions(xpcomInit.dynamicScalarDefs());
 
-  // Pre-calculate the various PlatformDecoderModule (PDM) supported on this
-  // machine.
-  xpcomInit.codecsSupported() = PDMFactory::Supported();
+  for (auto const& [location, supported] : sCodecsSupported) {
+    Unused << SendUpdateMediaCodecsSupported(location, supported);
+  }
 
   // Must send screen info before send initialData
   ScreenManager& screenManager = ScreenManager::GetSingleton();
@@ -2788,7 +2920,7 @@ bool ContentParent::InitInternal(ProcessPriority aInitialPriority) {
   }
 
   Unused << SendSetXPCOMProcessAttributes(
-      xpcomInit, initialData, lnfCache, fontList, sharedUASheetHandle,
+      xpcomInit, initialData, lnfData, fontList, sharedUASheetHandle,
       sharedUASheetAddress, sharedFontListBlocks);
 
   ipc::WritableSharedMap* sharedData =
@@ -3113,7 +3245,13 @@ void ContentParent::OnVarChanged(const GfxVarUpdate& aVar) {
 mozilla::ipc::IPCResult ContentParent::RecvSetClipboard(
     const IPCDataTransfer& aDataTransfer, const bool& aIsPrivateData,
     const IPC::Principal& aRequestingPrincipal,
-    const uint32_t& aContentPolicyType, const int32_t& aWhichClipboard) {
+    const nsContentPolicyType& aContentPolicyType,
+    const int32_t& aWhichClipboard) {
+  if (!ValidatePrincipal(aRequestingPrincipal,
+                         {ValidatePrincipalOptions::AllowNullPtr})) {
+    return IPC_FAIL(this, "receiving unexpected principal");
+  }
+
   nsresult rv;
   nsCOMPtr<nsIClipboard> clipboard(do_GetService(kCClipboardCID, &rv));
   NS_ENSURE_SUCCESS(rv, IPC_OK());
@@ -4319,23 +4457,11 @@ mozilla::ipc::IPCResult ContentParent::RecvExtProtocolChannelConnectParent(
   return IPC_OK();
 }
 
-bool ContentParent::HasNotificationPermission(
-    const IPC::Principal& aPrincipal) {
-  return true;
-}
-
 mozilla::ipc::IPCResult ContentParent::RecvShowAlert(
     nsIAlertNotification* aAlert) {
   if (!aAlert) {
     return IPC_FAIL_NO_REASON(this);
   }
-  nsCOMPtr<nsIPrincipal> principal;
-  nsresult rv = aAlert->GetPrincipal(getter_AddRefs(principal));
-  if (NS_WARN_IF(NS_FAILED(rv)) ||
-      !HasNotificationPermission(IPC::Principal(principal))) {
-    return IPC_OK();
-  }
-
   nsCOMPtr<nsIAlertsService> sysAlerts(components::Alerts::Service());
   if (sysAlerts) {
     sysAlerts->ShowAlert(aAlert, this);
@@ -4343,15 +4469,10 @@ mozilla::ipc::IPCResult ContentParent::RecvShowAlert(
   return IPC_OK();
 }
 
-mozilla::ipc::IPCResult ContentParent::RecvCloseAlert(
-    const nsString& aName, const IPC::Principal& aPrincipal) {
-  if (!HasNotificationPermission(aPrincipal)) {
-    return IPC_OK();
-  }
-
+mozilla::ipc::IPCResult ContentParent::RecvCloseAlert(const nsString& aName) {
   nsCOMPtr<nsIAlertsService> sysAlerts(components::Alerts::Service());
   if (sysAlerts) {
-    sysAlerts->CloseAlert(aName, aPrincipal);
+    sysAlerts->CloseAlert(aName);
   }
 
   return IPC_OK();
@@ -4359,17 +4480,19 @@ mozilla::ipc::IPCResult ContentParent::RecvCloseAlert(
 
 mozilla::ipc::IPCResult ContentParent::RecvDisableNotifications(
     const IPC::Principal& aPrincipal) {
-  if (HasNotificationPermission(aPrincipal)) {
-    Unused << Notification::RemovePermission(aPrincipal);
+  if (!ValidatePrincipal(aPrincipal)) {
+    return IPC_FAIL(this, "receiving unexpected principal");
   }
+  Unused << Notification::RemovePermission(aPrincipal);
   return IPC_OK();
 }
 
 mozilla::ipc::IPCResult ContentParent::RecvOpenNotificationSettings(
     const IPC::Principal& aPrincipal) {
-  if (HasNotificationPermission(aPrincipal)) {
-    Unused << Notification::OpenSettings(aPrincipal);
+  if (!ValidatePrincipal(aPrincipal)) {
+    return IPC_FAIL(this, "receiving unexpected principal");
   }
+  Unused << Notification::OpenSettings(aPrincipal);
   return IPC_OK();
 }
 
@@ -4449,7 +4572,7 @@ static int32_t AddGeolocationListener(
 }
 
 mozilla::ipc::IPCResult ContentParent::RecvAddGeolocationListener(
-    const IPC::Principal& aPrincipal, const bool& aHighAccuracy) {
+    const bool& aHighAccuracy) {
   // To ensure no geolocation updates are skipped, we always force the
   // creation of a new listener.
   RecvRemoveGeolocationListener();
@@ -4656,8 +4779,7 @@ nsresult ContentParent::DoSendAsyncMessage(const nsAString& aMessage,
 }
 
 mozilla::ipc::IPCResult ContentParent::RecvCopyFavicon(
-    nsIURI* aOldURI, nsIURI* aNewURI, const IPC::Principal& aLoadingPrincipal,
-    const bool& aInPrivateBrowsing) {
+    nsIURI* aOldURI, nsIURI* aNewURI, const bool& aInPrivateBrowsing) {
   if (!aOldURI) {
     return IPC_FAIL(this, "aOldURI should not be null");
   }
@@ -4665,8 +4787,7 @@ mozilla::ipc::IPCResult ContentParent::RecvCopyFavicon(
     return IPC_FAIL(this, "aNewURI should not be null");
   }
 
-  nsDocShell::CopyFavicon(aOldURI, aNewURI, aLoadingPrincipal,
-                          aInPrivateBrowsing);
+  nsDocShell::CopyFavicon(aOldURI, aNewURI, aInPrivateBrowsing);
   return IPC_OK();
 }
 
@@ -4845,7 +4966,7 @@ void ContentParent::NotifyUpdatedDictionaries() {
   RefPtr<mozSpellChecker> spellChecker(mozSpellChecker::Create());
   MOZ_ASSERT(spellChecker, "No spell checker?");
 
-  nsTArray<nsString> dictionaries;
+  nsTArray<nsCString> dictionaries;
   spellChecker->GetDictionaryList(&dictionaries);
 
   for (auto* cp : AllProcesses(eLive)) {
@@ -4853,18 +4974,19 @@ void ContentParent::NotifyUpdatedDictionaries() {
   }
 }
 
-void ContentParent::NotifyUpdatedFonts() {
+void ContentParent::NotifyUpdatedFonts(bool aFullRebuild) {
+  if (gfxPlatformFontList::PlatformFontList()->SharedFontList()) {
+    for (auto* cp : AllProcesses(eLive)) {
+      Unused << cp->SendRebuildFontList(aFullRebuild);
+    }
+    return;
+  }
+
   nsTArray<SystemFontListEntry> fontList;
   gfxPlatform::GetPlatform()->ReadSystemFontList(&fontList);
 
   for (auto* cp : AllProcesses(eLive)) {
     Unused << cp->SendUpdateFontList(fontList);
-  }
-}
-
-void ContentParent::NotifyRebuildFontList() {
-  for (auto* cp : AllProcesses(eLive)) {
-    Unused << cp->SendRebuildFontList();
   }
 }
 
@@ -4917,6 +5039,9 @@ bool ContentParent::DeallocPWebrtcGlobalParent(PWebrtcGlobalParent* aActor) {
 
 mozilla::ipc::IPCResult ContentParent::RecvSetOfflinePermission(
     const Principal& aPrincipal) {
+  if (!ValidatePrincipal(aPrincipal)) {
+    return IPC_FAIL(this, "receiving unexpected principal");
+  }
   nsCOMPtr<nsIOfflineCacheUpdateService> updateService =
       components::OfflineCacheUpdate::Service();
   if (!updateService) {
@@ -5251,6 +5376,11 @@ mozilla::ipc::IPCResult ContentParent::RecvCreateWindow(
     const IPC::Principal& aTriggeringPrincipal, nsIContentSecurityPolicy* aCsp,
     nsIReferrerInfo* aReferrerInfo, const OriginAttributes& aOriginAttributes,
     CreateWindowResolver&& aResolve) {
+  if (!ValidatePrincipal(aTriggeringPrincipal,
+                         {ValidatePrincipalOptions::AllowSystem})) {
+    return IPC_FAIL(this, "receiving unexpected principal");
+  }
+
   nsresult rv = NS_OK;
   CreatedWindowInfo cwi;
 
@@ -5442,7 +5572,7 @@ mozilla::ipc::IPCResult ContentParent::RecvGetOutputColorProfileData(
 mozilla::ipc::IPCResult ContentParent::RecvGetFontListShmBlock(
     const uint32_t& aGeneration, const uint32_t& aIndex,
     base::SharedMemoryHandle* aOut) {
-  auto fontList = gfxPlatformFontList::PlatformFontList();
+  auto* fontList = gfxPlatformFontList::PlatformFontList();
   MOZ_RELEASE_ASSERT(fontList, "gfxPlatformFontList not initialized?");
   fontList->ShareFontListShmBlockToProcess(aGeneration, aIndex, Pid(), aOut);
   return IPC_OK();
@@ -5451,7 +5581,7 @@ mozilla::ipc::IPCResult ContentParent::RecvGetFontListShmBlock(
 mozilla::ipc::IPCResult ContentParent::RecvInitializeFamily(
     const uint32_t& aGeneration, const uint32_t& aFamilyIndex,
     const bool& aLoadCmaps) {
-  auto fontList = gfxPlatformFontList::PlatformFontList();
+  auto* fontList = gfxPlatformFontList::PlatformFontList();
   MOZ_RELEASE_ASSERT(fontList, "gfxPlatformFontList not initialized?");
   fontList->InitializeFamily(aGeneration, aFamilyIndex, aLoadCmaps);
   return IPC_OK();
@@ -5460,7 +5590,7 @@ mozilla::ipc::IPCResult ContentParent::RecvInitializeFamily(
 mozilla::ipc::IPCResult ContentParent::RecvSetCharacterMap(
     const uint32_t& aGeneration, const mozilla::fontlist::Pointer& aFacePtr,
     const gfxSparseBitSet& aMap) {
-  auto fontList = gfxPlatformFontList::PlatformFontList();
+  auto* fontList = gfxPlatformFontList::PlatformFontList();
   MOZ_RELEASE_ASSERT(fontList, "gfxPlatformFontList not initialized?");
   fontList->SetCharacterMap(aGeneration, aFacePtr, aMap);
   return IPC_OK();
@@ -5468,18 +5598,25 @@ mozilla::ipc::IPCResult ContentParent::RecvSetCharacterMap(
 
 mozilla::ipc::IPCResult ContentParent::RecvInitOtherFamilyNames(
     const uint32_t& aGeneration, const bool& aDefer, bool* aLoaded) {
-  auto fontList = gfxPlatformFontList::PlatformFontList();
+  auto* fontList = gfxPlatformFontList::PlatformFontList();
   MOZ_RELEASE_ASSERT(fontList, "gfxPlatformFontList not initialized?");
-  fontList->InitOtherFamilyNames(aGeneration, aDefer);
-  *aLoaded = true;
+  *aLoaded = fontList->InitOtherFamilyNames(aGeneration, aDefer);
   return IPC_OK();
 }
 
 mozilla::ipc::IPCResult ContentParent::RecvSetupFamilyCharMap(
     const uint32_t& aGeneration, const mozilla::fontlist::Pointer& aFamilyPtr) {
-  auto fontList = gfxPlatformFontList::PlatformFontList();
+  auto* fontList = gfxPlatformFontList::PlatformFontList();
   MOZ_RELEASE_ASSERT(fontList, "gfxPlatformFontList not initialized?");
   fontList->SetupFamilyCharMap(aGeneration, aFamilyPtr);
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult ContentParent::RecvStartCmapLoading(
+    const uint32_t& aGeneration, const uint32_t& aStartIndex) {
+  auto* fontList = gfxPlatformFontList::PlatformFontList();
+  MOZ_RELEASE_ASSERT(fontList, "gfxPlatformFontList not initialized?");
+  fontList->StartCmapLoading(aGeneration, aStartIndex);
   return IPC_OK();
 }
 
@@ -5514,14 +5651,8 @@ mozilla::ipc::IPCResult ContentParent::RecvBeginDriverCrashGuard(
     case gfx::CrashGuardType::D3D11Layers:
       guard = MakeUnique<gfx::D3D11LayersCrashGuard>(this);
       break;
-    case gfx::CrashGuardType::D3D9Video:
-      guard = MakeUnique<gfx::D3D9VideoCrashGuard>(this);
-      break;
     case gfx::CrashGuardType::GLContext:
       guard = MakeUnique<gfx::GLContextCrashGuard>(this);
-      break;
-    case gfx::CrashGuardType::D3D11Video:
-      guard = MakeUnique<gfx::D3D11VideoCrashGuard>(this);
       break;
     case gfx::CrashGuardType::WMFVPXVideo:
       guard = MakeUnique<gfx::WMFVPXVideoCrashGuard>(this);
@@ -5562,6 +5693,9 @@ mozilla::ipc::IPCResult ContentParent::RecvNotifyBenchmarkResult(
 mozilla::ipc::IPCResult ContentParent::RecvNotifyPushObservers(
     const nsCString& aScope, const IPC::Principal& aPrincipal,
     const nsString& aMessageId) {
+  if (!ValidatePrincipal(aPrincipal)) {
+    return IPC_FAIL(this, "receiving unexpected principal");
+  }
   PushMessageDispatcher dispatcher(aScope, aPrincipal, aMessageId, Nothing());
   Unused << NS_WARN_IF(NS_FAILED(dispatcher.NotifyObserversAndWorkers()));
   return IPC_OK();
@@ -5570,6 +5704,9 @@ mozilla::ipc::IPCResult ContentParent::RecvNotifyPushObservers(
 mozilla::ipc::IPCResult ContentParent::RecvNotifyPushObserversWithData(
     const nsCString& aScope, const IPC::Principal& aPrincipal,
     const nsString& aMessageId, nsTArray<uint8_t>&& aData) {
+  if (!ValidatePrincipal(aPrincipal)) {
+    return IPC_FAIL(this, "receiving unexpected principal");
+  }
   PushMessageDispatcher dispatcher(aScope, aPrincipal, aMessageId,
                                    Some(std::move(aData)));
   Unused << NS_WARN_IF(NS_FAILED(dispatcher.NotifyObserversAndWorkers()));
@@ -5579,6 +5716,9 @@ mozilla::ipc::IPCResult ContentParent::RecvNotifyPushObserversWithData(
 mozilla::ipc::IPCResult
 ContentParent::RecvNotifyPushSubscriptionChangeObservers(
     const nsCString& aScope, const IPC::Principal& aPrincipal) {
+  if (!ValidatePrincipal(aPrincipal)) {
+    return IPC_FAIL(this, "receiving unexpected principal");
+  }
   PushSubscriptionChangeDispatcher dispatcher(aScope, aPrincipal);
   Unused << NS_WARN_IF(NS_FAILED(dispatcher.NotifyObserversAndWorkers()));
   return IPC_OK();
@@ -5587,6 +5727,9 @@ ContentParent::RecvNotifyPushSubscriptionChangeObservers(
 mozilla::ipc::IPCResult ContentParent::RecvPushError(
     const nsCString& aScope, const IPC::Principal& aPrincipal,
     const nsString& aMessage, const uint32_t& aFlags) {
+  if (!ValidatePrincipal(aPrincipal)) {
+    return IPC_FAIL(this, "receiving unexpected principal");
+  }
   PushErrorDispatcher dispatcher(aScope, aPrincipal, aMessage, aFlags);
   Unused << NS_WARN_IF(NS_FAILED(dispatcher.NotifyObserversAndWorkers()));
   return IPC_OK();
@@ -5595,6 +5738,9 @@ mozilla::ipc::IPCResult ContentParent::RecvPushError(
 mozilla::ipc::IPCResult
 ContentParent::RecvNotifyPushSubscriptionModifiedObservers(
     const nsCString& aScope, const IPC::Principal& aPrincipal) {
+  if (!ValidatePrincipal(aPrincipal)) {
+    return IPC_FAIL(this, "receiving unexpected principal");
+  }
   PushSubscriptionModifiedDispatcher dispatcher(aScope, aPrincipal);
   Unused << NS_WARN_IF(NS_FAILED(dispatcher.NotifyObservers()));
   return IPC_OK();
@@ -5665,6 +5811,9 @@ void ContentParent::BroadcastBlobURLUnregistration(
 mozilla::ipc::IPCResult ContentParent::RecvStoreAndBroadcastBlobURLRegistration(
     const nsCString& aURI, const IPCBlob& aBlob, const Principal& aPrincipal,
     const Maybe<nsID>& aAgentClusterId) {
+  if (!ValidatePrincipal(aPrincipal, {ValidatePrincipalOptions::AllowSystem})) {
+    return IPC_FAIL(this, "receiving unexpected principal");
+  }
   RefPtr<BlobImpl> blobImpl = IPCBlobUtils::Deserialize(aBlob);
   if (NS_WARN_IF(!blobImpl)) {
     return IPC_FAIL_NO_REASON(this);
@@ -5685,6 +5834,9 @@ mozilla::ipc::IPCResult ContentParent::RecvStoreAndBroadcastBlobURLRegistration(
 mozilla::ipc::IPCResult
 ContentParent::RecvUnstoreAndBroadcastBlobURLUnregistration(
     const nsCString& aURI, const Principal& aPrincipal) {
+  if (!ValidatePrincipal(aPrincipal, {ValidatePrincipalOptions::AllowSystem})) {
+    return IPC_FAIL(this, "receiving unexpected principal");
+  }
   BlobURLProtocolHandler::RemoveDataEntry(aURI, false /* Don't broadcast */);
   BroadcastBlobURLUnregistration(aURI, aPrincipal, this);
   mBlobURLs.RemoveElement(aURI);
@@ -6029,6 +6181,10 @@ PURLClassifierParent* ContentParent::AllocPURLClassifierParent(
 
 mozilla::ipc::IPCResult ContentParent::RecvPURLClassifierConstructor(
     PURLClassifierParent* aActor, const Principal& aPrincipal, bool* aSuccess) {
+  if (!ValidatePrincipal(aPrincipal)) {
+    return IPC_FAIL(this, "receiving unexpected principal");
+  }
+
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(aActor);
   *aSuccess = false;
@@ -6038,6 +6194,9 @@ mozilla::ipc::IPCResult ContentParent::RecvPURLClassifierConstructor(
   if (!principal) {
     actor->ClassificationFailed();
     return IPC_OK();
+  }
+  if (!ValidatePrincipal(aPrincipal)) {
+    return IPC_FAIL(this, "receiving unexpected principal");
   }
   return actor->StartClassify(principal, aSuccess);
 }
@@ -6205,6 +6364,9 @@ mozilla::ipc::IPCResult
 ContentParent::RecvAutomaticStorageAccessPermissionCanBeGranted(
     const Principal& aPrincipal,
     AutomaticStorageAccessPermissionCanBeGrantedResolver&& aResolver) {
+  if (!ValidatePrincipal(aPrincipal)) {
+    return IPC_FAIL(this, "receiving unexpected principal");
+  }
   aResolver(Document::AutomaticStorageAccessPermissionCanBeGranted(aPrincipal));
   return IPC_OK();
 }
@@ -6276,6 +6438,9 @@ mozilla::ipc::IPCResult ContentParent::RecvCompleteAllowAccessFor(
 
 mozilla::ipc::IPCResult ContentParent::RecvStoreUserInteractionAsPermission(
     const Principal& aPrincipal) {
+  if (!ValidatePrincipal(aPrincipal)) {
+    return IPC_FAIL(this, "receiving unexpected principal");
+  }
   ContentBlockingUserInteraction::Observe(aPrincipal);
   return IPC_OK();
 }
@@ -6571,7 +6736,8 @@ mozilla::ipc::IPCResult ContentParent::RecvWindowClose(
 }
 
 mozilla::ipc::IPCResult ContentParent::RecvWindowFocus(
-    const MaybeDiscarded<BrowsingContext>& aContext, CallerType aCallerType) {
+    const MaybeDiscarded<BrowsingContext>& aContext, CallerType aCallerType,
+    uint64_t aActionId) {
   if (aContext.IsNullOrDiscarded()) {
     MOZ_LOG(
         BrowsingContext::GetLog(), LogLevel::Debug,
@@ -6583,7 +6749,7 @@ mozilla::ipc::IPCResult ContentParent::RecvWindowFocus(
   ContentProcessManager* cpm = ContentProcessManager::GetSingleton();
   ContentParent* cp =
       cpm->GetContentProcessById(ContentParentId(context->OwnerProcessId()));
-  Unused << cp->SendWindowFocus(context, aCallerType);
+  Unused << cp->SendWindowFocus(context, aCallerType, aActionId);
   return IPC_OK();
 }
 
@@ -7020,10 +7186,11 @@ mozilla::ipc::IPCResult ContentParent::RecvNotifyOnHistoryReload(
 
 mozilla::ipc::IPCResult ContentParent::RecvHistoryCommit(
     const MaybeDiscarded<BrowsingContext>& aContext, const uint64_t& aLoadID,
-    const nsID& aChangeID, const uint32_t& aLoadType) {
+    const nsID& aChangeID, const uint32_t& aLoadType, const bool& aPersist,
+    const bool& aCloneEntryChildren) {
   if (!aContext.IsDiscarded()) {
-    aContext.get_canonical()->SessionHistoryCommit(aLoadID, aChangeID,
-                                                   aLoadType);
+    aContext.get_canonical()->SessionHistoryCommit(
+        aLoadID, aChangeID, aLoadType, aPersist, aCloneEntryChildren);
   }
 
   return IPC_OK();
@@ -7293,6 +7460,19 @@ IPCResult ContentParent::RecvFOGData(ByteBuf&& buf) {
 #ifdef MOZ_GLEAN
   glean::FOGData(std::move(buf));
 #endif
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult ContentParent::RecvSetContainerFeaturePolicy(
+    const MaybeDiscardedBrowsingContext& aContainerContext,
+    FeaturePolicy* aContainerFeaturePolicy) {
+  if (aContainerContext.IsNullOrDiscarded()) {
+    return IPC_OK();
+  }
+
+  auto* context = aContainerContext.get_canonical();
+  context->SetContainerFeaturePolicy(aContainerFeaturePolicy);
+
   return IPC_OK();
 }
 

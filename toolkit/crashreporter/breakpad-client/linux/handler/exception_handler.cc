@@ -97,6 +97,9 @@
 #include "common/linux/eintr_wrapper.h"
 #include "third_party/lss/linux_syscall_support.h"
 #include "prenv.h"
+#if defined(MOZ_OXIDIZED_BREAKPAD)
+#include "mozilla/toolkit/crashreporter/rust_minidump_writer_linux_ffi_generated.h"
+#endif
 
 #ifdef MOZ_PHC
 #include "replace_malloc_bridge.h"
@@ -468,7 +471,7 @@ bool ExceptionHandler::HandleSignal(int /*sig*/, siginfo_t* info, void* uc) {
   GetPHCAddrInfo(info, &addr_info);
 #endif
 
-  if (filter_ && !filter_(callback_context_, &addr_info))
+  if (filter_ && !filter_(callback_context_))
     return false;
 
   // Allow ourselves to be dumped if the signal is trusted.
@@ -528,8 +531,17 @@ bool ExceptionHandler::SimulateSignalDelivery(int sig) {
 // This function may run in a compromised context: see the top of the file.
 bool ExceptionHandler::GenerateDump(
     CrashContext *context, const mozilla::phc::AddrInfo* addr_info) {
-  if (IsOutOfProcess())
-    return crash_generation_client_->RequestDump(context, sizeof(*context));
+  if (IsOutOfProcess()) {
+    bool success =
+      crash_generation_client_->RequestDump(context, sizeof(*context));
+
+    if (callback_) {
+      success =
+        callback_(minidump_descriptor_, callback_context_, addr_info, success);
+    }
+
+    return success;
+  }
 
   // Allocating too much stack isn't a problem, and better to err on the side
   // of caution than smash it into random locations.
@@ -840,10 +852,15 @@ bool ExceptionHandler::WriteMinidumpForChild(pid_t child,
   // This function is not run in a compromised context.
   MinidumpDescriptor descriptor(dump_path);
   descriptor.UpdatePath();
+#if defined(MOZ_OXIDIZED_BREAKPAD)
+  if (!write_minidump_linux(descriptor.path(), child, child_blamed_thread))
+      return false;
+#else
   if (!google_breakpad::WriteMinidump(descriptor.path(),
                                       child,
                                       child_blamed_thread))
       return false;
+#endif
 
   // nullptr here for phc::AddrInfo* is ok because this is not a crash.
   return callback ? callback(descriptor, callback_context, nullptr, true)

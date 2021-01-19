@@ -42,6 +42,16 @@
   color: @lwtPopupBrighttextLinkColor@;
 }
 
+#PersonalToolbar:-moz-lwtheme .text-link,
+#nav-bar:-moz-lwtheme .text-link {
+  color: #0060df;
+}
+
+#PersonalToolbar[brighttext]:-moz-lwtheme .text-link,
+#nav-bar[brighttext]:-moz-lwtheme .text-link {
+  color: #45a1ff;
+}
+
 /* Toolbar / content area border */
 
 #navigator-toolbox {
@@ -82,8 +92,24 @@
 }
 
 #PersonalToolbar[collapsed=false]:not([initialized]) > #personal-toolbar-empty {
-  width: 0;
   visibility: hidden;
+}
+
+/*
+ * Make the empty bookmarks toolbar message take up no horizontal space.
+ * This avoids two issues:
+ * 1) drag/drop of urls/bookmarks to the toolbar not working, because they land
+ *    on the personal-toolbar-empty element.
+ * 2) buttons in the toolbar moving horizontally while the window opens,
+ *    because the element is first shown at full width and then completely
+ *    hidden.
+ */
+#PersonalToolbar[collapsed=false] > #personal-toolbar-empty[nowidth] > #personal-toolbar-empty-description {
+  margin-inline: 0;
+  width: 0;
+  white-space: nowrap;
+  position: relative;
+  z-index: 1;
 }
 
 #PersonalToolbar[collapsed=true].instant {

@@ -16,8 +16,6 @@
 #include "mozilla/Maybe.h"
 #include "mozilla/ServoStyleConstsInlines.h"
 #include "mozilla/StaticPrefs_layout.h"
-#include "mozilla/StaticPtr.h"
-#include "mozilla/StyleColorInlines.h"
 #include "mozilla/UniquePtr.h"
 #include "nsColor.h"
 #include "nsCoord.h"
@@ -27,28 +25,21 @@
 #include "nsStyleConsts.h"
 #include "nsChangeHint.h"
 #include "nsTimingFunction.h"
-#include "nsCOMPtr.h"
 #include "nsTArray.h"
-#include "nsCSSValue.h"
 #include "imgIContainer.h"
 #include "imgRequestProxy.h"
-#include "Orientation.h"
 #include "CounterStyleManager.h"
 #include <cstddef>  // offsetof()
-#include <utility>
 #include "X11UndefineNone.h"
 
 class nsIFrame;
 class nsIURI;
 class nsTextFrame;
-class nsPresContext;
 struct nsStyleDisplay;
 struct nsStyleVisibility;
 namespace mozilla {
 class ComputedStyle;
-namespace dom {
-class ImageTracker;
-}  // namespace dom
+
 }  // namespace mozilla
 
 namespace mozilla {
@@ -681,11 +672,6 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleList {
   nsChangeHint CalcDifference(const nsStyleList& aNewData,
                               const nsStyleDisplay& aOldDisplay) const;
 
-  imgRequestProxy* GetListStyleImage() const {
-    return mListStyleImage.IsUrl() ? mListStyleImage.AsUrl().GetImage()
-                                   : nullptr;
-  }
-
   nsRect GetImageRegion() const {
     if (!mImageRegion.IsRect()) {
       return nsRect();
@@ -699,7 +685,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleList {
 
   mozilla::CounterStylePtr mCounterStyle;
   mozilla::StyleQuotes mQuotes;
-  mozilla::StyleImageUrlOrNone mListStyleImage;
+  mozilla::StyleImage mListStyleImage;
 
   // the rect to use within an image.
   mozilla::StyleClipRectOrAuto mImageRegion;
@@ -714,7 +700,6 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStylePosition {
   using StyleRect = mozilla::StyleRect<T>;
   using StyleSize = mozilla::StyleSize;
   using StyleMaxSize = mozilla::StyleMaxSize;
-  using StyleFlexBasis = mozilla::StyleFlexBasis;
   using WritingMode = mozilla::WritingMode;
   using LogicalAxis = mozilla::LogicalAxis;
   using StyleImplicitGridTracks = mozilla::StyleImplicitGridTracks;
@@ -787,7 +772,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStylePosition {
   StyleSize mHeight;
   StyleSize mMinHeight;
   StyleMaxSize mMaxHeight;
-  StyleFlexBasis mFlexBasis;
+  mozilla::StyleFlexBasis mFlexBasis;
   StyleImplicitGridTracks mGridAutoColumns;
   StyleImplicitGridTracks mGridAutoRows;
   mozilla::StyleAspectRatio mAspectRatio;

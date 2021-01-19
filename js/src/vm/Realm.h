@@ -475,10 +475,8 @@ class JS::Realm : public JS::shadow::Realm {
   void clearTables();
 
   void addSizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf,
-                              size_t* tiAllocationSiteTables,
-                              size_t* tiArrayTypeTables,
-                              size_t* tiObjectTypeTables, size_t* realmObject,
-                              size_t* realmTables, size_t* innerViewsArg,
+                              size_t* realmObject, size_t* realmTables,
+                              size_t* innerViewsArg,
                               size_t* objectMetadataTablesArg,
                               size_t* savedStacksSet, size_t* varNamesSet,
                               size_t* nonSyntacticLexicalEnvironmentsArg,
@@ -561,8 +559,6 @@ class JS::Realm : public JS::shadow::Realm {
   void traceWeakRegExps(JSTracer* trc);
   void traceWeakSelfHostingScriptSource(JSTracer* trc);
   void traceWeakTemplateObjects(JSTracer* trc);
-
-  void traceWeakObjectGroups(JSTracer* trc) { objectGroups_.traceWeak(trc); }
 
   void clearScriptCounts();
   void clearScriptLCov();
@@ -753,11 +749,9 @@ class JS::Realm : public JS::shadow::Realm {
   }
   void updateDebuggerObservesCoverage();
 
-  // The code coverage can be enabled either for each realm, with the
-  // Debugger API, or for the entire runtime.
-  bool collectCoverage() const;
+  // Returns true if the Debugger API is collecting code coverage data for this
+  // realm or if the process-wide LCov option is enabled.
   bool collectCoverageForDebug() const;
-  bool collectCoverageForPGO() const;
 
   // Get or allocate the associated LCovRealm.
   js::coverage::LCovRealm* lcovRealm();

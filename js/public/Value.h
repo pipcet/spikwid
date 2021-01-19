@@ -11,8 +11,6 @@
 
 #include "mozilla/Attributes.h"
 #include "mozilla/Casting.h"
-#include "mozilla/Compiler.h"
-#include "mozilla/EndianUtils.h"
 #include "mozilla/FloatingPoint.h"
 #include "mozilla/Likely.h"
 #include "mozilla/Maybe.h"
@@ -22,9 +20,8 @@
 #include "js-config.h"
 #include "jstypes.h"
 
-#include "js/GCAPI.h"
 #include "js/RootingAPI.h"
-#include "js/Utility.h"
+#include "js/TypeDecls.h"
 
 namespace JS {
 class JS_PUBLIC_API Value;
@@ -246,9 +243,6 @@ enum JSWhyMagic {
 
   /** standard constructors are not created for off-thread parsing. */
   JS_OFF_THREAD_CONSTRUCTOR,
-
-  /** used in jit::TrySkipAwait */
-  JS_CANNOT_SKIP_AWAIT,
 
   /** for local use */
   JS_GENERIC_MAGIC,

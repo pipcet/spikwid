@@ -17,6 +17,8 @@
 namespace mozilla {
 class EventChainPostVisitor;
 class EventChainPreVisitor;
+class PreloaderBase;
+
 namespace dom {
 
 // NOTE(emilio): If we stop inheriting from Link, we need to remove the
@@ -186,6 +188,7 @@ class HTMLLinkElement final : public nsGenericHTMLElement,
 
   static bool CheckPreloadAttrs(const nsAttrValue& aAs, const nsAString& aType,
                                 const nsAString& aMedia, Document* aDocument);
+  static void WarnIgnoredPreload(const Document&, nsIURI&);
 
  protected:
   virtual ~HTMLLinkElement();

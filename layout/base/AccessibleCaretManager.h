@@ -9,6 +9,7 @@
 
 #include "AccessibleCaret.h"
 
+#include "mozilla/Attributes.h"
 #include "mozilla/dom/CaretStateChangedEvent.h"
 #include "mozilla/dom/MouseEventBinding.h"
 #include "mozilla/EnumSet.h"
@@ -102,6 +103,8 @@ class AccessibleCaretManager {
   virtual void OnBlur();
 
   // Handle NotifySelectionChanged event from nsISelectionListener.
+  // @param aReason potentially multiple of the reasons defined in
+  //                nsISelectionListener.idl.
   MOZ_CAN_RUN_SCRIPT
   virtual nsresult OnSelectionChanged(dom::Document* aDoc, dom::Selection* aSel,
                                       int16_t aReason);
@@ -184,11 +187,12 @@ class AccessibleCaretManager {
 
   // Change focus to aFrame if it isn't nullptr. Otherwise, clear the old focus
   // then re-focus the window.
-  void ChangeFocusToOrClearOldFocus(nsIFrame* aFrame) const;
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY void ChangeFocusToOrClearOldFocus(
+      nsIFrame* aFrame) const;
 
   MOZ_CAN_RUN_SCRIPT
   nsresult SelectWord(nsIFrame* aFrame, const nsPoint& aPoint) const;
-  void SetSelectionDragState(bool aState) const;
+  MOZ_CAN_RUN_SCRIPT void SetSelectionDragState(bool aState) const;
 
   // Return true if the candidate string is a phone number.
   bool IsPhoneNumber(nsAString& aCandidate) const;

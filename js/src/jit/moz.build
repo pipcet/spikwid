@@ -19,7 +19,6 @@ lir_inputs = ["LIR.h", "shared/LIR-shared.h"]
 UNIFIED_SOURCES += [
     "AliasAnalysis.cpp",
     "AlignmentMaskAnalysis.cpp",
-    "AutoDetectInvalidation.cpp",
     "BacktrackingAllocator.cpp",
     "Bailouts.cpp",
     "BaselineBailouts.cpp",
@@ -259,3 +258,6 @@ GeneratedFile(
     entry_point="generate_cacheirops_header",
     inputs=["CacheIROps.yaml"],
 )
+
+if CONFIG["FUZZING_INTERFACES"] and CONFIG["LIBFUZZER"]:
+    include("/tools/fuzzing/libfuzzer-config.mozbuild")

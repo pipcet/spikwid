@@ -244,7 +244,7 @@ const AddonCardListenerHandler = new Proxy(
           elements = document.querySelectorAll(
             `${cardSelector}, ${cardSelector} addon-details`
           );
-        } else {
+        } else if (name == "onUpdateModeChanged") {
           elements = document.querySelectorAll("addon-card");
         }
 
@@ -477,7 +477,7 @@ let loadViewFn;
 
 /**
  * This function is set in initialize() by the parent about:addons window. It
- * is a helper for gViewController.replaceView(gViewDefault). This should be
+ * is a helper for gViewController.replaceView(defaultViewId). This should be
  * used to reset the view if we try to load an invalid view.
  */
 let replaceWithDefaultViewFn;
@@ -2264,16 +2264,48 @@ class InlineOptionsBrowser extends HTMLElement {
 
   connectedCallback() {
     window.addEventListener("scroll", this, true);
+    top.browsingContext.embedderElement.addEventListener(
+      "FullZoomChange",
+      this
+    );
+    top.browsingContext.embedderElement.addEventListener(
+      "TextZoomChange",
+      this
+    );
   }
 
   disconnectedCallback() {
     window.removeEventListener("scroll", this, true);
+    top.browsingContext.embedderElement.removeEventListener(
+      "FullZoomChange",
+      this
+    );
+    top.browsingContext.embedderElement.removeEventListener(
+      "TextZoomChange",
+      this
+    );
   }
 
   handleEvent(e) {
-    if (e.type == "scroll") {
-      this.updatePositionTask.arm();
+    switch (e.type) {
+      case "scroll":
+        return this.updatePositionTask.arm();
+      case "FullZoomChange":
+      case "TextZoomChange":
+        return this.maybeUpdateZoom();
     }
+    return undefined;
+  }
+
+  maybeUpdateZoom() {
+    let bc = this.browser?.browsingContext;
+    let topBc = top.browsingContext;
+    if (!bc || !topBc) {
+      return;
+    }
+    // Use the same full-zoom as our top window.
+    bc.fullZoom = topBc.fullZoom;
+    bc.textZoom = topBc.textZoom;
   }
 
   setAddon(addon) {
@@ -2348,6 +2380,8 @@ class InlineOptionsBrowser extends HTMLElement {
     browser.clientTop;
 
     await readyPromise;
+
+    this.maybeUpdateZoom();
 
     if (!browser.messageManager) {
       // If the browser.messageManager is undefined, the browser element has

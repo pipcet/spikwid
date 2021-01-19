@@ -4,7 +4,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "mozilla/glean/String.h"
+#include "mozilla/glean/bindings/String.h"
 
 #include "nsString.h"
 #include "mozilla/Components.h"
@@ -17,15 +17,14 @@ NS_IMPL_ISUPPORTS_CI(GleanString, nsIGleanString)
 
 NS_IMETHODIMP
 GleanString::Set(const nsACString& aValue) {
-  this->mString.Set(aValue);
+  mString.Set(aValue);
   return NS_OK;
 }
 
 NS_IMETHODIMP
 GleanString::TestGetValue(const nsACString& aStorageName, JSContext* aCx,
                           JS::MutableHandleValue aResult) {
-  auto result =
-      this->mString.TestGetValue(PromiseFlatCString(aStorageName).get());
+  auto result = mString.TestGetValue(aStorageName);
   if (result.isNothing()) {
     aResult.set(JS::UndefinedValue());
   } else {

@@ -35,9 +35,6 @@
 #include "mozilla/BaseProfilerMarkers.h"
 #include "mozilla/ProfilerMarkersDetail.h"
 
-// TODO: Move common stuff to shared header instead.
-#include "GeckoProfiler.h"
-
 #ifndef MOZ_GECKO_PROFILER
 
 #  define PROFILER_MARKER_UNTYPED(markerName, categoryName, ...)
@@ -49,6 +46,14 @@
                                                 categoryPair, docShell)
 
 #else  // ndef MOZ_GECKO_PROFILER
+
+namespace mozilla {
+class ProfileChunkedBuffer;
+}
+
+bool profiler_can_accept_markers();
+bool profiler_capture_backtrace_into(
+    mozilla::ProfileChunkedBuffer& aChunkedBuffer);
 
 // Bring category names from Base Profiler into the geckoprofiler::category
 // namespace, for consistency with other Gecko Profiler identifiers.
@@ -133,7 +138,7 @@ inline mozilla::ProfileBufferBlockIndex profiler_add_marker(
 
 namespace geckoprofiler::markers {
 // Most common marker types. Others are in ProfilerMarkerTypes.h.
-using Text = ::mozilla::baseprofiler::markers::Text;
+using TextMarker = ::mozilla::baseprofiler::markers::TextMarker;
 using Tracing = mozilla::baseprofiler::markers::Tracing;
 }  // namespace geckoprofiler::markers
 
@@ -144,7 +149,7 @@ using Tracing = mozilla::baseprofiler::markers::Tracing;
       AUTO_PROFILER_STATS(PROFILER_MARKER_TEXT);                              \
       ::profiler_add_marker(markerName,                                       \
                             ::geckoprofiler::category::categoryName, options, \
-                            ::geckoprofiler::markers::Text{}, text);          \
+                            ::geckoprofiler::markers::TextMarker{}, text);    \
     } while (false)
 
 // RAII object that adds a PROFILER_MARKER_TEXT when destroyed; the marker's
@@ -172,7 +177,8 @@ class MOZ_RAII AutoProfilerTextMarker {
     AUTO_PROFILER_STATS(AUTO_PROFILER_MARKER_TEXT);
     profiler_add_marker(
         mozilla::ProfilerString8View::WrapNullTerminatedString(mMarkerName),
-        mCategory, std::move(mOptions), geckoprofiler::markers::Text{}, mText);
+        mCategory, std::move(mOptions), geckoprofiler::markers::TextMarker{},
+        mText);
   }
 
  protected:
@@ -257,6 +263,31 @@ class MOZ_RAII AutoProfilerTracing {
     AutoProfilerTracing PROFILER_RAII(                                      \
         categoryString, markerName, geckoprofiler::category::categoryPair,  \
         profiler_get_inner_window_id_from_docshell(docShell))
+
+extern template mozilla::ProfileBufferBlockIndex AddMarkerToBuffer(
+    mozilla::ProfileChunkedBuffer&, const mozilla::ProfilerString8View&,
+    const mozilla::MarkerCategory&, mozilla::MarkerOptions&&,
+    mozilla::baseprofiler::markers::NoPayload);
+
+extern template mozilla::ProfileBufferBlockIndex AddMarkerToBuffer(
+    mozilla::ProfileChunkedBuffer&, const mozilla::ProfilerString8View&,
+    const mozilla::MarkerCategory&, mozilla::MarkerOptions&&,
+    mozilla::baseprofiler::markers::TextMarker, const std::string&);
+
+extern template mozilla::ProfileBufferBlockIndex profiler_add_marker(
+    const mozilla::ProfilerString8View&, const mozilla::MarkerCategory&,
+    mozilla::MarkerOptions&&, mozilla::baseprofiler::markers::TextMarker,
+    const std::string&);
+
+extern template mozilla::ProfileBufferBlockIndex profiler_add_marker(
+    const mozilla::ProfilerString8View&, const mozilla::MarkerCategory&,
+    mozilla::MarkerOptions&&, mozilla::baseprofiler::markers::TextMarker,
+    const nsCString&);
+
+extern template mozilla::ProfileBufferBlockIndex profiler_add_marker(
+    const mozilla::ProfilerString8View&, const mozilla::MarkerCategory&,
+    mozilla::MarkerOptions&&, mozilla::baseprofiler::markers::Tracing,
+    const mozilla::ProfilerString8View&);
 
 #endif  // nfed MOZ_GECKO_PROFILER else
 

@@ -29,6 +29,20 @@
   outline: 1px solid transparent;
 }
 
+@media screen and (max-width: 938px) {
+  .container {
+    margin-inline-start: auto;
+    margin-inline-end: 8px;
+  }
+}
+
+@media screen and (max-width: 676px) {
+  .container {
+    margin-inline-start: 8px;
+    margin-inline-end: 8px;
+  }
+}
+
 .title {
   grid-area: 1 / 2 / 2 / 8;
 }
@@ -66,6 +80,7 @@ label[for="confirmation-checkbox"] {
   width: 32px;
   height: 32px;
   margin: 8px;
+  user-select: none;
 }
 
 .content,

@@ -1595,7 +1595,9 @@
       "size_overflow",
       "out_of_memory",
       "pipe_init_error",
-      "write_buffer_error"
+      "write_buffer_error",
+      "alpha_y_sz_mismatch",
+      "alpha_y_bpc_mismatch"
     ],
     "description": "Decode result of AVIF image",
     "bug_numbers": [1670827]
@@ -1649,7 +1651,7 @@
   "SCROLL_PRESENT_LATENCY": {
     "record_in_processes": ["main", "gpu"],
     "products": ["firefox", "geckoview_streaming"],
-    "alert_emails": [ "perfteam@mozilla.com", "sefeng@mozilla.com", "vchin@mozilla.com" ],
+    "alert_emails": [ "perf-telemetry-alerts@mozilla.com", "sefeng@mozilla.com", "vchin@mozilla.com" ],
     "expires_in_version": "never",
     "kind": "exponential",
     "releaseChannelCollection": "opt-out",
@@ -2637,39 +2639,6 @@
     "bug_numbers": [1296288, 1654309],
     "releaseChannelCollection": "opt-out"
   },
-  "ESNI_KEYS_RECORD_FETCH_DELAYS": {
-    "record_in_processes": ["main"],
-    "products": ["firefox", "fennec"],
-    "expires_in_version": "70",
-    "kind": "exponential",
-    "high": 60000,
-    "n_buckets": 100,
-    "description": "Added delays caused the esni keys fetching.(ms)",
-    "alert_emails": ["necko@mozilla.com", "ddamjanovic@mozilla.com"],
-    "bug_numbers": [1473736],
-    "releaseChannelCollection": "opt-out"
-  },
-  "ESNI_KEYS_RECORDS_FOUND": {
-    "record_in_processes": ["main"],
-    "products": ["firefox", "fennec"],
-    "expires_in_version": "70",
-    "kind": "boolean",
-    "description": "ESNI Keys found rate.",
-    "alert_emails": ["necko@mozilla.com", "ddamjanovic@mozilla.com"],
-    "bug_numbers": [1473736],
-    "releaseChannelCollection": "opt-out"
-  },
-  "ESNI_NOESNI_TLS_SUCCESS_RATE": {
-    "record_in_processes": ["main"],
-    "products": ["firefox", "fennec"],
-    "expires_in_version": "70",
-    "kind": "categorical",
-    "labels": ["EsniTLSSucceeded", "EsniTLSFailed", "NoEsniTLSSucceeded", "NoEsniTLSFailed"],
-    "description": "TLS handshake with and without esni success rate.",
-    "alert_emails": ["necko@mozilla.com", "ddamjanovic@mozilla.com"],
-    "bug_numbers": [1473736],
-    "releaseChannelCollection": "opt-out"
-  },
   "SSL_HANDSHAKE_VERSION": {
     "record_in_processes": ["main", "content"],
     "products": ["firefox", "fennec"],
@@ -3154,6 +3123,16 @@
     "releaseChannelCollection": "opt-out",
     "alert_emails": ["necko@mozilla.com", "vgosu@mozilla.com"]
   },
+  "HTTP_CHANNEL_ONSTART_SUCCESS_HTTPS_RR" : {
+    "record_in_processes": ["main"],
+    "products": ["firefox", "fennec"],
+    "expires_in_version": "never",
+    "kind": "boolean",
+    "keyed": true,
+    "description": "Successfully started HTTP channels when HTTPS RR is used; Keyed by echConfig is used or not",
+    "bug_numbers": [1682552],
+    "alert_emails": ["necko@mozilla.com", "kershaw@mozilla.com"]
+  },
   "HTTP_CONNECTION_ENTRY_CACHE_HIT_1" : {
     "record_in_processes": ["main", "content"],
     "products": ["firefox", "fennec"],
@@ -3470,6 +3449,87 @@
     "n_buckets": 50,
     "bug_numbers": [1655566],
     "description": "HTTP3: number of times when a stream is blocked by the flow control while sendnig data."
+  },
+  "HTTP3_LOSS_RATIO": {
+    "record_in_processes": ["main", "content"],
+    "products": ["firefox"],
+    "alert_emails": ["necko@mozilla.com", "ddamjanovic@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": 2000,
+    "n_buckets": 100,
+    "bug_numbers": [1677951],
+    "description": "HTTP3: packet loss ratio (multiply by 10000)."
+  },
+  "HTTP3_LATE_ACK_RATIO": {
+    "record_in_processes": ["main", "content"],
+    "products": ["firefox"],
+    "alert_emails": ["necko@mozilla.com", "ddamjanovic@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": 2000,
+    "n_buckets": 100,
+    "keyed": true,
+    "bug_numbers": [1677951],
+    "description": "HTTP3: spurious retransmissions ratio (spurios_retransmission / packet sent * 10000)."
+  },
+  "HTTP3_LATE_ACK": {
+    "record_in_processes": ["main", "content"],
+    "products": ["firefox"],
+    "alert_emails": ["necko@mozilla.com", "ddamjanovic@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": 10000,
+    "n_buckets": 100,
+    "keyed": true,
+    "bug_numbers": [1677951],
+    "description": "HTTP3: the number of spurious retransmissions."
+  },
+  "HTTP3_COUNTS_PTO": {
+    "record_in_processes": ["main", "content"],
+    "products": ["firefox"],
+    "alert_emails": ["necko@mozilla.com", "ddamjanovic@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": 5000,
+    "n_buckets": 100,
+    "keyed": true,
+    "bug_numbers": [1677951],
+    "description": "HTTP3: the number of PTOs."
+  },
+  "HTTP3_DROP_DGRAMS": {
+    "record_in_processes": ["main", "content"],
+    "products": ["firefox"],
+    "alert_emails": ["necko@mozilla.com", "ddamjanovic@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": 5000,
+    "n_buckets": 100,
+    "bug_numbers": [1677951],
+    "description": "HTTP3: the number of dropped datagrams."
+  },
+  "HTTP3_SAVED_DGRAMS": {
+    "record_in_processes": ["main", "content"],
+    "products": ["firefox"],
+    "alert_emails": ["necko@mozilla.com", "ddamjanovic@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": 5000,
+    "n_buckets": 100,
+    "bug_numbers": [1677951],
+    "description": "HTTP3: the number of saved datagrams that are waiting for keys to be available."
+  },
+  "HTTP3_RECEIVED_SENT_DGRAMS": {
+    "record_in_processes": ["main", "content"],
+    "products": ["firefox"],
+    "alert_emails": ["necko@mozilla.com", "ddamjanovic@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": 100000,
+    "n_buckets": 100,
+    "keyed": true,
+    "bug_numbers": [1677951],
+    "description": "HTTP3: the number of received/sent packets."
   },
   "HTTP_CONTENT_ENCODING": {
     "record_in_processes": ["main", "content"],
@@ -4665,7 +4725,7 @@
   "LOADED_TAB_COUNT": {
     "record_in_processes": ["main"],
     "products": ["firefox"],
-    "alert_emails": ["barret@mozilla.com", "perfteam@mozilla.com"],
+    "alert_emails": ["barret@mozilla.com", "perf-telemetry-alerts@mozilla.com"],
     "bug_numbers": [1634508],
     "expires_in_version": "never",
     "kind": "exponential",
@@ -6227,7 +6287,7 @@
   "PLACES_AUTOCOMPLETE_6_FIRST_RESULTS_TIME_MS": {
     "record_in_processes": ["main"],
     "products": ["firefox", "fennec"],
-    "alert_emails": ["mdeboer@mozilla.com", "dolske@mozilla.com"],
+    "alert_emails": ["mdeboer@mozilla.com"],
     "releaseChannelCollection": "opt-out",
     "expires_in_version": "never",
     "kind": "exponential",
@@ -6337,6 +6397,16 @@
     "bug_numbers": [1137447],
     "description": "Update: count of no updates were found for a background update check (timer initiated)"
   },
+  "UPDATE_CHECK_NO_UPDATE_SUBSEQUENT" : {
+    "record_in_processes": ["main"],
+    "products": ["firefox"],
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com", "bytesized@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "count",
+    "releaseChannelCollection": "opt-out",
+    "bug_numbers": [353804],
+    "description": "Update: count of no updates were found for a background update check (timer initiated)"
+  },
   "UPDATE_CHECK_CODE_EXTERNAL": {
     "record_in_processes": ["main"],
     "products": ["firefox", "fennec"],
@@ -6358,6 +6428,17 @@
     "releaseChannelCollection": "opt-out",
     "bug_numbers": [1137447],
     "description": "Update: background update check result code except for no updates found (timer initiated)"
+  },
+  "UPDATE_CHECK_CODE_SUBSEQUENT": {
+    "record_in_processes": ["main"],
+    "products": ["firefox"],
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com", "bytesized@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "enumerated",
+    "n_values": 50,
+    "releaseChannelCollection": "opt-out",
+    "bug_numbers": [353804],
+    "description": "Update: background update check result code except for no updates found (after we already have an update ready). Possible codes are enumerated by constants starting with CHK_ in toolkit/mozapps/update/UpdateTelemetry.jsm"
   },
   "UPDATE_CHECK_EXTENDED_ERROR_EXTERNAL": {
     "record_in_processes": ["main"],
@@ -6381,6 +6462,17 @@
     "bug_numbers": [1137447],
     "description": "Update: keyed count (key names are prefixed with AUS_CHECK_EX_ERR_) of background update check extended error code (timer initiated)"
   },
+  "UPDATE_CHECK_EXTENDED_ERROR_SUBSEQUENT": {
+    "record_in_processes": ["main"],
+    "products": ["firefox"],
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com", "bytesized@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "count",
+    "keyed": true,
+    "releaseChannelCollection": "opt-out",
+    "bug_numbers": [353804],
+    "description": "Update: keyed count (key names are prefixed with AUS_CHECK_EX_ERR_) of background update check extended error code (timer initiated)"
+  },
   "UPDATE_INVALID_LASTUPDATETIME_EXTERNAL": {
     "record_in_processes": ["main"],
     "products": ["firefox", "fennec"],
@@ -6399,6 +6491,16 @@
     "kind": "count",
     "releaseChannelCollection": "opt-out",
     "bug_numbers": [1137447],
+    "description": "Update: count of systems that have a last update time greater than the current time (timer initiated)"
+  },
+  "UPDATE_INVALID_LASTUPDATETIME_SUBSEQUENT": {
+    "record_in_processes": ["main"],
+    "products": ["firefox"],
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com", "bytesized@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "count",
+    "releaseChannelCollection": "opt-out",
+    "bug_numbers": [353804],
     "description": "Update: count of systems that have a last update time greater than the current time (timer initiated)"
   },
   "UPDATE_LAST_NOTIFY_INTERVAL_DAYS_EXTERNAL": {
@@ -6425,6 +6527,18 @@
     "bug_numbers": [1137447],
     "description": "Update: interval in days since the last background update check (timer initiated)"
   },
+  "UPDATE_LAST_NOTIFY_INTERVAL_DAYS_SUBSEQUENT": {
+    "record_in_processes": ["main"],
+    "products": ["firefox"],
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com", "bytesized@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "n_buckets": 30,
+    "high": 180,
+    "releaseChannelCollection": "opt-out",
+    "bug_numbers": [353804],
+    "description": "Update: interval in days since the last background update check (after we already have an update ready)"
+  },
   "UPDATE_PING_COUNT_EXTERNAL": {
     "record_in_processes": ["main"],
     "products": ["firefox", "fennec"],
@@ -6443,6 +6557,16 @@
     "kind": "count",
     "releaseChannelCollection": "opt-out",
     "bug_numbers": [1151267],
+    "description": "Update: count of systems for this ping for comparison with other pings (timer initiated)"
+  },
+  "UPDATE_PING_COUNT_SUBSEQUENT": {
+    "record_in_processes": ["main"],
+    "products": ["firefox", "fennec"],
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com", "bytesized@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "count",
+    "releaseChannelCollection": "opt-out",
+    "bug_numbers": [353804],
     "description": "Update: count of systems for this ping for comparison with other pings (timer initiated)"
   },
   "UPDATE_SERVICE_INSTALLED_EXTERNAL": {
@@ -6465,6 +6589,16 @@
     "bug_numbers": [1137447],
     "description": "Update: whether the service is installed (timer initiated)"
   },
+  "UPDATE_SERVICE_INSTALLED_SUBSEQUENT": {
+    "record_in_processes": ["main"],
+    "products": ["firefox"],
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com", "bytesized@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "boolean",
+    "releaseChannelCollection": "opt-out",
+    "bug_numbers": [353804],
+    "description": "Update: whether the service is installed (after we already have an update ready)"
+  },
   "UPDATE_SERVICE_MANUALLY_UNINSTALLED_EXTERNAL": {
     "record_in_processes": ["main"],
     "products": ["firefox", "fennec"],
@@ -6483,6 +6617,16 @@
     "kind": "count",
     "releaseChannelCollection": "opt-out",
     "bug_numbers": [1137447],
+    "description": "Update: count of systems that manually uninstalled the service (timer initiated)"
+  },
+  "UPDATE_SERVICE_MANUALLY_UNINSTALLED_SUBSEQUENT": {
+    "record_in_processes": ["main"],
+    "products": ["firefox"],
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com", "bytesized@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "count",
+    "releaseChannelCollection": "opt-out",
+    "bug_numbers": [353804],
     "description": "Update: count of systems that manually uninstalled the service (timer initiated)"
   },
   "UPDATE_UNABLE_TO_APPLY_EXTERNAL": {
@@ -6505,6 +6649,16 @@
     "bug_numbers": [1151267],
     "description": "Update: count of systems that cannot apply updates (timer initiated)"
   },
+  "UPDATE_UNABLE_TO_APPLY_SUBSEQUENT": {
+    "record_in_processes": ["main"],
+    "products": ["firefox"],
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com", "bytesized@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "count",
+    "releaseChannelCollection": "opt-out",
+    "bug_numbers": [353804],
+    "description": "Update: count of systems that cannot apply updates (timer initiated)"
+  },
   "UPDATE_CANNOT_STAGE_EXTERNAL": {
     "record_in_processes": ["main"],
     "products": ["firefox", "fennec"],
@@ -6523,6 +6677,16 @@
     "kind": "count",
     "releaseChannelCollection": "opt-out",
     "bug_numbers": [1137447],
+    "description": "Update: count of systems that cannot stage updates (timer initiated)"
+  },
+  "UPDATE_CANNOT_STAGE_SUBSEQUENT": {
+    "record_in_processes": ["main"],
+    "products": ["firefox"],
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com", "bytesized@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "count",
+    "releaseChannelCollection": "opt-out",
+    "bug_numbers": [353804],
     "description": "Update: count of systems that cannot stage updates (timer initiated)"
   },
   "UPDATE_PREF_UPDATE_CANCELATIONS_EXTERNAL": {
@@ -6547,6 +6711,17 @@
     "bug_numbers": [1137447],
     "description": "Update: number of sequential update elevation request cancelations greater than 0 (timer initiated)"
   },
+  "UPDATE_PREF_UPDATE_CANCELATIONS_SUBSEQUENT": {
+    "record_in_processes": ["main"],
+    "products": ["firefox"],
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com", "bytesized@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "enumerated",
+    "n_values": 100,
+    "releaseChannelCollection": "opt-out",
+    "bug_numbers": [353804],
+    "description": "Update: number of sequential update elevation request cancelations greater than 0 (after we already have an update ready)"
+  },
   "UPDATE_PREF_SERVICE_ERRORS_EXTERNAL": {
     "record_in_processes": ["main"],
     "products": ["firefox", "fennec"],
@@ -6569,6 +6744,17 @@
     "bug_numbers": [1137447],
     "description": "Update: number of sequential update service errors greater than 0 (timer initiated)"
   },
+  "UPDATE_PREF_SERVICE_ERRORS_SUBSEQUENT": {
+    "record_in_processes": ["main"],
+    "products": ["firefox"],
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com", "bytesized@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "enumerated",
+    "n_values": 30,
+    "releaseChannelCollection": "opt-out",
+    "bug_numbers": [353804],
+    "description": "Update: number of sequential update service errors greater than 0 (after we already have an update ready)"
+  },
   "UPDATE_NOT_PREF_UPDATE_AUTO_EXTERNAL": {
     "record_in_processes": ["main"],
     "products": ["firefox", "fennec"],
@@ -6587,6 +6773,16 @@
     "kind": "count",
     "releaseChannelCollection": "opt-out",
     "bug_numbers": [1137447],
+    "description": "Update: count of when getAppUpdateAutoEnabled from UpdateUtils.jsm does not return the default value of true (true values are not submitted)"
+  },
+  "UPDATE_NOT_PREF_UPDATE_AUTO_SUBSEQUENT": {
+    "record_in_processes": ["main"],
+    "products": ["firefox"],
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com", "bytesized@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "count",
+    "releaseChannelCollection": "opt-out",
+    "bug_numbers": [353804],
     "description": "Update: count of when getAppUpdateAutoEnabled from UpdateUtils.jsm does not return the default value of true (true values are not submitted)"
   },
   "UPDATE_NOT_PREF_UPDATE_STAGING_ENABLED_EXTERNAL": {
@@ -6609,6 +6805,16 @@
     "bug_numbers": [1137447],
     "description": "Update: count of when the app.update.staging.enabled boolean preference is not the default value of true (true values are not submitted)"
   },
+  "UPDATE_NOT_PREF_UPDATE_STAGING_ENABLED_SUBSEQUENT": {
+    "record_in_processes": ["main"],
+    "products": ["firefox"],
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com", "bytesized@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "count",
+    "releaseChannelCollection": "opt-out",
+    "bug_numbers": [353804],
+    "description": "Update: count of when the app.update.staging.enabled boolean preference is not the default value of true (true values are not submitted)"
+  },
   "UPDATE_NOT_PREF_UPDATE_SERVICE_ENABLED_EXTERNAL": {
     "record_in_processes": ["main"],
     "products": ["firefox", "fennec"],
@@ -6627,6 +6833,16 @@
     "kind": "count",
     "releaseChannelCollection": "opt-out",
     "bug_numbers": [1137447],
+    "description": "Update: count of when the app.update.service.enabled boolean preference is not the default value of true (true values are not submitted)"
+  },
+  "UPDATE_NOT_PREF_UPDATE_SERVICE_ENABLED_SUBSEQUENT": {
+    "record_in_processes": ["main"],
+    "products": ["firefox"],
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com", "bytesized@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "count",
+    "releaseChannelCollection": "opt-out",
+    "bug_numbers": [353804],
     "description": "Update: count of when the app.update.service.enabled boolean preference is not the default value of true (true values are not submitted)"
   },
   "UPDATE_DOWNLOAD_CODE_COMPLETE": {
@@ -6811,10 +7027,10 @@
     "alert_emails": ["application-update-telemetry-alerts@mozilla.com", "bytesized@mozilla.com"],
     "expires_in_version": "never",
     "kind": "categorical",
-    "bug_numbers": [893505, 1521427],
+    "bug_numbers": [893505, 1521427, 1553982],
     "releaseChannelCollection": "opt-out",
     "description": "Update: the application update doorhanger type that was displayed.",
-    "labels": ["restart", "available", "manual", "unsupported"]
+    "labels": ["restart", "available", "manual", "unsupported", "otherinstance"]
   },
   "UPDATE_NOTIFICATION_BADGE_SHOWN": {
     "record_in_processes": ["main"],
@@ -6822,10 +7038,10 @@
     "alert_emails": ["application-update-telemetry-alerts@mozilla.com", "bytesized@mozilla.com"],
     "expires_in_version": "never",
     "kind": "categorical",
-    "bug_numbers": [893505, 1365204, 1521427],
+    "bug_numbers": [893505, 1365204, 1521427, 1553982],
     "releaseChannelCollection": "opt-out",
     "description": "Update: the application update badge type that was displayed.",
-    "labels": ["restart", "available", "manual", "unsupported"]
+    "labels": ["restart", "available", "manual", "unsupported", "otherinstance"]
   },
   "UPDATE_NOTIFICATION_DISMISSED": {
     "record_in_processes": ["main"],
@@ -6833,10 +7049,10 @@
     "alert_emails": ["application-update-telemetry-alerts@mozilla.com", "bytesized@mozilla.com"],
     "expires_in_version": "never",
     "kind": "categorical",
-    "bug_numbers": [893505, 1521427],
+    "bug_numbers": [893505, 1521427, 1553982],
     "releaseChannelCollection": "opt-out",
     "description": "Update: the dismiss action was executed for this application update doorhanger type.",
-    "labels": ["restart", "available", "manual", "unsupported"]
+    "labels": ["restart", "available", "manual", "unsupported", "otherinstance"]
   },
   "UPDATE_NOTIFICATION_MAIN_ACTION_DOORHANGER": {
     "record_in_processes": ["main"],
@@ -6844,10 +7060,10 @@
     "alert_emails": ["application-update-telemetry-alerts@mozilla.com", "bytesized@mozilla.com"],
     "expires_in_version": "never",
     "kind": "categorical",
-    "bug_numbers": [893505, 1521427],
+    "bug_numbers": [893505, 1521427, 1553982],
     "releaseChannelCollection": "opt-out",
     "description": "Update: the main update action was initiated for this application update doorhanger type.",
-    "labels": ["restart", "available", "manual", "unsupported"]
+    "labels": ["restart", "available", "manual", "unsupported", "otherinstance"]
   },
   "UPDATE_NOTIFICATION_MAIN_ACTION_MENU": {
     "record_in_processes": ["main"],
@@ -6855,10 +7071,10 @@
     "alert_emails": ["application-update-telemetry-alerts@mozilla.com", "bytesized@mozilla.com"],
     "expires_in_version": "never",
     "kind": "categorical",
-    "bug_numbers": [893505, 1521427],
+    "bug_numbers": [893505, 1521427, 1553982],
     "releaseChannelCollection": "opt-out",
     "description": "Update: the update action was initiated from the PanelUI application update menu item.",
-    "labels": ["restart", "available", "manual", "unsupported"]
+    "labels": ["restart", "available", "manual", "unsupported", "otherinstance"]
   },
   "UPDATE_CAN_USE_BITS_EXTERNAL": {
     "record_in_processes": ["main"],
@@ -6895,6 +7111,24 @@
     "releaseChannelCollection": "opt-out",
     "bug_numbers": [1343669, 1540193, 1520321],
     "description": "Update: Whether BITS could be used to download updates (timer initiated)"
+  },
+  "UPDATE_CAN_USE_BITS_SUBSEQUENT": {
+    "record_in_processes": ["main"],
+    "products": ["firefox"],
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com", "bytesized@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "categorical",
+    "labels": [
+      "CanUseBits",
+      "NoBits_NotWindows",
+      "NoBits_FeatureOff",
+      "NoBits_Pref",
+      "NoBits_Proxy",
+      "NoBits_OtherUser"
+    ],
+    "releaseChannelCollection": "opt-out",
+    "bug_numbers": [1343669, 1540193, 1520321, 353804],
+    "description": "Update: Whether BITS could be used to download updates (after we already have an update ready)"
   },
   "UPDATE_BITS_RESULT_COMPLETE": {
     "record_in_processes": ["main"],
@@ -6965,7 +7199,7 @@
   "FX_TAB_CLOSE_TIME_ANIM_MS": {
     "record_in_processes": ["main"],
     "products": ["firefox", "fennec"],
-    "alert_emails": ["mconley@mozilla.com", "dolske@mozilla.com"],
+    "alert_emails": ["mconley@mozilla.com"],
     "bug_numbers": [1340842, 1488952],
     "expires_in_version": "never",
     "releaseChannelCollection": "opt-out",
@@ -6977,9 +7211,9 @@
   "FX_TAB_CLOSE_TIME_NO_ANIM_MS": {
     "record_in_processes": ["main"],
     "products": ["firefox"],
-    "alert_emails": ["mconley@mozilla.com", "hkirschner@mozilla.com"],
+    "alert_emails": ["mconley@mozilla.com", "esmyth@mozilla.com"],
     "bug_numbers": [1340842],
-    "expires_in_version": "86",
+    "expires_in_version": "92",
     "kind": "exponential",
     "high": 10000,
     "n_buckets": 50,
@@ -6988,9 +7222,9 @@
   "FX_TAB_CLOSE_PERMIT_UNLOAD_TIME_MS": {
     "record_in_processes": ["main"],
     "products": ["firefox"],
-    "alert_emails": ["mconley@mozilla.com", "hkirschner@mozilla.com"],
+    "alert_emails": ["mconley@mozilla.com", "esmyth@mozilla.com"],
     "bug_numbers": [1340842],
-    "expires_in_version": "86",
+    "expires_in_version": "92",
     "kind": "exponential",
     "high": 10000,
     "n_buckets": 50,
@@ -7032,7 +7266,7 @@
   "FX_TAB_SWITCH_UPDATE_MS": {
     "record_in_processes": ["main"],
     "products": ["firefox", "fennec"],
-    "alert_emails": ["perf-telemetry-alerts@mozilla.com", "mconley@mozilla.com", "dolske@mozilla.com"],
+    "alert_emails": ["perf-telemetry-alerts@mozilla.com", "mconley@mozilla.com"],
     "expires_in_version": "never",
     "releaseChannelCollection": "opt-out",
     "kind": "exponential",
@@ -7044,7 +7278,7 @@
   "FX_TAB_SWITCH_TOTAL_E10S_MS": {
     "record_in_processes": ["main"],
     "products": ["firefox", "fennec"],
-    "alert_emails": ["mconley@mozilla.com", "dolske@mozilla.com"],
+    "alert_emails": ["mconley@mozilla.com"],
     "expires_in_version": "never",
     "kind": "exponential",
     "high": 1000,
@@ -7110,7 +7344,7 @@
     "n_buckets": 50,
     "description": "When a document is loaded, report the number of unique site origins across the browser(all tabs) if it has been at least 5 minutes since last time we collect this data",
     "bug_numbers": [1589700],
-    "alert_emails": ["sefeng@mozilla.com", "perfteam@mozilla.com"],
+    "alert_emails": ["sefeng@mozilla.com", "perf-telemetry-alerts@mozilla.com"],
     "releaseChannelCollection": "opt-out"
   },
   "FX_NUMBER_OF_UNIQUE_SITE_ORIGINS_PER_DOCUMENT": {
@@ -7122,7 +7356,7 @@
     "n_buckets": 50,
     "description": "When a document is unloaded, report the highest number of site origins loaded simultaneously in that document.",
     "bug_numbers": [1603185],
-    "alert_emails": ["barret@mozilla.com", "perfteam@mozilla.com"],
+    "alert_emails": ["barret@mozilla.com", "perf-telemetry-alerts@mozilla.com"],
     "releaseChannelCollection": "opt-out"
   },
   "FX_NUMBER_OF_UNIQUE_SITE_ORIGINS_PER_LOADED_TABS_1": {
@@ -7134,7 +7368,7 @@
     "n_buckets": 50,
     "description": "When a document is loaded, if the user has exactly one loaded tab, report the ratio of unique site origins loaded to number of loaded tabs (multiplied by 100) if it has been at least 5 minutes since the last collection",
     "bug_numbers": [1655138],
-    "alert_emails": ["barret@mozilla.com", "perfteam@mozilla.com"],
+    "alert_emails": ["barret@mozilla.com", "perf-telemetry-alerts@mozilla.com"],
     "releaseChannelCollection": "opt-out"
   },
   "FX_NUMBER_OF_UNIQUE_SITE_ORIGINS_PER_LOADED_TABS_2_4": {
@@ -7146,7 +7380,7 @@
     "n_buckets": 50,
     "description": "When a document is loaded, if the user has a number of loaded tabs in the range 2 <= N <= 4, report the ratio of unique site origins loaded to number of loaded tabs (multiplied by 100) if it has been at least 5 minutes since the last collection",
     "bug_numbers": [1655138],
-    "alert_emails": ["barret@mozilla.com", "perfteam@mozilla.com"],
+    "alert_emails": ["barret@mozilla.com", "perf-telemetry-alerts@mozilla.com"],
     "releaseChannelCollection": "opt-out"
   },
   "FX_NUMBER_OF_UNIQUE_SITE_ORIGINS_PER_LOADED_TABS_5_9": {
@@ -7158,7 +7392,7 @@
     "n_buckets": 50,
     "description": "When a document is loaded, if the user has a number of loaded tabs in the range 5 <= N <= 9, report the ratio of unique site origins loaded to number of loaded tabs (multiplied by 100) if it has been at least 5 minutes since the last collection",
     "bug_numbers": [1655138],
-    "alert_emails": ["barret@mozilla.com", "perfteam@mozilla.com"],
+    "alert_emails": ["barret@mozilla.com", "perf-telemetry-alerts@mozilla.com"],
     "releaseChannelCollection": "opt-out"
   },
   "FX_NUMBER_OF_UNIQUE_SITE_ORIGINS_PER_LOADED_TABS_10_14": {
@@ -7170,7 +7404,7 @@
     "n_buckets": 50,
     "description": "When a document is loaded, if the user has a number of loaded tabs in the range 10 <= N <= 14, report the ratio of unique site origins loaded to number of loaded tabs (multiplied by 100) if it has been at least 5 minutes since the last collection",
     "bug_numbers": [1655138],
-    "alert_emails": ["barret@mozilla.com", "perfteam@mozilla.com"],
+    "alert_emails": ["barret@mozilla.com", "perf-telemetry-alerts@mozilla.com"],
     "releaseChannelCollection": "opt-out"
   },
   "FX_NUMBER_OF_UNIQUE_SITE_ORIGINS_PER_LOADED_TABS_15_19": {
@@ -7182,7 +7416,7 @@
     "n_buckets": 50,
     "description": "When a document is loaded, if the user has a number of loaded tabs in the range 15 <= N <= 19, report the ratio of unique site origins loaded to number of loaded tabs (multiplied by 100) if it has been at least 5 minutes since the last collection",
     "bug_numbers": [1655138],
-    "alert_emails": ["barret@mozilla.com", "perfteam@mozilla.com"],
+    "alert_emails": ["barret@mozilla.com", "perf-telemetry-alerts@mozilla.com"],
     "releaseChannelCollection": "opt-out"
   },
   "FX_NUMBER_OF_UNIQUE_SITE_ORIGINS_PER_LOADED_TABS_20_24": {
@@ -7194,7 +7428,7 @@
     "n_buckets": 50,
     "description": "When a document is loaded, if the user has a number of loaded tabs in the range 20 <= N <= 24, report the ratio of unique site origins loaded to number of loaded tabs (multiplied by 100) if it has been at least 5 minutes since the last collection",
     "bug_numbers": [1655138],
-    "alert_emails": ["barret@mozilla.com", "perfteam@mozilla.com"],
+    "alert_emails": ["barret@mozilla.com", "perf-telemetry-alerts@mozilla.com"],
     "releaseChannelCollection": "opt-out"
   },
   "FX_NUMBER_OF_UNIQUE_SITE_ORIGINS_PER_LOADED_TABS_25_29": {
@@ -7206,7 +7440,7 @@
     "n_buckets": 50,
     "description": "When a document is loaded, if the user has a number of loaded tabs in the range 25 <= N <= 29, report the ratio of unique site origins loaded to number of loaded tabs (multiplied by 100) if it has been at least 5 minutes since the last collection",
     "bug_numbers": [1655138],
-    "alert_emails": ["barret@mozilla.com", "perfteam@mozilla.com"],
+    "alert_emails": ["barret@mozilla.com", "perf-telemetry-alerts@mozilla.com"],
     "releaseChannelCollection": "opt-out"
   },
   "FX_NUMBER_OF_UNIQUE_SITE_ORIGINS_PER_LOADED_TABS_30_34": {
@@ -7218,7 +7452,7 @@
     "n_buckets": 50,
     "description": "When a document is loaded, if the user has a number of loaded tabs in the range 30 <= N <= 34, report the ratio of unique site origins loaded to number of loaded tabs (multiplied by 100) if it has been at least 5 minutes since the last collection",
     "bug_numbers": [1655138],
-    "alert_emails": ["barret@mozilla.com", "perfteam@mozilla.com"],
+    "alert_emails": ["barret@mozilla.com", "perf-telemetry-alerts@mozilla.com"],
     "releaseChannelCollection": "opt-out"
   },
   "FX_NUMBER_OF_UNIQUE_SITE_ORIGINS_PER_LOADED_TABS_35_39": {
@@ -7230,7 +7464,7 @@
     "n_buckets": 50,
     "description": "When a document is loaded, if the user has a number of loaded tabs in the range 35 <= N <= 39, report the ratio of unique site origins loaded to number of loaded tabs (multiplied by 100) if it has been at least 5 minutes since the last collection",
     "bug_numbers": [1655138],
-    "alert_emails": ["barret@mozilla.com", "perfteam@mozilla.com"],
+    "alert_emails": ["barret@mozilla.com", "perf-telemetry-alerts@mozilla.com"],
     "releaseChannelCollection": "opt-out"
   },
   "FX_NUMBER_OF_UNIQUE_SITE_ORIGINS_PER_LOADED_TABS_40_44": {
@@ -7242,7 +7476,7 @@
     "n_buckets": 50,
     "description": "When a document is loaded, if the user has a number of loaded tabs in the range 40 <= N <= 44, report the ratio of unique site origins loaded to number of loaded tabs (multiplied by 100) if it has been at least 5 minutes since the last collection",
     "bug_numbers": [1655138],
-    "alert_emails": ["barret@mozilla.com", "perfteam@mozilla.com"],
+    "alert_emails": ["barret@mozilla.com", "perf-telemetry-alerts@mozilla.com"],
     "releaseChannelCollection": "opt-out"
   },
   "FX_NUMBER_OF_UNIQUE_SITE_ORIGINS_PER_LOADED_TABS_45_49": {
@@ -7254,7 +7488,7 @@
     "n_buckets": 50,
     "description": "When a document is loaded, if the user has a number of loaded tabs in the range 45 <= N <= 49, report the ratio of unique site origins loaded to number of loaded tabs (multiplied by 100) if it has been at least 5 minutes since the last collection",
     "bug_numbers": [1655138],
-    "alert_emails": ["barret@mozilla.com", "perfteam@mozilla.com"],
+    "alert_emails": ["barret@mozilla.com", "perf-telemetry-alerts@mozilla.com"],
     "releaseChannelCollection": "opt-out"
   },
   "FX_NUMBER_OF_UNIQUE_SITE_ORIGINS_PER_LOADED_TABS_50_PLUS": {
@@ -7266,7 +7500,7 @@
     "n_buckets": 50,
     "description": "When a document is loaded, if the user has 50 or more loaded tabs, report the ratio of unique site origins loaded to number of loaded tabs (multiplied by 100) if it has been at least 5 minutes since the last collection",
     "bug_numbers": [1655138],
-    "alert_emails": ["barret@mozilla.com", "perfteam@mozilla.com"],
+    "alert_emails": ["barret@mozilla.com", "perf-telemetry-alerts@mozilla.com"],
     "releaseChannelCollection": "opt-out"
   },
   "FX_TAB_SWITCH_REQUEST_TAB_WARMING_STATE": {
@@ -7308,7 +7542,7 @@
     "record_in_processes": ["main"],
     "products": ["firefox", "fennec"],
     "expires_in_version": "never",
-    "alert_emails": ["mconley@mozilla.com", "dolske@mozilla.com"],
+    "alert_emails": ["mconley@mozilla.com"],
     "releaseChannelCollection": "opt-out",
     "kind": "exponential",
     "high": 10000,
@@ -7336,7 +7570,7 @@
     "n_buckets": 200,
     "description": "Firefox: Time taken to load a page (ms). This includes all static contents, no dynamic content. Page reloads and loading of about: pages are not included.",
     "bug_numbers": [1504247, 1549519],
-    "alert_emails": ["tdsmith@mozilla.com", "perfteam@mozilla.com", "product-metrics-telemetry-alerts@mozilla.com"],
+    "alert_emails": ["tdsmith@mozilla.com", "perf-telemetry-alerts@mozilla.com", "product-metrics-telemetry-alerts@mozilla.com"],
     "releaseChannelCollection": "opt-out"
   },
   "FX_PAGE_RELOAD_NORMAL_MS": {
@@ -7348,7 +7582,7 @@
     "n_buckets": 200,
     "description": "Firefox: Time taken to reload a page (ms) when using the LOAD_RELOAD_NORMAL flag",
     "bug_numbers": [1549519],
-    "alert_emails": ["sefeng@mozilla.com", "perfteam@mozilla.com", "product-metrics-telemetry-alerts@mozilla.com"],
+    "alert_emails": ["sefeng@mozilla.com", "perf-telemetry-alerts@mozilla.com", "product-metrics-telemetry-alerts@mozilla.com"],
     "releaseChannelCollection": "opt-out"
   },
   "FX_PAGE_RELOAD_SKIP_CACHE_MS": {
@@ -7360,7 +7594,7 @@
     "n_buckets": 200,
     "description": "Firefox: Time taken to reload a page (ms) when caches are skipped",
     "bug_numbers": [1549519],
-    "alert_emails": ["sefeng@mozilla.com", "perfteam@mozilla.com", "product-metrics-telemetry-alerts@mozilla.com"],
+    "alert_emails": ["sefeng@mozilla.com", "perf-telemetry-alerts@mozilla.com", "product-metrics-telemetry-alerts@mozilla.com"],
     "releaseChannelCollection": "opt-out"
   },
   "FX_SCHEDULE_PRESSURE_IDLE_SAMPLE_MS": {
@@ -7409,9 +7643,9 @@
   "FX_MIGRATION_ENTRY_POINT": {
     "record_in_processes": ["main"],
     "products": ["firefox"],
-    "bug_numbers": [731025, 1584261, 1643431, 1665442],
-    "alert_emails": ["gijs@mozilla.com", "MattN+telemetry@mozilla.com"],
-    "expires_in_version": "86",
+    "bug_numbers": [731025, 1584261, 1643431, 1665442, 1678204],
+    "alert_emails": ["gijs@mozilla.com", "mak@mozilla.com"],
+    "expires_in_version": "92",
     "kind": "enumerated",
     "n_values": 10,
     "releaseChannelCollection": "opt-out",
@@ -7420,9 +7654,9 @@
   "FX_MIGRATION_SOURCE_BROWSER": {
     "record_in_processes": ["main"],
     "products": ["firefox"],
-    "bug_numbers": [731025, 1523179, 1643431],
-    "alert_emails": ["gijs@mozilla.com", "MattN+telemetry@mozilla.com"],
-    "expires_in_version": "86",
+    "bug_numbers": [731025, 1523179, 1643431, 1678204],
+    "alert_emails": ["gijs@mozilla.com", "mak@mozilla.com"],
+    "expires_in_version": "92",
     "kind": "enumerated",
     "n_values": 15,
     "releaseChannelCollection": "opt-out",
@@ -7431,9 +7665,9 @@
   "FX_MIGRATION_ERRORS": {
     "record_in_processes": ["main"],
     "products": ["firefox"],
-    "bug_numbers": [731025, 1584261, 1643431],
-    "alert_emails": ["gijs@mozilla.com", "MattN+telemetry@mozilla.com"],
-    "expires_in_version": "86",
+    "bug_numbers": [731025, 1584261, 1643431, 1678204],
+    "alert_emails": ["gijs@mozilla.com", "mak@mozilla.com"],
+    "expires_in_version": "92",
     "kind": "enumerated",
     "keyed": true,
     "n_values": 12,
@@ -7443,9 +7677,9 @@
   "FX_MIGRATION_USAGE": {
     "record_in_processes": ["main"],
     "products": ["firefox"],
-    "bug_numbers": [731025, 1584261, 1643431],
-    "alert_emails": ["gijs@mozilla.com", "MattN+telemetry@mozilla.com"],
-    "expires_in_version": "86",
+    "bug_numbers": [731025, 1584261, 1643431, 1678204],
+    "alert_emails": ["gijs@mozilla.com", "mak@mozilla.com"],
+    "expires_in_version": "92",
     "kind": "enumerated",
     "keyed": true,
     "n_values": 12,
@@ -7455,9 +7689,9 @@
   "FX_MIGRATION_BOOKMARKS_IMPORT_MS": {
     "record_in_processes": ["main"],
     "products": ["firefox"],
-    "bug_numbers": [1289436, 1643431],
-    "alert_emails": ["gijs@mozilla.com"],
-    "expires_in_version": "86",
+    "bug_numbers": [1289436, 1643431, 1678204],
+    "alert_emails": ["gijs@mozilla.com", "mak@mozilla.com"],
+    "expires_in_version": "92",
     "kind": "exponential",
     "n_buckets": 70,
     "high": 100000,
@@ -7468,9 +7702,9 @@
   "FX_MIGRATION_HISTORY_IMPORT_MS": {
     "record_in_processes": ["main"],
     "products": ["firefox"],
-    "bug_numbers": [1289436, 1643431],
-    "alert_emails": ["gijs@mozilla.com"],
-    "expires_in_version": "86",
+    "bug_numbers": [1289436, 1643431, 1678204],
+    "alert_emails": ["gijs@mozilla.com", "mak@mozilla.com"],
+    "expires_in_version": "92",
     "kind": "exponential",
     "n_buckets": 70,
     "high": 100000,
@@ -7481,9 +7715,9 @@
   "FX_MIGRATION_LOGINS_IMPORT_MS": {
     "record_in_processes": ["main"],
     "products": ["firefox"],
-    "bug_numbers": [1289436, 1584261, 1643431],
-    "alert_emails": ["gijs@mozilla.com", "MattN+telemetry@mozilla.com", "passwords-dev@mozilla.org"],
-    "expires_in_version": "86",
+    "bug_numbers": [1289436, 1584261, 1643431, 1678204],
+    "alert_emails": ["gijs@mozilla.com", "mak@mozilla.com", "passwords-dev@mozilla.org"],
+    "expires_in_version": "92",
     "kind": "exponential",
     "n_buckets": 70,
     "high": 100000,
@@ -7520,9 +7754,9 @@
   "FX_MIGRATION_LOGINS_JANK_MS": {
     "record_in_processes": ["main"],
     "products": ["firefox"],
-    "bug_numbers": [1338522, 1584261, 1643431],
-    "alert_emails": ["dao@mozilla.com", "MattN+telemetry@mozilla.com", "passwords-dev@mozilla.org"],
-    "expires_in_version": "86",
+    "bug_numbers": [1338522, 1584261, 1643431, 1678204],
+    "alert_emails": ["dao@mozilla.com", "passwords-dev@mozilla.org"],
+    "expires_in_version": "92",
     "kind": "exponential",
     "n_buckets": 20,
     "high": 60000,
@@ -7545,9 +7779,9 @@
   "FX_MIGRATION_BOOKMARKS_QUANTITY": {
     "record_in_processes": ["main"],
     "products": ["firefox"],
-    "bug_numbers": [1279501, 1643431],
-    "alert_emails": ["gijs@mozilla.com"],
-    "expires_in_version": "86",
+    "bug_numbers": [1279501, 1643431, 1678204],
+    "alert_emails": ["gijs@mozilla.com", "mak@mozilla.com"],
+    "expires_in_version": "92",
     "kind": "exponential",
     "n_buckets": 20,
     "high": 1000,
@@ -7558,9 +7792,9 @@
   "FX_MIGRATION_HISTORY_QUANTITY": {
     "record_in_processes": ["main"],
     "products": ["firefox"],
-    "bug_numbers": [1279501, 1643431],
-    "alert_emails": ["gijs@mozilla.com"],
-    "expires_in_version": "86",
+    "bug_numbers": [1279501, 1643431, 1678204],
+    "alert_emails": ["gijs@mozilla.com", "mak@mozilla.com"],
+    "expires_in_version": "92",
     "kind": "exponential",
     "n_buckets": 40,
     "high": 10000,
@@ -7571,9 +7805,9 @@
   "FX_MIGRATION_LOGINS_QUANTITY": {
     "record_in_processes": ["main"],
     "products": ["firefox"],
-    "bug_numbers": [1279501, 1584261, 1643431],
-    "alert_emails": ["gijs@mozilla.com", "MattN+telemetry@mozilla.com", "passwords-dev@mozilla.org"],
-    "expires_in_version": "86",
+    "bug_numbers": [1279501, 1584261, 1643431, 1678204],
+    "alert_emails": ["gijs@mozilla.com", "mak@mozilla.com", "passwords-dev@mozilla.org"],
+    "expires_in_version": "92",
     "kind": "exponential",
     "n_buckets": 20,
     "high": 1000,
@@ -7630,9 +7864,9 @@
   "FX_PICTURE_IN_PICTURE_WINDOW_OPEN_DURATION": {
     "record_in_processes": ["main"],
     "products": ["firefox"],
-    "alert_emails": ["mconley@mozilla.com", "astevenson@mozilla.com"],
-    "bug_numbers": [1560590],
-    "expires_in_version": "87",
+    "alert_emails": ["mconley@mozilla.com", "rtestard@mozilla.com"],
+    "bug_numbers": [1560590, 1683100],
+    "expires_in_version": "93",
     "kind": "exponential",
     "high": 10000,
     "n_buckets": 100,
@@ -7748,7 +7982,7 @@
   "FX_SESSION_RESTORE_STARTUP_INIT_SESSION_MS": {
     "record_in_processes": ["main"],
     "products": ["firefox", "fennec"],
-    "alert_emails": ["session-restore-telemetry-alerts@mozilla.com", "mdeboer@mozilla.com", "dolske@mozilla.com"],
+    "alert_emails": ["session-restore-telemetry-alerts@mozilla.com", "mdeboer@mozilla.com"],
     "expires_in_version": "never",
     "releaseChannelCollection": "opt-out",
     "kind": "exponential",
@@ -7760,7 +7994,7 @@
   "FX_SESSION_RESTORE_STARTUP_ONLOAD_INITIAL_WINDOW_MS": {
     "record_in_processes": ["main"],
     "products": ["firefox", "fennec"],
-    "alert_emails": ["session-restore-telemetry-alerts@mozilla.com", "mdeboer@mozilla.com", "dolske@mozilla.com"],
+    "alert_emails": ["session-restore-telemetry-alerts@mozilla.com", "mdeboer@mozilla.com"],
     "expires_in_version": "never",
     "releaseChannelCollection": "opt-out",
     "kind": "exponential",
@@ -7870,7 +8104,7 @@
   "FX_SESSION_RESTORE_RESTORE_WINDOW_MS": {
     "record_in_processes": ["main"],
     "products": ["firefox", "fennec"],
-    "alert_emails": ["session-restore-telemetry-alerts@mozilla.com", "mdeboer@mozilla.com", "dolske@mozilla.com"],
+    "alert_emails": ["session-restore-telemetry-alerts@mozilla.com", "mdeboer@mozilla.com"],
     "expires_in_version": "never",
     "releaseChannelCollection": "opt-out",
     "kind": "exponential",
@@ -8058,15 +8292,15 @@
     "releaseChannelCollection": "opt-out",
     "description": "Number of HTML editors a node in the window has been observed by mutation observers, but has not had beforeinput event listeners"
   },
-  "ENCODING_OVERRIDE_SITUATION": {
+  "ENCODING_OVERRIDE_SITUATION_2": {
     "record_in_processes": ["main", "content"],
-    "products": ["firefox", "fennec"],
+    "products": ["firefox"],
     "alert_emails": ["hsivonen@mozilla.com"],
-    "bug_numbers": [840476, 977573, 1513473, 1554592, 1603047],
-    "expires_in_version": "79",
+    "bug_numbers": [840476, 977573, 1513473, 1554592, 1603047, 1648464],
+    "expires_in_version": "91",
     "releaseChannelCollection": "opt-out",
     "kind": "categorical",
-    "labels": ["Local", "RemoteTld", "RemoteNonTld", "LocalChardet", "RemoteChardet", "Labeled", "AlreadyOverridden", "Bug"],
+    "labels": ["AutoOverridden", "ManuallyOverridden", "LocalLabeled", "LocalUnlabeled", "UnlabeledInLk", "UnlabeledJp", "UnlabeledNonUtf8", "UnlabeledUtf8", "ChannelNonUtf8", "ChannelUtf8", "MetaNonUtf8", "MetaUtf8", "Bug"],
     "description": "Labeling status of top-level page when overriding encoding"
   },
   "LONG_REFLOW_INTERRUPTIBLE": {
@@ -9522,10 +9756,10 @@
   "PDF_VIEWER_DOCUMENT_VERSION_2": {
     "record_in_processes": ["main", "content"],
     "products": ["firefox"],
-    "expires_in_version": "84",
+    "expires_in_version": "88",
     "alert_emails": ["bdahl@mozilla.com"],
     "releaseChannelCollection": "opt-out",
-    "bug_numbers": [1566882],
+    "bug_numbers": [1566882, 1666979],
     "kind": "categorical",
     "labels": ["other", "v1_0", "v1_1", "v1_2", "v1_3", "v1_4", "v1_5", "v1_6", "v1_7", "v1_8", "v1_9", "v2_0", "v2_1", "v2_2", "v2_3"],
     "description": "The PDF document version (1.1, 1.2, etc.)"
@@ -9533,10 +9767,10 @@
   "PDF_VIEWER_DOCUMENT_GENERATOR_2": {
     "record_in_processes": ["main", "content"],
     "products": ["firefox"],
-    "expires_in_version": "84",
+    "expires_in_version": "88",
     "alert_emails": ["bdahl@mozilla.com"],
     "releaseChannelCollection": "opt-out",
-    "bug_numbers": [1566882],
+    "bug_numbers": [1566882, 1666979],
     "kind": "categorical",
     "labels": ["acrobat_distiller", "acrobat_pdfwriter", "adobe_livecycle", "adobe_pdf_library", "adobe_photoshop", "ghostscript", "tcpdf", "cairo", "dvipdfm", "dvips", "pdftex", "pdfkit", "itext", "prince", "quarkxpress", "mac_os_x", "microsoft", "openoffice", "oracle", "luradocument", "pdf_xchange", "antenna_house", "aspose_cells", "fpdf", "other"],
     "description": "The PDF document generator"
@@ -9544,10 +9778,10 @@
   "PDF_VIEWER_DOCUMENT_SIZE_KB": {
     "record_in_processes": ["main", "content"],
     "products": ["firefox"],
-    "expires_in_version": "84",
+    "expires_in_version": "88",
     "alert_emails": ["bdahl@mozilla.com"],
     "releaseChannelCollection": "opt-out",
-    "bug_numbers": [1566882],
+    "bug_numbers": [1566882, 1666979],
     "kind": "exponential",
     "low": 2,
     "high": 65536,
@@ -9557,10 +9791,10 @@
   "PDF_VIEWER_FONT_TYPES_2": {
     "record_in_processes": ["main", "content"],
     "products": ["firefox"],
-    "expires_in_version": "84",
+    "expires_in_version": "88",
     "alert_emails": ["bdahl@mozilla.com"],
     "releaseChannelCollection": "opt-out",
-    "bug_numbers": [1566882],
+    "bug_numbers": [1566882, 1666979],
     "kind": "categorical",
     "labels": ["UNKNOWN", "TYPE1", "TYPE1C", "CIDFONTTYPE0", "CIDFONTTYPE0C", "TRUETYPE", "CIDFONTTYPE2", "TYPE3", "OPENTYPE", "TYPE0", "MMTYPE1"],
     "description": "The PDF document font types used"
@@ -9568,10 +9802,10 @@
   "PDF_VIEWER_EMBED_2": {
     "record_in_processes": ["main", "content"],
     "products": ["firefox"],
-    "expires_in_version": "84",
+    "expires_in_version": "88",
     "alert_emails": ["bdahl@mozilla.com"],
     "releaseChannelCollection": "opt-out",
-    "bug_numbers": [1566882],
+    "bug_numbers": [1566882, 1666979],
     "kind": "categorical",
     "labels": ["object_embed", "iframe"],
     "description": "A PDF document was embedded using OBJECT/EMBED and or an IFRAME"
@@ -9579,10 +9813,10 @@
   "PDF_VIEWER_FORM_2": {
     "record_in_processes": ["main", "content"],
     "products": ["firefox"],
-    "expires_in_version": "84",
+    "expires_in_version": "88",
     "alert_emails": ["bdahl@mozilla.com"],
     "releaseChannelCollection": "opt-out",
-    "bug_numbers": [1566882],
+    "bug_numbers": [1566882, 1666979],
     "kind": "categorical",
     "labels": ["acroform", "xfa"],
     "description": "If a form was used, its type."
@@ -9590,10 +9824,10 @@
   "PDF_VIEWER_STREAM_TYPES_2": {
     "record_in_processes": ["main", "content"],
     "products": ["firefox"],
-    "expires_in_version": "84",
+    "expires_in_version": "88",
     "alert_emails": ["bdahl@mozilla.com"],
     "releaseChannelCollection": "opt-out",
-    "bug_numbers": [1566882],
+    "bug_numbers": [1566882, 1666979],
     "kind": "categorical",
     "labels": ["UNKNOWN", "FLATE", "LZW", "DCT", "JPX", "JBIG", "A85", "AHX", "CCF", "RLX"],
     "description": "The PDF document compression stream types used"
@@ -9613,10 +9847,10 @@
   "PDF_VIEWER_FALLBACK_REASON": {
     "record_in_processes": ["content"],
     "products": ["firefox"],
-    "expires_in_version": "84",
+    "expires_in_version": "88",
     "alert_emails": ["bdahl@mozilla.com"],
     "releaseChannelCollection": "opt-out",
-    "bug_numbers": [1630844],
+    "bug_numbers": [1630844, 1666979],
     "kind": "categorical",
     "labels": ["unknown", "forms", "javaScript", "smask", "shadingPattern", "font", "errorTilingPattern", "errorExtGState", "errorXObject", "errorFontLoadType3", "errorFontState", "errorFontMissing", "errorFontTranslate", "errorColorSpace", "errorOperatorList", "errorFontToUnicode", "errorFontLoadNative", "errorFontGetPath"],
     "description": "The reason the fallback bar was shown."
@@ -9624,10 +9858,10 @@
   "PDF_VIEWER_FALLBACK_ERROR": {
     "record_in_processes": ["main", "content"],
     "products": ["firefox"],
-    "expires_in_version": "84",
+    "expires_in_version": "88",
     "alert_emails": ["bdahl@mozilla.com"],
     "releaseChannelCollection": "opt-out",
-    "bug_numbers": [1643402],
+    "bug_numbers": [1643402, 1666979],
     "kind": "categorical",
     "labels": ["unknown", "forms", "javaScript", "smask", "shadingPattern", "font", "errorTilingPattern", "errorExtGState", "errorXObject", "errorFontLoadType3", "errorFontState", "errorFontMissing", "errorFontTranslate", "errorColorSpace", "errorOperatorList", "errorFontToUnicode", "errorFontLoadNative", "errorFontGetPath"],
     "description": "All errors that could trigger the fallback bar, even after the bar is shown."
@@ -9635,10 +9869,10 @@
   "PDF_VIEWER_TAGGED": {
     "record_in_processes": ["content"],
     "products": ["firefox"],
-    "expires_in_version": "87",
+    "expires_in_version": "88",
     "alert_emails": ["bdahl@mozilla.com"],
     "releaseChannelCollection": "opt-out",
-    "bug_numbers": [1673128],
+    "bug_numbers": [1673128, 1666979],
     "kind": "boolean",
     "description": "If a PDF is tagged."
   },
@@ -9806,7 +10040,7 @@
   "DEVTOOLS_COLD_TOOLBOX_OPEN_DELAY_MS": {
     "record_in_processes": ["main"],
     "products": ["firefox", "fennec"],
-    "alert_emails": ["dev-developer-tools@lists.mozilla.org", "hkirschner@mozilla.com"],
+    "alert_emails": ["dev-developer-tools@lists.mozilla.org"],
     "bug_numbers": [1405584, 1566392],
     "expires_in_version": "80",
     "kind": "exponential",
@@ -9818,7 +10052,7 @@
   "DEVTOOLS_WARM_TOOLBOX_OPEN_DELAY_MS": {
     "record_in_processes": ["main"],
     "products": ["firefox", "fennec"],
-    "alert_emails": ["dev-developer-tools@lists.mozilla.org", "hkirschner@mozilla.com"],
+    "alert_emails": ["dev-developer-tools@lists.mozilla.org"],
     "bug_numbers": [1405584 ,1566392],
     "expires_in_version": "80",
     "kind": "exponential",
@@ -9830,7 +10064,7 @@
   "DEVTOOLS_TOOLBOX_PAGE_RELOAD_DELAY_MS": {
     "record_in_processes": ["main"],
     "products": ["firefox", "fennec"],
-    "alert_emails": ["dev-developer-tools@lists.mozilla.org", "hkirschner@mozilla.com"],
+    "alert_emails": ["dev-developer-tools@lists.mozilla.org"],
     "bug_numbers": [1405585, 1566392],
     "expires_in_version": "80",
     "kind": "exponential",
@@ -9842,7 +10076,7 @@
   "DEVTOOLS_INSPECTOR_NEW_ROOT_TO_RELOAD_DELAY_MS": {
     "record_in_processes": ["main"],
     "products": ["firefox", "fennec"],
-    "alert_emails": ["dev-developer-tools@lists.mozilla.org", "hkirschner@mozilla.com"],
+    "alert_emails": ["dev-developer-tools@lists.mozilla.org"],
     "bug_numbers": [1405585, 1566392],
     "expires_in_version": "80",
     "kind": "exponential",
@@ -9871,7 +10105,7 @@
   "DEVTOOLS_DEBUGGER_LOAD_SOURCE_MS": {
     "record_in_processes": ["main", "content"],
     "products": ["firefox", "fennec"],
-    "alert_emails": ["dev-developer-tools@lists.mozilla.org", "hkirschner@mozilla.com"],
+    "alert_emails": ["dev-developer-tools@lists.mozilla.org"],
     "bug_numbers": [1429047, 1436039, 1557116],
     "expires_in_version": "never",
     "kind": "exponential",
@@ -9901,19 +10135,19 @@
     "record_in_processes": ["content"],
     "products": ["firefox"],
     "alert_emails": ["jolin@mozilla.com", "bvandyk@mozilla.com"],
-    "expires_in_version": "85",
+    "expires_in_version": "92",
     "kind": "boolean",
     "description": "Reports a true value when a page requests canPlayType for a HLS media type.",
-    "bug_numbers": [1628048]
+    "bug_numbers": [1628048, 1672573]
   },
   "MEDIA_HLS_CANPLAY_SUPPORTED": {
     "record_in_processes": ["content"],
     "products": ["firefox"],
     "alert_emails": ["jolin@mozilla.com", "bvandyk@mozilla.com"],
-    "expires_in_version": "85",
+    "expires_in_version": "92",
     "kind": "boolean",
     "description": "Reports a true value when a canPlayType request supports HLS.",
-    "bug_numbers": [1628048]
+    "bug_numbers": [1628048, 1672573]
   },
   "MEDIA_MP4_PARSE_SAMPLE_DESCRIPTION_ENTRIES_HAVE_MULTIPLE_CODECS": {
     "record_in_processes": ["main", "content"],
@@ -9988,10 +10222,10 @@
       "pulse",
       "pulse_rust",
       "sndio",
-      "sun"
+      "sunaudio"
     ],
     "description": "The operating system audio backend",
-    "bug_numbers": [1671714]
+    "bug_numbers": [1671714, 1679745]
   },
   "WEBRTC_DTLS_CIPHER": {
     "record_in_processes": ["content", "socket"],
@@ -11236,7 +11470,7 @@
   "DEVTOOLS_TOOLBOX_HOST": {
     "record_in_processes": ["main", "content"],
     "products": ["firefox", "fennec"],
-    "alert_emails": ["dev-developer-tools@lists.mozilla.org", "hkirschner@mozilla.com"],
+    "alert_emails": ["dev-developer-tools@lists.mozilla.org"],
     "expires_in_version": "never",
     "kind": "enumerated",
     "bug_numbers": [1205845, 1389995],
@@ -12121,37 +12355,13 @@
   "CRLITE_RESULT": {
     "record_in_processes": ["main"],
     "products": ["firefox"],
-    "expires_in_version": "86",
+    "expires_in_version": "92",
     "kind": "categorical",
     "labels": ["FilterNotAvailable", "IssuerNotEnrolled", "CertificateTooNew", "CertificateValid", "CertificateRevoked", "LibraryFailure", "CertRevokedByStash"],
     "description": "The result of looking up revocation information for a TLS server certificate in CRLite.",
-    "bug_numbers": [1586855, 1607765, 1670984],
+    "bug_numbers": [1586855, 1607765, 1670984, 1678206],
     "releaseChannelCollection": "opt-out",
-    "alert_emails": ["dkeeler@mozilla.com", "jcj@mozilla.com", "seceng-telemetry@mozilla.com"]
-  },
-  "CRLITE_FASTER_THAN_OCSP_MS": {
-    "record_in_processes": ["main"],
-    "products": ["firefox"],
-    "expires_in_version": "86",
-    "kind": "exponential",
-    "high": 20000,
-    "n_buckets": 50,
-    "description": "If both a CRLite lookup and OCSP request are made, how many milliseconds faster was CRLite?",
-    "bug_numbers": [1602641, 1607765],
-    "releaseChannelCollection": "opt-out",
-    "alert_emails": ["dkeeler@mozilla.com", "jcj@mozilla.com", "seceng-telemetry@mozilla.com"]
-  },
-  "OCSP_FASTER_THAN_CRLITE_MS": {
-    "record_in_processes": ["main"],
-    "products": ["firefox"],
-    "expires_in_version": "86",
-    "kind": "exponential",
-    "high": 20000,
-    "n_buckets": 50,
-    "description": "If both a CRLite lookup and OCSP request are made, how many milliseconds faster was OCSP?",
-    "bug_numbers": [1602641, 1607765],
-    "releaseChannelCollection": "opt-out",
-    "alert_emails": ["dkeeler@mozilla.com", "jcj@mozilla.com", "seceng-telemetry@mozilla.com"]
+    "alert_emails": ["dkeeler@mozilla.com", "seceng-telemetry@mozilla.com"]
   },
   "WEAVE_START_COUNT": {
     "record_in_processes": ["main", "content"],
@@ -12247,7 +12457,7 @@
     "high": 500,
     "n_buckets": 100,
     "bug_numbers": [1121966],
-    "alert_emails": ["dolske@mozilla.com"],
+    "alert_emails": ["perf-telemetry-alerts@mozilla.com"],
     "description": "Scaling percentage for the display where the first window is opened"
   },
   "SHUTDOWN_PHASE_DURATION_TICKS_QUIT_APPLICATION": {
@@ -13511,7 +13721,7 @@
   "JS_EXECUTION_PROPORTION" : {
     "record_in_processes": ["content"],
     "products": ["firefox", "geckoview_streaming"],
-    "alert_emails": ["dpalmeiro@mozilla.com","perfteam@mozilla.com"],
+    "alert_emails": ["dpalmeiro@mozilla.com","perf-telemetry-alerts@mozilla.com"],
     "expires_in_version": "89",
     "releaseChannelCollection": "opt-out",
     "kind": "linear",
@@ -13523,7 +13733,7 @@
   "JS_DELAZIFICATION_PROPORTION" : {
     "record_in_processes": ["content"],
     "products": ["firefox", "geckoview_streaming"],
-    "alert_emails": ["dpalmeiro@mozilla.com","perfteam@mozilla.com"],
+    "alert_emails": ["dpalmeiro@mozilla.com","perf-telemetry-alerts@mozilla.com"],
     "expires_in_version": "89",
     "releaseChannelCollection": "opt-out",
     "kind": "linear",
@@ -13535,7 +13745,7 @@
   "JS_XDR_ENCODING_PROPORTION" : {
     "record_in_processes": ["content"],
     "products": ["firefox", "geckoview_streaming"],
-    "alert_emails": ["dpalmeiro@mozilla.com","perfteam@mozilla.com"],
+    "alert_emails": ["dpalmeiro@mozilla.com","perf-telemetry-alerts@mozilla.com"],
     "expires_in_version": "89",
     "releaseChannelCollection": "opt-out",
     "kind": "linear",
@@ -13547,7 +13757,7 @@
   "JS_BASELINE_COMPILE_PROPORTION" : {
     "record_in_processes": ["content"],
     "products": ["firefox", "geckoview_streaming"],
-    "alert_emails": ["dpalmeiro@mozilla.com","perfteam@mozilla.com"],
+    "alert_emails": ["dpalmeiro@mozilla.com","perf-telemetry-alerts@mozilla.com"],
     "expires_in_version": "89",
     "releaseChannelCollection": "opt-out",
     "kind": "linear",
@@ -13559,7 +13769,7 @@
   "JS_BYTECODE_CACHING_TIME" : {
     "record_in_processes": ["content"],
     "products": ["firefox", "geckoview_streaming"],
-    "alert_emails": ["dpalmeiro@mozilla.com","perfteam@mozilla.com"],
+    "alert_emails": ["dpalmeiro@mozilla.com","perf-telemetry-alerts@mozilla.com"],
     "expires_in_version": "89",
     "releaseChannelCollection": "opt-out",
     "kind": "exponential",
@@ -13886,7 +14096,7 @@
   "TIME_TO_FIRST_CLICK_MS": {
     "record_in_processes": ["main", "content"],
     "products": ["firefox", "fennec"],
-    "alert_emails": ["hkirschner@mozilla.com"],
+    "alert_emails": ["perf-telemetry-alerts@mozilla.com"],
     "bug_numbers": [1307675, 1332511],
     "expires_in_version": "58",
     "kind": "exponential",
@@ -13897,7 +14107,7 @@
   "TIME_TO_FIRST_KEY_INPUT_MS": {
     "record_in_processes": ["main", "content"],
     "products": ["firefox", "fennec"],
-    "alert_emails": ["hkirschner@mozilla.com"],
+    "alert_emails": ["perf-telemetry-alerts@mozilla.com"],
     "bug_numbers": [1307675, 1332511],
     "expires_in_version": "58",
     "kind": "exponential",
@@ -13908,7 +14118,7 @@
   "TIME_TO_FIRST_MOUSE_MOVE_MS": {
     "record_in_processes": ["main", "content"],
     "products": ["firefox", "fennec"],
-    "alert_emails": ["hkirschner@mozilla.com"],
+    "alert_emails": ["perf-telemetry-alerts@mozilla.com"],
     "bug_numbers": [1307675, 1332511],
     "expires_in_version": "58",
     "kind": "exponential",
@@ -13919,7 +14129,7 @@
   "TIME_TO_FIRST_SCROLL_MS": {
     "record_in_processes": ["main", "content"],
     "products": ["firefox", "fennec"],
-    "alert_emails": ["hkirschner@mozilla.com"],
+    "alert_emails": ["perf-telemetry-alerts@mozilla.com"],
     "bug_numbers": [1307675, 1332511],
     "expires_in_version": "58",
     "kind": "exponential",
@@ -13930,7 +14140,7 @@
   "TIME_TO_FIRST_INTERACTION_MS": {
     "record_in_processes": ["main", "content"],
     "products": ["firefox", "fennec"],
-    "alert_emails": ["hkirschner@mozilla.com", "vchin@mozilla.com", "sphilp@mozilla.com", "dstrohmeier@mozilla.com"],
+    "alert_emails": ["perf-telemetry-alerts@mozilla.com"],
     "bug_numbers": [1332511, 1489524],
     "expires_in_version": "never",
     "releaseChannelCollection": "opt-out",
@@ -14133,7 +14343,7 @@
   "TIME_TO_NON_BLANK_PAINT_MS": {
     "record_in_processes": ["main", "content"],
     "products": ["firefox", "fennec", "geckoview_streaming"],
-    "alert_emails": ["hkirschner@mozilla.com", "vchin@mozilla.com", "sphilp@mozilla.com"],
+    "alert_emails": ["perf-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "releaseChannelCollection": "opt-out",
     "kind": "exponential",
@@ -14167,7 +14377,7 @@
   "TIME_TO_FIRST_CONTENTFUL_PAINT_MS": {
     "record_in_processes": ["main", "content"],
     "products": ["firefox", "fennec"],
-    "alert_emails": ["hkirschner@mozilla.com", "vchin@mozilla.com", "sphilp@mozilla.com", "dstrohmeier@mozilla.com"],
+    "alert_emails": ["perf-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "releaseChannelCollection": "opt-out",
     "kind": "exponential",
@@ -14280,8 +14490,8 @@
   "INTERMEDIATE_PRELOADING_ERRORS": {
     "record_in_processes": ["main"],
     "products": ["firefox"],
-    "alert_emails": ["seceng-telemetry@mozilla.com", "jjones@mozilla.com", "dkeeler@mozilla.com"],
-    "expires_in_version": "86",
+    "alert_emails": ["seceng-telemetry@mozilla.com", "dkeeler@mozilla.com"],
+    "expires_in_version": "92",
     "kind": "categorical",
     "labels": ["emptyAttachment",
                "failedToDownloadMisc",
@@ -14292,18 +14502,18 @@
                "failedToUpdateDB",
                "unexpectedHash",
                "unexpectedLength"],
-    "bug_numbers": [1519273, 1553550],
+    "bug_numbers": [1519273, 1553550, 1678206],
     "description": "Errors occurred during intermediate certificate preloading."
   },
   "INTERMEDIATE_PRELOADING_UPDATE_TIME_MS": {
     "record_in_processes": ["main"],
     "products": ["firefox"],
-    "alert_emails": ["seceng-telemetry@mozilla.com", "jjones@mozilla.com", "dkeeler@mozilla.com"],
-    "expires_in_version": "86",
+    "alert_emails": ["seceng-telemetry@mozilla.com", "dkeeler@mozilla.com"],
+    "expires_in_version": "92",
     "kind": "exponential",
     "high": 180000,
     "n_buckets": 50,
-    "bug_numbers": [1519273, 1553550],
+    "bug_numbers": [1519273, 1553550, 1678206],
     "description": "Number of milliseconds to update the pre-loaded data, if updated."
   },
   "IPC_SYNC_MESSAGE_MANAGER_LATENCY_MS": {
@@ -14380,7 +14590,7 @@
   "TIME_TO_DOM_CONTENT_LOADED_END_MS": {
     "record_in_processes": ["content"],
     "products": ["firefox", "fennec", "geckoview_streaming"],
-    "alert_emails": ["hkirschner@mozilla.com", "vchin@mozilla.com", "sphilp@mozilla.com"],
+    "alert_emails": ["perf-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "releaseChannelCollection": "opt-out",
     "kind": "exponential",
@@ -14438,7 +14648,7 @@
   "TIME_TO_LOAD_EVENT_END_MS": {
     "record_in_processes": ["content"],
     "products": ["firefox", "fennec", "geckoview_streaming"],
-    "alert_emails": ["hkirschner@mozilla.com", "vchin@mozilla.com", "sphilp@mozilla.com"],
+    "alert_emails": ["perf-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "releaseChannelCollection": "opt-out",
     "kind": "exponential",
@@ -14498,7 +14708,7 @@
   "TIME_TO_RESPONSE_START_MS": {
     "record_in_processes": ["main", "content"],
     "products": ["firefox", "fennec", "geckoview_streaming"],
-    "alert_emails": ["hkirschner@mozilla.com", "vchin@mozilla.com", "sphilp@mozilla.com"],
+    "alert_emails": ["perf-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "releaseChannelCollection": "opt-out",
     "kind": "exponential",
@@ -14510,7 +14720,7 @@
   "PERF_PAGE_LOAD_TIME_MS": {
     "record_in_processes": ["content"],
     "products": ["firefox", "geckoview_streaming"],
-    "alert_emails": ["dpalmeiro@mozilla.com", "perfteam@mozilla.com"],
+    "alert_emails": ["dpalmeiro@mozilla.com", "perf-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "releaseChannelCollection": "opt-out",
     "kind": "exponential",
@@ -14522,7 +14732,7 @@
   "PERF_PAGE_LOAD_TIME_FROM_RESPONSESTART_MS": {
     "record_in_processes": ["content"],
     "products": ["firefox", "geckoview_streaming"],
-    "alert_emails": ["dpalmeiro@mozilla.com", "perfteam@mozilla.com"],
+    "alert_emails": ["dpalmeiro@mozilla.com", "perf-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "releaseChannelCollection": "opt-out",
     "kind": "exponential",
@@ -14534,7 +14744,7 @@
   "PERF_DOM_CONTENT_LOADED_TIME_MS": {
     "record_in_processes": ["content"],
     "products": ["firefox", "geckoview_streaming"],
-    "alert_emails": ["dpalmeiro@mozilla.com", "perfteam@mozilla.com"],
+    "alert_emails": ["dpalmeiro@mozilla.com", "perf-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "releaseChannelCollection": "opt-out",
     "kind": "exponential",
@@ -14546,7 +14756,7 @@
   "PERF_DOM_CONTENT_LOADED_TIME_FROM_RESPONSESTART_MS": {
     "record_in_processes": ["content"],
     "products": ["firefox", "geckoview_streaming"],
-    "alert_emails": ["dpalmeiro@mozilla.com", "perfteam@mozilla.com"],
+    "alert_emails": ["dpalmeiro@mozilla.com", "perf-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "releaseChannelCollection": "opt-out",
     "kind": "exponential",
@@ -14558,7 +14768,7 @@
   "PERF_FIRST_CONTENTFUL_PAINT_MS": {
     "record_in_processes": ["content"],
     "products": ["firefox", "geckoview_streaming"],
-    "alert_emails": ["dpalmeiro@mozilla.com", "perfteam@mozilla.com"],
+    "alert_emails": ["dpalmeiro@mozilla.com", "perf-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "releaseChannelCollection": "opt-out",
     "kind": "exponential",
@@ -14570,7 +14780,7 @@
   "PERF_FIRST_CONTENTFUL_PAINT_FROM_RESPONSESTART_MS": {
     "record_in_processes": ["content"],
     "products": ["firefox", "geckoview_streaming"],
-    "alert_emails": ["dpalmeiro@mozilla.com", "perfteam@mozilla.com"],
+    "alert_emails": ["dpalmeiro@mozilla.com", "perf-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "releaseChannelCollection": "opt-out",
     "kind": "exponential",
@@ -14582,7 +14792,7 @@
   "PERF_REQUEST_ANIMATION_CALLBACK_NON_PAGELOAD_MS": {
     "record_in_processes": ["content"],
     "products": ["firefox", "geckoview_streaming"],
-    "alert_emails": ["dpalmeiro@mozilla.com", "perfteam@mozilla.com"],
+    "alert_emails": ["dpalmeiro@mozilla.com", "perf-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "releaseChannelCollection": "opt-out",
     "kind": "exponential",
@@ -14594,7 +14804,7 @@
   "PERF_REQUEST_ANIMATION_CALLBACK_PAGELOAD_MS": {
     "record_in_processes": ["content"],
     "products": ["firefox", "geckoview_streaming"],
-    "alert_emails": ["dpalmeiro@mozilla.com", "perfteam@mozilla.com"],
+    "alert_emails": ["dpalmeiro@mozilla.com", "perf-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "releaseChannelCollection": "opt-out",
     "kind": "exponential",
@@ -15366,20 +15576,6 @@
     "description": "Counts the number of times a user enable or disable the media control feature via UI button, and the total number of times media control feature is enabled and disabled, which allow us to calculate the number of times a user changes setting via modifying the preference directly.",
     "releaseChannelCollection": "opt-out"
   },
-  "MEDIA_CONTROL_PLATFORM_USAGE": {
-    "record_in_processes": ["main"],
-    "products": ["firefox"],
-    "alert_emails": [
-      "alwu@mozilla.com",
-      "cchang@mozilla.com"
-    ],
-    "bug_numbers": [1668139],
-    "expires_in_version": "90",
-    "kind": "categorical",
-    "labels": ["UsedOnWin", "EnabledOnWin", "UsedOnMac", "EnabledOnMac", "UsedOnLinux", "EnabledOnLinux", "UsedOnAndroid", "EnabledOnAndroid"],
-    "description": "Counts the number of times users enable and use media control on different platforms.",
-    "releaseChannelCollection": "opt-out"
-  },
   "MEDIA_CONTROL_HANDLE_PLAY_PAUSE_STOP_ACTIONS": {
     "record_in_processes": ["content"],
     "products": ["firefox"],
@@ -15394,18 +15590,31 @@
     "description": "The number of times `play/pause/stop` actions are being handled on either default handler or media session action handler.",
     "releaseChannelCollection": "opt-out"
   },
+  "TABS_AUDIO_COMPETITION": {
+    "record_in_processes": ["main"],
+    "products": ["firefox"],
+    "alert_emails": [
+      "alwu@mozilla.com"
+    ],
+    "bug_numbers": [1683788],
+    "expires_in_version": "91",
+    "kind": "categorical",
+    "labels": ["None", "Ignored", "ManagedFocusByUser", "ManagedFocusByGecko"],
+    "description": "This probe would be reported whenever (1) media starts without encountering audio competition (2) encountering audio competition but users ignore it (keep all media continually playing) (3) encountering audio competition and users manually handle it (4) encountering audio competition and Gecko handled it. The value of each state would be the total happening count for specific situation during the whole session.",
+    "releaseChannelCollection": "opt-out"
+  },
   "QM_QUOTA_INFO_LOAD_TIME_V0": {
     "record_in_processes": ["main"],
     "products": ["firefox", "fennec"],
-    "expires_in_version": "87",
-    "bug_numbers": [1609625],
+    "expires_in_version": "never",
+    "bug_numbers": [1609625, 1683102],
     "kind": "exponential",
     "keyed": true,
     "high": 180000,
     "n_buckets": 60,
     "releaseChannelCollection": "opt-out",
     "alert_emails": ["ttung@mozilla.com", "storage-telemetry@mozilla.com"],
-    "description": "Time (ms) for the QuotaManager to load quota information."
+    "description": "Time (ms) for the QuotaManager to load quota information. Keyed by conditions during quota info loading, see RecordQuotaInfoLoadTimeHelper::Run in https://searchfox.org/mozilla-central/source/dom/quota/ActorsParent.cpp"
   },
   "QM_FIRST_INITIALIZATION_ATTEMPT": {
     "record_in_processes": ["main"],
@@ -15466,7 +15675,7 @@
     "alert_emails": [
       "geckoview-team@mozilla.com",
       "sefeng@mozilla.com",
-      "perfteam@mozilla.com"
+      "perf-telemetry-alerts@mozilla.com"
     ],
     "expires_in_version": "never",
     "kind": "exponential",
@@ -15502,88 +15711,6 @@
     "n_buckets": 50,
     "bug_numbers": [1499418],
     "description": "GeckoView: Time taken to initialize all GeckoView modules in ms."
-  },
-  "QM_INIT_TELEMETRY_ERROR": {
-      "record_in_processes": ["main"],
-      "products": ["firefox", "fennec"],
-      "alert_emails": ["ttung@mozilla.com"],
-      "expires_in_version": "70",
-      "bug_numbers": [1436188],
-      "kind": "categorical",
-      "n_values": 75,
-      "labels": [
-          "Rep_NewLocalFile",
-          "Rep_EnsureDirectory",
-          "Rep_GetDirEntries",
-          "Rep_IsDirectory",
-          "Rep_GetLeafName",
-          "Rep_UnexpectedFile",
-          "Rep_GetNextFile",
-          "Rep_RestoreDirMeta",
-          "Rep_GetDirMeta",
-          "Ori_GetDirEntries",
-          "Ori_IsDirectory",
-          "Ori_GetLeafName",
-          "Ori_Remove",
-          "Ori_UnexpectedFile",
-          "Ori_UnexpectedClient",
-          "Ori_GetNextFile",
-          "Asm_GetDirForOrigin",
-          "Asm_Append",
-          "Asm_GetDirEntries",
-          "Asm_GetFileSize",
-          "Asm_GetNextFile",
-          "Cache_GetDirForOri",
-          "Cache_Append",
-          "Cache_GetPaddingSize",
-          "Cache_GetDirEntries",
-          "Cache_GetLeafName",
-          "Cache_IsDirectory",
-          "Cache_GetBodyUsage",
-          "Cache_GetFileSize",
-          "LS_GetDirForOrigin",
-          "LS_Append",
-          "LS_Exists",
-          "LS_GetPath",
-          "LS_GetUsageFile",
-          "LS_IsDirectory",
-          "LS_UnexpectedDir",
-          "LS_GetUsageForJFile",
-          "LS_IsDirectory2",
-          "LS_UnexpectedDir2",
-          "LS_Remove",
-          "LS_Remove2",
-          "LS_Clone",
-          "LS_Append2",
-          "LS_IsDirectory3",
-          "LS_UnexpectedDir3",
-          "LS_CreateConnection",
-          "LS_GetUsage",
-          "LS_UpdateUsageFile",
-          "LS_Remove3",
-          "LS_Remove4",
-          "LS_GetDirEntries",
-          "LS_GetNextFile",
-          "LS_GetLeafName",
-          "LS_IsDirectory4",
-          "IDB_GetDirectory",
-          "IDB_GetDBFilenames",
-          "IDB_GetBaseFilename",
-          "IDB_GetEntry",
-          "IDB_Clone",
-          "IDB_Append",
-          "IDB_Clone2",
-          "IDB_Append2",
-          "IDB_Clone3",
-          "IDB_Append3",
-          "IDB_InitDirectory",
-          "IDB_GetFileSize",
-          "IDB_GetWalFileSize",
-          "IDB_GetUsage",
-          "IDB_RemoveDBFiles"
-      ],
-      "keyed": true,
-      "description": "Getting the number of errors in QuotaManager initialization."
   },
   "HTTP_TRAFFIC_ANALYSIS_3": {
     "record_in_processes": ["main"],
@@ -15758,18 +15885,6 @@
     "expires_in_version": "99",
     "kind": "boolean",
     "description": "Whether TLS 1.3 client authentication uses PHA (true) or regular in-handshake authentication (false)"
-  },
-  "TLS_DELEGATED_CREDENTIALS_TIME_UNTIL_READY_MS": {
-    "record_in_processes": ["main"],
-    "products": ["firefox", "fennec"],
-    "alert_emails": ["seceng-telemetry@mozilla.com", "kjacobs@mozilla.com"],
-    "expires_in_version": "86",
-    "releaseChannelCollection": "opt-out",
-    "kind": "exponential",
-    "high": 2000,
-    "n_buckets": 100,
-    "bug_numbers": [1564179, 1645082],
-    "description": "milliseconds to complete a TLS handshake that used delegated credentials"
   },
   "PRESSHELL_LAYOUT_TOTAL_MS_PER_TICK": {
     "record_in_processes": ["main", "content"],
@@ -16143,9 +16258,9 @@
     "expires_in_version": "87",
     "kind": "categorical",
     "releaseChannelCollection": "opt-out",
-    "description": "Counts how often the external protocol handler dialog is shown. Labelled by protocol scheme. Keyed by whether the navigation came from the top level browser, an iframe or a cross origin iframe, or a null principal.",
+    "description": "Counts how often the external protocol handler dialog is shown. Labelled by protocol scheme. Keyed by the kind of browsing context the navigation was triggered from: TOPLEVEL: Top browser, SUB_SAMEORIGIN: Same origin iframe, SUB_CROSSORIGIN: Cross origin iframe, SUB_SANDBOX_ALLOW: Sandboxed iframe with relevant allow flags, SUB_SANDBOX_NOALLOW: Sandboxed iframe without relevant allow flags",
     "keyed": true,
-    "keys": ["TOPLEVEL", "SUB_SAMEORIGIN", "SUB_CROSSORIGIN", "NULLPRINCIPAL", "UNKNOWN"],
+    "keys": ["TOPLEVEL", "SUB_SAMEORIGIN", "SUB_CROSSORIGIN", "SUB_SANDBOX_ALLOW", "SUB_SANDBOX_NOALLOW", "UNKNOWN"],
     "labels": [
       "APPLE",
       "APPLE_FINDMY",

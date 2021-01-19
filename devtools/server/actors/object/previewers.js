@@ -362,19 +362,19 @@ const previewers = {
 
   Promise: [
     function({ obj, hooks }, grip, rawObj) {
-      const {state, value, reason} = ObjectUtils.getPromiseState(obj);
+      const { state, value, reason } = ObjectUtils.getPromiseState(obj);
       const ownProperties = Object.create(null);
-      ownProperties["<state>"] = state;
+      ownProperties["<state>"] = { value: state };
       let ownPropertiesLength = 1;
 
       // Only expose <value> or <reason> in top-level promises, to avoid recursion.
       // <state> is not problematic because it's a string.
       if (hooks.getGripDepth() === 1) {
         if (state == "fulfilled") {
-          ownProperties["<value>"] = hooks.createValueGrip(value);
+          ownProperties["<value>"] = { value: hooks.createValueGrip(value) };
           ++ownPropertiesLength;
         } else if (state == "rejected") {
-          ownProperties["<reason>"] = hooks.createValueGrip(reason);
+          ownProperties["<reason>"] = { value: hooks.createValueGrip(reason) };
           ++ownPropertiesLength;
         }
       }
@@ -593,6 +593,12 @@ previewers.Object = [
       case "SyntaxError":
       case "TypeError":
       case "URIError":
+      case "InternalError":
+      case "AggregateError":
+      case "CompileError":
+      case "DebuggeeWouldRun":
+      case "LinkError":
+      case "RuntimeError":
         const name = DevToolsUtils.getProperty(obj, "name");
         const msg = DevToolsUtils.getProperty(obj, "message");
         const stack = DevToolsUtils.getProperty(obj, "stack");

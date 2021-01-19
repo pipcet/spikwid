@@ -50,6 +50,7 @@ class JSDependentString;
 
 namespace js {
 
+struct StringStats;
 class AutoLockGCBgAlloc;
 class ObjectElements;
 class PlainObject;
@@ -69,7 +70,6 @@ class GCSchedulingTunables;
 class MinorCollectionTracer;
 class RelocationOverlay;
 class StringRelocationOverlay;
-struct TenureCountCache;
 enum class AllocKind : uint8_t;
 class TenuredCell;
 }  // namespace gc
@@ -103,7 +103,7 @@ class NurseryDecommitTask : public GCParallelTask {
   gc::Chunk* popChunk(const AutoLockHelperThreadState& lock);
 };
 
-class TenuringTracer : public JSTracer {
+class TenuringTracer final : public GenericTracer {
   friend class Nursery;
   Nursery& nursery_;
 
@@ -124,13 +124,24 @@ class TenuringTracer : public JSTracer {
 
   TenuringTracer(JSRuntime* rt, Nursery* nursery);
 
+  JSObject* onObjectEdge(JSObject* obj) override;
+  JSString* onStringEdge(JSString* str) override;
+  JS::Symbol* onSymbolEdge(JS::Symbol* sym) override;
+  JS::BigInt* onBigIntEdge(JS::BigInt* bi) override;
+  js::BaseScript* onScriptEdge(BaseScript* script) override;
+  js::Shape* onShapeEdge(Shape* shape) override;
+  js::RegExpShared* onRegExpSharedEdge(RegExpShared* shared) override;
+  js::ObjectGroup* onObjectGroupEdge(ObjectGroup* group) override;
+  js::BaseShape* onBaseShapeEdge(BaseShape* base) override;
+  js::jit::JitCode* onJitCodeEdge(jit::JitCode* code) override;
+  js::Scope* onScopeEdge(Scope* scope) override;
+
  public:
   Nursery& nursery() { return nursery_; }
 
   template <typename T>
   void traverse(T** thingp);
-  template <typename T>
-  void traverse(T* thingp);
+  void traverse(JS::Value* thingp);
 
   // The store buffers need to be able to call these directly.
   void traceObject(JSObject* src);
@@ -405,6 +416,8 @@ class Nursery {
   }
 
   bool shouldCollect() const;
+  bool isNearlyFull() const;
+  bool isUnderused() const;
 
   bool enableProfiling() const { return enableProfiling_; }
 
@@ -479,8 +492,8 @@ class Nursery {
   // Whether we will nursery-allocate BigInts.
   bool canAllocateBigInts_;
 
-  // Report ObjectGroups with at least this many instances tenured.
-  int64_t reportTenurings_;
+  // Report how many strings were deduplicated.
+  bool reportDeduplications_;
 
   // Whether and why a collection of this nursery has been requested. This is
   // mutable as it is set by the store buffer, which otherwise cannot modify
@@ -515,13 +528,12 @@ class Nursery {
     size_t nurseryUsedBytes = 0;
     size_t tenuredBytes = 0;
     size_t tenuredCells = 0;
+    mozilla::TimeStamp endTime;
   };
   PreviousGC previousGC;
 
-#ifndef JS_MORE_DETERMINISTIC
-  mozilla::TimeStamp lastResizeTime;
+  bool hasRecentGrowthData;
   double smoothedGrowthFactor;
-#endif
 
   // Calculate the promotion rate of the most recent minor GC.
   // The valid_for_tenuring parameter is used to return whether this
@@ -681,17 +693,14 @@ class Nursery {
     size_t tenuredBytes;
     size_t tenuredCells;
   };
-  CollectionResult doCollection(JS::GCReason reason,
-                                gc::TenureCountCache& tenureCounts);
+  CollectionResult doCollection(JS::GCReason reason);
 
-  size_t doPretenuring(JSRuntime* rt, JS::GCReason reason,
-                       const gc::TenureCountCache& tenureCounts,
-                       bool highPromotionRate);
+  void doPretenuring(JSRuntime* rt, JS::GCReason reason,
+                     bool highPromotionRate);
 
   // Move the object at |src| in the Nursery to an already-allocated cell
   // |dst| in Tenured.
-  void collectToFixedPoint(TenuringTracer& trc,
-                           gc::TenureCountCache& tenureCounts);
+  void collectToFixedPoint(TenuringTracer& trc);
 
   // The dependent string chars needs to be relocated if the base which it's
   // using chars from has been deduplicated.
@@ -738,17 +747,19 @@ class Nursery {
   void freeChunksFrom(unsigned firstFreeChunk);
 
   void sendTelemetry(JS::GCReason reason, mozilla::TimeDuration totalTime,
-                     bool wasEmpty, size_t pretenureCount,
-                     double promotionRate);
+                     bool wasEmpty, double promotionRate);
 
   void printCollectionProfile(JS::GCReason reason, double promotionRate);
-  void printTenuringData(const gc::TenureCountCache& tenureCounts);
+  void printDeduplicationData(js::StringStats& prev, js::StringStats& curr);
 
   // Profile recording and printing.
   void maybeClearProfileDurations();
   void startProfile(ProfileKey key);
   void endProfile(ProfileKey key);
   static void printProfileDurations(const ProfileDurations& times);
+
+  mozilla::TimeStamp collectionStartTime() const;
+  mozilla::TimeStamp lastCollectionEndTime() const;
 
   friend class TenuringTracer;
   friend class gc::MinorCollectionTracer;

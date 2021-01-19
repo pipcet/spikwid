@@ -95,83 +95,89 @@ static LazyLogModule gIOServiceLog("nsIOService");
 // A general port blacklist.  Connections to these ports will not be allowed
 // unless the protocol overrides.
 //
-// TODO: I am sure that there are more ports to be added.
-//       This cut is based on the classic mozilla codebase
+// This list is to be kept in sync with "bad ports" as defined in the
+// WHATWG Fetch standard at <https://fetch.spec.whatwg.org/#port-blocking>
 
 int16_t gBadPortList[] = {
-    1,     // tcpmux
-    7,     // echo
-    9,     // discard
-    11,    // systat
-    13,    // daytime
-    15,    // netstat
-    17,    // qotd
-    19,    // chargen
-    20,    // ftp-data
-    21,    // ftp
-    22,    // ssh
-    23,    // telnet
-    25,    // smtp
-    37,    // time
-    42,    // name
-    43,    // nicname
-    53,    // domain
-    77,    // priv-rjs
-    79,    // finger
-    87,    // ttylink
-    95,    // supdup
-    101,   // hostriame
-    102,   // iso-tsap
-    103,   // gppitnp
-    104,   // acr-nema
-    109,   // pop2
-    110,   // pop3
-    111,   // sunrpc
-    113,   // auth
-    115,   // sftp
-    117,   // uucp-path
-    119,   // nntp
-    123,   // ntp
-    135,   // loc-srv / epmap
-    139,   // netbios
-    143,   // imap2
-    179,   // bgp
-    389,   // ldap
-    427,   // afp (alternate)
-    465,   // smtp (alternate)
-    512,   // print / exec
-    513,   // login
-    514,   // shell
-    515,   // printer
-    526,   // tempo
-    530,   // courier
-    531,   // chat
-    532,   // netnews
-    540,   // uucp
-    548,   // afp
-    554,   // rtsp
-    556,   // remotefs
-    563,   // nntp+ssl
-    587,   // smtp (outgoing)
-    601,   // syslog-conn
-    636,   // ldap+ssl
-    993,   // imap+ssl
-    995,   // pop3+ssl
-    1720,  // h323hostcall
-    1723,  // pptp
-    2049,  // nfs
-    3659,  // apple-sasl
-    4045,  // lockd
-    5060,  // sip
-    5061,  // sips
-    6000,  // x11
-    6665,  // irc (alternate)
-    6666,  // irc (alternate)
-    6667,  // irc (default)
-    6668,  // irc (alternate)
-    6669,  // irc (alternate)
-    6697,  // irc+tls
-    0,     // Sentinel value: This MUST be zero
+    1,      // tcpmux
+    7,      // echo
+    9,      // discard
+    11,     // systat
+    13,     // daytime
+    15,     // netstat
+    17,     // qotd
+    19,     // chargen
+    20,     // ftp-data
+    21,     // ftp
+    22,     // ssh
+    23,     // telnet
+    25,     // smtp
+    37,     // time
+    42,     // name
+    43,     // nicname
+    53,     // domain
+    69,     // tftp
+    77,     // priv-rjs
+    79,     // finger
+    87,     // ttylink
+    95,     // supdup
+    101,    // hostriame
+    102,    // iso-tsap
+    103,    // gppitnp
+    104,    // acr-nema
+    109,    // pop2
+    110,    // pop3
+    111,    // sunrpc
+    113,    // auth
+    115,    // sftp
+    117,    // uucp-path
+    119,    // nntp
+    123,    // ntp
+    135,    // loc-srv / epmap
+    137,    // netbios
+    139,    // netbios
+    143,    // imap2
+    161,    // snmp
+    179,    // bgp
+    389,    // ldap
+    427,    // afp (alternate)
+    465,    // smtp (alternate)
+    512,    // print / exec
+    513,    // login
+    514,    // shell
+    515,    // printer
+    526,    // tempo
+    530,    // courier
+    531,    // chat
+    532,    // netnews
+    540,    // uucp
+    548,    // afp
+    554,    // rtsp
+    556,    // remotefs
+    563,    // nntp+ssl
+    587,    // smtp (outgoing)
+    601,    // syslog-conn
+    636,    // ldap+ssl
+    993,    // imap+ssl
+    995,    // pop3+ssl
+    1719,   // h323gatestat
+    1720,   // h323hostcall
+    1723,   // pptp
+    2049,   // nfs
+    3659,   // apple-sasl
+    4045,   // lockd
+    5060,   // sip
+    5061,   // sips
+    6000,   // x11
+    6566,   // sane-port
+    6665,   // irc (alternate)
+    6666,   // irc (alternate)
+    6667,   // irc (default)
+    6668,   // irc (alternate)
+    6669,   // irc (alternate)
+    6697,   // irc+tls
+    10080,  // amanda
+    0,      // Sentinel value: This MUST be zero
 };
 
 static const char kProfileChangeNetTeardownTopic[] =
@@ -222,6 +228,7 @@ static const char* gCallbackPrefsForSocketProcess[] = {
     "network.ssl_tokens_cache_enabled",
     "network.send_ODA_to_content_directly",
     "network.trr.",
+    "doh-rollout.",
     "network.dns.disableIPv6",
     "network.dns.skipTRR-when-parental-control-enabled",
     "network.offline-mirrors-connectivity",
@@ -987,7 +994,7 @@ nsIOService::NewChannelFromURI(nsIURI* aURI, nsINode* aLoadingNode,
                                nsIPrincipal* aLoadingPrincipal,
                                nsIPrincipal* aTriggeringPrincipal,
                                uint32_t aSecurityFlags,
-                               uint32_t aContentPolicyType,
+                               nsContentPolicyType aContentPolicyType,
                                nsIChannel** result) {
   return NewChannelFromURIWithProxyFlags(aURI,
                                          nullptr,  // aProxyURI
@@ -1001,7 +1008,8 @@ nsresult nsIOService::NewChannelFromURIWithClientAndController(
     nsIPrincipal* aTriggeringPrincipal,
     const Maybe<ClientInfo>& aLoadingClientInfo,
     const Maybe<ServiceWorkerDescriptor>& aController, uint32_t aSecurityFlags,
-    uint32_t aContentPolicyType, uint32_t aSandboxFlags, nsIChannel** aResult) {
+    nsContentPolicyType aContentPolicyType, uint32_t aSandboxFlags,
+    nsIChannel** aResult) {
   return NewChannelFromURIWithProxyFlagsInternal(
       aURI,
       nullptr,  // aProxyURI
@@ -1025,7 +1033,8 @@ nsresult nsIOService::NewChannelFromURIWithProxyFlagsInternal(
     nsIPrincipal* aTriggeringPrincipal,
     const Maybe<ClientInfo>& aLoadingClientInfo,
     const Maybe<ServiceWorkerDescriptor>& aController, uint32_t aSecurityFlags,
-    uint32_t aContentPolicyType, uint32_t aSandboxFlags, nsIChannel** result) {
+    nsContentPolicyType aContentPolicyType, uint32_t aSandboxFlags,
+    nsIChannel** result) {
   nsCOMPtr<nsILoadInfo> loadInfo = new LoadInfo(
       aLoadingPrincipal, aTriggeringPrincipal, aLoadingNode, aSecurityFlags,
       aContentPolicyType, aLoadingClientInfo, aController, aSandboxFlags);
@@ -1109,7 +1118,7 @@ nsIOService::NewChannelFromURIWithProxyFlags(
     nsIURI* aURI, nsIURI* aProxyURI, uint32_t aProxyFlags,
     nsINode* aLoadingNode, nsIPrincipal* aLoadingPrincipal,
     nsIPrincipal* aTriggeringPrincipal, uint32_t aSecurityFlags,
-    uint32_t aContentPolicyType, nsIChannel** result) {
+    nsContentPolicyType aContentPolicyType, nsIChannel** result) {
   return NewChannelFromURIWithProxyFlagsInternal(
       aURI, aProxyURI, aProxyFlags, aLoadingNode, aLoadingPrincipal,
       aTriggeringPrincipal, Maybe<ClientInfo>(),
@@ -1122,7 +1131,8 @@ nsIOService::NewChannel(const nsACString& aSpec, const char* aCharset,
                         nsIURI* aBaseURI, nsINode* aLoadingNode,
                         nsIPrincipal* aLoadingPrincipal,
                         nsIPrincipal* aTriggeringPrincipal,
-                        uint32_t aSecurityFlags, uint32_t aContentPolicyType,
+                        uint32_t aSecurityFlags,
+                        nsContentPolicyType aContentPolicyType,
                         nsIChannel** result) {
   nsresult rv;
   nsCOMPtr<nsIURI> uri;

@@ -28,7 +28,9 @@
 #include "mozilla/PerfStats.h"
 #include "mozilla/PresShellInlines.h"
 #include "mozilla/RangeUtils.h"
+#include "mozilla/ScopeExit.h"
 #include "mozilla/Sprintf.h"
+#include "mozilla/StaticAnalysisFunctions.h"
 #include "mozilla/StaticPrefs_apz.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_font.h"
@@ -200,6 +202,7 @@
 #include "mozilla/ServoStyleSet.h"
 #include "mozilla/StyleSheet.h"
 #include "mozilla/StyleSheetInlines.h"
+#include "mozilla/InputTaskManager.h"
 #include "mozilla/dom/ImageTracker.h"
 #include "nsIDocShellTreeOwner.h"
 #include "nsClassHashtable.h"
@@ -1290,6 +1293,7 @@ void PresShell::Destroy() {
         }
       }
     }
+    mPresContext->ClearOneShotPostRefreshObservers();
   }
 
 #ifdef MOZ_REFLOW_PERF
@@ -2465,7 +2469,8 @@ PresShell::CompleteMove(bool aForward, bool aExtend) {
       aExtend ? nsFrameSelection::FocusMode::kExtendSelection
               : nsFrameSelection::FocusMode::kCollapseToNewPoint;
   frameSelection->HandleClick(
-      pos.mResultContent, pos.mContentOffset, pos.mContentOffset, focusMode,
+      MOZ_KnownLive(pos.mResultContent) /* bug 1636889 */, pos.mContentOffset,
+      pos.mContentOffset, focusMode,
       aForward ? CARET_ASSOCIATE_AFTER : CARET_ASSOCIATE_BEFORE);
   if (limiter) {
     // HandleClick resets ancestorLimiter, so set it again.
@@ -2479,12 +2484,6 @@ PresShell::CompleteMove(bool aForward, bool aExtend) {
       nsISelectionController::SELECTION_FOCUS_REGION,
       nsISelectionController::SCROLL_SYNCHRONOUS |
           nsISelectionController::SCROLL_FOR_CARET_MOVE);
-}
-
-NS_IMETHODIMP
-PresShell::SelectAll() {
-  RefPtr<nsFrameSelection> frameSelection = mSelection;
-  return frameSelection->SelectAll();
 }
 
 static void DoCheckVisibility(nsPresContext* aPresContext, nsIContent* aNode,
@@ -2804,9 +2803,11 @@ void PresShell::FrameNeedsReflow(nsIFrame* aFrame,
       do {
         nsIFrame* f = stack.PopLastElement();
 
-        if (styleChange) {
-          if (f->IsPlaceholderFrame()) {
-            nsIFrame* oof = nsPlaceholderFrame::GetRealFrameForPlaceholder(f);
+        if (styleChange && f->IsPlaceholderFrame()) {
+          // Call `GetOutOfFlowFrame` directly because we can get here from
+          // frame destruction and the placeholder might be already torn down.
+          if (nsIFrame* oof =
+                  static_cast<nsPlaceholderFrame*>(f)->GetOutOfFlowFrame()) {
             if (!nsLayoutUtils::IsProperAncestorFrame(subtreeRoot, oof)) {
               // We have another distinct subtree we need to mark.
               subtrees.AppendElement(oof);
@@ -3775,11 +3776,11 @@ void PresShell::DispatchSynthMouseMove(WidgetGUIEvent* aEvent) {
 }
 
 void PresShell::ClearMouseCaptureOnView(nsView* aView) {
-  if (sCapturingContentInfo.mContent) {
+  if (nsIContent* capturingContent = GetCapturingContent()) {
     if (aView) {
       // if a view was specified, ensure that the captured content is within
       // this view.
-      nsIFrame* frame = sCapturingContentInfo.mContent->GetPrimaryFrame();
+      nsIFrame* frame = capturingContent->GetPrimaryFrame();
       if (frame) {
         nsView* view = frame->GetClosestView();
         // if there is no view, capturing won't be handled any more, so
@@ -3787,10 +3788,10 @@ void PresShell::ClearMouseCaptureOnView(nsView* aView) {
         if (view) {
           do {
             if (view == aView) {
-              sCapturingContentInfo.mContent = nullptr;
+              ReleaseCapturingContent();
               // the view containing the captured content likely disappeared so
               // disable capture for now.
-              sCapturingContentInfo.mAllowed = false;
+              AllowMouseCapture(false);
               break;
             }
 
@@ -3802,38 +3803,39 @@ void PresShell::ClearMouseCaptureOnView(nsView* aView) {
       }
     }
 
-    sCapturingContentInfo.mContent = nullptr;
+    ReleaseCapturingContent();
   }
 
   // disable mouse capture until the next mousedown as a dialog has opened
   // or a drag has started. Otherwise, someone could start capture during
   // the modal dialog or drag.
-  sCapturingContentInfo.mAllowed = false;
+  AllowMouseCapture(false);
 }
 
 void PresShell::ClearMouseCapture(nsIFrame* aFrame) {
-  if (!sCapturingContentInfo.mContent) {
-    sCapturingContentInfo.mAllowed = false;
+  nsIContent* capturingContent = GetCapturingContent();
+  if (!capturingContent) {
+    AllowMouseCapture(false);
     return;
   }
 
   // null frame argument means clear the capture
   if (!aFrame) {
-    sCapturingContentInfo.mContent = nullptr;
-    sCapturingContentInfo.mAllowed = false;
+    ReleaseCapturingContent();
+    AllowMouseCapture(false);
     return;
   }
 
-  nsIFrame* capturingFrame = sCapturingContentInfo.mContent->GetPrimaryFrame();
+  nsIFrame* capturingFrame = capturingContent->GetPrimaryFrame();
   if (!capturingFrame) {
-    sCapturingContentInfo.mContent = nullptr;
-    sCapturingContentInfo.mAllowed = false;
+    ReleaseCapturingContent();
+    AllowMouseCapture(false);
     return;
   }
 
   if (nsLayoutUtils::IsAncestorFrameCrossDoc(aFrame, capturingFrame)) {
-    sCapturingContentInfo.mContent = nullptr;
-    sCapturingContentInfo.mAllowed = false;
+    ReleaseCapturingContent();
+    AllowMouseCapture(false);
   }
 }
 
@@ -6425,7 +6427,8 @@ void PresShell::Paint(nsView* aViewToPaint, const nsRegion& aDirtyRegion,
 }
 
 // static
-void PresShell::SetCapturingContent(nsIContent* aContent, CaptureFlags aFlags) {
+void PresShell::SetCapturingContent(nsIContent* aContent, CaptureFlags aFlags,
+                                    WidgetEvent* aEvent) {
   // If capture was set for pointer lock, don't unlock unless we are coming
   // out of pointer lock explicitly.
   if (!aContent && sCapturingContentInfo.mPointerLock &&
@@ -6434,6 +6437,7 @@ void PresShell::SetCapturingContent(nsIContent* aContent, CaptureFlags aFlags) {
   }
 
   sCapturingContentInfo.mContent = nullptr;
+  sCapturingContentInfo.mRemoteTarget = nullptr;
 
   // only set capturing content if allowed or the
   // CaptureFlags::IgnoreAllowedState or CaptureFlags::PointerLock are used.
@@ -6441,6 +6445,14 @@ void PresShell::SetCapturingContent(nsIContent* aContent, CaptureFlags aFlags) {
       sCapturingContentInfo.mAllowed || (aFlags & CaptureFlags::PointerLock)) {
     if (aContent) {
       sCapturingContentInfo.mContent = aContent;
+    }
+    if (aEvent) {
+      MOZ_ASSERT(XRE_IsParentProcess());
+      MOZ_ASSERT(aEvent->mMessage == eMouseDown);
+      MOZ_ASSERT(aEvent->HasBeenPostedToRemoteProcess());
+      sCapturingContentInfo.mRemoteTarget =
+          BrowserParent::GetLastMouseRemoteTarget();
+      MOZ_ASSERT(sCapturingContentInfo.mRemoteTarget);
     }
     // CaptureFlags::PointerLock is the same as
     // CaptureFlags::RetargetToElement & CaptureFlags::IgnoreAllowedState.
@@ -6867,12 +6879,12 @@ nsresult PresShell::EventHandler::HandleEvent(nsIFrame* aFrameForPresShell,
 
   if (MaybeHandleEventWithAccessibleCaret(aFrameForPresShell, aGUIEvent,
                                           aEventStatus)) {
-    // Probably handled by AccessibleCaretEventHub.
+    // Handled by AccessibleCaretEventHub.
     return NS_OK;
   }
 
   if (MaybeDiscardEvent(aGUIEvent)) {
-    // Nobody cannot handle the event for now.
+    // Cannot handle the event for now.
     return NS_OK;
   }
 
@@ -7003,7 +7015,7 @@ nsresult PresShell::EventHandler::HandleEventUsingCoordinates(
   bool isWindowLevelMouseExit =
       (aGUIEvent->mMessage == eMouseExitFromWidget) &&
       (mouseEvent &&
-       (mouseEvent->mExitFrom.value() == WidgetMouseEvent::eTopLevel ||
+       (mouseEvent->mExitFrom.value() == WidgetMouseEvent::ePlatformTopLevel ||
         mouseEvent->mExitFrom.value() == WidgetMouseEvent::ePuppet));
 
   // Get the frame at the event point. However, don't do this if we're
@@ -7594,6 +7606,9 @@ bool PresShell::EventHandler::MaybeDiscardOrDelayKeyboardEvent(
     return false;
   }
 
+  MOZ_ASSERT_IF(InputTaskManager::CanSuspendInputEvent(),
+                !InputTaskManager::Get()->IsSuspended());
+
   if (aGUIEvent->mMessage == eKeyDown) {
     mPresShell->mNoDelayedKeyEvents = true;
   } else if (!mPresShell->mNoDelayedKeyEvents) {
@@ -7619,6 +7634,10 @@ bool PresShell::EventHandler::MaybeDiscardOrDelayMouseEvent(
            ->EventHandlingSuppressed()) {
     return false;
   }
+
+  MOZ_ASSERT_IF(InputTaskManager::CanSuspendInputEvent() &&
+                    aGUIEvent->mMessage != eMouseMove,
+                !InputTaskManager::Get()->IsSuspended());
 
   if (aGUIEvent->mMessage == eMouseDown) {
     mPresShell->mNoDelayedMouseEvents = true;
@@ -10868,32 +10887,29 @@ nsAccessibilityService* PresShell::GetAccessibilityService() {
 
 // Asks our docshell whether we're active.
 void PresShell::QueryIsActive() {
-  nsCOMPtr<nsISupports> container = mPresContext->GetContainerWeak();
-  if (mDocument) {
-    Document* displayDoc = mDocument->GetDisplayDocument();
-    if (displayDoc) {
-      // Ok, we're an external resource document -- we need to use our display
-      // document's docshell to determine "IsActive" status, since we lack
-      // a container.
-      MOZ_ASSERT(!container,
-                 "external resource doc shouldn't have its own container");
-
-      nsPresContext* displayPresContext = displayDoc->GetPresContext();
-      if (displayPresContext) {
-        container = displayPresContext->GetContainerWeak();
-      }
-    }
+  Document* doc = mDocument;
+  if (!doc) {
+    return;
+  }
+  if (Document* displayDoc = doc->GetDisplayDocument()) {
+    // Ok, we're an external resource document -- we need to use our display
+    // document's docshell to determine "IsActive" status, since we lack
+    // a browsing context of our own.
+    MOZ_ASSERT(!doc->GetBrowsingContext(),
+               "external resource doc shouldn't have its own BC");
+    doc = displayDoc;
   }
 
-  nsCOMPtr<nsIDocShell> docshell(do_QueryInterface(container));
-  if (docshell) {
-    bool isActive;
-    nsresult rv = docshell->GetIsActive(&isActive);
+  if (BrowsingContext* bc = doc->GetBrowsingContext()) {
     // Even though in theory the docshell here could be "Inactive and
-    // Foreground", thus implying aIsHidden=false for SetIsActive(),
-    // this is a newly created PresShell so we'd like to invalidate anyway
-    // upon being made active to ensure that the contents get painted.
-    if (NS_SUCCEEDED(rv)) SetIsActive(isActive);
+    // Foreground", thus implying aIsHidden=false for SetIsActive(), this is a
+    // newly created PresShell so we'd like to invalidate anyway upon being made
+    // active to ensure that the contents get painted.
+    auto* browserChild = BrowserChild::GetFrom(doc->GetDocShell());
+    const bool hiddenInRemoteFrame = browserChild &&
+                                     !browserChild->IsTopLevel() &&
+                                     !browserChild->IsVisible();
+    SetIsActive(bc->IsActive() && !hiddenInRemoteFrame);
   }
 }
 

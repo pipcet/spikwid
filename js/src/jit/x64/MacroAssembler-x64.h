@@ -867,44 +867,44 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared {
   // Extended unboxing API. If the payload is already in a register, returns
   // that register. Otherwise, provides a move to the given scratch register,
   // and returns that.
-  MOZ_MUST_USE Register extractObject(const Address& address,
-                                      Register scratch) {
+  [[nodiscard]] Register extractObject(const Address& address,
+                                       Register scratch) {
     MOZ_ASSERT(scratch != ScratchReg);
     unboxObject(address, scratch);
     return scratch;
   }
-  MOZ_MUST_USE Register extractObject(const ValueOperand& value,
-                                      Register scratch) {
+  [[nodiscard]] Register extractObject(const ValueOperand& value,
+                                       Register scratch) {
     MOZ_ASSERT(scratch != ScratchReg);
     unboxObject(value, scratch);
     return scratch;
   }
-  MOZ_MUST_USE Register extractSymbol(const ValueOperand& value,
-                                      Register scratch) {
+  [[nodiscard]] Register extractSymbol(const ValueOperand& value,
+                                       Register scratch) {
     MOZ_ASSERT(scratch != ScratchReg);
     unboxSymbol(value, scratch);
     return scratch;
   }
-  MOZ_MUST_USE Register extractInt32(const ValueOperand& value,
-                                     Register scratch) {
+  [[nodiscard]] Register extractInt32(const ValueOperand& value,
+                                      Register scratch) {
     MOZ_ASSERT(scratch != ScratchReg);
     unboxInt32(value, scratch);
     return scratch;
   }
-  MOZ_MUST_USE Register extractBoolean(const ValueOperand& value,
-                                       Register scratch) {
+  [[nodiscard]] Register extractBoolean(const ValueOperand& value,
+                                        Register scratch) {
     MOZ_ASSERT(scratch != ScratchReg);
     unboxBoolean(value, scratch);
     return scratch;
   }
-  MOZ_MUST_USE Register extractTag(const Address& address, Register scratch) {
+  [[nodiscard]] Register extractTag(const Address& address, Register scratch) {
     MOZ_ASSERT(scratch != ScratchReg);
     loadPtr(address, scratch);
     splitTag(scratch, scratch);
     return scratch;
   }
-  MOZ_MUST_USE Register extractTag(const ValueOperand& value,
-                                   Register scratch) {
+  [[nodiscard]] Register extractTag(const ValueOperand& value,
+                                    Register scratch) {
     MOZ_ASSERT(scratch != ScratchReg);
     splitTag(value, scratch);
     return scratch;
@@ -987,6 +987,14 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared {
   void vpcmpgtwSimd128(const SimdConstant& v, FloatRegister src);
   void vpcmpeqdSimd128(const SimdConstant& v, FloatRegister src);
   void vpcmpgtdSimd128(const SimdConstant& v, FloatRegister src);
+  void vcmpeqpsSimd128(const SimdConstant& v, FloatRegister src);
+  void vcmpneqpsSimd128(const SimdConstant& v, FloatRegister src);
+  void vcmpltpsSimd128(const SimdConstant& v, FloatRegister src);
+  void vcmplepsSimd128(const SimdConstant& v, FloatRegister src);
+  void vcmpeqpdSimd128(const SimdConstant& v, FloatRegister src);
+  void vcmpneqpdSimd128(const SimdConstant& v, FloatRegister src);
+  void vcmpltpdSimd128(const SimdConstant& v, FloatRegister src);
+  void vcmplepdSimd128(const SimdConstant& v, FloatRegister src);
 
   void loadWasmGlobalPtr(uint32_t globalDataOffset, Register dest) {
     loadPtr(Address(WasmTlsReg,
@@ -1022,8 +1030,6 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared {
   void loadUnboxedValue(const T& src, MIRType type, AnyRegister dest) {
     if (dest.isFloat()) {
       loadInt32OrDouble(src, dest.fpu());
-    } else if (type == MIRType::ObjectOrNull) {
-      unboxObjectOrNull(src, dest.gpr());
     } else {
       unboxNonDouble(Operand(src), dest.gpr(), ValueTypeFromMIRType(type));
     }

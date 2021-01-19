@@ -345,6 +345,12 @@ nsDNSRecord::ReportUnusable(uint16_t aPort) {
   return NS_OK;
 }
 
+NS_IMETHODIMP
+nsDNSRecord::GetEffectiveTRRMode(uint32_t* aMode) {
+  *aMode = mHostRecord->EffectiveTRRMode();
+  return NS_OK;
+}
+
 class nsDNSByTypeRecord : public nsIDNSByTypeRecord,
                           public nsIDNSTXTRecord,
                           public nsIDNSHTTPSSVCRecord {
@@ -734,12 +740,12 @@ nsresult nsDNSService::ReadPrefs(const char* name) {
     Preferences::GetCString(kPrefDnsLocalDomains, localDomains);
     MutexAutoLock lock(mLock);
     mLocalDomains.Clear();
-    if (!localDomains.IsEmpty()) {
-      nsCCharSeparatedTokenizer tokenizer(
-          localDomains, ',', nsCCharSeparatedTokenizer::SEPARATOR_OPTIONAL);
-      while (tokenizer.hasMoreTokens()) {
-        mLocalDomains.PutEntry(tokenizer.nextToken());
-      }
+    for (const auto& token :
+         nsCCharSeparatedTokenizerTemplate<NS_IsAsciiWhitespace,
+                                           nsTokenizerFlags::SeparatorOptional>(
+             localDomains, ',')
+             .ToRange()) {
+      mLocalDomains.PutEntry(token);
     }
   }
   if (!name || !strcmp(name, kPrefDnsForceResolve)) {

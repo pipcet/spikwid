@@ -4,7 +4,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "mozilla/glean/Datetime.h"
+#include "mozilla/glean/bindings/Datetime.h"
 
 #include "nsString.h"
 #include "mozilla/Components.h"
@@ -32,7 +32,7 @@ GleanDatetime::Set(PRTime aValue, uint8_t aOptionalArgc) {
 NS_IMETHODIMP
 GleanDatetime::TestGetValue(const nsACString& aStorageName, JSContext* aCx,
                             JS::MutableHandleValue aResult) {
-  auto result = mDatetime.TestGetValue(PromiseFlatCString(aStorageName).get());
+  auto result = mDatetime.TestGetValue(aStorageName);
   if (result.isNothing()) {
     aResult.set(JS::UndefinedValue());
   } else {

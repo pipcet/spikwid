@@ -32,6 +32,20 @@ struct DevPixelSpan {
   int end;
 };
 
+struct SkeletonUISettings {
+  uint32_t screenX;
+  uint32_t screenY;
+  uint32_t width;
+  uint32_t height;
+  CSSPixelSpan urlbarSpan;
+  CSSPixelSpan searchbarSpan;
+  double cssToDevPixelScaling;
+  Vector<CSSPixelSpan> springs;
+  bool maximized;
+  bool menubarShown;
+  bool rtlEnabled;
+};
+
 enum class ThemeMode : uint32_t { Invalid, Default, Dark, Light };
 
 struct ThemeColors {
@@ -41,6 +55,7 @@ struct ThemeColors {
   uint32_t chromeContentDividerColor;
   uint32_t tabLineColor;
   uint32_t urlbarColor;
+  uint32_t urlbarBorderColor;
   uint32_t animationColor;
 };
 
@@ -48,12 +63,7 @@ MFBT_API void CreateAndStorePreXULSkeletonUI(HINSTANCE hInstance, int argc,
                                              char** argv);
 MFBT_API HWND ConsumePreXULSkeletonUIHandle();
 MFBT_API bool WasPreXULSkeletonUIMaximized();
-MFBT_API void PersistPreXULSkeletonUIValues(int screenX, int screenY, int width,
-                                            int height, bool maximized,
-                                            CSSPixelSpan urlbar,
-                                            CSSPixelSpan searchbar,
-                                            const Vector<CSSPixelSpan>& springs,
-                                            double cssToDevPixelScaling);
+MFBT_API void PersistPreXULSkeletonUIValues(const SkeletonUISettings& settings);
 MFBT_API bool GetPreXULSkeletonUIEnabled();
 MFBT_API void SetPreXULSkeletonUIEnabledIfAllowed(bool value);
 MFBT_API void PollPreXULSkeletonUIEvents();

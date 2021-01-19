@@ -21,6 +21,7 @@
 #include "Layers.h"
 #include "MaskLayerImageCache.h"
 #include "MatrixStack.h"
+#include "TransformClipNode.h"
 #include "UnitTransforms.h"
 #include "Units.h"
 #include "gfx2DGlue.h"
@@ -128,6 +129,47 @@ static inline MaskLayerImageCache* GetMaskLayerImageCache() {
 
   return gMaskLayerImageCache;
 }
+
+struct InactiveLayerData {
+  RefPtr<layers::BasicLayerManager> mLayerManager;
+  RefPtr<layers::Layer> mLayer;
+  UniquePtr<layers::LayerProperties> mProps;
+
+  ~InactiveLayerData();
+};
+
+struct AssignedDisplayItem {
+  AssignedDisplayItem(nsPaintedDisplayItem* aItem, LayerState aLayerState,
+                      DisplayItemData* aData, const nsRect& aContentRect,
+                      DisplayItemEntryType aType, const bool aHasOpacity,
+                      const RefPtr<TransformClipNode>& aTransform,
+                      const bool aIsMerged);
+  AssignedDisplayItem(AssignedDisplayItem&& aRhs) = default;
+
+  bool HasOpacity() const { return mHasOpacity; }
+
+  bool HasTransform() const { return mTransform; }
+
+  nsPaintedDisplayItem* mItem;
+  DisplayItemData* mDisplayItemData;
+
+  /**
+   * If the display item is being rendered as an inactive
+   * layer, then this stores the layer manager being
+   * used for the inactive transaction.
+   */
+  UniquePtr<InactiveLayerData> mInactiveLayerData;
+  RefPtr<TransformClipNode> mTransform;
+
+  nsRect mContentRect;
+  LayerState mLayerState;
+  DisplayItemEntryType mType;
+
+  bool mReused;
+  bool mMerged;
+  bool mHasOpacity;
+  bool mHasPaintRect;
+};
 
 struct DisplayItemEntry {
   DisplayItemEntry(nsDisplayItem* aItem, DisplayItemEntryType aType)
@@ -244,6 +286,19 @@ DisplayItemData::DisplayItemData(LayerManagerData* aParent, uint32_t aKey,
   if (aFrame) {
     AddFrame(aFrame);
   }
+}
+
+void DisplayItemData::Destroy() {
+  // Get the pres context.
+  RefPtr<nsPresContext> presContext = mFrameList[0]->PresContext();
+
+  // Call our destructor.
+  this->~DisplayItemData();
+
+  // Don't let the memory be freed, since it will be recycled
+  // instead. Don't call the global operator delete.
+  presContext->PresShell()->FreeByObjectID(eArenaObjectID_DisplayItemData,
+                                           this);
 }
 
 void DisplayItemData::AddFrame(nsIFrame* aFrame) {
@@ -441,6 +496,12 @@ DisplayItemData* DisplayItemData::AssertDisplayItemData(
                      sAliveDisplayItemDatas->Contains(aData));
   MOZ_RELEASE_ASSERT(aData->mLayer);
   return aData;
+}
+
+void* DisplayItemData::operator new(size_t sz, nsPresContext* aPresContext) {
+  // Check the recycle list first.
+  return aPresContext->PresShell()->AllocateByObjectID(
+      eArenaObjectID_DisplayItemData, sz);
 }
 
 /**
@@ -4830,15 +4891,21 @@ void ContainerState::ProcessDisplayItems(nsDisplayList* aList) {
         params.mCompositorASR = itemASR;
       }
 
-      if (itemType == DisplayItemType::TYPE_PERSPECTIVE) {
-        // Perspective items have a single child item, an nsDisplayTransform.
-        // If the perspective item is scrolled, but the perspective-inducing
-        // frame is outside the scroll frame (indicated by item->Frame()
-        // being outside that scroll frame), we have to take special care to
-        // make APZ scrolling work properly. APZ needs us to put the scroll
-        // frame's FrameMetrics on our child transform ContainerLayer instead.
-        // It's worth investigating whether this ASR adjustment can be done at
-        // display item creation time.
+      // Perspective items have a single child item, an nsDisplayTransform.
+      // If the perspective item is scrolled, but the perspective-inducing
+      // frame is outside the scroll frame (indicated by item->Frame()
+      // being outside that scroll frame), we have to take special care to
+      // make APZ scrolling work properly. APZ needs us to put the scroll
+      // frame's FrameMetrics on our child transform ContainerLayer instead.
+      // We make a similar adjustment for OwnLayer items built for frames
+      // with perspective transforms (e.g. when they have rounded corners).
+      // It's worth investigating whether this ASR adjustment can be done at
+      // display item creation time.
+      bool deferASRForPerspective =
+          itemType == DisplayItemType::TYPE_PERSPECTIVE ||
+          (itemType == DisplayItemType::TYPE_OWN_LAYER &&
+           item->Frame()->IsTransformed() && item->Frame()->HasPerspective());
+      if (deferASRForPerspective) {
         scrollMetadataASR = GetASRForPerspective(
             scrollMetadataASR,
             item->Frame()->GetContainingBlock(nsIFrame::SKIP_SCROLLED_FRAME));
@@ -4978,12 +5045,25 @@ void ContainerState::ProcessDisplayItems(nsDisplayList* aList) {
       NS_ASSERTION(FindIndexOfLayerIn(mNewChildLayers, ownLayer) < 0,
                    "Layer already in list???");
 
+      // NewLayerEntry::mClipChain is used by SetupScrollingMetadata() to
+      // populate any scroll clips in the scroll metadata. Perspective layers
+      // have their ASR adjusted such that a scroll metadata that would normally
+      // go on the perspective layer goes on its transform layer child instead.
+      // However, the transform item's clip chain does not contain the
+      // corresponding scroll clip, so we use the perspective item's clip
+      // chain instead.
+      const DisplayItemClipChain* clipChainForScrollClips = layerClipChain;
+      if (itemType == DisplayItemType::TYPE_TRANSFORM && mContainerItem &&
+          mContainerItem->GetType() == DisplayItemType::TYPE_PERSPECTIVE) {
+        clipChainForScrollClips = mContainerItem->GetClipChain();
+      }
+
       NewLayerEntry* newLayerEntry = mNewChildLayers.AppendElement();
       newLayerEntry->mLayer = ownLayer;
       newLayerEntry->mAnimatedGeometryRoot = itemAGR;
       newLayerEntry->mASR = itemASR;
       newLayerEntry->mScrollMetadataASR = scrollMetadataASR;
-      newLayerEntry->mClipChain = layerClipChain;
+      newLayerEntry->mClipChain = clipChainForScrollClips;
       newLayerEntry->mLayerState = layerState;
       if (itemType == DisplayItemType::TYPE_FIXED_POSITION) {
         newLayerEntry->mIsFixedToRootScrollFrame =

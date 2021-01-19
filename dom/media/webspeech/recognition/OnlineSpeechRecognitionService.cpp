@@ -14,6 +14,9 @@
 #include "SpeechRecognitionResult.h"
 #include "SpeechRecognitionResultList.h"
 #include "nsIObserverService.h"
+#include "mozilla/dom/Document.h"
+#include "mozilla/Preferences.h"
+#include "mozilla/ScopeExit.h"
 #include "mozilla/StaticPrefs_media.h"
 #include "mozilla/Services.h"
 #include "nsDirectoryServiceDefs.h"
@@ -21,6 +24,8 @@
 #include "nsMemory.h"
 #include "nsNetUtil.h"
 #include "nsContentUtils.h"
+#include "nsIChannel.h"
+#include "nsIHttpChannel.h"
 #include "nsIPrincipal.h"
 #include "nsIStreamListener.h"
 #include "nsIUploadChannel2.h"
@@ -315,9 +320,7 @@ void OnlineSpeechRecognitionService::DoSTT() {
   nsSecurityFlags secFlags = nsILoadInfo::SEC_REQUIRE_CORS_INHERITS_SEC_CONTEXT;
   nsLoadFlags loadFlags =
       nsIRequest::LOAD_NORMAL | nsIChannel::LOAD_BYPASS_SERVICE_WORKER;
-  nsContentPolicyType contentPolicy =
-      nsContentUtils::InternalContentPolicyTypeToExternal(
-          nsIContentPolicy::TYPE_OTHER);
+  nsContentPolicyType contentPolicy = nsIContentPolicy::TYPE_OTHER;
 
   nsPIDOMWindowInner* window = mRecognition->GetOwner();
   if (NS_WARN_IF(!window)) {

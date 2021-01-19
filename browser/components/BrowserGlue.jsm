@@ -29,6 +29,7 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   Blocklist: "resource://gre/modules/Blocklist.jsm",
   BookmarkHTMLUtils: "resource://gre/modules/BookmarkHTMLUtils.jsm",
   BookmarkJSONUtils: "resource://gre/modules/BookmarkJSONUtils.jsm",
+  BrowserSearchTelemetry: "resource:///modules/BrowserSearchTelemetry.jsm",
   BrowserUsageTelemetry: "resource:///modules/BrowserUsageTelemetry.jsm",
   BrowserUtils: "resource://gre/modules/BrowserUtils.jsm",
   BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.jsm",
@@ -73,7 +74,7 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   SafeBrowsing: "resource://gre/modules/SafeBrowsing.jsm",
   Sanitizer: "resource:///modules/Sanitizer.jsm",
   SaveToPocket: "chrome://pocket/content/SaveToPocket.jsm",
-  SearchTelemetry: "resource:///modules/SearchTelemetry.jsm",
+  SearchSERPTelemetry: "resource:///modules/SearchSERPTelemetry.jsm",
   SessionStartup: "resource:///modules/sessionstore/SessionStartup.jsm",
   SessionStore: "resource:///modules/sessionstore/SessionStore.jsm",
   TabCrashHandler: "resource:///modules/ContentCrashHandlers.jsm",
@@ -120,8 +121,8 @@ const PREF_PDFJS_ISDEFAULT_CACHE_STATE = "pdfjs.enabledCache.state";
 /**
  * Fission-compatible JSProcess implementations.
  * Each actor options object takes the form of a ProcessActorOptions dictionary.
- * Detailed documentation of these options is in dom/docs/Fission.rst,
- * available at https://firefox-source-docs.mozilla.org/dom/Fission.html#jsprocessactor
+ * Detailed documentation of these options is in dom/docs/ipc/jsactors.rst,
+ * available at https://firefox-source-docs.mozilla.org/dom/ipc/jsactors.html
  */
 let JSPROCESSACTORS = {
   // Miscellaneous stuff that needs to be initialized per process.
@@ -171,8 +172,8 @@ let JSPROCESSACTORS = {
 
 /**
  * Fission-compatible JSWindowActor implementations.
- * Detailed documentation of these is in dom/docs/Fission.rst,
- * available at https://firefox-source-docs.mozilla.org/dom/Fission.html#jswindowactor
+ * Detailed documentation of these options is in dom/docs/ipc/jsactors.rst,
+ * available at https://firefox-source-docs.mozilla.org/dom/ipc/jsactors.html
  */
 let JSWINDOWACTORS = {
   AboutLogins: {
@@ -637,12 +638,12 @@ let JSWINDOWACTORS = {
     enablePreference: "accessibility.blockautorefresh",
   },
 
-  SearchTelemetry: {
+  SearchSERPTelemetry: {
     parent: {
-      moduleURI: "resource:///actors/SearchTelemetryParent.jsm",
+      moduleURI: "resource:///actors/SearchSERPTelemetryParent.jsm",
     },
     child: {
-      moduleURI: "resource:///actors/SearchTelemetryChild.jsm",
+      moduleURI: "resource:///actors/SearchSERPTelemetryChild.jsm",
       events: {
         DOMContentLoaded: {},
         pageshow: { mozSystemGroup: true },
@@ -685,17 +686,6 @@ let JSWINDOWACTORS = {
   SwitchDocumentDirection: {
     child: {
       moduleURI: "resource:///actors/SwitchDocumentDirectionChild.jsm",
-    },
-
-    allFrames: true,
-  },
-
-  SiteSpecificBrowser: {
-    parent: {
-      moduleURI: "resource:///actors/SiteSpecificBrowserParent.jsm",
-    },
-    child: {
-      moduleURI: "resource:///actors/SiteSpecificBrowserChild.jsm",
     },
 
     allFrames: true,
@@ -870,6 +860,7 @@ const listeners = {
     "update-downloaded": ["UpdateListener"],
     "update-available": ["UpdateListener"],
     "update-error": ["UpdateListener"],
+    "update-swap": ["UpdateListener"],
     "gmp-plugin-crash": ["PluginManager"],
     "plugin-crashed": ["PluginManager"],
   },
@@ -1133,7 +1124,7 @@ BrowserGlue.prototype = {
           Cu.reportError(ex);
         }
         let win = BrowserWindowTracker.getTopWindow();
-        win.BrowserSearch.recordSearchInTelemetry(engine, "urlbar");
+        BrowserSearchTelemetry.recordSearch(win.gBrowser, engine, "urlbar");
         break;
       case "browser-search-engine-modified":
         // Ensure we cleanup the hiddenOneOffs pref when removing
@@ -1352,7 +1343,7 @@ BrowserGlue.prototype = {
     );
     AddonManager.maybeInstallBuiltinAddon(
       "firefox-alpenglow@mozilla.org",
-      "1.1",
+      "1.2",
       "resource://builtin-themes/alpenglow/"
     );
 
@@ -2114,7 +2105,7 @@ BrowserGlue.prototype = {
     }
 
     BrowserUsageTelemetry.uninit();
-    SearchTelemetry.uninit();
+    SearchSERPTelemetry.uninit();
     PageThumbs.uninit();
     NewTabUtils.uninit();
 
@@ -2309,7 +2300,7 @@ BrowserGlue.prototype = {
     this._windowsWereRestored = true;
 
     BrowserUsageTelemetry.init();
-    SearchTelemetry.init();
+    SearchSERPTelemetry.init();
 
     ExtensionsUI.init();
 
@@ -2609,18 +2600,8 @@ BrowserGlue.prototype = {
       // Add the import button if this is the first startup.
       {
         task: async () => {
-          if (
-            this._isNewProfile &&
-            Services.prefs.getBoolPref(
-              "browser.toolbars.bookmarks.2h2020",
-              false
-            ) &&
-            // Not in automation: the button changes CUI state, breaking tests
-            !Cu.isInAutomation
-          ) {
-            await PlacesUIUtils.maybeAddImportButton();
-          }
-
+          // First check if we've already added the import button, in which
+          // case we should check for events indicating we can remove it.
           if (
             Services.prefs.getBoolPref(
               "browser.bookmarks.addedImportButton",
@@ -2628,6 +2609,20 @@ BrowserGlue.prototype = {
             )
           ) {
             PlacesUIUtils.removeImportButtonWhenImportSucceeds();
+            return;
+          }
+
+          // Otherwise, check if this is a new profile where we need to add it.
+          // `maybeAddImportButton` will call
+          // `removeImportButtonWhenImportSucceeds`itself if/when it adds the
+          // button. Doing things in this order avoids listening for removal
+          // more than once.
+          if (
+            this._isNewProfile &&
+            // Not in automation: the button changes CUI state, breaking tests
+            !Cu.isInAutomation
+          ) {
+            await PlacesUIUtils.maybeAddImportButton();
           }
         },
       },
@@ -2635,6 +2630,12 @@ BrowserGlue.prototype = {
       {
         task: () => {
           ASRouterNewTabHook.createInstance(ASRouterDefaultConfig());
+        },
+      },
+
+      {
+        task: () => {
+          PlacesUIUtils.ensureBookmarkToolbarTelemetryListening();
         },
       },
 
@@ -4176,6 +4177,7 @@ var ContentBlockingCategoriesPrefs = {
         "privacy.trackingprotection.socialtracking.enabled": null,
         "privacy.trackingprotection.fingerprinting.enabled": null,
         "privacy.trackingprotection.cryptomining.enabled": null,
+        "privacy.annotate_channels.strict_list.enabled": null,
       },
       standard: {
         "network.cookie.cookieBehavior": null,
@@ -4184,6 +4186,7 @@ var ContentBlockingCategoriesPrefs = {
         "privacy.trackingprotection.socialtracking.enabled": null,
         "privacy.trackingprotection.fingerprinting.enabled": null,
         "privacy.trackingprotection.cryptomining.enabled": null,
+        "privacy.annotate_channels.strict_list.enabled": null,
       },
     };
     let type = "strict";
@@ -4240,6 +4243,16 @@ var ContentBlockingCategoriesPrefs = {
         case "-stp":
           this.CATEGORY_PREFS[type][
             "privacy.trackingprotection.socialtracking.enabled"
+          ] = false;
+          break;
+        case "lvl2":
+          this.CATEGORY_PREFS[type][
+            "privacy.annotate_channels.strict_list.enabled"
+          ] = true;
+          break;
+        case "-lvl2":
+          this.CATEGORY_PREFS[type][
+            "privacy.annotate_channels.strict_list.enabled"
           ] = false;
           break;
         case "cookieBehavior0":
@@ -4837,6 +4850,11 @@ var AboutHomeStartupCache = {
   // messages as a signal that it's likely time to refresh the cache.
   CACHE_DEBOUNCE_RATE_MS: 5000,
 
+  // This is how long we'll block the AsyncShutdown while waiting for
+  // the cache to write. If we fail to write within that time, we will
+  // allow the shutdown to proceed.
+  SHUTDOWN_CACHE_WRITE_TIMEOUT_MS: 1000,
+
   // The following values are as possible values for the
   // browser.startup.abouthome_cache_result scalar. Keep these in sync with the
   // scalar definition in Scalars.yaml. See setDeferredResult for more
@@ -5032,13 +5050,18 @@ var AboutHomeStartupCache = {
    * never written during the session, one is generated and written
    * before the async function resolves.
    *
+   * @param withTimeout (boolean)
+   *   Whether or not the timeout mechanism should be used. Defaults
+   *   to true.
    * @returns Promise
-   * @resolves undefined
+   * @resolves boolean
    *   If a cache has never been written, or a cache write is in
-   *   progress, resolves when the cache has been written. Otherwise,
-   *   resolves immediately.
+   *   progress, resolves true when the cache has been written. Also
+   *   resolves to true if a cache didn't need to be written.
+   *
+   *   Resolves to false if a cache write unexpectedly timed out.
    */
-  async onShutdown() {
+  async onShutdown(withTimeout = true) {
     // If we never wrote this session, arm the task so that the next
     // step can finalize.
     if (!this._hasWrittenThisSession) {
@@ -5054,8 +5077,41 @@ var AboutHomeStartupCache = {
     if (this._cacheTask.isArmed) {
       this.log.trace("Finalizing cache task on shutdown");
       this._finalized = true;
-      await this._cacheTask.finalize();
+
+      // To avoid hanging shutdowns, we'll ensure that we wait a maximum of
+      // SHUTDOWN_CACHE_WRITE_TIMEOUT_MS millseconds before giving up.
+      let { setTimeout, clearTimeout } = ChromeUtils.import(
+        "resource://gre/modules/Timer.jsm"
+      );
+
+      const TIMED_OUT = Symbol();
+      let timeoutID = 0;
+
+      let timeoutPromise = new Promise(resolve => {
+        timeoutID = setTimeout(
+          () => resolve(TIMED_OUT),
+          this.SHUTDOWN_CACHE_WRITE_TIMEOUT_MS
+        );
+      });
+
+      let promises = [this._cacheTask.finalize()];
+      if (withTimeout) {
+        this.log.trace("Using timeout mechanism.");
+        promises.push(timeoutPromise);
+      } else {
+        this.log.trace("Skipping timeout mechanism.");
+      }
+
+      let result = await Promise.race(promises);
+      this.log.trace("Done blocking shutdown.");
+      clearTimeout(timeoutID);
+      if (result === TIMED_OUT) {
+        this.log.error("Timed out getting cache streams. Skipping cache task.");
+        return false;
+      }
     }
+    this.log.trace("onShutdown is exiting");
+    return true;
   },
 
   /**
@@ -5069,16 +5125,21 @@ var AboutHomeStartupCache = {
   async cacheNow() {
     this.log.trace("Caching now.");
     this._cacheProgress = "Getting cache streams";
+
     let { pageInputStream, scriptInputStream } = await this.requestCache();
 
     if (!pageInputStream || !scriptInputStream) {
+      this.log.trace("Failed to get cache streams.");
       this._cacheProgress = "Failed to get streams";
       return;
     }
 
+    this.log.trace("Got cache streams.");
+
     this._cacheProgress = "Writing to cache";
 
     try {
+      this.log.trace("Populating cache.");
       await this.populateCache(pageInputStream, scriptInputStream);
     } catch (e) {
       this._cacheProgress = "Failed to populate cache";
@@ -5335,6 +5396,8 @@ var AboutHomeStartupCache = {
         );
       });
     });
+
+    this.log.trace("populateCache has finished.");
   },
 
   /**

@@ -7,21 +7,15 @@
 #ifndef mozilla_glean_GleanDatetime_h
 #define mozilla_glean_GleanDatetime_h
 
+#include "mozilla/Maybe.h"
 #include "nsIGleanMetrics.h"
+#include "mozilla/glean/fog_ffi_generated.h"
 #include "nsString.h"
 #include "prtime.h"
 
 namespace mozilla::glean {
 
 namespace impl {
-extern "C" {
-void fog_datetime_set(uint32_t aId, int32_t aYear, uint32_t aMonth,
-                      uint32_t aDay, uint32_t aHour, uint32_t aMinute,
-                      uint32_t aSecond, uint32_t aNano, int32_t aOffsetSeconds);
-uint32_t fog_datetime_test_has_value(uint32_t aId, const char* aStorageName);
-void fog_datetime_test_get_value(uint32_t aId, const char* aStorageName,
-                                 nsACString& aValue);
-}
 
 class DatetimeMetric {
  public:
@@ -59,14 +53,18 @@ class DatetimeMetric {
    * This doesn't clear the stored value.
    * Parent process only. Panics in child processes.
    *
+   * @param aPingName The (optional) name of the ping to retrieve the metric
+   *        for. Defaults to the first value in `send_in_pings`.
+   *
    * @return value of the stored metric, or Nothing() if there is no value.
    */
-  Maybe<nsCString> TestGetValue(const char* aStorageName) const {
-    if (!fog_datetime_test_has_value(mId, aStorageName)) {
+  Maybe<nsCString> TestGetValue(
+      const nsACString& aPingName = nsCString()) const {
+    if (!fog_datetime_test_has_value(mId, &aPingName)) {
       return Nothing();
     }
     nsCString ret;
-    fog_datetime_test_get_value(mId, aStorageName, ret);
+    fog_datetime_test_get_value(mId, &aPingName, &ret);
     return Some(ret);
   }
 

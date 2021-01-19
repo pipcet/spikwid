@@ -20,6 +20,7 @@
 
 namespace js {
 
+class WithScope;
 class EnvironmentIter;
 class PlainObject;
 
@@ -516,9 +517,6 @@ bool SetObjectElementWithReceiver(JSContext* cx, HandleObject obj,
                                   HandleValue index, HandleValue value,
                                   HandleValue receiver, bool strict);
 
-bool InitElementArray(JSContext* cx, jsbytecode* pc, HandleArrayObject arr,
-                      uint32_t index, HandleValue value);
-
 bool AddValues(JSContext* cx, MutableHandleValue lhs, MutableHandleValue rhs,
                MutableHandleValue res);
 
@@ -627,15 +625,8 @@ JSObject* NewObjectOperationWithTemplate(JSContext* cx,
                                          HandleObject templateObject);
 JSObject* CreateThisWithTemplate(JSContext* cx, HandleObject templateObject);
 
-ArrayObject* NewArrayOperation(JSContext* cx, HandleScript script,
-                               jsbytecode* pc, uint32_t length,
+ArrayObject* NewArrayOperation(JSContext* cx, uint32_t length,
                                NewObjectKind newKind = GenericObject);
-
-ArrayObject* NewArrayOperationWithTemplate(JSContext* cx,
-                                           HandleObject templateObject);
-
-ArrayObject* NewArrayCopyOnWriteOperation(JSContext* cx, HandleScript script,
-                                          jsbytecode* pc);
 
 MOZ_MUST_USE bool GetImportOperation(JSContext* cx, HandleObject envChain,
                                      HandleScript script, jsbytecode* pc,

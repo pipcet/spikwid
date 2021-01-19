@@ -6,6 +6,7 @@
 # received from the raptor control server
 from __future__ import absolute_import
 
+import six
 import json
 import os
 
@@ -24,10 +25,9 @@ KNOWN_TEST_MODIFIERS = [
 ]
 
 
+@six.add_metaclass(ABCMeta)
 class PerftestResultsHandler(object):
     """Abstract base class to handle perftest results"""
-
-    __metaclass__ = ABCMeta
 
     def __init__(
         self,
@@ -772,9 +772,6 @@ class BrowsertimeResultsHandler(PerftestResultsHandler):
                     new_result = _new_standard_result(
                         new_result, subtest_unit=test.get("subtest_unit", "ms")
                     )
-                    # XXX Is this still needed?
-                    if self.app != "firefox":
-                        new_result["extra_options"].append(self.app)
 
                     LOG.info("parsed new benchmark result: %s" % str(new_result))
                     return new_result
@@ -794,7 +791,9 @@ class BrowsertimeResultsHandler(PerftestResultsHandler):
                             item
                         ):
                             # add page cycle custom measurements to the existing results
-                            for measurement in new_result["measurements"].iteritems():
+                            for measurement in six.iteritems(
+                                new_result["measurements"]
+                            ):
                                 self.results[i]["measurements"][measurement[0]].extend(
                                     measurement[1]
                                 )

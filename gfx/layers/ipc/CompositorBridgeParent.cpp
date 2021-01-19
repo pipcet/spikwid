@@ -60,10 +60,12 @@
 #include "mozilla/layers/OMTASampler.h"
 #include "mozilla/layers/PLayerTransactionParent.h"
 #include "mozilla/layers/RemoteContentController.h"
+#include "mozilla/layers/UiCompositorControllerParent.h"
 #include "mozilla/layers/WebRenderBridgeParent.h"
 #include "mozilla/layers/AsyncImagePipelineManager.h"
 #include "mozilla/webrender/WebRenderAPI.h"
 #include "mozilla/webgpu/WebGPUParent.h"
+#include "mozilla/webrender/RenderThread.h"
 #include "mozilla/media/MediaSystemResourceService.h"  // for MediaSystemResourceService
 #include "mozilla/mozalloc.h"                          // for operator new, etc
 #include "mozilla/PerfStats.h"
@@ -112,7 +114,6 @@ using namespace mozilla::ipc;
 using namespace mozilla::gfx;
 
 using base::ProcessId;
-using base::Thread;
 
 using mozilla::Telemetry::LABELS_CONTENT_FRAME_TIME_REASON;
 
@@ -392,7 +393,8 @@ void CompositorBridgeParent::Initialize() {
     MOZ_ASSERT(!mApzcTreeManager);
     MOZ_ASSERT(!mApzSampler);
     MOZ_ASSERT(!mApzUpdater);
-    mApzcTreeManager = new APZCTreeManager(mRootLayerTreeID);
+    mApzcTreeManager =
+        new APZCTreeManager(mRootLayerTreeID, mOptions.UseWebRender());
     mApzSampler = new APZSampler(mApzcTreeManager, mOptions.UseWebRender());
     mApzUpdater = new APZUpdater(mApzcTreeManager, mOptions.UseWebRender());
   }
@@ -1864,7 +1866,8 @@ mozilla::ipc::IPCResult CompositorBridgeParent::RecvAdoptChild(
 }
 
 PWebRenderBridgeParent* CompositorBridgeParent::AllocPWebRenderBridgeParent(
-    const wr::PipelineId& aPipelineId, const LayoutDeviceIntSize& aSize) {
+    const wr::PipelineId& aPipelineId, const LayoutDeviceIntSize& aSize,
+    const WindowKind& aWindowKind) {
   MOZ_ASSERT(wr::AsLayersId(aPipelineId) == mRootLayerTreeID);
   MOZ_ASSERT(!mWrBridge);
   MOZ_ASSERT(!mCompositor);
@@ -1895,9 +1898,9 @@ PWebRenderBridgeParent* CompositorBridgeParent::AllocPWebRenderBridgeParent(
     mOMTASampler->SetWebRenderWindowId(windowId);
   }
 
-  nsCString error("FEATURE_FAILTURE_WEBRENDER_INITIALIZE_UNSPECIFIED");
-  RefPtr<wr::WebRenderAPI> api =
-      wr::WebRenderAPI::Create(this, std::move(widget), windowId, aSize, error);
+  nsCString error("FEATURE_FAILURE_WEBRENDER_INITIALIZE_UNSPECIFIED");
+  RefPtr<wr::WebRenderAPI> api = wr::WebRenderAPI::Create(
+      this, std::move(widget), windowId, aSize, aWindowKind, error);
   if (!api) {
     mWrBridge =
         WebRenderBridgeParent::CreateDestroyed(aPipelineId, std::move(error));
@@ -2317,6 +2320,38 @@ void CompositorBridgeParent::NotifyDidSceneBuild(
   }
 }
 
+void CompositorBridgeParent::NotifyDidRender(const VsyncId& aCompositeStartId,
+                                             TimeStamp& aCompositeStart,
+                                             TimeStamp& aRenderStart,
+                                             TimeStamp& aCompositeEnd,
+                                             wr::RendererStats* aStats) {
+  if (!mWrBridge) {
+    return;
+  }
+
+  MOZ_RELEASE_ASSERT(mWrBridge->IsRootWebRenderBridgeParent());
+
+  RefPtr<UiCompositorControllerParent> uiController =
+      UiCompositorControllerParent::GetFromRootLayerTreeId(mRootLayerTreeID);
+
+  if (uiController && mIsForcedFirstPaint) {
+    uiController->NotifyFirstPaint();
+    mIsForcedFirstPaint = false;
+  }
+
+  nsTArray<CompositionPayload> payload =
+      mWrBridge->TakePendingScrollPayload(aCompositeStartId);
+  if (!payload.IsEmpty()) {
+    RecordCompositionPayloadsPresented(aCompositeEnd, payload);
+  }
+
+  nsTArray<ImageCompositeNotificationInfo> notifications;
+  mWrBridge->ExtractImageCompositeNotifications(&notifications);
+  if (!notifications.IsEmpty()) {
+    Unused << ImageBridgeParent::NotifyImageComposites(notifications);
+  }
+}
+
 void CompositorBridgeParent::NotifyPipelineRendered(
     const wr::PipelineId& aPipelineId, const wr::Epoch& aEpoch,
     const VsyncId& aCompositeStartId, TimeStamp& aCompositeStart,
@@ -2326,58 +2361,37 @@ void CompositorBridgeParent::NotifyPipelineRendered(
     return;
   }
 
+  bool isRoot = mWrBridge->PipelineId() == aPipelineId;
+  RefPtr<WebRenderBridgeParent> wrBridge =
+      isRoot ? mWrBridge
+             : RefPtr<WebRenderBridgeParent>(
+                   mAsyncImageManager->GetWrBridge(aPipelineId));
+  if (!wrBridge) {
+    return;
+  }
+
+  CompositorBridgeParentBase* compBridge =
+      isRoot ? this : wrBridge->GetCompositorBridge();
+  if (!compBridge) {
+    return;
+  }
+
+  MOZ_RELEASE_ASSERT(isRoot == wrBridge->IsRootWebRenderBridgeParent());
+
+  wrBridge->RemoveEpochDataPriorTo(aEpoch);
+
   nsTArray<FrameStats> stats;
 
   RefPtr<UiCompositorControllerParent> uiController =
       UiCompositorControllerParent::GetFromRootLayerTreeId(mRootLayerTreeID);
 
-  if (mWrBridge->PipelineId() == aPipelineId) {
-    mWrBridge->RemoveEpochDataPriorTo(aEpoch);
+  TransactionId transactionId = wrBridge->FlushTransactionIdsForEpoch(
+      aEpoch, aCompositeStartId, aCompositeStart, aRenderStart, aCompositeEnd,
+      uiController, aStats, &stats);
 
-    if (mIsForcedFirstPaint) {
-      uiController->NotifyFirstPaint();
-      mIsForcedFirstPaint = false;
-    }
-
-    std::pair<wr::PipelineId, wr::Epoch> key(aPipelineId, aEpoch);
-    nsTArray<CompositionPayload> payload =
-        mWrBridge->TakePendingScrollPayload(key);
-    if (!payload.IsEmpty()) {
-      RecordCompositionPayloadsPresented(payload);
-    }
-
-    TransactionId transactionId = mWrBridge->FlushTransactionIdsForEpoch(
-        aEpoch, aCompositeStartId, aCompositeStart, aRenderStart, aCompositeEnd,
-        uiController);
-    Unused << SendDidComposite(LayersId{0}, transactionId, aCompositeStart,
-                               aCompositeEnd);
-
-    nsTArray<ImageCompositeNotificationInfo> notifications;
-    mWrBridge->ExtractImageCompositeNotifications(&notifications);
-    if (!notifications.IsEmpty()) {
-      Unused << ImageBridgeParent::NotifyImageComposites(notifications);
-    }
-    return;
-  }
-
-  auto wrBridge = mAsyncImageManager->GetWrBridge(aPipelineId);
-  if (wrBridge && wrBridge->GetCompositorBridge()) {
-    MOZ_ASSERT(!wrBridge->IsRootWebRenderBridgeParent());
-    wrBridge->RemoveEpochDataPriorTo(aEpoch);
-
-    std::pair<wr::PipelineId, wr::Epoch> key(aPipelineId, aEpoch);
-    nsTArray<CompositionPayload> payload =
-        wrBridge->TakePendingScrollPayload(key);
-    if (!payload.IsEmpty()) {
-      RecordCompositionPayloadsPresented(payload);
-    }
-
-    TransactionId transactionId = wrBridge->FlushTransactionIdsForEpoch(
-        aEpoch, aCompositeStartId, aCompositeStart, aRenderStart, aCompositeEnd,
-        uiController, aStats, &stats);
-    Unused << wrBridge->GetCompositorBridge()->SendDidComposite(
-        wrBridge->GetLayersId(), transactionId, aCompositeStart, aCompositeEnd);
-  }
+  LayersId layersId = isRoot ? LayersId{0} : wrBridge->GetLayersId();
+  Unused << compBridge->SendDidComposite(layersId, transactionId,
+                                         aCompositeStart, aCompositeEnd);
 
   if (!stats.IsEmpty()) {
     Unused << SendNotifyFrameStats(stats);
@@ -2393,8 +2407,9 @@ void CompositorBridgeParent::NotifyDidComposite(TransactionId aTransactionId,
                                                 VsyncId aId,
                                                 TimeStamp& aCompositeStart,
                                                 TimeStamp& aCompositeEnd) {
-  MOZ_ASSERT(
-      !mWrBridge);  // We should be going through NotifyPipelineRendered instead
+  MOZ_ASSERT(!mWrBridge,
+             "We should be going through NotifyDidRender and "
+             "NotifyPipelineRendered instead");
 
   Unused << SendDidComposite(LayersId{0}, aTransactionId, aCompositeStart,
                              aCompositeEnd);
@@ -2541,15 +2556,6 @@ mozilla::ipc::IPCResult CompositorBridgeParent::RecvReleasePCanvasParent() {
 
 bool CompositorBridgeParent::IsSameProcess() const {
   return OtherPid() == base::GetCurrentProcId();
-}
-
-void CompositorBridgeParent::NotifyWebRenderContextPurge() {
-  MOZ_ASSERT(CompositorThread()->IsOnCurrentThread());
-  if (!mWrBridge) {
-    return;
-  }
-  RefPtr<wr::WebRenderAPI> api = mWrBridge->GetWebRenderAPI();
-  api->ClearAllCaches();
 }
 
 void CompositorBridgeParent::NotifyWebRenderDisableNativeCompositor() {

@@ -476,6 +476,10 @@ void nsDisplayListBuilder::AutoCurrentActiveScrolledRootSetter::
   mUsed = true;
 }
 
+nsPresContext* nsDisplayListBuilder::CurrentPresContext() {
+  return CurrentPresShellState()->mPresShell->GetPresContext();
+}
+
 /* static */
 nsRect nsDisplayListBuilder::OutOfFlowDisplayData::ComputeVisibleRectForFrame(
     nsDisplayListBuilder* aBuilder, nsIFrame* aFrame,
@@ -604,7 +608,6 @@ nsDisplayListBuilder::nsDisplayListBuilder(nsIFrame* aReferenceFrame,
       mForceLayerForScrollParent(false),
       mAsyncPanZoomEnabled(nsLayoutUtils::AsyncPanZoomEnabled(aReferenceFrame)),
       mBuildingInvisibleItems(false),
-      mHitTestIsForVisibility(false),
       mIsBuilding(false),
       mInInvalidSubtree(false),
       mDisablePartialUpdates(false),
@@ -969,6 +972,21 @@ uint32_t nsDisplayListBuilder::GetBackgroundPaintFlags() {
   }
   if (mUseHighQualityScaling) {
     flags |= nsCSSRendering::PAINTBG_HIGH_QUALITY_SCALING;
+  }
+  return flags;
+}
+
+// TODO(emilio): Maybe unify BackgroundPaintFlags and IamgeRendererFlags.
+uint32_t nsDisplayListBuilder::GetImageRendererFlags() const {
+  uint32_t flags = 0;
+  if (mSyncDecodeImages) {
+    flags |= nsImageRenderer::FLAG_SYNC_DECODE_IMAGES;
+  }
+  if (mIsPaintingToWindow) {
+    flags |= nsImageRenderer::FLAG_PAINTING_TO_WINDOW;
+  }
+  if (mUseHighQualityScaling) {
+    flags |= nsImageRenderer::FLAG_HIGH_QUALITY_SCALING;
   }
   return flags;
 }
@@ -2806,9 +2824,37 @@ void nsDisplayList::HitTest(nsDisplayListBuilder* aBuilder, const nsRect& aRect,
       }
 
       if (aBuilder->HitTestIsForVisibility()) {
-        if (aState->mHitFullyOpaqueItem ||
-            item->GetOpaqueRegion(aBuilder, &snap).Contains(aRect)) {
-          aState->mHitFullyOpaqueItem = true;
+        aState->mHitOccludingItem = [&] {
+          if (aState->mHitOccludingItem) {
+            // We already hit something before.
+            return true;
+          }
+          if (aState->mCurrentOpacity == 1.0f &&
+              item->GetOpaqueRegion(aBuilder, &snap).Contains(aRect)) {
+            // An opaque item always occludes everything. Note that we need to
+            // check wrapping opacity and such as well.
+            return true;
+          }
+          float threshold = aBuilder->VisibilityThreshold();
+          if (threshold == 1.0f) {
+            return false;
+          }
+          float itemOpacity = [&] {
+            switch (item->GetType()) {
+              case DisplayItemType::TYPE_OPACITY:
+                return static_cast<nsDisplayOpacity*>(item)->GetOpacity();
+              case DisplayItemType::TYPE_BACKGROUND_COLOR:
+                return static_cast<nsDisplayBackgroundColor*>(item)
+                    ->GetOpacity();
+              default:
+                // Be conservative and assume it won't occlude other items.
+                return 0.0f;
+            }
+          }();
+          return itemOpacity * aState->mCurrentOpacity >= threshold;
+        }();
+
+        if (aState->mHitOccludingItem) {
           // We're exiting early, so pop the remaining items off the buffer.
           aState->mItemBuffer.TruncateLength(itemBufferStart);
           break;
@@ -4523,6 +4569,14 @@ bool nsDisplayImageContainer::CanOptimizeToImageLayer(
   return true;
 }
 
+#if defined(MOZ_REFLOW_PERF_DSP) && defined(MOZ_REFLOW_PERF)
+void nsDisplayReflowCount::Paint(nsDisplayListBuilder* aBuilder,
+                                 gfxContext* aCtx) {
+  mFrame->PresShell()->PaintCount(mFrameName, aCtx, mFrame->PresContext(),
+                                  mFrame, ToReferenceFrame(), mColor);
+}
+#endif
+
 void nsDisplayBackgroundColor::ApplyOpacity(nsDisplayListBuilder* aBuilder,
                                             float aOpacity,
                                             const DisplayItemClipChain* aClip) {
@@ -5765,6 +5819,9 @@ void nsDisplayOpacity::HitTest(nsDisplayListBuilder* aBuilder,
                                const nsRect& aRect,
                                nsDisplayItem::HitTestState* aState,
                                nsTArray<nsIFrame*>* aOutFrames) {
+  AutoRestore<float> opacity(aState->mCurrentOpacity);
+  aState->mCurrentOpacity *= mOpacity;
+
   // TODO(emilio): special-casing zero is a bit arbitrary... Maybe we should
   // only consider fully opaque items? Or make this configurable somehow?
   if (aBuilder->HitTestIsForVisibility() && mOpacity == 0.0f) {
@@ -8891,6 +8948,27 @@ bool nsDisplayText::CreateWebRenderCommands(
 
   if (bounds.IsEmpty()) {
     return true;
+  }
+
+  // For large font sizes, punt to a blob image, to avoid the blurry rendering
+  // that results from WR clamping the glyph size used for rasterization.
+  //
+  // (See FONT_SIZE_LIMIT in webrender/src/glyph_rasterizer/mod.rs.)
+  //
+  // This is not strictly accurate, as final used font sizes might not be the
+  // same as claimed by the fontGroup's style.size (eg: due to font-size-adjust
+  // altering the used size of the font actually used).
+  // It also fails to consider how transforms might affect the device-font-size
+  // that webrender uses (and clamps).
+  // But it should be near enough for practical purposes; the limitations just
+  // mean we might sometimes end up with webrender still applying some bitmap
+  // scaling, or bail out when we didn't really need to.
+  constexpr float kWebRenderFontSizeLimit = 320.0;
+  f->EnsureTextRun(nsTextFrame::eInflated);
+  gfxTextRun* textRun = f->GetTextRun(nsTextFrame::eInflated);
+  if (textRun &&
+      textRun->GetFontGroup()->GetStyle()->size > kWebRenderFontSizeLimit) {
+    return false;
   }
 
   gfx::Point deviceOffset =

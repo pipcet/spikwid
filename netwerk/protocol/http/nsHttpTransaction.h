@@ -228,6 +228,9 @@ class nsHttpTransaction final : public nsAHttpTransaction,
   already_AddRefed<nsHttpConnectionInfo> PrepareFastFallbackConnInfo(
       bool aEchConfigUsed);
 
+  void MaybeReportFailedSVCDomain(nsresult aReason,
+                                  nsHttpConnectionInfo* aFailedConnInfo);
+
   already_AddRefed<Http2PushedStreamWrapper> TakePushedStreamById(
       uint32_t aStreamId);
 
@@ -396,6 +399,7 @@ class nsHttpTransaction final : public nsAHttpTransaction,
   bool mDeferredSendProgress;
   bool mWaitingOnPipeOut;
 
+  bool mIsHttp3Used = false;
   bool mDoNotRemoveAltSvc;
 
   // mClosed           := transaction has been explicitly closed
@@ -481,6 +485,7 @@ class nsHttpTransaction final : public nsAHttpTransaction,
   NetAddr mSelfAddr;
   NetAddr mPeerAddr;
   bool mResolvedByTRR;
+  bool mEchConfigUsed = false;
 
   bool m0RTTInProgress;
   bool mDoNotTryEarlyData;
@@ -498,14 +503,14 @@ class nsHttpTransaction final : public nsAHttpTransaction,
 
   HttpTrafficCategory mTrafficCategory;
   bool mThroughCaptivePortal;
-  int32_t mProxyConnectResponseCode;
+  Atomic<int32_t> mProxyConnectResponseCode;
 
   OnPushCallback mOnPushCallback;
   nsDataHashtable<nsUint32HashKey, RefPtr<Http2PushedStreamWrapper>>
       mIDToStreamMap;
 
   nsCOMPtr<nsICancelable> mDNSRequest;
-  Maybe<uint32_t> mHTTPSSVCReceivedStage;
+  Atomic<uint32_t, Relaxed> mHTTPSSVCReceivedStage;
   bool m421Received = false;
   nsCOMPtr<nsIDNSHTTPSSVCRecord> mHTTPSSVCRecord;
   nsTArray<RefPtr<nsISVCBRecord>> mRecordsForRetry;

@@ -223,29 +223,26 @@ class IonGetPropertyIC : public IonIC {
 
   TypedOrValueRegister value_;
   ConstantOrRegister id_;
-  TypedOrValueRegister output_;
-  Register maybeTemp_;  // Might be InvalidReg.
+  ValueOperand output_;
 
  public:
   IonGetPropertyIC(CacheKind kind, LiveRegisterSet liveRegs,
                    TypedOrValueRegister value, const ConstantOrRegister& id,
-                   TypedOrValueRegister output, Register maybeTemp)
+                   ValueOperand output)
       : IonIC(kind),
         liveRegs_(liveRegs),
         value_(value),
         id_(id),
-        output_(output),
-        maybeTemp_(maybeTemp) {}
+        output_(output) {}
 
   TypedOrValueRegister value() const { return value_; }
   ConstantOrRegister id() const { return id_; }
-  TypedOrValueRegister output() const { return output_; }
-  Register maybeTemp() const { return maybeTemp_; }
+  ValueOperand output() const { return output_; }
   LiveRegisterSet liveRegs() const { return liveRegs_; }
 
-  static MOZ_MUST_USE bool update(JSContext* cx, HandleScript outerScript,
-                                  IonGetPropertyIC* ic, HandleValue val,
-                                  HandleValue idVal, MutableHandleValue res);
+  [[nodiscard]] static bool update(JSContext* cx, HandleScript outerScript,
+                                   IonGetPropertyIC* ic, HandleValue val,
+                                   HandleValue idVal, MutableHandleValue res);
 };
 
 class IonGetPropSuperIC : public IonIC {
@@ -254,12 +251,12 @@ class IonGetPropSuperIC : public IonIC {
   Register object_;
   TypedOrValueRegister receiver_;
   ConstantOrRegister id_;
-  TypedOrValueRegister output_;
+  ValueOperand output_;
 
  public:
   IonGetPropSuperIC(CacheKind kind, LiveRegisterSet liveRegs, Register object,
                     TypedOrValueRegister receiver, const ConstantOrRegister& id,
-                    TypedOrValueRegister output)
+                    ValueOperand output)
       : IonIC(kind),
         liveRegs_(liveRegs),
         object_(object),
@@ -270,13 +267,13 @@ class IonGetPropSuperIC : public IonIC {
   Register object() const { return object_; }
   TypedOrValueRegister receiver() const { return receiver_; }
   ConstantOrRegister id() const { return id_; }
-  TypedOrValueRegister output() const { return output_; }
+  ValueOperand output() const { return output_; }
   LiveRegisterSet liveRegs() const { return liveRegs_; }
 
-  static MOZ_MUST_USE bool update(JSContext* cx, HandleScript outerScript,
-                                  IonGetPropSuperIC* ic, HandleObject obj,
-                                  HandleValue receiver, HandleValue idVal,
-                                  MutableHandleValue res);
+  [[nodiscard]] static bool update(JSContext* cx, HandleScript outerScript,
+                                   IonGetPropSuperIC* ic, HandleObject obj,
+                                   HandleValue receiver, HandleValue idVal,
+                                   MutableHandleValue res);
 };
 
 class IonSetPropertyIC : public IonIC {
@@ -309,9 +306,9 @@ class IonSetPropertyIC : public IonIC {
 
   bool strict() const { return strict_; }
 
-  static MOZ_MUST_USE bool update(JSContext* cx, HandleScript outerScript,
-                                  IonSetPropertyIC* ic, HandleObject obj,
-                                  HandleValue idVal, HandleValue rhs);
+  [[nodiscard]] static bool update(JSContext* cx, HandleScript outerScript,
+                                   IonSetPropertyIC* ic, HandleObject obj,
+                                   HandleValue idVal, HandleValue rhs);
 };
 
 class IonGetNameIC : public IonIC {
@@ -335,9 +332,9 @@ class IonGetNameIC : public IonIC {
   Register temp() const { return temp_; }
   LiveRegisterSet liveRegs() const { return liveRegs_; }
 
-  static MOZ_MUST_USE bool update(JSContext* cx, HandleScript outerScript,
-                                  IonGetNameIC* ic, HandleObject envChain,
-                                  MutableHandleValue res);
+  [[nodiscard]] static bool update(JSContext* cx, HandleScript outerScript,
+                                   IonGetNameIC* ic, HandleObject envChain,
+                                   MutableHandleValue res);
 };
 
 class IonBindNameIC : public IonIC {
@@ -438,9 +435,9 @@ class IonHasOwnIC : public IonIC {
   Register output() const { return output_; }
   LiveRegisterSet liveRegs() const { return liveRegs_; }
 
-  static MOZ_MUST_USE bool update(JSContext* cx, HandleScript outerScript,
-                                  IonHasOwnIC* ic, HandleValue val,
-                                  HandleValue idVal, int32_t* res);
+  [[nodiscard]] static bool update(JSContext* cx, HandleScript outerScript,
+                                   IonHasOwnIC* ic, HandleValue val,
+                                   HandleValue idVal, int32_t* res);
 };
 
 class IonCheckPrivateFieldIC : public IonIC {
@@ -464,9 +461,9 @@ class IonCheckPrivateFieldIC : public IonIC {
   Register output() const { return output_; }
   LiveRegisterSet liveRegs() const { return liveRegs_; }
 
-  static MOZ_MUST_USE bool update(JSContext* cx, HandleScript outerScript,
-                                  IonCheckPrivateFieldIC* ic, HandleValue val,
-                                  HandleValue idVal, bool* res);
+  [[nodiscard]] static bool update(JSContext* cx, HandleScript outerScript,
+                                   IonCheckPrivateFieldIC* ic, HandleValue val,
+                                   HandleValue idVal, bool* res);
 };
 
 class IonInIC : public IonIC {
@@ -493,9 +490,9 @@ class IonInIC : public IonIC {
   Register temp() const { return temp_; }
   LiveRegisterSet liveRegs() const { return liveRegs_; }
 
-  static MOZ_MUST_USE bool update(JSContext* cx, HandleScript outerScript,
-                                  IonInIC* ic, HandleValue key,
-                                  HandleObject obj, bool* res);
+  [[nodiscard]] static bool update(JSContext* cx, HandleScript outerScript,
+                                   IonInIC* ic, HandleValue key,
+                                   HandleObject obj, bool* res);
 };
 
 class IonInstanceOfIC : public IonIC {
@@ -520,9 +517,9 @@ class IonInstanceOfIC : public IonIC {
   Register output() const { return output_; }
 
   // This signature mimics that of TryAttachInstanceOfStub in baseline
-  static MOZ_MUST_USE bool update(JSContext* cx, HandleScript outerScript,
-                                  IonInstanceOfIC* ic, HandleValue lhs,
-                                  HandleObject rhs, bool* attached);
+  [[nodiscard]] static bool update(JSContext* cx, HandleScript outerScript,
+                                   IonInstanceOfIC* ic, HandleValue lhs,
+                                   HandleObject rhs, bool* attached);
 };
 
 class IonCompareIC : public IonIC {
@@ -546,9 +543,9 @@ class IonCompareIC : public IonIC {
   TypedOrValueRegister rhs() const { return rhs_; }
   Register output() const { return output_; }
 
-  static MOZ_MUST_USE bool update(JSContext* cx, HandleScript outerScript,
-                                  IonCompareIC* stub, HandleValue lhs,
-                                  HandleValue rhs, bool* res);
+  [[nodiscard]] static bool update(JSContext* cx, HandleScript outerScript,
+                                   IonCompareIC* stub, HandleValue lhs,
+                                   HandleValue rhs, bool* res);
 };
 
 class IonUnaryArithIC : public IonIC {
@@ -569,9 +566,9 @@ class IonUnaryArithIC : public IonIC {
   TypedOrValueRegister input() const { return input_; }
   ValueOperand output() const { return output_; }
 
-  static MOZ_MUST_USE bool update(JSContext* cx, HandleScript outerScript,
-                                  IonUnaryArithIC* stub, HandleValue val,
-                                  MutableHandleValue res);
+  [[nodiscard]] static bool update(JSContext* cx, HandleScript outerScript,
+                                   IonUnaryArithIC* stub, HandleValue val,
+                                   MutableHandleValue res);
 };
 
 class IonToPropertyKeyIC : public IonIC {
@@ -591,9 +588,9 @@ class IonToPropertyKeyIC : public IonIC {
   ValueOperand input() const { return input_; }
   ValueOperand output() const { return output_; }
 
-  static MOZ_MUST_USE bool update(JSContext* cx, HandleScript outerScript,
-                                  IonToPropertyKeyIC* ic, HandleValue val,
-                                  MutableHandleValue res);
+  [[nodiscard]] static bool update(JSContext* cx, HandleScript outerScript,
+                                   IonToPropertyKeyIC* ic, HandleValue val,
+                                   MutableHandleValue res);
 };
 
 class IonBinaryArithIC : public IonIC {
@@ -617,9 +614,9 @@ class IonBinaryArithIC : public IonIC {
   TypedOrValueRegister rhs() const { return rhs_; }
   ValueOperand output() const { return output_; }
 
-  static MOZ_MUST_USE bool update(JSContext* cx, HandleScript outerScript,
-                                  IonBinaryArithIC* stub, HandleValue lhs,
-                                  HandleValue rhs, MutableHandleValue res);
+  [[nodiscard]] static bool update(JSContext* cx, HandleScript outerScript,
+                                   IonBinaryArithIC* stub, HandleValue lhs,
+                                   HandleValue rhs, MutableHandleValue res);
 };
 
 }  // namespace jit

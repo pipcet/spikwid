@@ -27,6 +27,7 @@
 #include "builtin/Eval.h"
 #include "builtin/Object.h"
 #include "builtin/SelfHostingDefines.h"
+#include "builtin/Symbol.h"
 #include "frontend/BytecodeCompilation.h"
 #include "frontend/BytecodeCompiler.h"
 #include "frontend/TokenStream.h"
@@ -46,6 +47,7 @@
 #include "util/StringBuffer.h"
 #include "vm/AsyncFunction.h"
 #include "vm/AsyncIteration.h"
+#include "vm/BooleanObject.h"
 #include "vm/FunctionFlags.h"          // js::FunctionFlags
 #include "vm/GeneratorAndAsyncKind.h"  // js::GeneratorKind, js::FunctionAsyncKind
 #include "vm/GlobalObject.h"
@@ -54,10 +56,12 @@
 #include "vm/JSContext.h"
 #include "vm/JSObject.h"
 #include "vm/JSScript.h"
+#include "vm/NumberObject.h"
 #include "vm/PlainObject.h"  // js::PlainObject
 #include "vm/SelfHosting.h"
 #include "vm/Shape.h"
 #include "vm/SharedImmutableStringsCache.h"
+#include "vm/StringObject.h"
 #include "vm/WrapperObject.h"
 #include "vm/Xdr.h"
 #include "wasm/AsmJS.h"
@@ -375,7 +379,7 @@ static bool ResolveInterpretedFunctionPrototype(JSContext* cx,
   }
 
   RootedPlainObject proto(
-      cx, NewSingletonObjectWithGivenProto<PlainObject>(cx, objProto));
+      cx, NewTenuredObjectWithGivenProto<PlainObject>(cx, objProto));
   if (!proto) {
     return false;
   }
@@ -596,12 +600,6 @@ XDRResult js::XDRInterpretedFunction(XDRState<mode>* xdr,
     flags = FunctionFlags::clearMutableflags(fun->flags()).toRaw();
 
     atom = fun->displayAtom();
-
-    // The environment of any function which is not reused will always be
-    // null, it is later defined when a function is cloned or reused to
-    // mirror the scope chain.
-    MOZ_ASSERT_IF(fun->isSingleton() && !fun->baseScript()->hasBeenCloned(),
-                  fun->environment() == nullptr);
   }
 
   // Everything added below can substituted by the non-lazy-script version of
@@ -808,7 +806,7 @@ static JSObject* CreateFunctionConstructor(JSContext* cx, JSProtoKey key) {
       cx, NewFunctionWithProto(
               cx, Function, 1, FunctionFlags::NATIVE_CTOR, nullptr,
               HandlePropertyName(cx->names().Function), functionProto,
-              gc::AllocKind::FUNCTION, SingletonObject));
+              gc::AllocKind::FUNCTION, TenuredObject));
   if (!functionCtor) {
     return nullptr;
   }
@@ -830,7 +828,7 @@ static JSObject* CreateFunctionPrototype(JSContext* cx, JSProtoKey key) {
   return NewFunctionWithProto(
       cx, FunctionPrototype, 0, FunctionFlags::NATIVE_FUN, nullptr,
       HandlePropertyName(cx->names().empty), objectProto,
-      gc::AllocKind::FUNCTION, SingletonObject);
+      gc::AllocKind::FUNCTION, TenuredObject);
 }
 
 JSString* js::FunctionToStringCache::lookup(BaseScript* script) const {
@@ -1570,11 +1568,11 @@ bool DelazifyCanonicalScriptedFunctionImpl(JSContext* cx, HandleFunction fun,
     JS::CompileOptions options(cx);
     frontend::FillCompileOptionsForLazyFunction(options, lazy);
 
-    Rooted<frontend::CompilationInfo> compilationInfo(
-        cx, frontend::CompilationInfo(cx, options));
-    compilationInfo.get().input.initFromLazy(lazy);
+    Rooted<frontend::CompilationStencil> stencil(
+        cx, frontend::CompilationStencil(cx, options));
+    stencil.get().input.initFromLazy(lazy);
 
-    if (!frontend::CompileLazyFunctionToStencil(cx, compilationInfo.get(), lazy,
+    if (!frontend::CompileLazyFunctionToStencil(cx, stencil.get(), lazy,
                                                 units.get(), sourceLength)) {
       // The frontend shouldn't fail after linking the function and the
       // non-lazy script together.
@@ -1583,7 +1581,7 @@ bool DelazifyCanonicalScriptedFunctionImpl(JSContext* cx, HandleFunction fun,
       return false;
     }
 
-    if (!frontend::InstantiateStencilsForDelazify(cx, compilationInfo.get())) {
+    if (!frontend::InstantiateStencilsForDelazify(cx, stencil.get())) {
       // The frontend shouldn't fail after linking the function and the
       // non-lazy script together.
       MOZ_ASSERT(fun->baseScript() == lazy);
@@ -1596,7 +1594,7 @@ bool DelazifyCanonicalScriptedFunctionImpl(JSContext* cx, HandleFunction fun,
       //       format to use for incremental encoding.
       bool useStencilXDR = !js::UseOffThreadParseGlobal();
       if (useStencilXDR) {
-        if (!ss->xdrEncodeFunctionStencil(cx, compilationInfo.get().stencil)) {
+        if (!ss->xdrEncodeFunctionStencil(cx, stencil.get())) {
           return false;
         }
       } else {
@@ -1992,6 +1990,22 @@ bool JSFunction::needsNamedLambdaEnvironment() const {
   return scope->hasEnvironment();
 }
 
+bool JSFunction::needsCallObject() const {
+  if (isNative()) {
+    return false;
+  }
+
+  MOZ_ASSERT(hasBytecode());
+
+  // Note: this should be kept in sync with
+  // FunctionBox::needsCallObjectRegardlessOfBindings().
+  MOZ_ASSERT_IF(
+      baseScript()->funHasExtensibleScope() || isGenerator() || isAsync(),
+      nonLazyScript()->bodyScope()->hasEnvironment());
+
+  return nonLazyScript()->bodyScope()->hasEnvironment();
+}
+
 JSFunction* js::NewScriptedFunction(
     JSContext* cx, unsigned nargs, FunctionFlags flags, HandleAtom atom,
     HandleObject proto /* = nullptr */,
@@ -2106,7 +2120,7 @@ bool js::CanReuseScriptForClone(JS::Realm* realm, HandleFunction fun,
                                 HandleObject newEnclosingEnv) {
   MOZ_ASSERT(fun->isInterpreted());
 
-  if (realm != fun->realm() || fun->isSingleton()) {
+  if (realm != fun->realm()) {
     return false;
   }
 
@@ -2150,12 +2164,6 @@ static inline JSFunction* NewFunctionClone(JSContext* cx, HandleFunction fun,
     return nullptr;
   }
 
-  // FunctionFlags::HAS_INFERRED_NAME can be set at compile-time and at
-  // runtime. In the latter case we should actually clear the flag before
-  // cloning the function, but since we can't differentiate between both
-  // cases here, we'll end up with a momentarily incorrect function name.
-  // This will be fixed up in SetFunctionName(), which should happen through
-  // JSOp::SetFunName directly after JSOp::Lambda.
   constexpr uint16_t NonCloneableFlags = FunctionFlags::EXTENDED |
                                          FunctionFlags::RESOLVED_LENGTH |
                                          FunctionFlags::RESOLVED_NAME;
@@ -2236,7 +2244,7 @@ JSFunction* js::CloneFunctionAndScript(JSContext* cx, HandleFunction fun,
   }
 
   RootedFunction clone(
-      cx, NewFunctionClone(cx, fun, SingletonObject, allocKind, proto));
+      cx, NewFunctionClone(cx, fun, TenuredObject, allocKind, proto));
   if (!clone) {
     return nullptr;
   }
@@ -2292,7 +2300,6 @@ JSFunction* js::CloneAsmJSModuleFunction(JSContext* cx, HandleFunction fun) {
   MOZ_ASSERT(!fun->hasJitInfo());
   clone->initNative(InstantiateAsmJS, nullptr);
 
-  clone->setGroup(fun->group());
   return clone;
 }
 
@@ -2303,7 +2310,7 @@ JSFunction* js::CloneSelfHostingIntrinsic(JSContext* cx, HandleFunction fun) {
   MOZ_ASSERT(cx->compartment() != fun->compartment());
 
   JSFunction* clone =
-      NewFunctionClone(cx, fun, SingletonObject, gc::AllocKind::FUNCTION,
+      NewFunctionClone(cx, fun, TenuredObject, gc::AllocKind::FUNCTION,
                        /* proto = */ nullptr);
   if (!clone) {
     return nullptr;
@@ -2421,14 +2428,9 @@ bool js::SetFunctionName(JSContext* cx, HandleFunction fun, HandleValue name,
                          FunctionPrefixKind prefixKind) {
   MOZ_ASSERT(name.isString() || name.isSymbol() || name.isNumeric());
 
-  // `fun` is a newly created function, so normally it can't already have an
-  // inferred name. The rare exception is when `fun` was created by cloning
-  // a singleton function; see the comment in NewFunctionClone. In that case,
-  // the inferred name is bogus, so clear it out.
-  if (fun->hasInferredName()) {
-    MOZ_ASSERT(fun->isSingleton());
-    fun->clearInferredName();
-  }
+  // `fun` is a newly created function, so it can't already have an inferred
+  // name.
+  MOZ_ASSERT(!fun->hasInferredName());
 
   // Anonymous functions should neither have an own 'name' property nor a
   // resolved name at this point.

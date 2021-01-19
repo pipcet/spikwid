@@ -11,6 +11,7 @@
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/dom/BrowserChild.h"
 #include "mozilla/dom/BrowserParent.h"
+#include "mozilla/dom/Document.h"
 #include "mozilla/dom/MouseEventBinding.h"
 
 namespace mozilla {
@@ -121,6 +122,7 @@ void PointerEventHandler::UpdateActivePointerState(WidgetMouseEvent* aEvent,
       sActivePointersIds->Remove(aEvent->pointerId);
       break;
     default:
+      MOZ_ASSERT_UNREACHABLE("event has invalid type");
       break;
   }
 }

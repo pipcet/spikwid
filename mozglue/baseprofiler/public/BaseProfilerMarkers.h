@@ -132,7 +132,7 @@ inline ProfileBufferBlockIndex AddMarker(const ProfilerString8View& aName,
 
 namespace mozilla::baseprofiler::markers {
 // Most common marker type. Others are in BaseProfilerMarkerTypes.h.
-struct Text {
+struct TextMarker {
   static constexpr Span<const char> MarkerTypeName() {
     return MakeStringSpan("Text");
   }
@@ -177,7 +177,7 @@ struct Tracing {
       AUTO_PROFILER_STATS(BASE_PROFILER_MARKER_TEXT);                        \
       ::mozilla::baseprofiler::AddMarker(                                    \
           markerName, ::mozilla::baseprofiler::category::categoryName,       \
-          options, ::mozilla::baseprofiler::markers::Text{}, text);          \
+          options, ::mozilla::baseprofiler::markers::TextMarker{}, text);    \
     } while (false)
 
 namespace mozilla::baseprofiler {
@@ -205,7 +205,7 @@ class MOZ_RAII AutoProfilerTextMarker {
     mOptions.TimingRef().SetIntervalEnd();
     AUTO_PROFILER_STATS(AUTO_BASE_PROFILER_MARKER_TEXT);
     AddMarker(ProfilerString8View::WrapNullTerminatedString(mMarkerName),
-              mCategory, std::move(mOptions), markers::Text{}, mText);
+              mCategory, std::move(mOptions), markers::TextMarker{}, mText);
   }
 
  protected:
@@ -214,6 +214,18 @@ class MOZ_RAII AutoProfilerTextMarker {
   MarkerOptions mOptions;
   std::string mText;
 };
+
+extern template MFBT_API ProfileBufferBlockIndex
+AddMarker(const ProfilerString8View&, const MarkerCategory&, MarkerOptions&&,
+          markers::TextMarker, const std::string&);
+
+extern template MFBT_API ProfileBufferBlockIndex
+AddMarkerToBuffer(ProfileChunkedBuffer&, const ProfilerString8View&,
+                  const MarkerCategory&, MarkerOptions&&, markers::NoPayload);
+
+extern template MFBT_API ProfileBufferBlockIndex AddMarkerToBuffer(
+    ProfileChunkedBuffer&, const ProfilerString8View&, const MarkerCategory&,
+    MarkerOptions&&, markers::TextMarker, const std::string&);
 
 }  // namespace mozilla::baseprofiler
 

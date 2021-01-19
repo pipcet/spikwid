@@ -26,6 +26,7 @@
 #include "nsAppDirectoryServiceDefs.h"
 #include "nsIObserver.h"
 #include "nsIObserverService.h"
+#include "nsIThread.h"
 #include "nsThreadUtils.h"
 #include "nsXULAppAPI.h"
 #include "prinrval.h"
@@ -538,8 +539,7 @@ void BackgroundHangThread::ReportHang(TimeDuration aHangTime,
           baseprofiler::SpliceableJSONWriter& aWriter) {}
       static MarkerSchema MarkerTypeDisplay() {
         using MS = MarkerSchema;
-        MS schema{MS::Location::markerChart, MS::Location::markerTable,
-                  MS::Location::timelineOverview};
+        MS schema{MS::Location::markerChart, MS::Location::markerTable};
         return schema;
       }
     };

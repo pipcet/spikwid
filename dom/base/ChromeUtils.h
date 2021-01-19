@@ -11,12 +11,13 @@
 #include "mozilla/dom/BindingDeclarations.h"
 #include "mozilla/dom/ChromeUtilsBinding.h"
 #include "mozilla/dom/Exceptions.h"
-#include "mozilla/ErrorResult.h"
 #include "nsDOMNavigationTiming.h"  // for DOMHighResTimeStamp
 #include "nsIDOMProcessChild.h"
 #include "nsIDOMProcessParent.h"
 
 namespace mozilla {
+
+class ErrorResult;
 
 namespace devtools {
 class HeapSnapshot;
@@ -190,8 +191,6 @@ class ChromeUtils {
                                           ErrorResult& aRv);
 
   static PopupBlockerState GetPopupControlState(GlobalObject& aGlobal);
-
-  static bool IsPopupTokenUnused(GlobalObject& aGlobal);
 
   static double LastExternalProtocolIframeAllowed(GlobalObject& aGlobal);
 

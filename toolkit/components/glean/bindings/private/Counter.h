@@ -7,16 +7,13 @@
 #ifndef mozilla_glean_GleanCounter_h
 #define mozilla_glean_GleanCounter_h
 
+#include "mozilla/Maybe.h"
 #include "nsIGleanMetrics.h"
+#include "mozilla/glean/fog_ffi_generated.h"
 
 namespace mozilla::glean {
 
 namespace impl {
-extern "C" {
-void fog_counter_add(uint32_t aId, int32_t aAmount);
-uint32_t fog_counter_test_has_value(uint32_t aId, const char* aStorageName);
-int32_t fog_counter_test_get_value(uint32_t aId, const char* aStorageName);
-}
 
 class CounterMetric {
  public:
@@ -41,13 +38,16 @@ class CounterMetric {
    * This doesn't clear the stored value.
    * Parent process only. Panics in child processes.
    *
+   * @param aPingName The (optional) name of the ping to retrieve the metric
+   *        for. Defaults to the first value in `send_in_pings`.
+   *
    * @return value of the stored metric, or Nothing() if there is no value.
    */
-  Maybe<int32_t> TestGetValue(const char* aStorageName) const {
-    if (!fog_counter_test_has_value(mId, aStorageName)) {
+  Maybe<int32_t> TestGetValue(const nsACString& aPingName = nsCString()) const {
+    if (!fog_counter_test_has_value(mId, &aPingName)) {
       return Nothing();
     }
-    return Some(fog_counter_test_get_value(mId, aStorageName));
+    return Some(fog_counter_test_get_value(mId, &aPingName));
   }
 
  private:

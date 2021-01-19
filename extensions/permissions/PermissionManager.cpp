@@ -15,6 +15,7 @@
 #include "mozilla/Permission.h"
 #include "mozilla/PermissionManager.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/ScopeExit.h"
 #include "mozilla/StaticPrefs_permissions.h"
 #include "mozilla/Telemetry.h"
 
@@ -24,6 +25,7 @@
 #include "mozStorageCID.h"
 
 #include "nsAppDirectoryServiceDefs.h"
+#include "nsComponentManagerUtils.h"
 #include "nsContentUtils.h"
 #include "nsCRT.h"
 #include "nsEffectiveTLDService.h"

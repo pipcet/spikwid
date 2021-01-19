@@ -4,7 +4,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "mozilla/glean/Counter.h"
+#include "mozilla/glean/bindings/Counter.h"
 
 #include "nsString.h"
 #include "mozilla/Components.h"
@@ -17,15 +17,14 @@ NS_IMPL_ISUPPORTS_CI(GleanCounter, nsIGleanCounter)
 
 NS_IMETHODIMP
 GleanCounter::Add(uint32_t aAmount) {
-  this->mCounter.Add(aAmount);
+  mCounter.Add(aAmount);
   return NS_OK;
 }
 
 NS_IMETHODIMP
 GleanCounter::TestGetValue(const nsACString& aStorageName,
                            JS::MutableHandleValue aResult) {
-  auto result =
-      this->mCounter.TestGetValue(PromiseFlatCString(aStorageName).get());
+  auto result = mCounter.TestGetValue(aStorageName);
   if (result.isNothing()) {
     aResult.set(JS::UndefinedValue());
   } else {

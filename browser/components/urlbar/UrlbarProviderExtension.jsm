@@ -17,17 +17,13 @@ const { XPCOMUtils } = ChromeUtils.import(
 XPCOMUtils.defineLazyModuleGetters(this, {
   Services: "resource://gre/modules/Services.jsm",
   SkippableTimer: "resource:///modules/UrlbarUtils.jsm",
+  UrlbarPrefs: "resource:///modules/UrlbarPrefs.jsm",
   UrlbarProvider: "resource:///modules/UrlbarUtils.jsm",
   UrlbarProvidersManager: "resource:///modules/UrlbarProvidersManager.jsm",
   UrlbarResult: "resource:///modules/UrlbarResult.jsm",
   UrlbarSearchUtils: "resource:///modules/UrlbarSearchUtils.jsm",
   UrlbarUtils: "resource:///modules/UrlbarUtils.jsm",
 });
-
-// When we send events to extensions, we wait this amount of time in ms for them
-// to respond before timing out.  Tests can override this by setting
-// UrlbarProviderExtension.notificationTimeout.
-const DEFAULT_NOTIFICATION_TIMEOUT = 200;
 
 /**
  * The browser.urlbar extension API allows extensions to create their own urlbar
@@ -185,10 +181,13 @@ class UrlbarProviderExtension extends UrlbarProvider {
    * describing the view update.  See the base UrlbarProvider class for more.
    *
    * @param {UrlbarResult} result The result whose view will be updated.
+   * @param {Map} idsByName
+   *   A Map from an element's name, as defined by the provider; to its ID in
+   *   the DOM, as defined by the browser.
    * @returns {object} An object describing the view update.
    */
-  async getViewUpdate(result) {
-    return this._notifyListener("getViewUpdate", result);
+  async getViewUpdate(result, idsByName) {
+    return this._notifyListener("getViewUpdate", result, idsByName);
   }
 
   /**
@@ -284,7 +283,7 @@ class UrlbarProviderExtension extends UrlbarProvider {
       // so that we're not stuck waiting forever.
       let timer = new SkippableTimer({
         name: "UrlbarProviderExtension notification timer",
-        time: UrlbarProviderExtension.notificationTimeout,
+        time: UrlbarPrefs.get("extension.timeout"),
         reportErrorOnTimeout: true,
         logger: this.logger,
       });
@@ -389,5 +388,3 @@ UrlbarProviderExtension.SOURCE_TYPES = {
   search: UrlbarUtils.RESULT_SOURCE.SEARCH,
   tabs: UrlbarUtils.RESULT_SOURCE.TABS,
 };
-
-UrlbarProviderExtension.notificationTimeout = DEFAULT_NOTIFICATION_TIMEOUT;

@@ -23,6 +23,7 @@
 #include "gfxPlatform.h"
 #include "nsPrintfCString.h"
 #include "mozilla/AccessibleCaretEventHub.h"
+#include "mozilla/BasePrincipal.h"
 #include "mozilla/ComputedStyle.h"
 #include "mozilla/StaticPrefs_browser.h"
 #include "mozilla/dom/AnonymousContent.h"
@@ -758,7 +759,7 @@ void nsCanvasFrame::Reflow(nsPresContext* aPresContext,
           // example of this.
           if (layoutOverflow < 0) {
             LogicalRect so(kidWM, pifChild->ScrollableOverflowRect(),
-                           aReflowInput.ComputedSizeAsContainerIfConstrained());
+                           pifChild->GetSize());
             layoutOverflow = so.BEnd(kidWM) - canvasBSizeSum;
           }
           bOffset = std::max(bOffset, layoutOverflow);
@@ -839,8 +840,13 @@ void nsCanvasFrame::Reflow(nsPresContext* aPresContext,
     } else {
       // This only occurs in paginated mode.  There is no available space on
       // this page due to reserving space for overflow from a previous page,
-      // so we push our child to the next page.
-      SetOverflowFrames(std::move(mFrames));
+      // so we push our child to the next page.  Note that we can have some
+      // placeholders for fixed pos. frames in mFrames too, so we need to be
+      // careful to only push `kidFrame`.
+      MOZ_ASSERT(!kidFrame->IsPlaceholderFrame(),
+                 "we should never push fixed pos placeholders");
+      mFrames.RemoveFrame(kidFrame);
+      SetOverflowFrames(nsFrameList(kidFrame, kidFrame));
       aStatus.SetIncomplete();
     }
 

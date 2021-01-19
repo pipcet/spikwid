@@ -25,6 +25,9 @@
 - (NSNumber*)moxInsertionPointLineNumber;
 
 // override
+- (NSString*)moxRole;
+
+// override
 - (NSString*)moxSubrole;
 
 // override
@@ -108,3 +111,27 @@
 - (NSValue*)moxBoundsForRange:(NSValue*)range;
 
 @end
+
+namespace mozilla {
+namespace a11y {
+
+enum AXTextEditType {
+  AXTextEditTypeUnknown,
+  AXTextEditTypeDelete,
+  AXTextEditTypeInsert,
+  AXTextEditTypeTyping,
+  AXTextEditTypeDictation,
+  AXTextEditTypeCut,
+  AXTextEditTypePaste,
+  AXTextEditTypeAttributesChange
+};
+
+enum AXTextStateChangeType {
+  AXTextStateChangeTypeUnknown,
+  AXTextStateChangeTypeEdit,
+  AXTextStateChangeTypeSelectionMove,
+  AXTextStateChangeTypeSelectionExtend
+};
+
+}
+}

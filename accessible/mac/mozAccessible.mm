@@ -6,6 +6,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #import "mozAccessible.h"
+#include "MOXAccessibleBase.h"
 
 #import "MacUtils.h"
 #import "mozView.h"
@@ -39,8 +40,6 @@ using namespace mozilla::a11y;
 
 @interface mozAccessible ()
 - (BOOL)providesLabelNotTitle;
-
-- (nsStaticAtom*)ARIARole;
 
 - (void)maybePostLiveRegionChanged;
 @end
@@ -112,7 +111,7 @@ using namespace mozilla::a11y;
 static const uint64_t kCachedStates =
     states::CHECKED | states::PRESSED | states::MIXED | states::EXPANDED |
     states::CURRENT | states::SELECTED | states::TRAVERSED | states::LINKED |
-    states::HASPOPUP;
+    states::HASPOPUP | states::BUSY;
 static const uint64_t kCacheInitialized = ((uint64_t)0x1) << 63;
 
 - (uint64_t)state {
@@ -144,19 +143,20 @@ static const uint64_t kCacheInitialized = ((uint64_t)0x1) << 63;
 }
 
 - (void)stateChanged:(uint64_t)state isEnabled:(BOOL)enabled {
-  if ((state & kCachedStates) == 0) {
-    return;
+  if ((state & kCachedStates) != 0) {
+    if (!(mCachedState & kCacheInitialized)) {
+      [self state];
+    } else {
+      if (enabled) {
+        mCachedState |= state;
+      } else {
+        mCachedState &= ~state;
+      }
+    }
   }
 
-  if (!(mCachedState & kCacheInitialized)) {
-    [self state];
-    return;
-  }
-
-  if (enabled) {
-    mCachedState |= state;
-  } else {
-    mCachedState &= ~state;
+  if (state == states::BUSY) {
+    [self moxPostNotification:@"AXElementBusyChanged"];
   }
 }
 
@@ -550,6 +550,13 @@ struct RoleDescrComparator {
 };
 
 - (NSString*)moxRoleDescription {
+  if (NSString* ariaRoleDescription =
+          utils::GetAccAttr(self, "roledescription")) {
+    if ([ariaRoleDescription length]) {
+      return ariaRoleDescription;
+    }
+  }
+
   if (mRole == roles::FIGURE) return utils::LocalizedString(u"figure"_ns);
 
   if (mRole == roles::HEADING) return utils::LocalizedString(u"heading"_ns);
@@ -591,25 +598,17 @@ struct RoleDescrComparator {
     if (flag == eNameFromSubtree) {
       return nil;
     }
-
-    if (![self providesLabelNotTitle]) {
-      Relation rel = acc->RelationByType(RelationType::LABELLED_BY);
-      if (rel.Next() && !rel.Next()) {
-        return nil;
-      }
-    }
   } else if (proxy) {
     uint32_t flag = proxy->Name(name);
     if (flag == eNameFromSubtree) {
       return nil;
     }
+  }
 
-    if (![self providesLabelNotTitle]) {
-      nsTArray<ProxyAccessible*> rels =
-          proxy->RelationByType(RelationType::LABELLED_BY);
-      if (rels.Length() == 1) {
-        return nil;
-      }
+  if (![self providesLabelNotTitle]) {
+    NSArray* relations = [self getRelationsByType:RelationType::LABELLED_BY];
+    if ([relations count] == 1) {
+      return nil;
     }
   }
 
@@ -741,24 +740,9 @@ struct RoleDescrComparator {
 - (id)moxTitleUIElement {
   MOZ_ASSERT(!mGeckoAccessible.IsNull());
 
-  if (Accessible* acc = mGeckoAccessible.AsAccessible()) {
-    Relation rel = acc->RelationByType(RelationType::LABELLED_BY);
-    Accessible* tempAcc = rel.Next();
-    if (tempAcc && !rel.Next()) {
-      mozAccessible* label = GetNativeFromGeckoAccessible(tempAcc);
-      return [label isAccessibilityElement] ? label : nil;
-    }
-
-    return nil;
-  }
-
-  ProxyAccessible* proxy = mGeckoAccessible.AsProxy();
-  nsTArray<ProxyAccessible*> rel =
-      proxy->RelationByType(RelationType::LABELLED_BY);
-  ProxyAccessible* tempProxy = rel.SafeElementAt(0);
-  if (tempProxy && rel.Length() <= 1) {
-    mozAccessible* label = GetNativeFromGeckoAccessible(tempProxy);
-    return [label isAccessibilityElement] ? label : nil;
+  NSArray* relations = [self getRelationsByType:RelationType::LABELLED_BY];
+  if ([relations count] == 1) {
+    return [relations firstObject];
   }
 
   return nil;
@@ -781,6 +765,18 @@ struct RoleDescrComparator {
 
 - (NSNumber*)moxRequired {
   return @([self stateWithMask:states::REQUIRED] != 0);
+}
+
+- (NSNumber*)moxElementBusy {
+  return @([self stateWithMask:states::BUSY] != 0);
+}
+
+- (NSArray*)moxLinkedUIElements {
+  return [self getRelationsByType:RelationType::FLOWS_TO];
+}
+
+- (NSArray*)moxARIAControls {
+  return [self getRelationsByType:RelationType::CONTROLLER_FOR];
 }
 
 - (mozAccessible*)topWebArea {
@@ -822,6 +818,33 @@ struct RoleDescrComparator {
   }
 
   return nil;
+}
+
+- (id)moxHighestEditableAncestor {
+  id highestAncestor = [self moxEditableAncestor];
+  while ([highestAncestor conformsToProtocol:@protocol(MOXAccessible)]) {
+    id ancestorParent = [highestAncestor moxUnignoredParent];
+    if (![ancestorParent conformsToProtocol:@protocol(MOXAccessible)]) {
+      break;
+    }
+
+    id higherAncestor = [ancestorParent moxEditableAncestor];
+
+    if (!higherAncestor) {
+      break;
+    }
+
+    highestAncestor = higherAncestor;
+  }
+
+  return highestAncestor;
+}
+
+- (id)moxFocusableAncestor {
+  // XXX: Checking focusable state up the chain can be expensive. For now,
+  // we can just return AXEditableAncestor since the main use case for this
+  // is rich text editing with links.
+  return [self moxEditableAncestor];
 }
 
 #ifndef RELEASE_OR_BETA
@@ -916,9 +939,7 @@ struct RoleDescrComparator {
       LayoutDeviceIntPoint(geckoRect.X() + (geckoRect.Width() / 2),
                            geckoRect.Y() + (geckoRect.Height() / 2));
   nsIWidget* widget = [objOrView widget];
-  // XXX: NSRightMouseDown is depreciated in 10.12, should be
-  // changed to NSEventTypeRightMouseDown after refactoring.
-  widget->SynthesizeNativeMouseEvent(p, NSRightMouseDown, 0, nullptr);
+  widget->SynthesizeNativeMouseEvent(p, NSEventTypeRightMouseDown, 0, nullptr);
 }
 
 - (void)moxPerformPress {
@@ -948,6 +969,24 @@ struct RoleDescrComparator {
       return;
     }
   }
+}
+
+- (NSArray<mozAccessible*>*)getRelationsByType:(RelationType)relationType {
+  if (Accessible* acc = mGeckoAccessible.AsAccessible()) {
+    NSMutableArray<mozAccessible*>* relations = [[NSMutableArray alloc] init];
+    Relation rel = acc->RelationByType(relationType);
+    while (Accessible* relAcc = rel.Next()) {
+      if (mozAccessible* relNative = GetNativeFromGeckoAccessible(relAcc)) {
+        [relations addObject:relNative];
+      }
+    }
+
+    return relations;
+  }
+
+  ProxyAccessible* proxy = mGeckoAccessible.AsProxy();
+  nsTArray<ProxyAccessible*> rel = proxy->RelationByType(relationType);
+  return utils::ConvertToNSArray(rel);
 }
 
 - (void)handleAccessibleTextChangeEvent:(NSString*)change
@@ -984,21 +1023,23 @@ struct RoleDescrComparator {
       // reduntant.
       id<MOXTextMarkerSupport> delegate = [self moxTextMarkerDelegate];
       id selectedRange = [delegate moxSelectedTextMarkerRange];
-      id editableAncestor = [self moxEditableAncestor];
-      id textChangeElement = editableAncestor ? editableAncestor : self;
+      BOOL isCollapsed =
+          [static_cast<MOXTextMarkerDelegate*>(delegate) selectionIsCollapsed];
       NSDictionary* userInfo = @{
-        @"AXTextChangeElement" : textChangeElement,
+        @"AXTextChangeElement" : self,
         @"AXSelectedTextMarkerRange" :
-            (selectedRange ? selectedRange : [NSNull null])
+            (selectedRange ? selectedRange : [NSNull null]),
+        @"AXTextStateChangeType" : isCollapsed
+            ? @(AXTextStateChangeTypeSelectionMove)
+            : @(AXTextStateChangeTypeSelectionExtend)
       };
 
       mozAccessible* webArea = [self topWebArea];
       [webArea
           moxPostNotification:NSAccessibilitySelectedTextChangedNotification
                  withUserInfo:userInfo];
-      [textChangeElement
-          moxPostNotification:NSAccessibilitySelectedTextChangedNotification
-                 withUserInfo:userInfo];
+      [self moxPostNotification:NSAccessibilitySelectedTextChangedNotification
+                   withUserInfo:userInfo];
       break;
     }
     case nsIAccessibleEvent::EVENT_LIVE_REGION_ADDED:
@@ -1009,9 +1050,15 @@ struct RoleDescrComparator {
       mIsLiveRegion = false;
       break;
     case nsIAccessibleEvent::EVENT_REORDER:
-    case nsIAccessibleEvent::EVENT_NAME_CHANGE:
       [self maybePostLiveRegionChanged];
       break;
+    case nsIAccessibleEvent::EVENT_NAME_CHANGE: {
+      if (![self providesLabelNotTitle]) {
+        [self moxPostNotification:NSAccessibilityTitleChangedNotification];
+      }
+      [self maybePostLiveRegionChanged];
+      break;
+    }
   }
 }
 

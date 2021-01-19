@@ -289,7 +289,7 @@ impl WindowWrapper {
     #[cfg(feature = "software")]
     fn update_software(&self, dim: DeviceIntSize) {
         if let Some(swgl) = self.software_gl() {
-            swgl.init_default_framebuffer(dim.width, dim.height, 0, std::ptr::null_mut());
+            swgl.init_default_framebuffer(0, 0, dim.width, dim.height, 0, std::ptr::null_mut());
         }
     }
 
@@ -305,15 +305,15 @@ impl WindowWrapper {
 }
 
 #[cfg(feature = "software")]
-fn make_software_context() -> Option<swgl::Context> {
+fn make_software_context() -> swgl::Context {
     let ctx = swgl::Context::create();
     ctx.make_current();
-    Some(ctx)
+    ctx
 }
 
 #[cfg(not(feature = "software"))]
-fn make_software_context() -> Option<swgl::Context> {
-    None
+fn make_software_context() -> swgl::Context {
+    panic!("software feature not enabled")
 }
 
 fn make_window(
@@ -326,7 +326,7 @@ fn make_window(
     software: bool,
 ) -> WindowWrapper {
     let sw_ctx = if software {
-        make_software_context()
+        Some(make_software_context())
     } else {
         None
     };

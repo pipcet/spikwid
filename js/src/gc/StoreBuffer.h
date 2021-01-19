@@ -420,7 +420,7 @@ class StoreBuffer {
 #ifdef DEBUG
     if (JS::RuntimeHeapIsBusy()) {
       MOZ_ASSERT(!CurrentThreadIsGCMarking());
-      MOZ_ASSERT(lock_.ownedByCurrentThread());
+      lock_.assertOwnedByCurrentThread();
     } else {
       MOZ_ASSERT(CurrentThreadCanAccessRuntime(runtime_));
     }
@@ -480,6 +480,7 @@ class StoreBuffer {
   void disable();
   bool isEnabled() const { return enabled_; }
 
+  bool isEmpty() const;
   void clear();
 
   const Nursery& nursery() const { return nursery_; }

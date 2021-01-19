@@ -42,7 +42,9 @@
 #include "builtin/SelfHostingDefines.h"
 #include "builtin/String.h"
 #include "builtin/WeakMapObject.h"
-#include "frontend/ParserAtom.h"  // js::frontend::ParserAtom
+#include "frontend/BytecodeCompilation.h"  // CompileGlobalScriptToStencil
+#include "frontend/CompilationInfo.h"      // js::frontend::CompilationStencil
+#include "frontend/ParserAtom.h"           // js::frontend::ParserAtom
 #include "gc/Marking.h"
 #include "gc/Policy.h"
 #include "jit/AtomicOperations.h"
@@ -59,6 +61,7 @@
 #include "js/ScalarType.h"  // js::Scalar::Type
 #include "js/SourceText.h"  // JS::SourceText
 #include "js/StableStringChars.h"
+#include "js/Transcoding.h"
 #include "js/Warnings.h"  // JS::{,Set}WarningReporter
 #include "js/Wrapper.h"
 #include "util/StringBuffer.h"
@@ -689,7 +692,7 @@ static bool intrinsic_DefineProperty(JSContext* cx, unsigned argc, Value* vp) {
     return result.reportError(cx, obj, id);
   }
 
-  args.rval().setBoolean(result.reallyOk());
+  args.rval().setBoolean(result.ok());
   return true;
 }
 
@@ -1009,6 +1012,25 @@ static bool intrinsic_SetCanonicalName(JSContext* cx, unsigned argc,
   return true;
 }
 
+static bool intrinsic_SetIsInlinableLargeFunction(JSContext* cx, unsigned argc,
+                                                  Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  MOZ_ASSERT(args.length() == 1);
+
+  RootedFunction fun(cx, &args[0].toObject().as<JSFunction>());
+  MOZ_ASSERT(fun->isSelfHostedBuiltin());
+
+  // _SetIsInlinableLargeFunction can only be called on top-level function
+  // declarations.
+  MOZ_ASSERT(fun->kind() == FunctionFlags::NormalFunction);
+  MOZ_ASSERT(!fun->isLambda());
+
+  fun->baseScript()->setIsInlinableLargeFunction();
+
+  args.rval().setUndefined();
+  return true;
+}
+
 static bool intrinsic_GeneratorObjectIsClosed(JSContext* cx, unsigned argc,
                                               Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
@@ -1275,67 +1297,6 @@ static bool intrinsic_PossiblyWrappedTypedArrayHasDetachedBuffer(JSContext* cx,
 
   bool detached = obj->hasDetachedBuffer();
   args.rval().setBoolean(detached);
-  return true;
-}
-
-static bool intrinsic_MoveTypedArrayElements(JSContext* cx, unsigned argc,
-                                             Value* vp) {
-  CallArgs args = CallArgsFromVp(argc, vp);
-  MOZ_ASSERT(args.length() == 4);
-  MOZ_RELEASE_ASSERT(args[1].isInt32());
-  MOZ_RELEASE_ASSERT(args[2].isInt32());
-  MOZ_RELEASE_ASSERT(args[3].isInt32());
-
-  Rooted<TypedArrayObject*> tarray(cx,
-                                   &args[0].toObject().as<TypedArrayObject>());
-  uint32_t to = uint32_t(args[1].toInt32());
-  uint32_t from = uint32_t(args[2].toInt32());
-  uint32_t count = uint32_t(args[3].toInt32());
-
-  MOZ_ASSERT(count > 0,
-             "don't call this method if copying no elements, because then "
-             "the not-detached requirement is wrong");
-
-  if (tarray->hasDetachedBuffer()) {
-    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
-                              JSMSG_TYPED_ARRAY_DETACHED);
-    return false;
-  }
-
-  // Don't multiply by |tarray->bytesPerElement()| in case the compiler can't
-  // strength-reduce multiplication by 1/2/4/8 into the equivalent shift.
-  const size_t ElementShift = TypedArrayShift(tarray->type());
-
-  MOZ_ASSERT((UINT32_MAX >> ElementShift) > to);
-  uint32_t byteDest = to << ElementShift;
-
-  MOZ_ASSERT((UINT32_MAX >> ElementShift) > from);
-  uint32_t byteSrc = from << ElementShift;
-
-  MOZ_ASSERT((UINT32_MAX >> ElementShift) >= count);
-  uint32_t byteSize = count << ElementShift;
-
-#ifdef DEBUG
-  {
-    uint32_t viewByteLength = tarray->byteLength().deprecatedGetUint32();
-    MOZ_ASSERT(byteSize <= viewByteLength);
-    MOZ_ASSERT(byteDest < viewByteLength);
-    MOZ_ASSERT(byteSrc < viewByteLength);
-    MOZ_ASSERT(byteDest <= viewByteLength - byteSize);
-    MOZ_ASSERT(byteSrc <= viewByteLength - byteSize);
-  }
-#endif
-
-  SharedMem<uint8_t*> data = tarray->dataPointerEither().cast<uint8_t*>();
-  if (tarray->isSharedMemory()) {
-    jit::AtomicOperations::memmoveSafeWhenRacy(data + byteDest, data + byteSrc,
-                                               byteSize);
-  } else {
-    memmove(data.unwrapUnshared() + byteDest, data.unwrapUnshared() + byteSrc,
-            byteSize);
-  }
-
-  args.rval().setUndefined();
   return true;
 }
 
@@ -1609,12 +1570,7 @@ static bool intrinsic_StringSplitString(JSContext* cx, unsigned argc,
   RootedString string(cx, args[0].toString());
   RootedString sep(cx, args[1].toString());
 
-  RootedObjectGroup group(cx, ObjectGroupRealm::getStringSplitStringGroup(cx));
-  if (!group) {
-    return false;
-  }
-
-  JSObject* aobj = StringSplitString(cx, group, string, sep, INT32_MAX);
+  JSObject* aobj = StringSplitString(cx, string, sep, INT32_MAX);
   if (!aobj) {
     return false;
   }
@@ -1637,12 +1593,7 @@ static bool intrinsic_StringSplitStringLimit(JSContext* cx, unsigned argc,
   MOZ_ASSERT(limit > 0,
              "Zero limit case is already handled in self-hosted code.");
 
-  RootedObjectGroup group(cx, ObjectGroupRealm::getStringSplitStringGroup(cx));
-  if (!group) {
-    return false;
-  }
-
-  JSObject* aobj = StringSplitString(cx, group, string, sep, limit);
+  JSObject* aobj = StringSplitString(cx, string, sep, limit);
   if (!aobj) {
     return false;
   }
@@ -1998,6 +1949,72 @@ static bool intrinsic_ExecuteModule(JSContext* cx, unsigned argc, Value* vp) {
   return ModuleObject::execute(cx, module, args.rval());
 }
 
+static bool intrinsic_IsTopLevelAwaitEnabled(JSContext* cx, unsigned argc,
+                                             Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  MOZ_ASSERT(args.length() == 0);
+  bool topLevelAwait = cx->options().topLevelAwait();
+  args.rval().setBoolean(topLevelAwait);
+  return true;
+}
+
+static bool intrinsic_GetAsyncCycleRoot(JSContext* cx, unsigned argc,
+                                        Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  MOZ_ASSERT(args.length() == 1);
+  RootedModuleObject module(cx, &args[0].toObject().as<ModuleObject>());
+  JSObject* result = js::GetAsyncCycleRoot(module);
+  if (!result) {
+    return false;
+  }
+  args.rval().setObject(*result);
+  return true;
+}
+
+static bool intrinsic_AppendAsyncParentModule(JSContext* cx, unsigned argc,
+                                              Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  MOZ_ASSERT(args.length() == 2);
+  RootedModuleObject self(cx, &args[0].toObject().as<ModuleObject>());
+  RootedModuleObject parent(cx, &args[1].toObject().as<ModuleObject>());
+  return ModuleObject::appendAsyncParentModule(cx, self, parent);
+}
+
+static bool intrinsic_CreateTopLevelCapability(JSContext* cx, unsigned argc,
+                                               Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  MOZ_ASSERT(args.length() == 1);
+  RootedModuleObject self(cx, &args[0].toObject().as<ModuleObject>());
+  PromiseObject* result = ModuleObject::createTopLevelCapability(cx, self);
+  if (!result) {
+    return false;
+  }
+  args.rval().setObject(*result);
+  return true;
+}
+
+static bool intrinsic_ModuleTopLevelCapabilityResolve(JSContext* cx,
+                                                      unsigned argc,
+                                                      Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  MOZ_ASSERT(args.length() == 1);
+  RootedModuleObject module(cx, &args[0].toObject().as<ModuleObject>());
+  ModuleObject::topLevelCapabilityResolve(cx, module);
+  args.rval().setUndefined();
+  return true;
+}
+
+static bool intrinsic_ModuleTopLevelCapabilityReject(JSContext* cx,
+                                                     unsigned argc, Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  MOZ_ASSERT(args.length() == 2);
+  RootedModuleObject module(cx, &args[0].toObject().as<ModuleObject>());
+  HandleValue error = args[1];
+  ModuleObject::topLevelCapabilityReject(cx, module, error);
+  args.rval().setUndefined();
+  return true;
+}
+
 static bool intrinsic_NewModuleNamespace(JSContext* cx, unsigned argc,
                                          Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
@@ -2191,6 +2208,7 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_INLINABLE_FN("std_Math_max", math_max, 2, 0, MathMax),
     JS_INLINABLE_FN("std_Math_min", math_min, 2, 0, MathMin),
     JS_INLINABLE_FN("std_Math_abs", math_abs, 1, 0, MathAbs),
+    JS_INLINABLE_FN("std_Math_trunc", math_trunc, 1, 0, MathTrunc),
 
     JS_FN("std_Map_entries", MapObject::entries, 0, 0),
 
@@ -2298,6 +2316,8 @@ static const JSFunctionSpec intrinsic_functions[] = {
           CallNonGenericSelfhostedMethod<Is<ArrayIteratorObject>>, 2, 0),
 
     JS_FN("_SetCanonicalName", intrinsic_SetCanonicalName, 2, 0),
+    JS_FN("_SetIsInlinableLargeFunction", intrinsic_SetIsInlinableLargeFunction,
+          1, 0),
 
     JS_INLINABLE_FN("GuardToArrayIterator",
                     intrinsic_GuardToBuiltin<ArrayIteratorObject>, 1, 0,
@@ -2414,7 +2434,6 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_FN("PossiblyWrappedTypedArrayHasDetachedBuffer",
           intrinsic_PossiblyWrappedTypedArrayHasDetachedBuffer, 1, 0),
 
-    JS_FN("MoveTypedArrayElements", intrinsic_MoveTypedArrayElements, 4, 0),
     JS_FN("TypedArrayBitwiseSlice", intrinsic_TypedArrayBitwiseSlice, 4, 0),
     JS_FN("TypedArrayInitFromPackedArray",
           intrinsic_TypedArrayInitFromPackedArray, 2, 0),
@@ -2582,6 +2601,14 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_FN("InstantiateModuleFunctionDeclarations",
           intrinsic_InstantiateModuleFunctionDeclarations, 1, 0),
     JS_FN("ExecuteModule", intrinsic_ExecuteModule, 1, 0),
+    JS_FN("IsTopLevelAwaitEnabled", intrinsic_IsTopLevelAwaitEnabled, 0, 0),
+    JS_FN("GetAsyncCycleRoot", intrinsic_GetAsyncCycleRoot, 1, 0),
+    JS_FN("AppendAsyncParentModule", intrinsic_AppendAsyncParentModule, 2, 0),
+    JS_FN("CreateTopLevelCapability", intrinsic_CreateTopLevelCapability, 1, 0),
+    JS_FN("ModuleTopLevelCapabilityResolve",
+          intrinsic_ModuleTopLevelCapabilityResolve, 1, 0),
+    JS_FN("ModuleTopLevelCapabilityReject",
+          intrinsic_ModuleTopLevelCapabilityReject, 2, 0),
     JS_FN("NewModuleNamespace", intrinsic_NewModuleNamespace, 2, 0),
     JS_FN("AddModuleNamespaceBinding", intrinsic_AddModuleNamespaceBinding, 4,
           0),
@@ -2639,6 +2666,7 @@ void js::FillSelfHostingCompileOptions(CompileOptions& options) {
   options.setSelfHostingMode(true);
   options.setForceFullParse();
   options.setForceStrictMode();
+  options.setIsRunOnce(true);
 }
 
 GlobalObject* JSRuntime::createSelfHostingGlobal(JSContext* cx) {
@@ -2646,7 +2674,7 @@ GlobalObject* JSRuntime::createSelfHostingGlobal(JSContext* cx) {
   MOZ_ASSERT(!cx->realm());
 
   JS::RealmOptions options;
-  options.creationOptions().setNewCompartmentAndZone();
+  options.creationOptions().setNewCompartmentInSelfHostingZone();
   // Debugging the selfHosted zone is not supported because CCWs are not
   // allowed in that zone.
   options.creationOptions().setInvisibleToDebugger(true);
@@ -2681,7 +2709,7 @@ GlobalObject* JSRuntime::createSelfHostingGlobal(JSContext* cx) {
   }
 
   cx->runtime()->selfHostingGlobal_ = shg;
-  realm->zone()->setIsSelfHostingZone();
+  MOZ_ASSERT(realm->zone()->isSelfHostingZone());
   realm->setIsSelfHostingRealm();
 
   if (!GlobalObject::initSelfHostingBuiltins(cx, shg, intrinsic_functions)) {
@@ -2773,6 +2801,37 @@ static bool VerifyGlobalNames(JSContext* cx, Handle<GlobalObject*> shg) {
   return true;
 }
 
+bool JSRuntime::initSelfHostingFromXDR(
+    JSContext* cx, const CompileOptions& options,
+    frontend::CompilationStencilSet& stencilSet,
+    MutableHandle<JSScript*> scriptOut) {
+  MOZ_ASSERT(selfHostingGlobal_);
+  MOZ_ASSERT(selfHostedXDR.length() > 0);
+  scriptOut.set(nullptr);
+
+  // Deserialize the stencil from XDR.
+  JS::TranscodeRange xdrRange(selfHostedXDR);
+  bool decodeOk = false;
+  if (!stencilSet.deserializeStencils(cx, xdrRange, &decodeOk)) {
+    return false;
+  }
+  // If XDR decode failed, it's not a propagated error.
+  // Fall back to regular text parse.
+  if (!decodeOk) {
+    return true;
+  }
+
+  // Instantiate the stencil.
+  Rooted<frontend::CompilationGCOutput> output(cx);
+  if (!frontend::CompilationStencil::instantiateStencils(cx, stencilSet,
+                                                         output.get())) {
+    return false;
+  }
+
+  scriptOut.set(output.get().script);
+  return true;
+}
+
 bool JSRuntime::initSelfHosting(JSContext* cx) {
   MOZ_ASSERT(!selfHostingGlobal_);
 
@@ -2780,12 +2839,6 @@ bool JSRuntime::initSelfHosting(JSContext* cx) {
     selfHostingGlobal_ = cx->runtime()->parentRuntime->selfHostingGlobal_;
     return true;
   }
-
-  /*
-   * Self hosted state can be accessed from threads for other runtimes
-   * parented to this one, so cannot include state in the nursery.
-   */
-  JS::AutoDisableGenerationalGC disable(cx);
 
   Rooted<GlobalObject*> shg(cx, JSRuntime::createSelfHostingGlobal(cx));
   if (!shg) {
@@ -2804,27 +2857,83 @@ bool JSRuntime::initSelfHosting(JSContext* cx) {
    */
   AutoSelfHostingErrorReporter errorReporter(cx);
 
-  uint32_t srcLen = GetRawScriptsSize();
-
-  const unsigned char* compressed = compressedSources;
-  uint32_t compressedLen = GetCompressedSize();
-  auto src = cx->make_pod_array<char>(srcLen);
-  if (!src ||
-      !DecompressString(compressed, compressedLen,
-                        reinterpret_cast<unsigned char*>(src.get()), srcLen)) {
-    return false;
-  }
-
+  // Variables used to instantiate scripts.
   CompileOptions options(cx);
   FillSelfHostingCompileOptions(options);
 
-  JS::SourceText<mozilla::Utf8Unit> srcBuf;
-  if (!srcBuf.init(cx, std::move(src), srcLen)) {
-    return false;
+  RootedScript script(cx);
+
+  // Try initializing from Stencil XDR.
+  if (selfHostedXDR.length() > 0) {
+    // Initialize the compilation info that houses the stencil.
+    Rooted<frontend::CompilationStencilSet> stencilSet(
+        cx, frontend::CompilationStencilSet(cx, options));
+    if (!stencilSet.get().input.initForSelfHostingGlobal(cx)) {
+      return false;
+    }
+
+    if (!initSelfHostingFromXDR(cx, options, stencilSet.get(), &script)) {
+      return false;
+    }
   }
 
-  RootedValue rv(cx);
-  if (!JS::Evaluate(cx, options, srcBuf, &rv)) {
+  // If script wasn't generated, it means XDR was either not provided or that it
+  // failed the decoding phase. Parse from text as before.
+  if (!script) {
+    Rooted<frontend::CompilationStencil> stencil(
+        cx, frontend::CompilationStencil(cx, options));
+    if (!stencil.get().input.initForSelfHostingGlobal(cx)) {
+      return false;
+    }
+
+    uint32_t srcLen = GetRawScriptsSize();
+    const unsigned char* compressed = compressedSources;
+    uint32_t compressedLen = GetCompressedSize();
+    auto src = cx->make_pod_array<char>(srcLen);
+    if (!src) {
+      return false;
+    }
+    if (!DecompressString(compressed, compressedLen,
+                          reinterpret_cast<unsigned char*>(src.get()),
+                          srcLen)) {
+      return false;
+    }
+
+    JS::SourceText<mozilla::Utf8Unit> srcBuf;
+    if (!srcBuf.init(cx, std::move(src), srcLen)) {
+      return false;
+    }
+
+    if (!frontend::CompileGlobalScriptToStencil(cx, stencil.get(), srcBuf,
+                                                ScopeKind::Global)) {
+      return false;
+    }
+
+    // Serialize the stencil to XDR.
+    if (selfHostedXDRWriter) {
+      JS::TranscodeBuffer xdrBuffer;
+      if (!stencil.get().serializeStencils(cx, xdrBuffer)) {
+        return false;
+      }
+
+      if (!selfHostedXDRWriter(cx, xdrBuffer)) {
+        return false;
+      }
+    }
+
+    // Instantiate the stencil.
+    Rooted<frontend::CompilationGCOutput> output(cx);
+    if (!frontend::CompilationStencil::instantiateStencils(cx, stencil.get(),
+                                                           output.get())) {
+      return false;
+    }
+
+    script.set(output.get().script);
+  }
+
+  MOZ_ASSERT(script);
+  RootedValue rval(cx);
+  if (!JS_ExecuteScript(cx, script, &rval)) {
     return false;
   }
 
@@ -2833,7 +2942,9 @@ bool JSRuntime::initSelfHosting(JSContext* cx) {
   }
 
   // Garbage collect the self hosting zone once when it is created. It should
-  // not be modified after this point.
+  // not be modified after this point. Drop top-level script reference before we
+  // do this collection.
+  script.set(nullptr);
   cx->runtime()->gc.freezeSelfHostingZone();
 
   return true;
@@ -3087,7 +3198,7 @@ static JSObject* CloneObject(JSContext* cx,
     MOZ_ASSERT(selfHostedObject->isNative());
     clone = NewObjectWithGivenProto(
         cx, selfHostedObject->getClass(), nullptr,
-        selfHostedObject->asTenured().getAllocKind(), SingletonObject);
+        selfHostedObject->asTenured().getAllocKind(), TenuredObject);
   }
   if (!clone) {
     return nullptr;
