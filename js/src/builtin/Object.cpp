@@ -16,6 +16,7 @@
 #include "builtin/BigInt.h"
 #include "builtin/Eval.h"
 #include "builtin/SelfHostingDefines.h"
+#include "builtin/TestingFunctions.h"
 #include "frontend/BytecodeCompiler.h"
 #include "jit/InlinableNatives.h"
 #include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
@@ -40,7 +41,6 @@
 #include "vm/NativeObject-inl.h"
 #include "vm/Shape-inl.h"
 
-#  include "builtin/TestingFunctions.h"
 
 using namespace js;
 
@@ -2053,6 +2053,7 @@ static bool FinishObjectClassInit(JSContext* cx, JS::HandleObject ctor,
   if (!DefineTestingFunctions(cx, global, /* fuzzingSafe = */ false,
                               /* disableOOMFunctions = */ false)) {
     return false;
+  }
 
   Rooted<NativeObject*> holder(cx,
                                GlobalObject::getIntrinsicsHolder(cx, global));
