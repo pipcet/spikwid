@@ -2072,6 +2072,7 @@ pref("browser.engagement.downloads-button.has-used", false);
 pref("browser.engagement.fxa-toolbar-menu-button.has-used", false);
 pref("browser.engagement.home-button.has-used", false);
 pref("browser.engagement.sidebar-button.has-used", false);
+pref("browser.engagement.library-button.has-used", false);
 
 pref("browser.aboutConfig.showWarning", false);
 
@@ -2519,6 +2520,7 @@ pref("devtools.popup.disable_autohide", false);
 
 // FirstStartup service time-out in ms
 pref("first-startup.timeout", 30000);
+pref("default-browser-agent.enabled", false);
 pref("app.normandy.test-prefs.bool", false);
 pref("app.normandy.test-prefs.integer", 0);
 pref("app.normandy.test-prefs.string", "");
