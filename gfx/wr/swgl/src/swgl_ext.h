@@ -2,52 +2,48 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-static inline void commit_span(uint32_t* buf, WideRGBA8 r) {
-  if (blend_key) r = blend_pixels_RGBA8(unaligned_load<PackedRGBA8>(buf), r);
+static ALWAYS_INLINE void commit_span(uint32_t* buf, WideRGBA8 r) {
+  if (blend_key) r = blend_pixels(buf, unaligned_load<PackedRGBA8>(buf), r);
   unaligned_store(buf, pack(r));
 }
 
-static inline void commit_span(uint32_t* buf, PackedRGBA8 r) {
+static ALWAYS_INLINE void commit_span(uint32_t* buf, PackedRGBA8 r) {
   if (blend_key)
-    r = pack(blend_pixels_RGBA8(unaligned_load<PackedRGBA8>(buf), unpack(r)));
+    r = pack(blend_pixels(buf, unaligned_load<PackedRGBA8>(buf), unpack(r)));
   unaligned_store(buf, r);
 }
 
 UNUSED static inline void commit_solid_span(uint32_t* buf, WideRGBA8 r,
                                             int len) {
   if (blend_key) {
-    for (uint32_t* end = &buf[len]; buf < end; buf += 4) {
+    for (uint32_t* end = &buf[len & ~3]; buf < end; buf += 4) {
       unaligned_store(
-          buf, pack(blend_pixels_RGBA8(unaligned_load<PackedRGBA8>(buf), r)));
+          buf, pack(blend_pixels(buf, unaligned_load<PackedRGBA8>(buf), r)));
+    }
+    len &= 3;
+    if (len > 0) {
+      partial_store_span(
+          buf,
+          pack(blend_pixels(buf, partial_load_span<PackedRGBA8>(buf, len), r,
+                            len)),
+          len);
     }
   } else {
     fill_n(buf, len, bit_cast<U32>(pack(r)).x);
   }
 }
 
-UNUSED static inline void commit_texture_span(uint32_t* buf, uint32_t* src,
-                                              int len) {
-  if (blend_key) {
-    for (uint32_t* end = &buf[len]; buf < end; buf += 4, src += 4) {
-      PackedRGBA8 r = unaligned_load<PackedRGBA8>(src);
-      unaligned_store(buf, pack(blend_pixels_RGBA8(
-                               unaligned_load<PackedRGBA8>(buf), unpack(r))));
-    }
-  } else {
-    memcpy(buf, src, len * sizeof(uint32_t));
-  }
-}
-
-static inline void commit_span(uint8_t* buf, WideR8 r) {
-  if (blend_key) r = blend_pixels_R8(unpack(unaligned_load<PackedR8>(buf)), r);
+static ALWAYS_INLINE void commit_span(uint8_t* buf, WideR8 r) {
+  if (blend_key)
+    r = blend_pixels(buf, unpack(unaligned_load<PackedR8>(buf)), r);
   unaligned_store(buf, pack(r));
 }
 
 UNUSED static inline void commit_solid_span(uint8_t* buf, WideR8 r, int len) {
   if (blend_key) {
     for (uint8_t* end = &buf[len]; buf < end; buf += 4) {
-      unaligned_store(
-          buf, pack(blend_pixels_R8(unpack(unaligned_load<PackedR8>(buf)), r)));
+      unaligned_store(buf, pack(blend_pixels(
+                               buf, unpack(unaligned_load<PackedR8>(buf)), r)));
     }
   } else {
     fill_n((uint32_t*)buf, len / 4, bit_cast<uint32_t>(pack(r)));
@@ -55,18 +51,20 @@ UNUSED static inline void commit_solid_span(uint8_t* buf, WideR8 r, int len) {
 }
 
 template <typename V>
-static inline WideRGBA8 pack_span(uint32_t*, const V& v) {
+static ALWAYS_INLINE WideRGBA8 pack_span(uint32_t*, const V& v) {
   return pack_pixels_RGBA8(v);
 }
 
-static inline WideRGBA8 pack_span(uint32_t*) { return pack_pixels_RGBA8(); }
+static ALWAYS_INLINE WideRGBA8 pack_span(uint32_t*) {
+  return pack_pixels_RGBA8();
+}
 
 template <typename C>
-static inline WideR8 pack_span(uint8_t*, C c) {
+static ALWAYS_INLINE WideR8 pack_span(uint8_t*, C c) {
   return pack_pixels_R8(c);
 }
 
-static inline WideR8 pack_span(uint8_t*) { return pack_pixels_R8(); }
+static ALWAYS_INLINE WideR8 pack_span(uint8_t*) { return pack_pixels_R8(); }
 
 // Forces a value with vector run-class to have scalar run-class.
 template <typename T>
@@ -98,13 +96,13 @@ static ALWAYS_INLINE auto swgl_forceScalar(T v) -> decltype(force_scalar(v)) {
     swgl_SpanLength -= swgl_StepSize;     \
   } while (0)
 
-static inline WideRGBA8 pack_pixels_RGBA8(Float alpha) {
+static ALWAYS_INLINE WideRGBA8 pack_pixels_RGBA8(Float alpha) {
   I32 i = round_pixel(alpha);
   HalfRGBA8 c = packRGBA8(zipLow(i, i), zipHigh(i, i));
   return combine(zipLow(c, c), zipHigh(c, c));
 }
 
-static inline WideRGBA8 pack_pixels_RGBA8(float alpha) {
+static ALWAYS_INLINE WideRGBA8 pack_pixels_RGBA8(float alpha) {
   I32 i = round_pixel(alpha);
   HalfRGBA8 c = packRGBA8(i, i);
   return combine(c, c);
@@ -359,15 +357,19 @@ static inline WideRGBA8 sampleColorYUV(S0 sampler0, vec2 uv0, int layer0,
 // Helper functions to apply a color modulus when available.
 struct NoColor {};
 
-SI WideRGBA8 applyColor(WideRGBA8 src, NoColor) { return src; }
+static ALWAYS_INLINE WideRGBA8 applyColor(WideRGBA8 src, NoColor) {
+  return src;
+}
 
-SI WideRGBA8 applyColor(WideRGBA8 src, WideRGBA8 color) {
+static ALWAYS_INLINE WideRGBA8 applyColor(WideRGBA8 src, WideRGBA8 color) {
   return muldiv255(src, color);
 }
 
-SI PackedRGBA8 applyColor(PackedRGBA8 src, NoColor) { return src; }
+static ALWAYS_INLINE PackedRGBA8 applyColor(PackedRGBA8 src, NoColor) {
+  return src;
+}
 
-SI PackedRGBA8 applyColor(PackedRGBA8 src, WideRGBA8 color) {
+static ALWAYS_INLINE PackedRGBA8 applyColor(PackedRGBA8 src, WideRGBA8 color) {
   return pack(muldiv255(unpack(src), color));
 }
 
@@ -394,18 +396,11 @@ static void blendTextureNearestRGBA8(S sampler, const ivec2_scalar& i, int span,
   // fill this section with a constant clamped sample.
   if (curX < minX) {
     int n = min(minX - curX, span);
-    curX += n;
-    span -= n;
     auto src = applyColor(unpack(bit_cast<PackedRGBA8>(U32(row[minX]))), color);
-    while (n > 0) {
-      int chunk = min(n, 4);
-      auto r = blend_key ? blend_pixels_RGBA8(
-                               partial_load_span<PackedRGBA8>(buf, chunk), src)
-                         : src;
-      partial_store_span(buf, pack(r), chunk);
-      buf += chunk;
-      n -= chunk;
-    }
+    commit_solid_span(buf, src, n);
+    buf += n;
+    span -= n;
+    curX += n;
   }
   // Here we only deal with valid samples within the sample bounds. No clamping
   // should occur here within these inner loops.
@@ -416,7 +411,7 @@ static void blendTextureNearestRGBA8(S sampler, const ivec2_scalar& i, int span,
     for (int end = curX + (n & ~3); curX < end; curX += 4, buf += 4) {
       auto src =
           applyColor(unpack(unaligned_load<PackedRGBA8>(&row[curX])), color);
-      auto r = blend_pixels_RGBA8(unaligned_load<PackedRGBA8>(buf), src);
+      auto r = blend_pixels(buf, unaligned_load<PackedRGBA8>(buf), src);
       unaligned_store(buf, pack(r));
     }
   } else {
@@ -432,7 +427,8 @@ static void blendTextureNearestRGBA8(S sampler, const ivec2_scalar& i, int span,
     if (blend_key) {
       auto src = applyColor(
           unpack(partial_load_span<PackedRGBA8>(&row[curX], n)), color);
-      auto r = blend_pixels_RGBA8(partial_load_span<PackedRGBA8>(buf, n), src);
+      auto r =
+          blend_pixels(buf, partial_load_span<PackedRGBA8>(buf, n), src, n);
       partial_store_span(buf, pack(r), n);
     } else {
       auto src =
@@ -446,15 +442,7 @@ static void blendTextureNearestRGBA8(S sampler, const ivec2_scalar& i, int span,
   // need to fill this section with a constant clamped sample.
   if (span > 0) {
     auto src = applyColor(unpack(bit_cast<PackedRGBA8>(U32(row[maxX]))), color);
-    while (span > 0) {
-      int chunk = min(span, 4);
-      auto r = blend_key ? blend_pixels_RGBA8(
-                               partial_load_span<PackedRGBA8>(buf, chunk), src)
-                         : src;
-      partial_store_span(buf, pack(r), chunk);
-      buf += chunk;
-      span -= chunk;
-    }
+    commit_solid_span(buf, src, span);
   }
 }
 
@@ -512,6 +500,79 @@ static bool allowTextureNearest(S sampler, T P, int span) {
 // Determine if we can apply 1:1 nearest filtering to a span of texture
 #define swgl_allowTextureNearest(s, p) \
   allowTextureNearest(s, p, swgl_SpanLength)
+
+// Checks if a gradient table of the specified size exists at the UV coords of
+// the address within an RGBA32F texture. If so, a linear address within the
+// texture is returned that may be used to sample the gradient table later. If
+// the address doesn't describe a valid gradient, then a negative value is
+// returned.
+static inline int swgl_validateGradient(sampler2D sampler, ivec2_scalar address,
+                                        int entries) {
+  return sampler->format == TextureFormat::RGBA32F && address.y >= 0 &&
+                 address.y < int(sampler->height) && address.x >= 0 &&
+                 address.x < int(sampler->width) && entries > 0 &&
+                 address.x + 2 * entries <= int(sampler->width)
+             ? address.y * sampler->stride + address.x * 4
+             : -1;
+}
+
+// Swizzle RGBA gradient result to BGRA.
+static ALWAYS_INLINE HalfRGBA8 swizzleGradient(HalfRGBA8 v) {
+  return SHUFFLE(v, v, 2, 1, 0, 3, 6, 5, 4, 7);
+}
+
+static inline WideRGBA8 sampleGradient(sampler2D sampler, int address,
+                                       Float entry) {
+  assert(sampler->format == TextureFormat::RGBA32F);
+  assert(address >= 0 && address < int(sampler->height * sampler->stride));
+  // Get the integer portion of the entry index to find the entry colors.
+  I32 index = cast(entry);
+  // Use the fractional portion of the entry index to control blending between
+  // entry colors.
+  Float offset = entry - cast(index);
+  // Every entry is a pair of colors blended by the fractional offset.
+  index *= 2;
+  assert(test_all(index >= 0 && index < int(sampler->width) - 1));
+  Float* buf = (Float*)&sampler->buf[address];
+  // Blend between the colors for each SIMD lane, then pack them to RGBA8
+  // result. Since the layout of the RGBA8 framebuffer is actually BGRA while
+  // the gradient table has RGBA colors, swizzling is required.
+  return combine(swizzleGradient(packRGBA8(
+                     round_pixel(buf[index.x] + buf[index.x + 1] * offset.x),
+                     round_pixel(buf[index.y] + buf[index.y + 1] * offset.y))),
+                 swizzleGradient(packRGBA8(
+                     round_pixel(buf[index.z] + buf[index.z + 1] * offset.z),
+                     round_pixel(buf[index.w] + buf[index.w + 1] * offset.w))));
+}
+
+// Samples a gradient entry from the gradient at the provided linearized
+// address. The integer portion of the entry index is used to find the entry
+// within the table whereas the fractional portion is used to blend between
+// adjacent table entries.
+#define swgl_commitGradientRGBA8(sampler, address, entry) \
+  swgl_commitChunk(RGBA8, sampleGradient(sampler, address, entry))
+
+// Variant that allows specifying a color multiplier of the gradient result.
+#define swgl_commitGradientColorRGBA8(sampler, address, entry, color)        \
+  swgl_commitChunk(RGBA8, muldiv255(sampleGradient(sampler, address, entry), \
+                                    pack_pixels_RGBA8(color)))
+
+// Extension to set a clip mask image to be sampled during blending. The offset
+// specifies the positioning of the clip mask image relative to the viewport
+// origin. The bounding box specifies the rectangle relative to the clip mask's
+// origin that constrains sampling within the clip mask.
+static sampler2D swgl_ClipMask = nullptr;
+static IntPoint swgl_ClipMaskOffset = {0, 0};
+static IntRect swgl_ClipMaskBounds = {0, 0, 0, 0};
+#define swgl_clipMask(mask, offset, bb_origin, bb_size)        \
+  do {                                                         \
+    if (bb_size != vec2_scalar(0.0f, 0.0f)) {                  \
+      swgl_ClipMask = mask;                                    \
+      swgl_ClipMaskOffset = make_ivec2(offset);                \
+      swgl_ClipMaskBounds =                                    \
+          IntRect(make_ivec2(bb_origin), make_ivec2(bb_size)); \
+    }                                                          \
+  } while (0)
 
 // Dispatch helper used by the GLSL translator to swgl_drawSpan functions.
 // The number of pixels committed is tracked by checking for the difference in

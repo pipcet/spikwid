@@ -40,6 +40,12 @@ class ResourceWatcher {
     this._cache = [];
     this._listenerCount = new Map();
 
+    // WeakMap used to avoid starting a legacy listener twice for the same
+    // target + resource-type pair. Legacy listener creation can be subject to
+    // race conditions.
+    // Maps a target front to an array of resource types.
+    this._existingLegacyListeners = new WeakMap();
+
     this._notifyWatchers = this._notifyWatchers.bind(this);
     this._throttledNotifyWatchers = throttle(this._notifyWatchers, 100);
   }
@@ -331,7 +337,10 @@ class ResourceWatcher {
    * See _onTargetAvailable for arguments, they are the same.
    */
   _onTargetDestroyed({ targetFront }) {
-    //TODO: Is there a point in doing anything?
+    // Clear the map of legacy listeners for this target.
+    this._existingLegacyListeners.set(targetFront, []);
+
+    //TODO: Is there a point in doing anything else?
     //
     // We could remove the available/destroyed event, but as the target is destroyed
     // its listeners will be destroyed anyway.
@@ -698,15 +707,15 @@ class ResourceWatcher {
    * Call backward compatibility code from `LegacyListeners` in order to listen for a given
    * type of resource from a given target.
    */
-  _watchResourcesForTarget(targetFront, resourceType) {
+  async _watchResourcesForTarget(targetFront, resourceType) {
     if (this._hasResourceWatcherSupportForTarget(resourceType, targetFront)) {
       // This resource / target pair should already be handled by the watcher,
       // no need to start legacy listeners.
-      return Promise.resolve();
+      return;
     }
 
     if (targetFront.isDestroyed()) {
-      return Promise.resolve();
+      return;
     }
 
     const onAvailable = this._onResourceAvailable.bind(this, { targetFront });
@@ -716,13 +725,39 @@ class ResourceWatcher {
     if (!(resourceType in LegacyListeners)) {
       throw new Error(`Missing legacy listener for ${resourceType}`);
     }
-    return LegacyListeners[resourceType]({
-      targetList: this.targetList,
+
+    const legacyListeners =
+      this._existingLegacyListeners.get(targetFront) || [];
+    if (legacyListeners.includes(resourceType)) {
+      console.error(
+        `Already started legacy listener for ${resourceType} on ${targetFront.actorID}`
+      );
+      return;
+    }
+    this._existingLegacyListeners.set(
       targetFront,
-      onAvailable,
-      onDestroyed,
-      onUpdated,
-    });
+      legacyListeners.concat(resourceType)
+    );
+
+    try {
+      await LegacyListeners[resourceType]({
+        targetList: this.targetList,
+        targetFront,
+        onAvailable,
+        onDestroyed,
+        onUpdated,
+      });
+    } catch (e) {
+      // Swallow the error to avoid breaking calls to watchResources which will
+      // loop on all existing targets to create legacy listeners.
+      // If a legacy listener fails to handle a target for some reason, we
+      // should still try to process other targets as much as possible.
+      // See Bug 1687645.
+      console.error(
+        `Failed to start [${resourceType}] legacy listener for target ${targetFront.actorID}`,
+        e
+      );
+    }
   }
 
   /**
@@ -793,6 +828,15 @@ class ResourceWatcher {
     // We are aware of one case where that might be useful.
     // When a panel is disabled via the options panel, after it has been opened.
     // Would that justify doing this? Is there another usecase?
+
+    // XXX: This is most likely only needed to avoid growing the Map infinitely.
+    // Unless in the "disabled panel" use case mentioned in the comment above,
+    // we should not see the same target actorID again.
+    const listeners = this._existingLegacyListeners.get(targetFront);
+    if (listeners && listeners.includes(resourceType)) {
+      const remainingListeners = listeners.filter(l => l !== resourceType);
+      this._existingLegacyListeners.set(targetFront, remainingListeners);
+    }
   }
 }
 
@@ -815,6 +859,8 @@ ResourceWatcher.TYPES = ResourceWatcher.prototype.TYPES = {
   INDEXED_DB: "indexed-db",
   NETWORK_EVENT_STACKTRACE: "network-event-stacktrace",
   SOURCE: "source",
+  BREAKPOINT: "breakpoint",
+  SERVER_SENT_EVENT: "server-sent-event",
 };
 module.exports = { ResourceWatcher, TYPES: ResourceWatcher.TYPES };
 
@@ -873,6 +919,10 @@ const LegacyListeners = {
     .NETWORK_EVENT_STACKTRACE]: require("devtools/shared/resources/legacy-listeners/network-event-stacktraces"),
   [ResourceWatcher.TYPES
     .SOURCE]: require("devtools/shared/resources/legacy-listeners/source"),
+  [ResourceWatcher.TYPES
+    .BREAKPOINT]: require("devtools/shared/resources/legacy-listeners/breakpoint"),
+  [ResourceWatcher.TYPES
+    .SERVER_SENT_EVENT]: require("devtools/shared/resources/legacy-listeners/server-sent-events"),
 };
 
 // Optional transformers for each type of resource.

@@ -701,11 +701,13 @@ Toolbox.prototype = {
       targetFront.on("navigate", this._onNavigate);
       targetFront.on("frame-update", this._updateFrames);
       targetFront.on("inspect-object", this._onInspectObject);
-
-      targetFront.watchFronts("inspector", async inspectorFront => {
-        registerWalkerListeners(this.store, inspectorFront.walker);
-      });
     }
+
+    // Walker listeners allow to monitor DOM Mutation breakpoint updates.
+    // All targets should be monitored.
+    targetFront.watchFronts("inspector", async inspectorFront => {
+      registerWalkerListeners(this.store, inspectorFront.walker);
+    });
 
     const { threadFront } = targetFront;
     if (threadFront) {
@@ -2982,6 +2984,8 @@ Toolbox.prototype = {
    * Fired when user just started navigating away to another web page.
    */
   async _onWillNavigate() {
+    // Clearing the error count as soon as we navigate
+    this.setErrorCount(0);
     this.updateToolboxButtons();
     const toolId = this.currentToolId;
     // For now, only inspector, webconsole and netmonitor fire "reloaded" event

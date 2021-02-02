@@ -1292,6 +1292,14 @@ var Policies = {
 
   ManagedBookmarks: {},
 
+  ManualAppUpdateOnly: {
+    onBeforeAddons(manager, param) {
+      if (param) {
+        manager.disallowFeature("autoAppUpdateChecking");
+      }
+    },
+  },
+
   NetworkPrediction: {
     onBeforeAddons(manager, param) {
       setAndLockPref("network.dns.disablePrefetch", !param);
@@ -2353,11 +2361,6 @@ function blockAboutPage(manager, feature, neededOnContentProcess = false) {
     gBlockedAboutPages.push(chromeURL);
   } catch (e) {
     // Some about pages don't have chrome URLS (compat)
-  }
-
-  if (feature == "about:config") {
-    // Hide old page until it is removed
-    gBlockedAboutPages.push("chrome://global/content/config.xhtml");
   }
 }
 

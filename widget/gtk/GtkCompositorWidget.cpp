@@ -125,5 +125,21 @@ void GtkCompositorWidget::SetEGLNativeWindowSize(
 }
 #endif
 
+LayoutDeviceIntRegion GtkCompositorWidget::GetTransparentRegion() {
+  if (!mWidget) {
+    return LayoutDeviceIntRect();
+  }
+
+  // We need to clear target buffer alpha values of popup windows as
+  // SW-WR paints with alpha blending (see Bug 1674473).
+  if (mWidget->IsPopup()) {
+    return LayoutDeviceIntRect(LayoutDeviceIntPoint(0, 0), GetClientSize());
+  }
+
+  // Clear background of titlebar area to render titlebar
+  // transparent corners correctly.
+  return mWidget->GetTitlebarRect();
+}
+
 }  // namespace widget
 }  // namespace mozilla

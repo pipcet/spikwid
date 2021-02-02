@@ -26,8 +26,7 @@
  * For a collection to be carried out incrementally the following conditions
  * must be met:
  *  - the collection must be run by calling js::GCSlice() rather than js::GC()
- *  - the GC mode must have been set to JSGC_MODE_INCREMENTAL or
- *    JSGC_MODE_ZONE_INCREMENTAL with JS_SetGCParameter()
+ *  - the GC parameter JSGC_INCREMENTAL_GC_ENABLED must be true.
  *
  * The last condition is an engine-internal mechanism to ensure that incremental
  * collection is not carried out without the correct barriers being implemented.
@@ -193,7 +192,6 @@
 
 #include "gc/GC-inl.h"
 
-#include "mozilla/ArrayUtils.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/MacroForEach.h"
 #include "mozilla/MemoryReporting.h"
@@ -205,6 +203,7 @@
 
 #include <algorithm>
 #include <initializer_list>
+#include <iterator>
 #include <string.h>
 #include <utility>
 #ifndef XP_WIN
@@ -273,7 +272,6 @@
 using namespace js;
 using namespace js::gc;
 
-using mozilla::ArrayLength;
 using mozilla::Maybe;
 using mozilla::Nothing;
 using mozilla::Some;
@@ -309,8 +307,7 @@ static_assert(js::gc::JSClassAlignBytes >= MinFirstWordAlignment,
 static_assert(js::ScopeDataAlignBytes >= MinFirstWordAlignment,
               "CellFlagBitsReservedForGC should support scope data pointers");
 
-static_assert(mozilla::ArrayLength(slotsToThingKind) ==
-                  SLOTS_TO_THING_KIND_LIMIT,
+static_assert(std::size(slotsToThingKind) == SLOTS_TO_THING_KIND_LIMIT,
               "We have defined a slot count for each kind.");
 
 #define CHECK_THING_SIZE(allocKind, traceKind, type, sizedType, bgFinal,       \
@@ -407,7 +404,7 @@ static constexpr FinalizePhase BackgroundFinalizePhases[] = {
       AllocKind::OBJECT_GROUP}}};
 
 void Arena::unmarkAll() {
-  MarkBitmapWord* arenaBits = chunk()->bitmap.arenaBits(this);
+  MarkBitmapWord* arenaBits = chunk()->markBits.arenaBits(this);
   for (size_t i = 0; i < ArenaBitmapWords; i++) {
     arenaBits[i] = 0;
   }
@@ -448,11 +445,11 @@ void Arena::checkNoMarkedCells() {
 void Arena::staticAsserts() {
   static_assert(size_t(AllocKind::LIMIT) <= 255,
                 "All AllocKinds and AllocKind::LIMIT must fit in a uint8_t.");
-  static_assert(mozilla::ArrayLength(ThingSizes) == AllocKindCount,
+  static_assert(std::size(ThingSizes) == AllocKindCount,
                 "We haven't defined all thing sizes.");
-  static_assert(mozilla::ArrayLength(FirstThingOffsets) == AllocKindCount,
+  static_assert(std::size(FirstThingOffsets) == AllocKindCount,
                 "We haven't defined all offsets.");
-  static_assert(mozilla::ArrayLength(ThingsPerArena) == AllocKindCount,
+  static_assert(std::size(ThingsPerArena) == AllocKindCount,
                 "We haven't defined all counts.");
 }
 
@@ -600,7 +597,7 @@ static bool FinalizeArenas(JSFreeOp* fop, Arena** src, SortedArenaList& dest,
   }
 }
 
-Chunk* ChunkPool::pop() {
+TenuredChunk* ChunkPool::pop() {
   MOZ_ASSERT(bool(head_) == bool(count_));
   if (!count_) {
     return nullptr;
@@ -608,7 +605,7 @@ Chunk* ChunkPool::pop() {
   return remove(head_);
 }
 
-void ChunkPool::push(Chunk* chunk) {
+void ChunkPool::push(TenuredChunk* chunk) {
   MOZ_ASSERT(!chunk->info.next);
   MOZ_ASSERT(!chunk->info.prev);
 
@@ -620,7 +617,7 @@ void ChunkPool::push(Chunk* chunk) {
   ++count_;
 }
 
-Chunk* ChunkPool::remove(Chunk* chunk) {
+TenuredChunk* ChunkPool::remove(TenuredChunk* chunk) {
   MOZ_ASSERT(count_ > 0);
   MOZ_ASSERT(contains(chunk));
 
@@ -648,8 +645,8 @@ void ChunkPool::sort() {
     head_ = mergeSort(head(), count());
 
     // Fixup prev pointers.
-    Chunk* prev = nullptr;
-    for (Chunk* cur = head_; cur; cur = cur->info.next) {
+    TenuredChunk* prev = nullptr;
+    for (TenuredChunk* cur = head_; cur; cur = cur->info.next) {
       cur->info.prev = prev;
       prev = cur;
     }
@@ -659,7 +656,7 @@ void ChunkPool::sort() {
   MOZ_ASSERT(isSorted());
 }
 
-Chunk* ChunkPool::mergeSort(Chunk* list, size_t count) {
+TenuredChunk* ChunkPool::mergeSort(TenuredChunk* list, size_t count) {
   MOZ_ASSERT(bool(list) == bool(count));
 
   if (count < 2) {
@@ -669,10 +666,10 @@ Chunk* ChunkPool::mergeSort(Chunk* list, size_t count) {
   size_t half = count / 2;
 
   // Split;
-  Chunk* front = list;
-  Chunk* back;
+  TenuredChunk* front = list;
+  TenuredChunk* back;
   {
-    Chunk* cur = list;
+    TenuredChunk* cur = list;
     for (size_t i = 0; i < half - 1; i++) {
       MOZ_ASSERT(cur);
       cur = cur->info.next;
@@ -686,7 +683,7 @@ Chunk* ChunkPool::mergeSort(Chunk* list, size_t count) {
 
   // Merge
   list = nullptr;
-  Chunk** cur = &list;
+  TenuredChunk** cur = &list;
   while (front || back) {
     if (!front) {
       *cur = back;
@@ -715,7 +712,7 @@ Chunk* ChunkPool::mergeSort(Chunk* list, size_t count) {
 
 bool ChunkPool::isSorted() const {
   uint32_t last = 1;
-  for (Chunk* cursor = head_; cursor; cursor = cursor->info.next) {
+  for (TenuredChunk* cursor = head_; cursor; cursor = cursor->info.next) {
     if (cursor->info.numArenasFree < last) {
       return false;
     }
@@ -725,9 +722,9 @@ bool ChunkPool::isSorted() const {
 }
 
 #ifdef DEBUG
-bool ChunkPool::contains(Chunk* chunk) const {
+bool ChunkPool::contains(TenuredChunk* chunk) const {
   verify();
-  for (Chunk* cursor = head_; cursor; cursor = cursor->info.next) {
+  for (TenuredChunk* cursor = head_; cursor; cursor = cursor->info.next) {
     if (cursor == chunk) {
       return true;
     }
@@ -738,7 +735,8 @@ bool ChunkPool::contains(Chunk* chunk) const {
 bool ChunkPool::verify() const {
   MOZ_ASSERT(bool(head_) == bool(count_));
   uint32_t count = 0;
-  for (Chunk* cursor = head_; cursor; cursor = cursor->info.next, ++count) {
+  for (TenuredChunk* cursor = head_; cursor;
+       cursor = cursor->info.next, ++count) {
     MOZ_ASSERT_IF(cursor->info.prev, cursor->info.prev->info.next == cursor);
     MOZ_ASSERT_IF(cursor->info.next, cursor->info.next->info.prev == cursor);
   }
@@ -763,7 +761,7 @@ ChunkPool GCRuntime::expireEmptyChunkPool(const AutoLockGC& lock) {
 
   ChunkPool expired;
   while (tooManyEmptyChunks(lock)) {
-    Chunk* chunk = emptyChunks(lock).pop();
+    TenuredChunk* chunk = emptyChunks(lock).pop();
     prepareToFreeChunk(chunk->info);
     expired.push(chunk);
   }
@@ -777,7 +775,7 @@ ChunkPool GCRuntime::expireEmptyChunkPool(const AutoLockGC& lock) {
 
 static void FreeChunkPool(ChunkPool& pool) {
   for (ChunkPool::Iter iter(pool); !iter.done();) {
-    Chunk* chunk = iter.get();
+    TenuredChunk* chunk = iter.get();
     iter.next();
     pool.remove(chunk);
     MOZ_ASSERT(!chunk->info.numArenasFreeCommitted);
@@ -790,7 +788,7 @@ void GCRuntime::freeEmptyChunks(const AutoLockGC& lock) {
   FreeChunkPool(emptyChunks(lock));
 }
 
-inline void GCRuntime::prepareToFreeChunk(ChunkInfo& info) {
+inline void GCRuntime::prepareToFreeChunk(TenuredChunkInfo& info) {
   MOZ_ASSERT(numArenasFreeCommitted >= info.numArenasFreeCommitted);
   numArenasFreeCommitted -= info.numArenasFreeCommitted;
   stats().count(gcstats::COUNT_DESTROY_CHUNK);
@@ -805,7 +803,7 @@ inline void GCRuntime::prepareToFreeChunk(ChunkInfo& info) {
 
 inline void GCRuntime::updateOnArenaFree() { ++numArenasFreeCommitted; }
 
-void Chunk::addArenaToFreeList(GCRuntime* gc, Arena* arena) {
+void TenuredChunk::addArenaToFreeList(GCRuntime* gc, Arena* arena) {
   MOZ_ASSERT(!arena->allocated());
   arena->next = info.freeArenasHead;
   info.freeArenasHead = arena;
@@ -814,23 +812,24 @@ void Chunk::addArenaToFreeList(GCRuntime* gc, Arena* arena) {
   gc->updateOnArenaFree();
 }
 
-void Chunk::addArenaToDecommittedList(const Arena* arena) {
+void TenuredChunk::addArenaToDecommittedList(const Arena* arena) {
   ++info.numArenasFree;
-  decommittedArenas.set(Chunk::arenaIndex(arena->address()));
+  decommittedArenas[TenuredChunk::arenaIndex(arena->address())] = true;
 }
 
-void Chunk::recycleArena(Arena* arena, SortedArenaList& dest,
-                         size_t thingsPerArena) {
+void TenuredChunk::recycleArena(Arena* arena, SortedArenaList& dest,
+                                size_t thingsPerArena) {
   arena->setAsFullyUnused();
   dest.insertAt(arena, thingsPerArena);
 }
 
-void Chunk::releaseArena(GCRuntime* gc, Arena* arena, const AutoLockGC& lock) {
+void TenuredChunk::releaseArena(GCRuntime* gc, Arena* arena,
+                                const AutoLockGC& lock) {
   addArenaToFreeList(gc, arena);
   updateChunkListAfterFree(gc, lock);
 }
 
-bool Chunk::decommitOneFreeArena(GCRuntime* gc, AutoLockGC& lock) {
+bool TenuredChunk::decommitOneFreeArena(GCRuntime* gc, AutoLockGC& lock) {
   MOZ_ASSERT(info.numArenasFreeCommitted > 0);
   Arena* arena = fetchNextFreeArena(gc);
   updateChunkListAfterAlloc(gc, lock);
@@ -851,27 +850,29 @@ bool Chunk::decommitOneFreeArena(GCRuntime* gc, AutoLockGC& lock) {
   return ok;
 }
 
-void Chunk::decommitFreeArenasWithoutUnlocking(const AutoLockGC& lock) {
+void TenuredChunk::decommitFreeArenasWithoutUnlocking(const AutoLockGC& lock) {
   for (size_t i = 0; i < ArenasPerChunk; ++i) {
-    if (decommittedArenas.get(i) || arenas[i].allocated()) {
+    if (decommittedArenas[i] || arenas[i].allocated()) {
       continue;
     }
 
     if (MarkPagesUnusedSoft(&arenas[i], ArenaSize)) {
       info.numArenasFreeCommitted--;
-      decommittedArenas.set(i);
+      decommittedArenas[i] = true;
     }
   }
 }
 
-void Chunk::updateChunkListAfterAlloc(GCRuntime* gc, const AutoLockGC& lock) {
+void TenuredChunk::updateChunkListAfterAlloc(GCRuntime* gc,
+                                             const AutoLockGC& lock) {
   if (MOZ_UNLIKELY(!hasAvailableArenas())) {
     gc->availableChunks(lock).remove(this);
     gc->fullChunks(lock).push(this);
   }
 }
 
-void Chunk::updateChunkListAfterFree(GCRuntime* gc, const AutoLockGC& lock) {
+void TenuredChunk::updateChunkListAfterFree(GCRuntime* gc,
+                                            const AutoLockGC& lock) {
   if (info.numArenasFree == 1) {
     gc->fullChunks(lock).remove(this);
     gc->availableChunks(lock).push(this);
@@ -913,7 +914,8 @@ GCRuntime::GCRuntime(JSRuntime* rt)
       verifyPreData(nullptr),
       lastGCStartTime_(ReallyNow()),
       lastGCEndTime_(ReallyNow()),
-      mode(TuningDefaults::Mode),
+      incrementalGCEnabled(TuningDefaults::IncrementalGCEnabled),
+      perZoneGCEnabled(TuningDefaults::PerZoneGCEnabled),
       numActiveZoneIters(0),
       cleanUpEverything(false),
       grayBufferState(GCRuntime::GrayBufferState::Unused),
@@ -927,9 +929,7 @@ GCRuntime::GCRuntime(JSRuntime* rt)
       isFull(false),
       incrementalState(gc::State::NotActive),
       initialState(gc::State::NotActive),
-#ifdef JS_GC_ZEAL
       useZeal(false),
-#endif
       lastMarkSlice(false),
       safeToYield(true),
       markOnBackgroundThreadDuringSweeping(false),
@@ -970,13 +970,13 @@ GCRuntime::GCRuntime(JSRuntime* rt)
       lock(mutexid::GCLock),
       allocTask(this, emptyChunks_.ref()),
       unmarkTask(this),
+      markTask(this),
       sweepTask(this),
       freeTask(this),
       decommitTask(this),
-      sweepMarkTask(this),
       nursery_(this),
       storeBuffer_(rt, nursery()) {
-  setGCMode(JSGC_MODE_GLOBAL);
+  marker.setIncrementalGCEnabled(incrementalGCEnabled);
 }
 
 #ifdef JS_GC_ZEAL
@@ -1234,11 +1234,11 @@ const char* js::gc::AllocKindName(AllocKind kind) {
       FOR_EACH_ALLOCKIND(EXPAND_THING_NAME)
 #  undef EXPAND_THING_NAME
   };
-  static_assert(ArrayLength(names) == AllocKindCount,
+  static_assert(std::size(names) == AllocKindCount,
                 "names array should have an entry for every AllocKind");
 
   size_t i = size_t(kind);
-  MOZ_ASSERT(i < ArrayLength(names));
+  MOZ_ASSERT(i < std::size(names));
   return names[i];
 }
 
@@ -1294,11 +1294,7 @@ bool GCRuntime::init(uint32_t maxbytes) {
   }
 #endif
 
-  if (!marker.init(mode)) {
-    return false;
-  }
-
-  if (!initSweepActions()) {
+  if (!marker.init() || !initSweepActions()) {
     return false;
   }
 
@@ -1384,7 +1380,7 @@ bool GCRuntime::setParameter(JSGCParamKey key, uint32_t value,
                              AutoLockGC& lock) {
   switch (key) {
     case JSGC_SLICE_TIME_BUDGET_MS:
-      defaultTimeBudgetMS_ = value ? value : SliceBudget::UnlimitedTimeBudget;
+      defaultTimeBudgetMS_ = value;
       break;
     case JSGC_MARK_STACK_LIMIT:
       if (value == 0) {
@@ -1392,12 +1388,11 @@ bool GCRuntime::setParameter(JSGCParamKey key, uint32_t value,
       }
       setMarkStackLimit(value, lock);
       break;
-    case JSGC_MODE:
-      if (mode != JSGC_MODE_GLOBAL && mode != JSGC_MODE_ZONE &&
-          mode != JSGC_MODE_INCREMENTAL && mode != JSGC_MODE_ZONE_INCREMENTAL) {
-        return false;
-      }
-      mode = JSGCMode(value);
+    case JSGC_INCREMENTAL_GC_ENABLED:
+      setIncrementalGCEnabled(value != 0);
+      break;
+    case JSGC_PER_ZONE_GC_ENABLED:
+      perZoneGCEnabled = value != 0;
       break;
     case JSGC_COMPACTING_ENABLED:
       compactingEnabled = value != 0;
@@ -1452,8 +1447,11 @@ void GCRuntime::resetParameter(JSGCParamKey key, AutoLockGC& lock) {
     case JSGC_MARK_STACK_LIMIT:
       setMarkStackLimit(MarkStack::DefaultCapacity, lock);
       break;
-    case JSGC_MODE:
-      mode = TuningDefaults::Mode;
+    case JSGC_INCREMENTAL_GC_ENABLED:
+      setIncrementalGCEnabled(TuningDefaults::IncrementalGCEnabled);
+      break;
+    case JSGC_PER_ZONE_GC_ENABLED:
+      perZoneGCEnabled = TuningDefaults::PerZoneGCEnabled;
       break;
     case JSGC_COMPACTING_ENABLED:
       compactingEnabled = TuningDefaults::CompactingEnabled;
@@ -1508,21 +1506,19 @@ uint32_t GCRuntime::getParameter(JSGCParamKey key, const AutoLockGC& lock) {
       return uint32_t(majorGCNumber);
     case JSGC_MINOR_GC_NUMBER:
       return uint32_t(minorGCNumber);
-    case JSGC_MODE:
-      return uint32_t(mode);
+    case JSGC_INCREMENTAL_GC_ENABLED:
+      return incrementalGCEnabled;
+    case JSGC_PER_ZONE_GC_ENABLED:
+      return perZoneGCEnabled;
     case JSGC_UNUSED_CHUNKS:
       return uint32_t(emptyChunks(lock).count());
     case JSGC_TOTAL_CHUNKS:
       return uint32_t(fullChunks(lock).count() + availableChunks(lock).count() +
                       emptyChunks(lock).count());
     case JSGC_SLICE_TIME_BUDGET_MS:
-      if (defaultTimeBudgetMS_.ref() == SliceBudget::UnlimitedTimeBudget) {
-        return 0;
-      } else {
-        MOZ_RELEASE_ASSERT(defaultTimeBudgetMS_ >= 0);
-        MOZ_RELEASE_ASSERT(defaultTimeBudgetMS_ <= UINT32_MAX);
-        return uint32_t(defaultTimeBudgetMS_);
-      }
+      MOZ_RELEASE_ASSERT(defaultTimeBudgetMS_ >= 0);
+      MOZ_RELEASE_ASSERT(defaultTimeBudgetMS_ <= UINT32_MAX);
+      return uint32_t(defaultTimeBudgetMS_);
     case JSGC_MARK_STACK_LIMIT:
       return marker.maxCapacity();
     case JSGC_HIGH_FREQUENCY_TIME_LIMIT:
@@ -1592,6 +1588,11 @@ void GCRuntime::setMarkStackLimit(size_t limit, AutoLockGC& lock) {
   AutoUnlockGC unlock(lock);
   AutoStopVerifyingBarriers pauseVerification(rt, false);
   marker.setMaxCapacity(limit);
+}
+
+void GCRuntime::setIncrementalGCEnabled(bool enabled) {
+  incrementalGCEnabled = enabled;
+  marker.setIncrementalGCEnabled(enabled);
 }
 
 void GCRuntime::updateHelperThreadCount() {
@@ -2965,61 +2966,39 @@ void ArenaLists::checkNoArenasToUpdateForKind(AllocKind kind) {
 #endif
 }
 
-TimeStamp SliceBudget::unlimitedDeadline;
-
-void SliceBudget::Init() {
-  MOZ_ASSERT(!unlimitedDeadline);
-  uint64_t oneYearsInSeconds = 365 * 24 * 60 * 60;
-  unlimitedDeadline =
-      ReallyNow() + TimeDuration::FromSeconds(100 * oneYearsInSeconds);
-}
-
-SliceBudget::SliceBudget()
-    : timeBudget(UnlimitedTimeBudget), workBudget(UnlimitedWorkBudget) {
-  makeUnlimited();
-}
-
 SliceBudget::SliceBudget(TimeBudget time)
-    : timeBudget(time), workBudget(UnlimitedWorkBudget) {
-  if (time.budget < 0) {
-    makeUnlimited();
-  } else {
-    // Note: TimeBudget(0) is equivalent to WorkBudget(CounterReset).
-    deadline = ReallyNow() + TimeDuration::FromMilliseconds(time.budget);
-    counter = CounterReset;
-  }
+    : budget(time), counter(StepsPerTimeCheck) {
+  budget.as<TimeBudget>().deadline =
+      ReallyNow() + TimeDuration::FromMilliseconds(timeBudget());
 }
 
 SliceBudget::SliceBudget(WorkBudget work)
-    : timeBudget(UnlimitedTimeBudget), workBudget(work) {
-  if (work.budget < 0) {
-    makeUnlimited();
-  } else {
-    deadline = TimeStamp();
-    counter = work.budget;
-  }
-}
+    : budget(work), counter(work.budget) {}
 
 int SliceBudget::describe(char* buffer, size_t maxlen) const {
   if (isUnlimited()) {
     return snprintf(buffer, maxlen, "unlimited");
   } else if (isWorkBudget()) {
-    return snprintf(buffer, maxlen, "work(%" PRId64 ")", workBudget.budget);
+    return snprintf(buffer, maxlen, "work(%" PRId64 ")", workBudget());
   } else {
-    return snprintf(buffer, maxlen, "%" PRId64 "ms", timeBudget.budget);
+    return snprintf(buffer, maxlen, "%" PRId64 "ms", timeBudget());
   }
 }
 
 bool SliceBudget::checkOverBudget() {
-  if (deadline.IsNull()) {
+  MOZ_ASSERT(counter <= 0);
+  MOZ_ASSERT(!isUnlimited());
+
+  if (isWorkBudget()) {
     return true;
   }
 
-  bool over = ReallyNow() >= deadline;
-  if (!over) {
-    counter = CounterReset;
+  if (ReallyNow() >= budget.as<TimeBudget>().deadline) {
+    return true;
   }
-  return over;
+
+  counter = StepsPerTimeCheck;
+  return false;
 }
 
 void GCRuntime::requestMajorGC(JS::GCReason reason) {
@@ -3329,7 +3308,7 @@ void GCRuntime::decommitFreeArenas(const bool& cancel, AutoLockGC& lock) {
   // it is dangerous to iterate the available list directly, as the active
   // thread could modify it concurrently. Instead, we build and pass an
   // explicit Vector containing the Chunks we want to visit.
-  Vector<Chunk*, 0, SystemAllocPolicy> chunksToDecommit;
+  Vector<TenuredChunk*, 0, SystemAllocPolicy> chunksToDecommit;
   for (ChunkPool::Iter chunk(availableChunks(lock)); !chunk.done();
        chunk.next()) {
     if (chunk->info.numArenasFreeCommitted != 0 &&
@@ -3339,7 +3318,7 @@ void GCRuntime::decommitFreeArenas(const bool& cancel, AutoLockGC& lock) {
     }
   }
 
-  for (Chunk* chunk : chunksToDecommit) {
+  for (TenuredChunk* chunk : chunksToDecommit) {
     // The arena list is not doubly-linked, so we have to work in the free
     // list order and not in the natural order.
 
@@ -4642,12 +4621,10 @@ void GCRuntime::groupZonesForSweeping(JS::GCReason reason) {
     finder.useOneComponent();
   }
 
-#ifdef JS_GC_ZEAL
   // Use one component for two-slice zeal modes.
   if (useZeal && hasIncrementalTwoSliceZealMode()) {
     finder.useOneComponent();
   }
-#endif
 
   for (GCZonesIter zone(this); !zone.done(); zone.next()) {
     MOZ_ASSERT(zone->isGCMarking());
@@ -4699,7 +4676,7 @@ void GCRuntime::getNextSweepGroup() {
   }
 
   if (abortSweepAfterCurrentGroup) {
-    joinTask(sweepMarkTask, gcstats::PhaseKind::SWEEP_MARK);
+    joinTask(markTask, gcstats::PhaseKind::SWEEP_MARK);
 
     // Abort collection of subsequent sweep groups.
     for (SweepGroupZonesIter zone(this); !zone.done(); zone.next()) {
@@ -5505,8 +5482,8 @@ IncrementalProgress GCRuntime::beginSweepingSweepGroup(JSFreeOp* fop,
   for (SweepGroupZonesIter zone(this); !zone.done(); zone.next()) {
     zone->arenas.queueForForegroundSweep(fop, ForegroundObjectFinalizePhase);
     zone->arenas.queueForForegroundSweep(fop, ForegroundNonObjectFinalizePhase);
-    for (unsigned i = 0; i < ArrayLength(BackgroundFinalizePhases); ++i) {
-      zone->arenas.queueForBackgroundSweep(fop, BackgroundFinalizePhases[i]);
+    for (const auto& phase : BackgroundFinalizePhases) {
+      zone->arenas.queueForBackgroundSweep(fop, phase);
     }
 
     zone->arenas.queueForegroundThingsForSweep();
@@ -5522,7 +5499,7 @@ IncrementalProgress GCRuntime::beginSweepingSweepGroup(JSFreeOp* fop,
 
 #ifdef JS_GC_ZEAL
 bool GCRuntime::shouldYieldForZeal(ZealMode mode) {
-  bool yield = useZeal && isIncremental && hasZealMode(mode);
+  bool yield = useZeal && hasZealMode(mode);
 
   // Only yield on the first sweep slice for this mode.
   bool firstSweepSlice = initialState != State::Sweep;
@@ -5536,9 +5513,9 @@ bool GCRuntime::shouldYieldForZeal(ZealMode mode) {
 
 IncrementalProgress GCRuntime::endSweepingSweepGroup(JSFreeOp* fop,
                                                      SliceBudget& budget) {
-  // This is to prevent a race between sweepMarkTask checking the zone state and
+  // This is to prevent a race between markTask checking the zone state and
   // us changing it below.
-  if (joinSweepMarkTask() == NotFinished) {
+  if (joinBackgroundMarkTask() == NotFinished) {
     return NotFinished;
   }
 
@@ -5594,7 +5571,7 @@ IncrementalProgress GCRuntime::endSweepingSweepGroup(JSFreeOp* fop,
 
 IncrementalProgress GCRuntime::markDuringSweeping(JSFreeOp* fop,
                                                   SliceBudget& budget) {
-  MOZ_ASSERT(sweepMarkTask.isIdle());
+  MOZ_ASSERT(markTask.isIdle());
 
   if (marker.isDrained()) {
     return Finished;
@@ -5602,9 +5579,9 @@ IncrementalProgress GCRuntime::markDuringSweeping(JSFreeOp* fop,
 
   if (markOnBackgroundThreadDuringSweeping) {
     AutoLockHelperThreadState lock;
-    MOZ_ASSERT(sweepMarkTask.isIdle(lock));
-    sweepMarkTask.setBudget(budget);
-    sweepMarkTask.startOrRunIfIdle(lock);
+    MOZ_ASSERT(markTask.isIdle(lock));
+    markTask.setBudget(budget);
+    markTask.startOrRunIfIdle(lock);
     return Finished;  // This means don't yield to the mutator here.
   }
 
@@ -5681,7 +5658,7 @@ bool ArenaLists::foregroundFinalize(JSFreeOp* fop, AllocKind thingKind,
   return true;
 }
 
-void js::gc::SweepMarkTask::run(AutoLockHelperThreadState& lock) {
+void js::gc::BackgroundMarkTask::run(AutoLockHelperThreadState& lock) {
   AutoUnlockHelperThreadState unlock(lock);
 
   // Time reporting is handled separately for parallel tasks.
@@ -5689,13 +5666,13 @@ void js::gc::SweepMarkTask::run(AutoLockHelperThreadState& lock) {
       gc->markUntilBudgetExhausted(this->budget, GCMarker::DontReportMarkTime);
 }
 
-IncrementalProgress GCRuntime::joinSweepMarkTask() {
+IncrementalProgress GCRuntime::joinBackgroundMarkTask() {
   AutoLockHelperThreadState lock;
-  if (sweepMarkTask.isIdle(lock)) {
+  if (markTask.isIdle(lock)) {
     return Finished;
   }
 
-  joinTask(sweepMarkTask, gcstats::PhaseKind::SWEEP_MARK, lock);
+  joinTask(markTask, gcstats::PhaseKind::SWEEP_MARK, lock);
 
   IncrementalProgress result = sweepMarkResult;
   sweepMarkResult = Finished;
@@ -6149,7 +6126,7 @@ static UniquePtr<SweepAction> Sequence(UniquePtr<SweepAction> first,
                                        Rest... rest) {
   UniquePtr<SweepAction> actions[] = {std::move(first), std::move(rest)...};
   auto seq = MakeUnique<SweepActionSequence>();
-  if (!seq || !seq->init(actions, ArrayLength(actions))) {
+  if (!seq || !seq->init(actions, std::size(actions))) {
     return nullptr;
   }
 
@@ -6247,7 +6224,7 @@ IncrementalProgress GCRuntime::performSweepActions(SliceBudget& budget) {
 
   SweepAction::Args args{this, &fop, budget};
   IncrementalProgress sweepProgress = sweepActions->run(args);
-  IncrementalProgress markProgress = joinSweepMarkTask();
+  IncrementalProgress markProgress = joinBackgroundMarkTask();
 
   if (sweepProgress == Finished && markProgress == Finished) {
     return Finished;
@@ -6724,9 +6701,21 @@ static bool NeedToCollectNursery(GCRuntime* gc) {
   return !gc->nursery().isEmpty() || !gc->storeBuffer().isEmpty();
 }
 
+#ifdef DEBUG
+static const char* DescribeBudget(const SliceBudget& budget) {
+  MOZ_ASSERT(TlsContext.get()->isMainThreadContext());
+  constexpr size_t length = 32;
+  static char buffer[length];
+  budget.describe(buffer, length);
+  return buffer;
+}
+#endif
+
 void GCRuntime::incrementalSlice(SliceBudget& budget,
                                  const MaybeInvocationKind& gckind,
                                  JS::GCReason reason) {
+  MOZ_ASSERT_IF(isIncrementalGCInProgress(), isIncremental);
+
   AutoSetThreadIsPerformingGC performingGC;
 
   AutoGCSession session(this, JS::HeapState::MajorCollecting);
@@ -6740,39 +6729,26 @@ void GCRuntime::incrementalSlice(SliceBudget& budget,
   bool destroyingRuntime = (reason == JS::GCReason::DESTROY_RUNTIME);
 
   initialState = incrementalState;
+  isIncremental = !budget.isUnlimited();
 
 #ifdef JS_GC_ZEAL
-  /*
-   * Do the incremental collection type specified by zeal mode if the
-   * collection was triggered by runDebugGC() and incremental GC has not been
-   * cancelled by resetIncrementalGC().
-   */
-  useZeal = reason == JS::GCReason::DEBUG_GC && !budget.isUnlimited();
-#else
-  bool useZeal = false;
+  // Do the incremental collection type specified by zeal mode if the collection
+  // was triggered by runDebugGC() and incremental GC has not been cancelled by
+  // resetIncrementalGC().
+  useZeal = isIncremental && reason == JS::GCReason::DEBUG_GC;
 #endif
 
 #ifdef DEBUG
-  {
-    char budgetBuffer[32];
-    budget.describe(budgetBuffer, 32);
-    stats().writeLogMessage(
-        "Incremental: %d, lastMarkSlice: %d, useZeal: %d, budget: %s",
-        bool(isIncremental), bool(lastMarkSlice), bool(useZeal), budgetBuffer);
-  }
+  stats().log("Incremental: %d, lastMarkSlice: %d, useZeal: %d, budget: %s",
+              bool(isIncremental), bool(lastMarkSlice), bool(useZeal),
+              DescribeBudget(budget));
 #endif
 
-  MOZ_ASSERT_IF(isIncrementalGCInProgress(), isIncremental);
-
-  isIncremental = !budget.isUnlimited();
-
   if (useZeal && hasIncrementalTwoSliceZealMode()) {
-    /*
-     * Yields between slices occurs at predetermined points in these modes;
-     * the budget is not used.
-     */
-    stats().writeLogMessage("Using unlimited budget for two-slice zeal mode");
-    budget.makeUnlimited();
+    // Yields between slices occurs at predetermined points in these modes; the
+    // budget is not used. |isIncremental| is still true.
+    stats().log("Using unlimited budget for two-slice zeal mode");
+    budget = SliceBudget::unlimited();
   }
 
   switch (incrementalState) {
@@ -6798,8 +6774,7 @@ void GCRuntime::incrementalSlice(SliceBudget& budget,
         break;
       }
 
-      if (isIncremental && useZeal &&
-          hasZealMode(ZealMode::YieldBeforeRootMarking)) {
+      if (useZeal && hasZealMode(ZealMode::YieldBeforeRootMarking)) {
         break;
       }
 
@@ -6825,15 +6800,14 @@ void GCRuntime::incrementalSlice(SliceBudget& budget,
 
       // If we needed delayed marking for gray roots, then collect until done.
       if (isIncremental && !hasValidGrayRootsBuffer()) {
-        budget.makeUnlimited();
+        budget = SliceBudget::unlimited();
         isIncremental = false;
         stats().nonincremental(GCAbortReason::GrayRootBufferingFailed);
       }
 
       incrementalState = State::Mark;
 
-      if (isIncremental && useZeal &&
-          hasZealMode(ZealMode::YieldBeforeMarking)) {
+      if (useZeal && hasZealMode(ZealMode::YieldBeforeMarking)) {
         break;
       }
 
@@ -6878,7 +6852,7 @@ void GCRuntime::incrementalSlice(SliceBudget& budget,
              !(useZeal && hasZealMode(ZealMode::YieldBeforeMarking))) ||
             (useZeal && hasZealMode(ZealMode::YieldBeforeSweeping))) {
           lastMarkSlice = true;
-          stats().writeLogMessage("Yielding before starting sweeping");
+          stats().log("Yielding before starting sweeping");
           break;
         }
       }
@@ -7065,7 +7039,7 @@ GCRuntime::IncrementalResult GCRuntime::budgetIncrementalGC(
     bool nonincrementalByAPI, JS::GCReason reason, SliceBudget& budget) {
   if (nonincrementalByAPI) {
     stats().nonincremental(GCAbortReason::NonIncrementalRequested);
-    budget.makeUnlimited();
+    budget = SliceBudget::unlimited();
 
     // Reset any in progress incremental GC if this was triggered via the
     // API. This isn't required for correctness, but sometimes during tests
@@ -7079,7 +7053,7 @@ GCRuntime::IncrementalResult GCRuntime::budgetIncrementalGC(
   }
 
   if (reason == JS::GCReason::ABORT_GC) {
-    budget.makeUnlimited();
+    budget = SliceBudget::unlimited();
     stats().nonincremental(GCAbortReason::AbortRequested);
     return resetIncrementalGC(GCAbortReason::AbortRequested);
   }
@@ -7089,14 +7063,13 @@ GCRuntime::IncrementalResult GCRuntime::budgetIncrementalGC(
     if (unsafeReason == GCAbortReason::None) {
       if (reason == JS::GCReason::COMPARTMENT_REVIVED) {
         unsafeReason = GCAbortReason::CompartmentRevived;
-      } else if (mode != JSGC_MODE_INCREMENTAL &&
-                 mode != JSGC_MODE_ZONE_INCREMENTAL) {
+      } else if (!incrementalGCEnabled) {
         unsafeReason = GCAbortReason::ModeChange;
       }
     }
 
     if (unsafeReason != GCAbortReason::None) {
-      budget.makeUnlimited();
+      budget = SliceBudget::unlimited();
       stats().nonincremental(unsafeReason);
       return resetIncrementalGC(unsafeReason);
     }
@@ -7111,7 +7084,7 @@ GCRuntime::IncrementalResult GCRuntime::budgetIncrementalGC(
     if (zone->gcHeapSize.bytes() >=
         zone->gcHeapThreshold.incrementalLimitBytes()) {
       checkZoneIsScheduled(zone, reason, "GC bytes");
-      budget.makeUnlimited();
+      budget = SliceBudget::unlimited();
       stats().nonincremental(GCAbortReason::GCBytesTrigger);
       if (zone->wasGCStarted() && zone->gcState() > Zone::Sweep) {
         resetReason = GCAbortReason::GCBytesTrigger;
@@ -7121,7 +7094,7 @@ GCRuntime::IncrementalResult GCRuntime::budgetIncrementalGC(
     if (zone->mallocHeapSize.bytes() >=
         zone->mallocHeapThreshold.incrementalLimitBytes()) {
       checkZoneIsScheduled(zone, reason, "malloc bytes");
-      budget.makeUnlimited();
+      budget = SliceBudget::unlimited();
       stats().nonincremental(GCAbortReason::MallocBytesTrigger);
       if (zone->wasGCStarted() && zone->gcState() > Zone::Sweep) {
         resetReason = GCAbortReason::MallocBytesTrigger;
@@ -7131,7 +7104,7 @@ GCRuntime::IncrementalResult GCRuntime::budgetIncrementalGC(
     if (zone->jitHeapSize.bytes() >=
         zone->jitHeapThreshold.incrementalLimitBytes()) {
       checkZoneIsScheduled(zone, reason, "JIT code bytes");
-      budget.makeUnlimited();
+      budget = SliceBudget::unlimited();
       stats().nonincremental(GCAbortReason::JitCodeBytesTrigger);
       if (zone->wasGCStarted() && zone->gcState() > Zone::Sweep) {
         resetReason = GCAbortReason::JitCodeBytesTrigger;
@@ -7140,7 +7113,7 @@ GCRuntime::IncrementalResult GCRuntime::budgetIncrementalGC(
 
     if (isIncrementalGCInProgress() &&
         zone->isGCScheduled() != zone->wasGCStarted()) {
-      budget.makeUnlimited();
+      budget = SliceBudget::unlimited();
       resetReason = GCAbortReason::ZoneChange;
     }
   }
@@ -7161,8 +7134,7 @@ void GCRuntime::maybeIncreaseSliceBudget(SliceBudget& budget) {
   // minimum time budget that increases linearly with time/slice count up to a
   // maximum.
 
-  if (budget.isTimeBudget() && !budget.isUnlimited() &&
-      isIncrementalGCInProgress()) {
+  if (budget.isTimeBudget() && isIncrementalGCInProgress()) {
     // All times are in milliseconds.
     struct BudgetAtTime {
       double time;
@@ -7177,7 +7149,7 @@ void GCRuntime::maybeIncreaseSliceBudget(SliceBudget& budget) {
         LinearInterpolate(totalTime, MinBudgetStart.time, MinBudgetStart.budget,
                           MinBudgetEnd.time, MinBudgetEnd.budget);
 
-    if (budget.timeBudget.budget < minBudget) {
+    if (budget.timeBudget() < minBudget) {
       budget = SliceBudget(TimeBudget(minBudget));
     }
   }
@@ -7189,8 +7161,7 @@ static void ScheduleZones(GCRuntime* gc) {
       continue;
     }
 
-    if (gc->gcMode() == JSGC_MODE_GLOBAL ||
-        gc->gcMode() == JSGC_MODE_INCREMENTAL) {
+    if (!gc->isPerZoneGCEnabled()) {
       zone->scheduleGC();
     }
 
@@ -7267,7 +7238,7 @@ void GCRuntime::maybeCallGCCallback(JSGCStatus status, JS::GCReason reason) {
  * implementation.
  */
 MOZ_NEVER_INLINE GCRuntime::IncrementalResult GCRuntime::gcCycle(
-    bool nonincrementalByAPI, SliceBudget budget,
+    bool nonincrementalByAPI, const SliceBudget& budgetArg,
     const MaybeInvocationKind& gckind, JS::GCReason reason) {
   // Assert if this is a GC unsafe region.
   rt->mainContextFromOwnThread()->verifyIsSafeToGC();
@@ -7292,6 +7263,7 @@ MOZ_NEVER_INLINE GCRuntime::IncrementalResult GCRuntime::gcCycle(
 
   // Increase slice budget for long running collections before it is recorded by
   // AutoGCSlice.
+  SliceBudget budget(budgetArg);
   maybeIncreaseSliceBudget(budget);
 
   ScheduleZones(this);
@@ -7486,7 +7458,7 @@ struct MOZ_RAII AutoSetZoneSliceThresholds {
   GCRuntime* gc;
 };
 
-void GCRuntime::collect(bool nonincrementalByAPI, SliceBudget budget,
+void GCRuntime::collect(bool nonincrementalByAPI, const SliceBudget& budget,
                         const MaybeInvocationKind& gckindArg,
                         JS::GCReason reason) {
   MOZ_ASSERT(reason != JS::GCReason::NO_REASON);
@@ -7502,8 +7474,7 @@ void GCRuntime::collect(bool nonincrementalByAPI, SliceBudget budget,
     return;
   }
 
-  stats().writeLogMessage("GC starting in state %s",
-                          StateName(incrementalState));
+  stats().log("GC starting in state %s", StateName(incrementalState));
 
   AutoTraceLog logGC(TraceLoggerForCurrentThread(), TraceLogger_GC);
   AutoStopVerifyingBarriers av(rt, IsShutdownReason(reason));
@@ -7525,7 +7496,7 @@ void GCRuntime::collect(bool nonincrementalByAPI, SliceBudget budget,
 
     if (reason == JS::GCReason::ABORT_GC) {
       MOZ_ASSERT(!isIncrementalGCInProgress());
-      stats().writeLogMessage("GC aborted by request");
+      stats().log("GC aborted by request");
       break;
     }
 
@@ -7570,7 +7541,7 @@ void GCRuntime::collect(bool nonincrementalByAPI, SliceBudget budget,
     MOZ_RELEASE_ASSERT(CheckGrayMarkingState(rt));
   }
 #endif
-  stats().writeLogMessage("GC ending in state %s", StateName(incrementalState));
+  stats().log("GC ending in state %s", StateName(incrementalState));
 
   UnscheduleZones(this);
 }
@@ -7591,6 +7562,10 @@ SliceBudget GCRuntime::defaultBudget(JS::GCReason reason, int64_t millis) {
     } else {
       millis = defaultSliceBudgetMS();
     }
+  }
+
+  if (millis == 0) {
+    return SliceBudget::unlimited();
   }
 
   return SliceBudget(TimeBudget(millis));
@@ -7839,7 +7814,7 @@ void GCRuntime::waitForBackgroundTasks() {
   MOZ_ASSERT(!isIncrementalGCInProgress());
   MOZ_ASSERT(sweepTask.isIdle());
   MOZ_ASSERT(decommitTask.isIdle());
-  MOZ_ASSERT(sweepMarkTask.isIdle());
+  MOZ_ASSERT(markTask.isIdle());
 
   allocTask.join();
   freeTask.join();
@@ -8476,6 +8451,8 @@ JS_PUBLIC_API void JS::NonIncrementalGC(JSContext* cx,
   MOZ_ASSERT(gckind == GC_NORMAL || gckind == GC_SHRINK);
 
   cx->runtime()->gc.gc(gckind, reason);
+
+  MOZ_ASSERT(!IsIncrementalGCInProgress(cx));
 }
 
 JS_PUBLIC_API void JS::StartIncrementalGC(JSContext* cx,
@@ -8610,7 +8587,8 @@ JS_PUBLIC_API void JS::DisableIncrementalGC(JSContext* cx) {
 }
 
 JS_PUBLIC_API bool JS::IsIncrementalGCEnabled(JSContext* cx) {
-  return cx->runtime()->gc.isIncrementalGCEnabled();
+  GCRuntime& gc = cx->runtime()->gc;
+  return gc.isIncrementalGCEnabled() && gc.isIncrementalGCAllowed();
 }
 
 JS_PUBLIC_API bool JS::IsIncrementalGCInProgress(JSContext* cx) {

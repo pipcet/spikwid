@@ -20,6 +20,7 @@
 #include "nsISupportsUtils.h"
 #include "nsIThreadManager.h"
 #include "nsComponentManagerUtils.h"
+#include "nsNetUtil.h"
 #include "nsPrintfCString.h"
 #include "nsXPCOMCIDInternal.h"
 #include "prthread.h"
@@ -37,6 +38,7 @@
 #include "TRR.h"
 #include "TRRQuery.h"
 #include "TRRService.h"
+#include "ODoHService.h"
 
 #include "mozilla/Atomics.h"
 #include "mozilla/HashFunctions.h"
@@ -421,7 +423,7 @@ void AddrHostRecord::ResolveComplete() {
                     : Telemetry::LABELS_DNS_LOOKUP_DISPOSITION2::trrFail);
   }
 
-  if (nsHostResolver::Mode() == MODE_TRRFIRST) {
+  if (nsHostResolver::Mode() == nsIDNSService::MODE_TRRFIRST) {
     Telemetry::Accumulate(Telemetry::TRR_SKIP_REASON_TRR_FIRST,
                           mTRRTRRSkippedReason);
 
@@ -963,7 +965,7 @@ nsresult nsHostResolver::ResolveHost(const nsACString& aHost,
 
   // By-Type requests use only TRR. If TRR is disabled we can return
   // immediately.
-  if (IS_OTHER_TYPE(type) && Mode() == MODE_TRROFF) {
+  if (IS_OTHER_TYPE(type) && Mode() == nsIDNSService::MODE_TRROFF) {
     return NS_ERROR_UNKNOWN_HOST;
   }
 
@@ -1350,7 +1352,8 @@ void nsHostResolver::MaybeRenewHostRecordLocked(nsHostRecord* aRec) {
 // returns error if no TRR resolve is issued
 // it is impt this is not called while a native lookup is going on
 nsresult nsHostResolver::TrrLookup(nsHostRecord* aRec, TRR* pushedTRR) {
-  if (Mode() == MODE_TRROFF || StaticPrefs::network_dns_disabled()) {
+  if (Mode() == nsIDNSService::MODE_TRROFF ||
+      StaticPrefs::network_dns_disabled()) {
     return NS_ERROR_UNKNOWN_HOST;
   }
   LOG(("TrrLookup host:%s af:%" PRId16, aRec->host.get(), aRec->af));
@@ -1371,10 +1374,42 @@ nsresult nsHostResolver::TrrLookup(nsHostRecord* aRec, TRR* pushedTRR) {
 
   MOZ_ASSERT(!rec->mResolving);
 
+  auto hasConnectivity = [this]() -> bool {
+    if (!mNCS) {
+      return true;
+    }
+    nsINetworkConnectivityService::ConnectivityState ipv4 = mNCS->GetIPv4();
+    nsINetworkConnectivityService::ConnectivityState ipv6 = mNCS->GetIPv6();
+
+    if (ipv4 == nsINetworkConnectivityService::OK ||
+        ipv6 == nsINetworkConnectivityService::OK) {
+      return true;
+    }
+
+    if (ipv4 == nsINetworkConnectivityService::UNKNOWN ||
+        ipv6 == nsINetworkConnectivityService::UNKNOWN) {
+      // One of the checks hasn't completed yet. Optimistically assume we'll
+      // have network connectivity.
+      return true;
+    }
+
+    return false;
+  };
+
   nsIRequest::TRRMode reqMode = rec->mEffectiveTRRMode;
   if (rec->mTrrServer.IsEmpty() &&
       (!gTRRService || !gTRRService->Enabled(reqMode))) {
-    rec->RecordReason(nsHostRecord::TRR_NOT_CONFIRMED);
+    if (NS_IsOffline()) {
+      // If we are in the NOT_CONFIRMED state _because_ we lack connectivity,
+      // then we should report that the browser is offline instead.
+      rec->RecordReason(nsHostRecord::TRR_IS_OFFLINE);
+    }
+    if (!hasConnectivity()) {
+      rec->RecordReason(nsHostRecord::TRR_NO_CONNECTIVITY);
+    } else {
+      rec->RecordReason(nsHostRecord::TRR_NOT_CONFIRMED);
+    }
+
     LOG(("TrrLookup:: %s service not enabled\n", rec->host.get()));
     return NS_ERROR_UNKNOWN_HOST;
   }
@@ -1382,7 +1417,9 @@ nsresult nsHostResolver::TrrLookup(nsHostRecord* aRec, TRR* pushedTRR) {
   MaybeRenewHostRecordLocked(rec);
 
   RefPtr<TRRQuery> query = new TRRQuery(this, rec);
-  nsresult rv = query->DispatchLookup(pushedTRR);
+  bool useODoH = gODoHService->Enabled() &&
+                 !((rec->flags & nsIDNSService::RESOLVE_DISABLE_ODOH));
+  nsresult rv = query->DispatchLookup(pushedTRR, useODoH);
   if (NS_FAILED(rv)) {
     rec->RecordReason(nsHostRecord::TRR_DID_NOT_MAKE_QUERY);
     return rv;
@@ -1463,14 +1500,14 @@ nsresult nsHostResolver::NativeLookup(nsHostRecord* aRec) {
 }
 
 // static
-ResolverMode nsHostResolver::Mode() {
+nsIDNSService::ResolverMode nsHostResolver::Mode() {
   if (gTRRService) {
-    return static_cast<ResolverMode>(gTRRService->Mode());
+    return gTRRService->Mode();
   }
 
   // If we don't have a TRR service just return MODE_TRROFF so we don't make
   // any TRR requests by mistake.
-  return MODE_TRROFF;
+  return nsIDNSService::MODE_TRROFF;
 }
 
 nsIRequest::TRRMode nsHostRecord::TRRMode() {
@@ -1479,7 +1516,7 @@ nsIRequest::TRRMode nsHostRecord::TRRMode() {
 
 // static
 void nsHostResolver::ComputeEffectiveTRRMode(nsHostRecord* aRec) {
-  ResolverMode resolverMode = nsHostResolver::Mode();
+  nsIDNSService::ResolverMode resolverMode = nsHostResolver::Mode();
   nsIRequest::TRRMode requestMode = aRec->TRRMode();
 
   // For domains that are excluded from TRR or when parental control is enabled,
@@ -1511,7 +1548,7 @@ void nsHostResolver::ComputeEffectiveTRRMode(nsHostRecord* aRec) {
     return;
   }
 
-  if (resolverMode == MODE_TRROFF) {
+  if (resolverMode == nsIDNSService::MODE_TRROFF) {
     aRec->RecordReason(nsHostRecord::TRR_OFF_EXPLICIT);
     aRec->mEffectiveTRRMode = nsIRequest::TRR_DISABLED_MODE;
     return;
@@ -1524,20 +1561,20 @@ void nsHostResolver::ComputeEffectiveTRRMode(nsHostRecord* aRec) {
   }
 
   if ((requestMode == nsIRequest::TRR_DEFAULT_MODE &&
-       resolverMode == MODE_NATIVEONLY)) {
+       resolverMode == nsIDNSService::MODE_NATIVEONLY)) {
     aRec->RecordReason(nsHostRecord::TRR_MODE_NOT_ENABLED);
     aRec->mEffectiveTRRMode = nsIRequest::TRR_DISABLED_MODE;
     return;
   }
 
   if (requestMode == nsIRequest::TRR_DEFAULT_MODE &&
-      resolverMode == MODE_TRRFIRST) {
+      resolverMode == nsIDNSService::MODE_TRRFIRST) {
     aRec->mEffectiveTRRMode = nsIRequest::TRR_FIRST_MODE;
     return;
   }
 
   if (requestMode == nsIRequest::TRR_DEFAULT_MODE &&
-      resolverMode == MODE_TRRONLY) {
+      resolverMode == nsIDNSService::MODE_TRRONLY) {
     aRec->mEffectiveTRRMode = nsIRequest::TRR_ONLY_MODE;
     return;
   }
@@ -1559,6 +1596,10 @@ nsresult nsHostResolver::NameLookup(nsHostRecord* rec) {
     LOG(("NameLookup %s while already resolving\n", rec->host.get()));
     return NS_OK;
   }
+
+  // Make sure we reset the reason each time we attempt to do a new lookup
+  // so we don't wronly report the reason for the previous one.
+  rec->mTRRTRRSkippedReason = nsHostRecord::TRR_UNSET;
 
   ComputeEffectiveTRRMode(rec);
 

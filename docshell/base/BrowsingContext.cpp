@@ -344,8 +344,19 @@ already_AddRefed<BrowsingContext> BrowsingContext::CreateDetached(
   }
 
   nsContentUtils::GenerateUUIDInPlace(fields.mHistoryID);
-  fields.mExplicitActive =
-      parentBC ? ExplicitActiveStatus::None : ExplicitActiveStatus::Active;
+  fields.mExplicitActive = [&] {
+    if (parentBC) {
+      // Non-root browsing-contexts inherit their status from its parent.
+      return ExplicitActiveStatus::None;
+    }
+    if (aType == Type::Content) {
+      // Content gets managed by the chrome front-end / embedder element and
+      // starts as inactive.
+      return ExplicitActiveStatus::Inactive;
+    }
+    // Chrome starts as active.
+    return ExplicitActiveStatus::Active;
+  }();
 
   fields.mFullZoom = parentBC ? parentBC->FullZoom() : 1.0f;
   fields.mTextZoom = parentBC ? parentBC->TextZoom() : 1.0f;
@@ -633,8 +644,12 @@ void BrowsingContext::SetEmbedderElement(Element* aEmbedder) {
     if (XRE_IsParentProcess() && IsTopContent()) {
       nsAutoString messageManagerGroup;
       if (aEmbedder->IsXULElement()) {
-        aEmbedder->GetAttr(kNameSpaceID_None, nsGkAtoms::messagemanagergroup,
-                           messageManagerGroup);
+        aEmbedder->GetAttr(nsGkAtoms::messagemanagergroup, messageManagerGroup);
+        if (!aEmbedder->AttrValueIs(kNameSpaceID_None,
+                                    nsGkAtoms::initiallyactive,
+                                    nsGkAtoms::_false, eIgnoreCase)) {
+          txn.SetExplicitActive(ExplicitActiveStatus::Active);
+        }
       }
       txn.SetMessageManagerGroup(messageManagerGroup);
 
@@ -1738,8 +1753,19 @@ bool BrowsingContext::RemoveRootFromBFCacheSync() {
 
 nsresult BrowsingContext::CheckSandboxFlags(nsDocShellLoadState* aLoadState) {
   const auto& sourceBC = aLoadState->SourceBrowsingContext();
-  if (sourceBC.IsDiscarded() || (sourceBC && sourceBC->IsSandboxedFrom(this))) {
-    return NS_ERROR_DOM_INVALID_ACCESS_ERR;
+  if (sourceBC.IsNull()) {
+    return NS_OK;
+  }
+
+  // We might be called after the source BC has been discarded, but before we've
+  // destroyed our in-process instance of the BrowsingContext object in some
+  // situations (e.g. after creating a new pop-up with window.open while the
+  // window is being closed). In these situations we want to still perform the
+  // sandboxing check against our in-process copy. If we've forgotten about the
+  // context already, assume it is sanboxed. (bug 1643450)
+  BrowsingContext* bc = sourceBC.GetMaybeDiscarded();
+  if (!bc || bc->IsSandboxedFrom(this)) {
+    return NS_ERROR_DOM_SECURITY_ERR;
   }
   return NS_OK;
 }
@@ -2407,7 +2433,7 @@ void BrowsingContext::DidSet(FieldIndex<IDX_ExplicitActive>,
 
 bool BrowsingContext::CanSet(FieldIndex<IDX_HasMainMediaController>,
                              bool aNewValue, ContentParent* aSource) {
-  return IsTop() && CheckOnlyOwningProcessCanSet(aSource);
+  return IsTop() && LegacyCheckOnlyOwningProcessCanSet(aSource);
 }
 
 void BrowsingContext::DidSet(FieldIndex<IDX_HasMainMediaController>,
@@ -2433,7 +2459,8 @@ bool BrowsingContext::CanSet(
     FieldIndex<IDX_TouchEventsOverrideInternal>,
     const enum TouchEventsOverride& aTouchEventsOverride,
     ContentParent* aSource) {
-  return CheckOnlyOwningProcessCanSet(aSource);
+  // TODO: Bug 1688948 - Should only be set in the parent process.
+  return true;
 }
 
 bool BrowsingContext::CanSet(FieldIndex<IDX_DisplayMode>,
@@ -2515,7 +2542,7 @@ void BrowsingContext::DidSet(FieldIndex<IDX_PlatformOverride>) {
   });
 }
 
-bool BrowsingContext::CheckOnlyOwningProcessCanSet(ContentParent* aSource) {
+bool BrowsingContext::LegacyCheckOnlyOwningProcessCanSet(ContentParent* aSource) {
   if (aSource) {
     MOZ_ASSERT(XRE_IsParentProcess());
 
@@ -2566,19 +2593,19 @@ void BrowsingContext::DidSet(FieldIndex<IDX_IsActiveBrowserWindowInternal>,
 bool BrowsingContext::CanSet(FieldIndex<IDX_AllowContentRetargeting>,
                              const bool& aAllowContentRetargeting,
                              ContentParent* aSource) {
-  return CheckOnlyOwningProcessCanSet(aSource);
+  return LegacyCheckOnlyOwningProcessCanSet(aSource);
 }
 
 bool BrowsingContext::CanSet(FieldIndex<IDX_AllowContentRetargetingOnChildren>,
                              const bool& aAllowContentRetargetingOnChildren,
                              ContentParent* aSource) {
-  return CheckOnlyOwningProcessCanSet(aSource);
+  return LegacyCheckOnlyOwningProcessCanSet(aSource);
 }
 
 bool BrowsingContext::CanSet(FieldIndex<IDX_AllowPlugins>,
                              const bool& aAllowPlugins,
                              ContentParent* aSource) {
-  return CheckOnlyOwningProcessCanSet(aSource);
+  return LegacyCheckOnlyOwningProcessCanSet(aSource);
 }
 
 bool BrowsingContext::CanSet(FieldIndex<IDX_FullscreenAllowedByOwner>,
@@ -2647,7 +2674,7 @@ bool BrowsingContext::CanSet(FieldIndex<IDX_DefaultLoadFlags>,
                              ContentParent* aSource) {
   // Bug 1623565 - Are these flags only used by the debugger, which makes it
   // possible that this field can only be settable by the parent process?
-  return CheckOnlyOwningProcessCanSet(aSource);
+  return LegacyCheckOnlyOwningProcessCanSet(aSource);
 }
 
 void BrowsingContext::DidSet(FieldIndex<IDX_DefaultLoadFlags>) {
@@ -2681,7 +2708,7 @@ bool BrowsingContext::CanSet(FieldIndex<IDX_UserAgentOverride>,
     return false;
   }
 
-  return CheckOnlyOwningProcessCanSet(aSource);
+  return LegacyCheckOnlyOwningProcessCanSet(aSource);
 }
 
 bool BrowsingContext::CanSet(FieldIndex<IDX_PlatformOverride>,
@@ -2691,7 +2718,7 @@ bool BrowsingContext::CanSet(FieldIndex<IDX_PlatformOverride>,
     return false;
   }
 
-  return CheckOnlyOwningProcessCanSet(aSource);
+  return LegacyCheckOnlyOwningProcessCanSet(aSource);
 }
 
 bool BrowsingContext::CheckOnlyEmbedderCanSet(ContentParent* aSource) {

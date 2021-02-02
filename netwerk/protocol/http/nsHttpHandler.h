@@ -364,12 +364,10 @@ class nsHttpHandler final : public nsIHttpProtocolHandler,
 
   already_AddRefed<AltSvcMapping> GetAltServiceMapping(
       const nsACString& scheme, const nsACString& host, int32_t port, bool pb,
-      bool isolated, const nsACString& topWindowOrigin,
       const OriginAttributes& originAttributes, bool aHttp2Allowed,
       bool aHttp3Allowed) {
-    return mAltSvcCache->GetAltServiceMapping(scheme, host, port, pb, isolated,
-                                              topWindowOrigin, originAttributes,
-                                              aHttp2Allowed, aHttp3Allowed);
+    return mAltSvcCache->GetAltServiceMapping(
+        scheme, host, port, pb, originAttributes, aHttp2Allowed, aHttp3Allowed);
   }
 
   //
@@ -468,8 +466,6 @@ class nsHttpHandler final : public nsIHttpProtocolHandler,
   uint32_t DefaultHpackBuffer() const { return mDefaultHpackBuffer; }
 
   bool Bug1563538() const { return mBug1563538; }
-  bool Bug1563695() const { return mBug1563695; }
-  bool Bug1556491() const { return mBug1556491; }
 
   bool IsHttp3VersionSupported(const nsACString& version);
 
@@ -512,8 +508,7 @@ class nsHttpHandler final : public nsIHttpProtocolHandler,
       nsHttpConnectionInfo* aCI);
 
   void MaybeAddAltSvcForTesting(nsIURI* aUri, const nsACString& aUsername,
-                                const nsACString& aTopWindowOrigin,
-                                bool aPrivateBrowsing, bool aIsolated,
+                                bool aPrivateBrowsing,
                                 nsIInterfaceRequestor* aCallbacks,
                                 const OriginAttributes& aOriginAttributes);
 
@@ -599,7 +594,7 @@ class nsHttpHandler final : public nsIHttpProtocolHandler,
   PRIntervalTime mIdleTimeout;
   PRIntervalTime mSpdyTimeout;
   PRIntervalTime mResponseTimeout;
-  bool mResponseTimeoutEnabled;
+  Atomic<bool, Relaxed> mResponseTimeoutEnabled;
   uint32_t mNetworkChangedTimeout;  // milliseconds
   uint16_t mMaxRequestAttempts;
   uint16_t mMaxRequestDelay;
@@ -765,8 +760,6 @@ class nsHttpHandler final : public nsIHttpProtocolHandler,
 
   // Pref for the whole fix that bug provides
   Atomic<bool, Relaxed> mBug1563538;
-  Atomic<bool, Relaxed> mBug1563695;
-  Atomic<bool, Relaxed> mBug1556491;
 
   Atomic<bool, Relaxed> mHttp3Enabled;
   // Http3 parameters
@@ -792,7 +785,7 @@ class nsHttpHandler final : public nsIHttpProtocolHandler,
   uint32_t mFastOpenConsecutiveFailureCounter;
   uint32_t mFastOpenStallsLimit;
   uint32_t mFastOpenStallsCounter;
-  uint32_t mFastOpenStallsIdleTime;
+  Atomic<uint32_t, Relaxed> mFastOpenStallsIdleTime;
   uint32_t mFastOpenStallsTimeout;
 
   // If true, the transactions from active tab will be dispatched first.

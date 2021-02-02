@@ -157,6 +157,7 @@ void GfxInfo::GetData() {
   nsCString glRenderer;
   nsCString glVersion;
   nsCString textureFromPixmap;
+  nsCString testType;
 
   // Available if GLX_MESA_query_renderer is supported.
   nsCString mesaVendor;
@@ -211,6 +212,8 @@ void GfxInfo::GetData() {
       stringToFill = pciDevices.AppendElement();
     } else if (!strcmp(line, "DRM_RENDERDEVICE")) {
       stringToFill = &drmRenderDevice;
+    } else if (!strcmp(line, "TEST_TYPE")) {
+      stringToFill = &testType;
     } else if (!strcmp(line, "WARNING")) {
       logString = true;
     } else if (!strcmp(line, "ERROR")) {
@@ -270,6 +273,7 @@ void GfxInfo::GetData() {
   }
 
   mDrmRenderDevice = std::move(drmRenderDevice);
+  mTestType = std::move(testType);
 
   // Mesa always exposes itself in the GL_VERSION string, but not always the
   // GL_VENDOR string.
@@ -582,7 +586,7 @@ void GfxInfo::GetData() {
     }
   }
 
-  if (error || errorLog) {
+  if (error || errorLog || mTestType.IsEmpty()) {
     if (!mAdapterDescription.IsEmpty()) {
       mAdapterDescription.AppendLiteral(" (See failure log)");
     } else {
@@ -776,21 +780,20 @@ const nsTArray<GfxDriverInfo>& GfxInfo::GetGfxDriverInfo() {
 
     ////////////////////////////////////
     // FEATURE_WEBRENDER_SOFTWARE - ALLOWLIST
-#ifdef NIGHTLY_BUILD
+#ifdef EARLY_BETA_OR_EARLIER
 #  if defined(_M_IX86) || defined(_M_X64) || defined(__i386__) || \
       defined(__i386) || defined(__amd64__)
     APPEND_TO_DRIVER_BLOCKLIST_EXT(
-        OperatingSystem::Linux, ScreenSizeStatus::SmallAndMedium,
-        BatteryStatus::All, DesktopEnvironment::All, WindowProtocol::All,
-        DriverVendor::NonMesaAll, DeviceFamily::All,
-        nsIGfxInfo::FEATURE_WEBRENDER_SOFTWARE,
+        OperatingSystem::Linux, ScreenSizeStatus::All, BatteryStatus::All,
+        DesktopEnvironment::All, WindowProtocol::All, DriverVendor::NonMesaAll,
+        DeviceFamily::All, nsIGfxInfo::FEATURE_WEBRENDER_SOFTWARE,
         nsIGfxInfo::FEATURE_ALLOW_ALWAYS, DRIVER_COMPARISON_IGNORED,
         V(0, 0, 0, 0), "FEATURE_ROLLOUT_NIGHTLY_SOFTWARE_WR_NON_MESA_S_M_SCRN",
         "");
 
     APPEND_TO_DRIVER_BLOCKLIST_EXT(
-        OperatingSystem::Linux, ScreenSizeStatus::SmallAndMedium,
-        BatteryStatus::All, DesktopEnvironment::All, WindowProtocol::All,
+        OperatingSystem::Linux, ScreenSizeStatus::All, BatteryStatus::All,
+        DesktopEnvironment::All, WindowProtocol::All,
         DriverVendor::HardwareMesaAll, DeviceFamily::All,
         nsIGfxInfo::FEATURE_WEBRENDER_SOFTWARE,
         nsIGfxInfo::FEATURE_ALLOW_ALWAYS, DRIVER_COMPARISON_IGNORED,
@@ -956,6 +959,13 @@ NS_IMETHODIMP
 GfxInfo::GetDesktopEnvironment(nsAString& aDesktopEnvironment) {
   GetData();
   AppendASCIItoUTF16(mDesktopEnvironment, aDesktopEnvironment);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+GfxInfo::GetTestType(nsAString& aTestType) {
+  GetData();
+  AppendASCIItoUTF16(mTestType, aTestType);
   return NS_OK;
 }
 

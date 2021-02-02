@@ -188,7 +188,6 @@ using JS::CompileOptions;
 using js::shell::RCFile;
 
 using mozilla::ArrayEqual;
-using mozilla::ArrayLength;
 using mozilla::AsVariant;
 using mozilla::Atomic;
 using mozilla::MakeScopeExit;
@@ -287,7 +286,8 @@ class js::shell::OffThreadJob {
  public:
   using Source = mozilla::Variant<JS::UniqueTwoByteChars, JS::TranscodeBuffer>;
 
-  OffThreadJob(ShellContext* sc, ScriptKind kind, Source&& source);
+  OffThreadJob(ShellContext* sc, ScriptKind kind, bool useOffThreadParseGlobal,
+               Source&& source);
   ~OffThreadJob();
 
   void cancel();
@@ -300,6 +300,7 @@ class js::shell::OffThreadJob {
  public:
   const int32_t id;
   const ScriptKind kind;
+  const bool useOffThreadParseGlobal;
 
  private:
   js::Monitor& monitor;
@@ -309,10 +310,11 @@ class js::shell::OffThreadJob {
 };
 
 static OffThreadJob* NewOffThreadJob(JSContext* cx, ScriptKind kind,
+                                     CompileOptions& options,
                                      OffThreadJob::Source&& source) {
   ShellContext* sc = GetShellContext(cx);
-  UniquePtr<OffThreadJob> job(
-      cx->new_<OffThreadJob>(sc, kind, std::move(source)));
+  UniquePtr<OffThreadJob> job(cx->new_<OffThreadJob>(
+      sc, kind, options.useOffThreadParseGlobal, std::move(source)));
   if (!job) {
     return nullptr;
   }
@@ -442,9 +444,11 @@ static void CancelOffThreadJobsForRuntime(JSContext* cx) {
 
 mozilla::Atomic<int32_t> gOffThreadJobSerial(1);
 
-OffThreadJob::OffThreadJob(ShellContext* sc, ScriptKind kind, Source&& source)
+OffThreadJob::OffThreadJob(ShellContext* sc, ScriptKind kind,
+                           bool useOffThreadParseGlobal, Source&& source)
     : id(gOffThreadJobSerial++),
       kind(kind),
+      useOffThreadParseGlobal(useOffThreadParseGlobal),
       monitor(sc->offThreadMonitor),
       state(RUNNING),
       token(nullptr),
@@ -2058,7 +2062,7 @@ static void CacheEntry_setKind(JSContext* cx, HandleObject cache,
 }
 
 static uint8_t* CacheEntry_getBytecode(JSContext* cx, HandleObject cache,
-                                       uint32_t* length) {
+                                       size_t* length) {
   MOZ_ASSERT(CacheEntry_isCacheEntry(cache));
   Value v = JS::GetReservedSlot(cache, CacheEntry_BYTECODE);
   if (!v.isObject() || !v.toObject().is<ArrayBufferObject>()) {
@@ -2069,7 +2073,7 @@ static uint8_t* CacheEntry_getBytecode(JSContext* cx, HandleObject cache,
   }
 
   ArrayBufferObject* arrayBuffer = &v.toObject().as<ArrayBufferObject>();
-  *length = arrayBuffer->byteLength().deprecatedGetUint32();
+  *length = arrayBuffer->byteLength().get();
   return arrayBuffer->dataPointer();
 }
 
@@ -2322,7 +2326,7 @@ static bool Evaluate(JSContext* cx, unsigned argc, Value* vp) {
   BytecodeCacheKind saveCacheKind = BytecodeCacheKind::Undefined;
 
   if (loadBytecode) {
-    uint32_t loadLength = 0;
+    size_t loadLength = 0;
     uint8_t* loadData = nullptr;
     loadData = CacheEntry_getBytecode(cx, cacheEntry, &loadLength);
     if (!loadData) {
@@ -2431,7 +2435,9 @@ static bool Evaluate(JSContext* cx, unsigned argc, Value* vp) {
       }
     }
 
-    if (!JS_ExecuteScript(cx, envChain, script, args.rval())) {
+    if (!(envChain.empty()
+              ? JS_ExecuteScript(cx, script, args.rval())
+              : JS_ExecuteScript(cx, envChain, script, args.rval()))) {
       if (catchTermination && !JS_IsExceptionPending(cx)) {
         JSAutoRealm ar1(cx, callerGlobal);
         JSString* str = JS_NewStringCopyZ(cx, "terminated");
@@ -5303,9 +5309,10 @@ static bool DumpAST(JSContext* cx, const JS::ReadOnlyCompileOptions& options,
                     js::frontend::ParseGoal goal) {
   using namespace js::frontend;
 
-  Parser<FullParseHandler, Unit> parser(cx, options, units, length, false,
-                                        stencil, compilationState, nullptr,
-                                        nullptr);
+  Parser<FullParseHandler, Unit> parser(cx, options, units, length,
+                                        /* foldConstants = */ false, stencil,
+                                        compilationState,
+                                        /* syntaxParser = */ nullptr);
   if (!parser.checkOptions()) {
     return false;
   }
@@ -5343,7 +5350,7 @@ static bool DumpAST(JSContext* cx, const JS::ReadOnlyCompileOptions& options,
 
 #if defined(DEBUG)
   js::Fprinter out(stderr);
-  DumpParseTree(pn, out);
+  DumpParseTree(&parser, pn, out);
 #endif
 
   return true;
@@ -5674,8 +5681,9 @@ static bool SyntaxParse(JSContext* cx, unsigned argc, Value* vp) {
                                               stencil.get());
 
   Parser<frontend::SyntaxParseHandler, char16_t> parser(
-      cx, options, chars, length, false, stencil.get(), compilationState,
-      nullptr, nullptr);
+      cx, options, chars, length,
+      /* foldConstants = */ false, stencil.get(), compilationState,
+      /* syntaxParser = */ nullptr);
   if (!parser.checkOptions()) {
     return false;
   }
@@ -5773,8 +5781,9 @@ static bool OffThreadCompileScript(JSContext* cx, unsigned argc, Value* vp) {
     return false;
   }
 
-  OffThreadJob* job = NewOffThreadJob(
-      cx, ScriptKind::Script, OffThreadJob::Source(std::move(ownedChars)));
+  OffThreadJob* job =
+      NewOffThreadJob(cx, ScriptKind::Script, options,
+                      OffThreadJob::Source(std::move(ownedChars)));
   if (!job) {
     return false;
   }
@@ -5796,14 +5805,15 @@ static bool OffThreadCompileScript(JSContext* cx, unsigned argc, Value* vp) {
 static bool runOffThreadScript(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
 
-  if (OffThreadParsingMustWaitForGC(cx->runtime())) {
-    gc::FinishGC(cx);
-  }
-
   OffThreadJob* job =
       LookupOffThreadJobForArgs(cx, ScriptKind::Script, args, 0);
   if (!job) {
     return false;
+  }
+
+  if (job->useOffThreadParseGlobal &&
+      OffThreadParsingMustWaitForGC(cx->runtime())) {
+    gc::FinishGC(cx);
   }
 
   JS::OffThreadToken* token = job->waitUntilDone(cx);
@@ -5862,8 +5872,9 @@ static bool OffThreadCompileModule(JSContext* cx, unsigned argc, Value* vp) {
     return false;
   }
 
-  OffThreadJob* job = NewOffThreadJob(
-      cx, ScriptKind::Module, OffThreadJob::Source(std::move(ownedChars)));
+  OffThreadJob* job =
+      NewOffThreadJob(cx, ScriptKind::Module, options,
+                      OffThreadJob::Source(std::move(ownedChars)));
   if (!job) {
     return false;
   }
@@ -5885,14 +5896,15 @@ static bool OffThreadCompileModule(JSContext* cx, unsigned argc, Value* vp) {
 static bool FinishOffThreadModule(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
 
-  if (OffThreadParsingMustWaitForGC(cx->runtime())) {
-    gc::FinishGC(cx);
-  }
-
   OffThreadJob* job =
       LookupOffThreadJobForArgs(cx, ScriptKind::Module, args, 0);
   if (!job) {
     return false;
+  }
+
+  if (job->useOffThreadParseGlobal &&
+      OffThreadParsingMustWaitForGC(cx->runtime())) {
+    gc::FinishGC(cx);
   }
 
   JS::OffThreadToken* token = job->waitUntilDone(cx);
@@ -5938,6 +5950,14 @@ static bool OffThreadDecodeScript(JSContext* cx, unsigned argc, Value* vp) {
   options.useStencilXDR =
       CacheEntry_getKind(cx, cacheEntry) == BytecodeCacheKind::Stencil;
 
+  // In browser, we always use off-thread parse global for decode task, for
+  // performance reason.
+  // (see ScriptLoader::AttemptAsyncScriptCompile)
+  //
+  // This code should be removed, and the above code should be used, once
+  // bug 1687973 gets fixed.
+  options.useOffThreadParseGlobal = true;
+
   if (args.length() >= 2) {
     if (args[1].isPrimitive()) {
       JS_ReportErrorNumberASCII(cx, my_GetErrorMessage, nullptr,
@@ -5960,7 +5980,7 @@ static bool OffThreadDecodeScript(JSContext* cx, unsigned argc, Value* vp) {
   options.forceAsync = true;
 
   JS::TranscodeBuffer loadBuffer;
-  uint32_t loadLength = 0;
+  size_t loadLength = 0;
   uint8_t* loadData = nullptr;
   loadData = CacheEntry_getBytecode(cx, cacheEntry, &loadLength);
   if (!loadData) {
@@ -5977,7 +5997,7 @@ static bool OffThreadDecodeScript(JSContext* cx, unsigned argc, Value* vp) {
   }
 
   OffThreadJob* job =
-      NewOffThreadJob(cx, ScriptKind::DecodeScript,
+      NewOffThreadJob(cx, ScriptKind::DecodeScript, options,
                       OffThreadJob::Source(std::move(loadBuffer)));
   if (!job) {
     return false;
@@ -5997,14 +6017,15 @@ static bool OffThreadDecodeScript(JSContext* cx, unsigned argc, Value* vp) {
 static bool runOffThreadDecodedScript(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
 
-  if (OffThreadParsingMustWaitForGC(cx->runtime())) {
-    gc::FinishGC(cx);
-  }
-
   OffThreadJob* job =
       LookupOffThreadJobForArgs(cx, ScriptKind::DecodeScript, args, 0);
   if (!job) {
     return false;
+  }
+
+  if (job->useOffThreadParseGlobal &&
+      OffThreadParsingMustWaitForGC(cx->runtime())) {
+    gc::FinishGC(cx);
   }
 
   JS::OffThreadToken* token = job->waitUntilDone(cx);
@@ -6573,6 +6594,13 @@ static bool NewGlobal(JSContext* cx, unsigned argc, Value* vp) {
     }
     if (v.isBoolean()) {
       behaviors.setDisableLazyParsing(v.toBoolean());
+    }
+
+    if (!JS_GetProperty(cx, opts, "discardSource", &v)) {
+      return false;
+    }
+    if (v.isBoolean()) {
+      behaviors.setDiscardSource(v.toBoolean());
     }
 
     if (!JS_GetProperty(cx, opts, "useWindowProxy", &v)) {
@@ -7154,15 +7182,15 @@ struct SharedObjectMailbox {
   union Value {
     struct {
       SharedArrayRawBuffer* buffer;
-      uint32_t length;
+      BufferSize length;
     } sarb;
     JS::WasmModule* module;
     double number;
+
+    Value() : number(0.0) {}
   };
 
-  SharedObjectMailbox() : tag(MailboxTag::Empty) {}
-
-  MailboxTag tag;
+  MailboxTag tag = MailboxTag::Empty;
   Value val;
 };
 
@@ -7225,7 +7253,7 @@ static bool GetSharedObject(JSContext* cx, unsigned argc, Value* vp) {
         // incremented prior to the SAB creation.
 
         SharedArrayRawBuffer* buf = mbx->val.sarb.buffer;
-        uint32_t length = mbx->val.sarb.length;
+        BufferSize length = mbx->val.sarb.length;
         if (!buf->addReference()) {
           JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
                                     JSMSG_SC_SAB_REFCNT_OFLO);
@@ -7236,7 +7264,7 @@ static bool GetSharedObject(JSContext* cx, unsigned argc, Value* vp) {
         // returning.
 
         Rooted<ArrayBufferObjectMaybeShared*> maybesab(
-            cx, SharedArrayBufferObject::New(cx, buf, BufferSize(length)));
+            cx, SharedArrayBufferObject::New(cx, buf, length));
         if (!maybesab) {
           buf->dropReference();
           return false;
@@ -7310,7 +7338,7 @@ static bool SetSharedObject(JSContext* cx, unsigned argc, Value* vp) {
                                            &obj->as<SharedArrayBufferObject>());
       tag = MailboxTag::SharedArrayBuffer;
       value.sarb.buffer = sab->rawBufferObject();
-      value.sarb.length = sab->byteLength().deprecatedGetUint32();
+      value.sarb.length = sab->byteLength();
       if (!value.sarb.buffer->addReference()) {
         JS_ReportErrorASCII(cx,
                             "Reference count overflow on SharedArrayBuffer");
@@ -7326,7 +7354,7 @@ static bool SetSharedObject(JSContext* cx, unsigned argc, Value* vp) {
                      .as<SharedArrayBufferObject>());
         tag = MailboxTag::WasmMemory;
         value.sarb.buffer = sab->rawBufferObject();
-        value.sarb.length = sab->byteLength().deprecatedGetUint32();
+        value.sarb.length = sab->byteLength();
         if (!value.sarb.buffer->addReference()) {
           JS_ReportErrorASCII(cx,
                               "Reference count overflow on SharedArrayBuffer");
@@ -9040,6 +9068,8 @@ static const JSFunctionSpecWithHelp shell_functions[] = {
 "      invisibleToDebugger: If true, the global will be invisible to the\n"
 "         debugger (default false)\n"
 "      disableLazyParsing: If true, don't create lazy scripts for functions\n"
+"         (default false).\n"
+"      discardSource: If true, discard source after compiling a script\n"
 "         (default false).\n"
 "      useWindowProxy: the global will be created with a WindowProxy attached. In this\n"
 "          case, the WindowProxy will be returned.\n"
@@ -10822,7 +10852,7 @@ static bool SetContextOptions(JSContext* cx, const OptionParser& op) {
   }
 
   if (op.getBoolOption("enable-large-buffers")) {
-    ArrayBufferObject::supportLargeBuffers = true;
+    JS::SetLargeArrayBuffersEnabled(true);
   }
 
   if (op.getBoolOption("disable-bailout-loop-check")) {
@@ -11991,10 +12021,11 @@ int main(int argc, char** argv, char** envp) {
 
   EnvironmentPreparer environmentPreparer(cx);
 
-  if (!op.getBoolOption("no-incremental-gc")) {
-    JS_SetGCParameter(cx, JSGC_MODE, JSGC_MODE_ZONE_INCREMENTAL);
-    JS_SetGCParameter(cx, JSGC_SLICE_TIME_BUDGET_MS, 10);
-  }
+  bool incrementalGC = !op.getBoolOption("no-incremental-gc");
+  JS_SetGCParameter(cx, JSGC_INCREMENTAL_GC_ENABLED, incrementalGC);
+  JS_SetGCParameter(cx, JSGC_SLICE_TIME_BUDGET_MS, 10);
+
+  JS_SetGCParameter(cx, JSGC_PER_ZONE_GC_ENABLED, true);
 
   JS::SetProcessLargeAllocationFailureCallback(my_LargeAllocFailCallback);
 

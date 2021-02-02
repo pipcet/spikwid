@@ -336,13 +336,10 @@
         case KeyEvent.DOM_VK_SPACE:
           if (visibleTabs[lastFocusedTabIndex].multiselected) {
             gBrowser.removeFromMultiSelectedTabs(
-              visibleTabs[lastFocusedTabIndex],
-              { isLastMultiSelectChange: false }
+              visibleTabs[lastFocusedTabIndex]
             );
           } else {
-            gBrowser.addToMultiSelectedTabs(visibleTabs[lastFocusedTabIndex], {
-              isLastMultiSelectChange: true,
-            });
+            gBrowser.addToMultiSelectedTabs(visibleTabs[lastFocusedTabIndex]);
           }
           break;
         default:
@@ -940,7 +937,6 @@
 
     set _tabMinWidth(val) {
       this.style.setProperty("--tab-min-width", val + "px");
-      return val;
     }
 
     get _isCustomizing() {

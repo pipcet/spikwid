@@ -340,12 +340,47 @@
   "CONTENT_PROCESS_LAUNCH_IS_SYNC" : {
     "record_in_processes": ["main"],
     "products": ["firefox", "fennec"],
-    "alert_emails": ["jld@mozilla.com", "jimm@mozilla.com", "mconley@mozilla.com"],
+    "alert_emails": ["jld@mozilla.com", "jimm@mozilla.  com", "mconley@mozilla.com"],
     "expires_in_version": "never",
     "bug_numbers": [1474991],
     "kind": "boolean",
     "releaseChannelCollection": "opt-out",
     "description": "Whether a content process was launched synchronously (unnecessarily delaying UI response)."
+  },
+  "CONTENT_PROCESS_COUNT": {
+    "record_in_processes": ["main"],
+    "products": ["firefox"],
+    "alert_emails": ["barret@mozilla.com", "perf-telemetry-alerts@mozilla.com"],
+    "expires_in_version": "98",
+    "bug_numbers": [1688078],
+    "kind": "linear",
+    "high": 500,
+    "n_buckets": 100,
+    "releaseChannelCollection": "opt-out",
+    "description": "A count of the number of content processes, collected every five minutes."
+  },
+  "CONTENT_PROCESS_MAX": {
+    "record_in_processes": ["main"],
+    "products": ["firefox"],
+    "alert_emails": ["barret@mozilla.com", "perf-telemetry-alerts@mozilla.com"],
+    "expires_in_version": "98",
+    "bug_numbers": [1688079],
+    "kind": "linear",
+    "high": 500,
+    "n_buckets": 100,
+    "releaseChannelCollection": "opt-out",
+    "description": "The maximum number of content processes, submitted when a new maximum is reached."
+  },
+  "CONTENT_PROCESS_TIME_SINCE_LAST_LAUNCH_MS": {
+    "record_in_processes": ["main"],
+    "products": ["firefox"],
+    "alert_emails": ["barret@mozilla.com", "perf-telemetry-alerts@mozilla.com"],
+    "expires_in_version": "98",
+    "bug_numbers": [1688082],
+    "kind": "exponential",
+    "high": 600000,
+    "n_buckets": 100,
+    "description": "The time (in milliseconds) since the last content process was launched."
   },
   "CYCLE_COLLECTOR": {
     "record_in_processes": ["main", "content"],
@@ -3531,6 +3566,17 @@
     "bug_numbers": [1677951],
     "description": "HTTP3: the number of received/sent packets."
   },
+  "HTTP3_CHANNEL_ONSTART_SUCCESS" : {
+    "record_in_processes": ["main", "content"],
+    "products": ["firefox"],
+    "expires_in_version": "never",
+    "kind": "boolean",
+    "description": "Successfully started HTTP channels when HTTP3 is used",
+    "bug_numbers": [1677987],
+    "releaseChannelCollection": "opt-out",
+    "keyed": true,
+    "alert_emails": ["necko@mozilla.com", "ddamjanovic@mozilla.com"]
+  },
   "HTTP_CONTENT_ENCODING": {
     "record_in_processes": ["main", "content"],
     "products": ["firefox", "fennec"],
@@ -4721,6 +4767,66 @@
     "n_buckets": 100,
     "releaseChannelCollection": "opt-out",
     "description": "Number of tabs opened across all windows, collected at most every 5 minutes whenever the user interacts with the browser in the following ways: open tab/window, page load."
+  },
+  "LAZYLOAD_IMAGE_TOTAL": {
+    "record_in_processes": ["main", "content"],
+    "products": ["firefox"],
+    "alert_emails": ["sefeng@mozilla.com"],
+    "bug_numbers": [1687358],
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": 2000,
+    "n_buckets": 100,
+    "releaseChannelCollection": "opt-out",
+    "description": "The amount of images that have `loading='lazy'` on the page or have loaded lazily already."
+  },
+  "LAZYLOAD_IMAGE_STARTED": {
+    "record_in_processes": ["main", "content"],
+    "products": ["firefox"],
+    "alert_emails": ["sefeng@mozilla.com"],
+    "bug_numbers": [1687358],
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": 2000,
+    "n_buckets": 100,
+    "releaseChannelCollection": "opt-out",
+    "description": "Number of lazy-loaded images that we've started loading as a result of triggering the lazy-load observer threshold."
+  },
+  "LAZYLOAD_IMAGE_NOT_VIEWPORT": {
+    "record_in_processes": ["main", "content"],
+    "products": ["firefox"],
+    "alert_emails": ["sefeng@mozilla.com"],
+    "bug_numbers": [1687358],
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": 2000,
+    "n_buckets": 100,
+    "releaseChannelCollection": "opt-out",
+    "description": "Number of lazy-loaded images that were started to load but didn't reach to the viewport eventually"
+  },
+  "LAZYLOAD_IMAGE_VIEWPORT_LOADING": {
+    "record_in_processes": ["main", "content"],
+    "products": ["firefox"],
+    "alert_emails": ["sefeng@mozilla.com"],
+    "bug_numbers": [1687358],
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": 2000,
+    "n_buckets": 100,
+    "releaseChannelCollection": "opt-out",
+    "description": "Number of lazy-loaded images that reached the viewport which were not done loading when they did so."
+  },
+  "LAZYLOAD_IMAGE_VIEWPORT_LOADED": {
+    "record_in_processes": ["main", "content"],
+    "products": ["firefox"],
+    "alert_emails": ["sefeng@mozilla.com"],
+    "bug_numbers": [1687358],
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": 2000,
+    "n_buckets": 100,
+    "releaseChannelCollection": "opt-out",
+    "description": "Number of lazy-loaded images that reached the viewport and were done loading when they did so."
   },
   "LOADED_TAB_COUNT": {
     "record_in_processes": ["main"],
@@ -6147,6 +6253,20 @@
     "high": 524288,
     "n_buckets" : 100,
     "description": "PLACES: Size of favicon files without a specific file type probe, loaded from the web (Bytes)"
+  },
+  "PLACES_BOOKMARKS_TOOLBAR_RENDER_DELAY_MS": {
+    "alert_emails": ["gkruitbosch@mozilla.com", "esmyth@mozilla.com"],
+    "bug_numbers": [1680216],
+    "releaseChannelCollection": "opt-out",
+    "record_in_processes": ["main"],
+    "products": ["firefox"],
+    "expires_in_version": "92",
+    "keyed": true,
+    "kind": "exponential",
+    "low": 1,
+    "high": 60000,
+    "n_buckets": 30,
+    "description": "Number of ms between initial rendering and when we show the bookmarks toolbar items. Will record once per window opened (so may never record in a given subsession, or multiple times). Keyed by whether we waited for idle or not."
   },
   "LINK_ICON_SIZES_ATTR_USAGE": {
     "record_in_processes": ["main", "content"],
@@ -7877,8 +7997,8 @@
     "record_in_processes": ["content"],
     "products": ["firefox"],
     "alert_emails": ["mconley@mozilla.com"],
-    "bug_numbers": [1622263],
-    "expires_in_version": "87",
+    "bug_numbers": [1622263, 1683101],
+    "expires_in_version": "92",
     "kind": "exponential",
     "high": 10000,
     "n_buckets": 100,
@@ -8296,12 +8416,34 @@
     "record_in_processes": ["main", "content"],
     "products": ["firefox"],
     "alert_emails": ["hsivonen@mozilla.com"],
-    "bug_numbers": [840476, 977573, 1513473, 1554592, 1603047, 1648464],
+    "bug_numbers": [840476, 977573, 1513473, 1554592, 1603047, 1648464, 1686463],
     "expires_in_version": "91",
     "releaseChannelCollection": "opt-out",
     "kind": "categorical",
-    "labels": ["AutoOverridden", "ManuallyOverridden", "LocalLabeled", "LocalUnlabeled", "UnlabeledInLk", "UnlabeledJp", "UnlabeledNonUtf8", "UnlabeledUtf8", "ChannelNonUtf8", "ChannelUtf8", "MetaNonUtf8", "MetaUtf8", "Bug"],
+    "labels": ["AutoOverridden", "ManuallyOverridden", "LocalLabeled", "LocalUnlabeled", "UnlabeledInLk", "UnlabeledJp", "UnlabeledNonUtf8", "UnlabeledUtf8", "ChannelNonUtf8", "ChannelUtf8", "MetaNonUtf8", "MetaUtf8", "Bug", "UnlabeledAscii", "UnlabeledNonUtf8TLD"],
     "description": "Labeling status of top-level page when overriding encoding"
+  },
+  "ENCODING_DETECTION_OUTCOME_TEXT": {
+    "record_in_processes": ["main", "content"],
+    "products": ["firefox"],
+    "alert_emails": ["hsivonen@mozilla.com"],
+    "bug_numbers": [1686463],
+    "expires_in_version": "91",
+    "releaseChannelCollection": "opt-out",
+    "kind": "categorical",
+    "labels": ["UtfInitial", "UtfFinal", "TldInitial", "TldFinal", "ContentInitial", "ContentFinal", "GenericInitial", "GenericFinal"],
+    "description": "Type of automatic encoding detection outcome for text/plain excluding ASCII-only"
+  },
+  "ENCODING_DETECTION_OUTCOME_HTML": {
+    "record_in_processes": ["main", "content"],
+    "products": ["firefox"],
+    "alert_emails": ["hsivonen@mozilla.com"],
+    "bug_numbers": [1686463],
+    "expires_in_version": "91",
+    "releaseChannelCollection": "opt-out",
+    "kind": "categorical",
+    "labels": ["UtfInitial", "UtfFinal", "TldInitial", "TldFinal", "ContentInitial", "ContentFinal", "GenericInitial", "GenericFinal"],
+    "description": "Type of automatic encoding detection outcome for text/html excluding ASCII-only"
   },
   "LONG_REFLOW_INTERRUPTIBLE": {
     "record_in_processes": ["main", "content"],
@@ -9601,7 +9743,7 @@
     "kind": "count",
     "keyed": true,
     "releaseChannelCollection": "opt-out",
-    "alert_emails": ["adw@mozilla.com", "loines@mozilla.com"],
+    "alert_emails": ["fx-search@mozilla.com", "rev-data@mozilla.com"],
     "bug_numbers": [1089670, 1475571, 1482158, 1499193, 1545172, 1572500, 1654680],
     "description": "Records search counts for search access points and in-content searches. For search access points in general, the format is: <engine-name>.<search-access-point> For the urlbar when in search mode, the format is <engine name>.urlbar-searchmode For the urlbar when an internal @engine shortcut is used, the format is: <engine-name>.alias For in-content searches, the format is <provider>.in-content:[sap|sap-follow-on|organic]:[code|none]",
     "record_into_store": ["main", "account-ecosystem"]
@@ -10126,10 +10268,10 @@
     "record_in_processes": ["content"],
     "products": ["firefox"],
     "alert_emails": ["bvandyk@mozilla.com", "drno@ohlmeier.org"],
-    "expires_in_version": "88",
+    "expires_in_version": "100",
     "kind": "boolean",
     "description": "Reports a true value when a page requests canPlayType for a matroska media type.",
-    "bug_numbers": [1429986, 1570634, 1606206]
+    "bug_numbers": [1429986, 1570634, 1606206, 1689266]
   },
   "MEDIA_HLS_CANPLAY_REQUESTED": {
     "record_in_processes": ["content"],
@@ -12859,50 +13001,52 @@
     "description": "The number of entries in persistent DataStorage (HSTS and HPKP data, basically)"
   },
   "VIDEO_PLAY_TIME_MS" : {
-    "record_in_processes": ["content"],
+    "record_in_processes": ["main", "content"],
     "products": ["firefox"],
-    "alert_emails": ["jya@mozilla.com", "drno@ohlmeier.org"],
+    "alert_emails": ["alwu@mozilla.com", "drno@ohlmeier.org"],
     "expires_in_version": "never",
-    "description": "Total time spent playing video in milliseconds. This reports the total play time for an HTML Media Element whenever it is suspended, such as when the page is unloaded.",
+    "description": "Total time spent playing video in milliseconds. This reports the total play time for a video element whenever the decoder stops. (eg. pausing media, encountering an error, changing to a new resource, page goes to the bf-cached or page gets discarded)",
     "kind": "exponential",
     "high": 7200000,
     "n_buckets": 100,
-    "bug_numbers": [1261955, 1127646, 1570634, 1567604],
+    "bug_numbers": [1261955, 1127646, 1570634, 1567604, 1685399],
     "releaseChannelCollection": "opt-out"
   },
   "VIDEO_HIDDEN_PLAY_TIME_MS" : {
-    "record_in_processes": ["content"],
+    "record_in_processes": ["main", "content"],
     "products": ["firefox"],
-    "alert_emails": ["jya@mozilla.com", "drno@ohlmeier.org"],
+    "alert_emails": ["alwu@mozilla.com", "drno@ohlmeier.org"],
     "expires_in_version": "never",
-    "description": "Total time spent playing video while element is hidden, in milliseconds. This reports the total hidden play time for an HTML Media Element whenever it is suspended, such as when the page is unloaded.",
+    "description": "Total time spent playing video while element is hidden, in milliseconds. This reports the total hidden play time for a video element whenever the decoder stops. (eg. pausing media, encountering an error, changing to a new resource, page goes to the bf-cached or page gets discarded)",
     "kind": "exponential",
     "high": 7200000,
     "n_buckets": 100,
-    "bug_numbers": [1285419, 1570634]
+    "bug_numbers": [1285419, 1570634, 1685399],
+    "releaseChannelCollection": "opt-out"
   },
   "VIDEO_HIDDEN_PLAY_TIME_PERCENTAGE" : {
-    "record_in_processes": ["content"],
+    "record_in_processes": ["main", "content"],
     "products": ["firefox"],
-    "alert_emails": ["jya@mozilla.com", "drno@ohlmeier.org"],
+    "alert_emails": ["alwu@mozilla.com", "drno@ohlmeier.org"],
     "expires_in_version": "never",
-    "description": "Percentage of total time spent playing video while element is hidden. Keyed by audio presence and by height ranges (boundaries: 240. 480, 576, 720, 1080, 2160), e.g.: 'V,0<h<=240', 'AV,h>2160'; and 'All' will accumulate all percentages. This is reported whenever an HTML Media Element is suspended or resumed, such as when the page is unloaded.",
+    "description": "Percentage of total time spent playing video while element is hidden. Keyed by audio presence and by height ranges (boundaries: 240. 480, 576, 720, 1080, 2160), e.g.: 'V,0<h<=240', 'AV,h>2160'; and 'All' will accumulate all percentages. This is reported whenever the decoder stops. (eg. pausing media, encountering an error, changing to a new resource, page goes to the bf-cached or page gets discarded)",
     "keyed": true,
     "kind": "linear",
     "high": 100,
     "n_buckets": 50,
-    "bug_numbers": [1287987, 1570634]
+    "bug_numbers": [1287987, 1570634, 1685399],
+    "releaseChannelCollection": "opt-out"
   },
   "VIDEO_ENCRYPTED_PLAY_TIME_MS" : {
     "record_in_processes": ["content"],
     "products": ["firefox"],
     "alert_emails": ["bvandyk@mozilla.com", "drno@ohlmeier.org"],
     "expires_in_version": "never",
-    "description": "Total time spent playing encrypted video in milliseconds. This reports the total play time for an HTML Media Element playing encrypted content whenever it is suspended, such as when the page is unloaded.",
+    "description": "Total time spent playing encrypted video in milliseconds. This reports the total play time for a video element playing encrypted content whenever the decoder stops. (eg. pausing media, encountering an error, changing to a new resource, page goes to the bf-cached or page gets discarded)",
     "kind": "exponential",
     "high": 7200000,
     "n_buckets": 100,
-    "bug_numbers": [1662212],
+    "bug_numbers": [1662212, 1685399],
     "releaseChannelCollection": "opt-out"
   },
   "VIDEO_CLEARKEY_PLAY_TIME_MS" : {
@@ -12910,11 +13054,11 @@
     "products": ["firefox"],
     "alert_emails": ["bvandyk@mozilla.com", "drno@ohlmeier.org"],
     "expires_in_version": "never",
-    "description": "Total time spent playing Clearkey encrypted video in milliseconds. This reports the total play time for an HTML Media Element playing Clearkey encrypted content whenever it is suspended, such as when the page is unloaded.",
+    "description": "Total time spent playing Clearkey encrypted video in milliseconds. This reports the total play time for a video lement playing Clearkey encrypted content whenever the decoder stops. (eg. pausing media, encountering an error, changing to a new resource, page goes to the bf-cached or page gets discarded)",
     "kind": "exponential",
     "high": 7200000,
     "n_buckets": 100,
-    "bug_numbers": [1662212],
+    "bug_numbers": [1662212, 1685399],
     "releaseChannelCollection": "opt-out"
   },
   "VIDEO_WIDEVINE_PLAY_TIME_MS" : {
@@ -12922,48 +13066,49 @@
     "products": ["firefox"],
     "alert_emails": ["bvandyk@mozilla.com", "drno@ohlmeier.org"],
     "expires_in_version": "never",
-    "description": "Total time spent playing Widevine encrypted video in milliseconds. This reports the total play time for an HTML Media Element playing Widevine encrypted content whenever it is suspended, such as when the page is unloaded.",
+    "description": "Total time spent playing Widevine encrypted video in milliseconds. This reports the total play time for a video element playing Widevine encrypted content whenever the decoder stops. (eg. pausing media, encountering an error, changing to a new resource, page goes to the bf-cached or page gets discarded)",
     "kind": "exponential",
     "high": 7200000,
     "n_buckets": 100,
-    "bug_numbers": [1662212],
+    "bug_numbers": [1662212, 1685399],
     "releaseChannelCollection": "opt-out"
   },
   "VIDEO_INFERRED_DECODE_SUSPEND_PERCENTAGE" : {
-    "record_in_processes": ["content"],
+    "record_in_processes": ["main", "content"],
     "products": ["firefox"],
-    "alert_emails": ["jya@mozilla.com", "drno@ohlmeier.org"],
-    "expires_in_version": "88",
-    "description": "Percentage of total time spent *not* fully decoding video while element is hidden (simulated, even when feature is not enabled). Keyed by audio presence and by height ranges (boundaries: 240. 480, 576, 720, 1080, 2160), e.g.: 'V,0<h<=240', 'AV,h>2160'; and 'All' will accumulate all percentages. This is reported whenever an HTML Media Element is suspended or resumed, such as when the page is unloaded.",
+    "alert_emails": ["alwu@mozilla.com", "drno@ohlmeier.org"],
+    "expires_in_version": "92",
+    "description": "Percentage of total time spent *not* fully decoding video while element is hidden (simulated, even when feature is not enabled). Keyed by audio presence and by height ranges (boundaries: 240. 480, 576, 720, 1080, 2160), e.g.: 'V,0<h<=240', 'AV,h>2160'; and 'All' will accumulate all percentages. This is reported whenever the decoder stops. (eg. pausing media, encountering an error, changing to a new resource, page goes to the bf-cached or page gets discarded)",
     "keyed": true,
     "kind": "linear",
     "high": 100,
     "n_buckets": 50,
-    "bug_numbers": [1293145, 1570634, 1606206]
+    "bug_numbers": [1293145, 1570634, 1606206, 1685399],
+    "releaseChannelCollection": "opt-out"
   },
   "VIDEO_INTER_KEYFRAME_AVERAGE_MS" : {
     "record_in_processes": ["content"],
     "products": ["firefox"],
-    "alert_emails": ["jya@mozilla.com", "drno@ohlmeier.org"],
-    "expires_in_version": "88",
-    "description": "Average interval between video keyframes in played videos, in milliseconds. Keyed by audio presence and by height ranges (boundaries: 240. 480, 576, 720, 1080, 2160), e.g.: 'V,0<h<=240', 'AV,h>2160'; and 'All' will accumulate all percentages. This is reported whenever an HTML Media Element is suspended or resumed, such as when the page is unloaded.",
+    "alert_emails": ["alwu@mozilla.com", "drno@ohlmeier.org"],
+    "expires_in_version": "92",
+    "description": "Average interval between video keyframes in played videos, in milliseconds. Keyed by audio presence and by height ranges (boundaries: 240. 480, 576, 720, 1080, 2160), e.g.: 'V,0<h<=240', 'AV,h>2160'; and 'All' will accumulate all percentages. This is reported whenever the decoder stops. (eg. pausing media, encountering an error, changing to a new resource, page goes to the bf-cached or page gets discarded)",
     "keyed": true,
     "kind": "exponential",
     "high": 60000,
     "n_buckets": 100,
-    "bug_numbers": [1289668, 1570634, 1606206]
+    "bug_numbers": [1289668, 1570634, 1606206, 1685399]
   },
   "VIDEO_INTER_KEYFRAME_MAX_MS" : {
     "record_in_processes": ["content"],
     "products": ["firefox"],
-    "alert_emails": ["jya@mozilla.com", "drno@ohlmeier.org"],
-    "expires_in_version": "88",
-    "description": "Maximum interval between video keyframes in played videos, in milliseconds; '0' means only 1 keyframe found. Keyed by audio presence and by height ranges (boundaries: 240. 480, 576, 720, 1080, 2160), e.g.: 'V,0<h<=240', 'AV,h>2160'; and 'All' will accumulate all percentages. This is reported whenever an HTML Media Element is suspended or resumed, such as when the page is unloaded.",
+    "alert_emails": ["alwu@mozilla.com", "drno@ohlmeier.org"],
+    "expires_in_version": "92",
+    "description": "Maximum interval between video keyframes in played videos, in milliseconds; '0' means only 1 keyframe found. Keyed by audio presence and by height ranges (boundaries: 240. 480, 576, 720, 1080, 2160), e.g.: 'V,0<h<=240', 'AV,h>2160'; and 'All' will accumulate all percentages. This is reported whenever the decoder stops. (eg. pausing media, encountering an error, changing to a new resource, page goes to the bf-cached or page gets discarded)",
     "keyed": true,
     "kind": "exponential",
     "high": 60000,
     "n_buckets": 100,
-    "bug_numbers": [1289668, 1570634, 1606206]
+    "bug_numbers": [1289668, 1570634, 1606206, 1685399]
   },
   "VIDEO_SUSPEND_RECOVERY_TIME_MS" : {
     "record_in_processes": ["content"],
@@ -15417,17 +15562,6 @@
     "keyed": true,
     "description": "Permission requests (showing a permission prompt) by whether they were requested from code handling a user input event."
   },
-  "PROFILE_DIRECTORY_FILE_AGE": {
-    "record_in_processes": ["main"],
-    "products": ["firefox", "fennec"],
-    "alert_emails": ["jrediger@mozilla.com", "telemetry-client-dev@mozilla.com"],
-    "bug_numbers": [1458574],
-    "expires_in_version": "65",
-    "high": 1500,
-    "n_buckets": 20,
-    "kind": "exponential",
-    "description": "Age of files scanned in profile directory in days when determining initial profile age."
-  },
   "QUIRKS_MODE": {
     "record_in_processes": ["main", "content"],
     "products": ["firefox", "fennec"],
@@ -16254,8 +16388,8 @@
     "record_in_processes": ["main"],
     "products": ["firefox"],
     "alert_emails": ["pbz@mozilla.com", "seceng-telemetry@mozilla.com"],
-    "bug_numbers": [1672344],
-    "expires_in_version": "87",
+    "bug_numbers": [1672344, 1683103],
+    "expires_in_version": "90",
     "kind": "categorical",
     "releaseChannelCollection": "opt-out",
     "description": "Counts how often the external protocol handler dialog is shown. Labelled by protocol scheme. Keyed by the kind of browsing context the navigation was triggered from: TOPLEVEL: Top browser, SUB_SAMEORIGIN: Same origin iframe, SUB_CROSSORIGIN: Cross origin iframe, SUB_SANDBOX_ALLOW: Sandboxed iframe with relevant allow flags, SUB_SANDBOX_NOALLOW: Sandboxed iframe without relevant allow flags",

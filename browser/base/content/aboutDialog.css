@@ -65,6 +65,10 @@
   padding-inline-start: 0;
 }
 
+#updateDeck > *:not(.selected) {
+  visibility: hidden;
+}
+
 #updateButton,
 #updateDeck > hbox > label {
   margin-inline-start: 0;
@@ -97,6 +101,10 @@ description > .text-link:focus {
   padding: 0;
 }
 
+#submit-feedback {
+  padding-inline-start: 10px;
+}
+
 .bottom-link,
 .bottom-link:focus {
   text-align: center;
@@ -115,7 +123,7 @@ description > .text-link:focus {
 
 #icons > .icon {
   -moz-context-properties: fill;
-  margin: 8px 5px;
+  margin: 5px;
   width: 16px;
   height: 16px;
 }

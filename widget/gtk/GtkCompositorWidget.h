@@ -61,6 +61,8 @@ class GtkCompositorWidget : public CompositorWidget,
   EGLNativeWindowType GetEGLNativeWindow();
   int32_t GetDepth();
 
+  LayoutDeviceIntRegion GetTransparentRegion() override;
+
 #if defined(MOZ_X11)
   Display* XDisplay() const { return mXDisplay; }
   Window XWindow() const { return mXWindow; }

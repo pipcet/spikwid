@@ -25,6 +25,7 @@
 #include "mozilla/XREAppData.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/WheelEventBinding.h"
+#include "InputData.h"
 #include "nsAppRunner.h"
 #include <algorithm>
 
@@ -158,11 +159,43 @@ using mozilla::gl::GLContextGLX;
 // out to the bounding-box if there are more
 #define MAX_RECTS_IN_REGION 100
 
-const gint kEvents =
-    GDK_EXPOSURE_MASK | GDK_STRUCTURE_MASK | GDK_VISIBILITY_NOTIFY_MASK |
-    GDK_ENTER_NOTIFY_MASK | GDK_LEAVE_NOTIFY_MASK | GDK_BUTTON_PRESS_MASK |
-    GDK_BUTTON_RELEASE_MASK | GDK_SMOOTH_SCROLL_MASK | GDK_TOUCH_MASK |
-    GDK_SCROLL_MASK | GDK_POINTER_MOTION_MASK | GDK_PROPERTY_CHANGE_MASK;
+#if !GTK_CHECK_VERSION(3, 18, 0)
+
+struct _GdkEventTouchpadPinch {
+  GdkEventType type;
+  GdkWindow* window;
+  gint8 send_event;
+  gint8 phase;
+  gint8 n_fingers;
+  guint32 time;
+  gdouble x;
+  gdouble y;
+  gdouble dx;
+  gdouble dy;
+  gdouble angle_delta;
+  gdouble scale;
+  gdouble x_root, y_root;
+  guint state;
+};
+
+typedef enum {
+  GDK_TOUCHPAD_GESTURE_PHASE_BEGIN,
+  GDK_TOUCHPAD_GESTURE_PHASE_UPDATE,
+  GDK_TOUCHPAD_GESTURE_PHASE_END,
+  GDK_TOUCHPAD_GESTURE_PHASE_CANCEL
+} GdkTouchpadGesturePhase;
+
+GdkEventMask GDK_TOUCHPAD_GESTURE_MASK = static_cast<GdkEventMask>(1 << 24);
+GdkEventType GDK_TOUCHPAD_PINCH = static_cast<GdkEventType>(42);
+
+#endif
+
+const gint kEvents = GDK_TOUCHPAD_GESTURE_MASK | GDK_EXPOSURE_MASK |
+                     GDK_STRUCTURE_MASK | GDK_VISIBILITY_NOTIFY_MASK |
+                     GDK_ENTER_NOTIFY_MASK | GDK_LEAVE_NOTIFY_MASK |
+                     GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK |
+                     GDK_SMOOTH_SCROLL_MASK | GDK_TOUCH_MASK | GDK_SCROLL_MASK |
+                     GDK_POINTER_MOTION_MASK | GDK_PROPERTY_CHANGE_MASK;
 
 #if !GTK_CHECK_VERSION(3, 22, 0)
 typedef enum {
@@ -216,6 +249,7 @@ static gboolean key_release_event_cb(GtkWidget* widget, GdkEventKey* event);
 static gboolean property_notify_event_cb(GtkWidget* widget,
                                          GdkEventProperty* event);
 static gboolean scroll_event_cb(GtkWidget* widget, GdkEventScroll* event);
+
 static void hierarchy_changed_cb(GtkWidget* widget,
                                  GtkWidget* previous_toplevel);
 static gboolean window_state_event_cb(GtkWidget* widget,
@@ -231,6 +265,8 @@ static void widget_composited_changed_cb(GtkWidget* widget, gpointer user_data);
 static void scale_changed_cb(GtkWidget* widget, GParamSpec* aPSpec,
                              gpointer aPointer);
 static gboolean touch_event_cb(GtkWidget* aWidget, GdkEventTouch* aEvent);
+static gboolean generic_event_cb(GtkWidget* widget, GdkEvent* aEvent);
+
 static nsWindow* GetFirstNSWindowForGDKWindow(GdkWindow* aGdkWindow);
 
 #ifdef __cplusplus
@@ -271,7 +307,7 @@ static SystemTimeConverter<guint32>& TimeConverter() {
   return sTimeConverterSingleton;
 }
 
-nsWindow::CSDSupportLevel nsWindow::sCSDSupportLevel = CSD_SUPPORT_UNKNOWN;
+nsWindow::CSDSupportLevel nsWindow::sCSDSupportLevel = GTK_DECORATION_UNKNOWN;
 bool nsWindow::sTransparentMainWindow = false;
 static bool sIgnoreChangedSettings = false;
 
@@ -503,7 +539,7 @@ nsWindow::nsWindow() {
   mLastScrollEventTime = GDK_CURRENT_TIME;
 
   mPendingConfigures = 0;
-  mCSDSupportLevel = CSD_SUPPORT_NONE;
+  mCSDSupportLevel = GTK_DECORATION_NONE;
   mDrawToContainer = false;
   mDrawInTitlebar = false;
   mTitlebarBackdropState = false;
@@ -1033,7 +1069,7 @@ void nsWindow::SetSizeConstraints(const SizeConstraints& aConstraints) {
 }
 
 void nsWindow::AddCSDDecorationSize(int* aWidth, int* aHeight) {
-  if (mCSDSupportLevel == CSD_SUPPORT_CLIENT && mDrawInTitlebar) {
+  if (mCSDSupportLevel == GTK_DECORATION_CLIENT && mDrawInTitlebar) {
     GtkBorder decorationSize = GetCSDDecorationSize(!mIsTopLevel);
     *aWidth += decorationSize.left + decorationSize.right;
     *aHeight += decorationSize.top + decorationSize.bottom;
@@ -1239,9 +1275,11 @@ void nsWindow::Move(double aX, double aY) {
   }
 }
 
-bool nsWindow::IsWaylandPopup() {
-  return !mIsX11Display && mIsTopLevel && mWindowType == eWindowType_popup;
+bool nsWindow::IsPopup() {
+  return mIsTopLevel && mWindowType == eWindowType_popup;
 }
+
+bool nsWindow::IsWaylandPopup() { return !mIsX11Display && IsPopup(); }
 
 void nsWindow::HideWaylandTooltips() {
   while (gVisibleWaylandPopupWindows) {
@@ -2252,7 +2290,7 @@ LayoutDeviceIntRect nsWindow::GetClientBounds() {
 void nsWindow::UpdateClientOffsetFromFrameExtents() {
   AUTO_PROFILER_LABEL("nsWindow::UpdateClientOffsetFromFrameExtents", OTHER);
 
-  if (mCSDSupportLevel == CSD_SUPPORT_CLIENT && mDrawInTitlebar) {
+  if (mCSDSupportLevel == GTK_DECORATION_CLIENT && mDrawInTitlebar) {
     return;
   }
 
@@ -3156,7 +3194,7 @@ void nsWindow::OnSizeAllocate(GtkAllocation* aAllocation) {
   // is enabled. In either cases (Wayland or system titlebar is off on X11)
   // we don't get _NET_FRAME_EXTENTS X11 property notification so we derive
   // it from mContainer position.
-  if (mCSDSupportLevel == CSD_SUPPORT_CLIENT) {
+  if (mCSDSupportLevel == GTK_DECORATION_CLIENT) {
     if (!mIsX11Display || (mIsX11Display && mDrawInTitlebar)) {
       UpdateClientOffsetFromCSDWindow();
     }
@@ -3270,6 +3308,47 @@ void nsWindow::OnLeaveNotifyEvent(GdkEventCrossing* aEvent) {
   DispatchInputEvent(&event);
 }
 
+bool nsWindow::CheckResizerEdge(LayoutDeviceIntPoint aPoint,
+                                GdkWindowEdge& aOutEdge) {
+  // We only need to handle resizers for PIP window.
+  if (!mIsPIPWindow) {
+    return false;
+  }
+
+  // Don't allow resizing maximized windows.
+  if (mSizeState != nsSizeMode_Normal) {
+    return false;
+  }
+
+#define RESIZER_SIZE 15
+  int resizerSize = RESIZER_SIZE * GdkScaleFactor();
+  int topDist = aPoint.y;
+  int leftDist = aPoint.x;
+  int rightDist = mBounds.width - aPoint.x;
+  int bottomDist = mBounds.height - aPoint.y;
+
+  if (leftDist <= resizerSize && topDist <= resizerSize) {
+    aOutEdge = GDK_WINDOW_EDGE_NORTH_WEST;
+  } else if (rightDist <= resizerSize && topDist <= resizerSize) {
+    aOutEdge = GDK_WINDOW_EDGE_NORTH_EAST;
+  } else if (leftDist <= resizerSize && bottomDist <= resizerSize) {
+    aOutEdge = GDK_WINDOW_EDGE_SOUTH_WEST;
+  } else if (rightDist <= resizerSize && bottomDist <= resizerSize) {
+    aOutEdge = GDK_WINDOW_EDGE_SOUTH_EAST;
+  } else if (topDist <= resizerSize) {
+    aOutEdge = GDK_WINDOW_EDGE_NORTH;
+  } else if (leftDist <= resizerSize) {
+    aOutEdge = GDK_WINDOW_EDGE_WEST;
+  } else if (rightDist <= resizerSize) {
+    aOutEdge = GDK_WINDOW_EDGE_EAST;
+  } else if (bottomDist <= resizerSize) {
+    aOutEdge = GDK_WINDOW_EDGE_SOUTH;
+  } else {
+    return false;
+  }
+  return true;
+}
+
 template <typename Event>
 static LayoutDeviceIntPoint GetRefPoint(nsWindow* aWindow, Event* aEvent) {
   if (aEvent->window == aWindow->GetGdkWindow()) {
@@ -3330,6 +3409,39 @@ void nsWindow::OnMotionNotifyEvent(GdkEventMotion* aEvent) {
     }
   }
 #endif /* MOZ_X11 */
+
+  GdkWindowEdge edge;
+  if (CheckResizerEdge(GetRefPoint(this, aEvent), edge)) {
+    nsCursor cursor = eCursor_none;
+    switch (edge) {
+      case GDK_WINDOW_EDGE_NORTH:
+        cursor = eCursor_n_resize;
+        break;
+      case GDK_WINDOW_EDGE_NORTH_WEST:
+        cursor = eCursor_nw_resize;
+        break;
+      case GDK_WINDOW_EDGE_NORTH_EAST:
+        cursor = eCursor_ne_resize;
+        break;
+      case GDK_WINDOW_EDGE_WEST:
+        cursor = eCursor_w_resize;
+        break;
+      case GDK_WINDOW_EDGE_EAST:
+        cursor = eCursor_e_resize;
+        break;
+      case GDK_WINDOW_EDGE_SOUTH:
+        cursor = eCursor_s_resize;
+        break;
+      case GDK_WINDOW_EDGE_SOUTH_WEST:
+        cursor = eCursor_sw_resize;
+        break;
+      case GDK_WINDOW_EDGE_SOUTH_EAST:
+        cursor = eCursor_se_resize;
+        break;
+    }
+    SetCursor(cursor, nullptr, 0, 0);
+    return;
+  }
 
   WidgetMouseEvent event(true, eMouseMove, this, WidgetMouseEvent::eReal);
 
@@ -3498,6 +3610,15 @@ void nsWindow::OnButtonPressEvent(GdkEventButton* aEvent) {
 
   // check to see if we should rollup
   if (CheckForRollup(aEvent->x_root, aEvent->y_root, false, false)) return;
+
+  // Check to see if the event is within our window's resize region
+  GdkWindowEdge edge;
+  if (CheckResizerEdge(GetRefPoint(this, aEvent), edge)) {
+    gdk_window_begin_resize_drag(gtk_widget_get_window(mShell), edge,
+                                 aEvent->button, aEvent->x_root, aEvent->y_root,
+                                 aEvent->time);
+    return;
+  }
 
   gdouble pressure = 0;
   gdk_event_get_axis((GdkEvent*)aEvent, GDK_AXIS_PRESSURE, &pressure);
@@ -4082,7 +4203,7 @@ void nsWindow::OnScaleChanged(GtkAllocation* aAllocation) {
   // is enabled. In ither cases (Wayland or system titlebar is off on X11)
   // we don't get _NET_FRAME_EXTENTS X11 property notification so we derive
   // it from mContainer position.
-  if (mCSDSupportLevel == CSD_SUPPORT_CLIENT) {
+  if (mCSDSupportLevel == GTK_DECORATION_CLIENT) {
     if (!mIsX11Display || (mIsX11Display && mDrawInTitlebar)) {
       UpdateClientOffsetFromCSDWindow();
     }
@@ -4135,6 +4256,58 @@ nsWindow* nsWindow::GetTransientForWindowIfPopup() {
 
 bool nsWindow::IsHandlingTouchSequence(GdkEventSequence* aSequence) {
   return mHandleTouchEvent && mTouches.Contains(aSequence);
+}
+
+gboolean nsWindow::OnTouchpadPinchEvent(GdkEventTouchpadPinch* aEvent) {
+  if (StaticPrefs::apz_gtk_touchpad_pinch_enabled()) {
+    PinchGestureInput::PinchGestureType pinchGestureType =
+        PinchGestureInput::PINCHGESTURE_SCALE;
+    ScreenCoord CurrentSpan;
+    ScreenCoord PreviousSpan;
+
+    switch (aEvent->phase) {
+      case GDK_TOUCHPAD_GESTURE_PHASE_BEGIN:
+        pinchGestureType = PinchGestureInput::PINCHGESTURE_START;
+        CurrentSpan = aEvent->scale;
+
+        // Assign PreviousSpan --> 0.999 to make mDeltaY field of the
+        // WidgetWheelEvent that this PinchGestureInput event will be converted
+        // to not equal Zero as our discussion because we observed that the
+        // scale of the PHASE_BEGIN event is 1.
+        PreviousSpan = 0.999;
+        mLastPinchEventSpan = aEvent->scale;
+        break;
+
+      case GDK_TOUCHPAD_GESTURE_PHASE_UPDATE:
+        pinchGestureType = PinchGestureInput::PINCHGESTURE_SCALE;
+        if (aEvent->scale == mLastPinchEventSpan) {
+          return FALSE;
+        }
+        CurrentSpan = aEvent->scale;
+        PreviousSpan = mLastPinchEventSpan;
+        mLastPinchEventSpan = aEvent->scale;
+        break;
+
+      case GDK_TOUCHPAD_GESTURE_PHASE_END:
+        pinchGestureType = PinchGestureInput::PINCHGESTURE_END;
+        CurrentSpan = aEvent->scale;
+        PreviousSpan = mLastPinchEventSpan;
+        break;
+
+      default:
+        return FALSE;
+    }
+
+    LayoutDeviceIntPoint touchpadPoint = GetRefPoint(this, aEvent);
+    PinchGestureInput event(
+        pinchGestureType, PinchGestureInput::TRACKPAD, aEvent->time,
+        GetEventTimeStamp(aEvent->time), ExternalPoint(0, 0),
+        ScreenPoint(touchpadPoint.x, touchpadPoint.y), CurrentSpan,
+        PreviousSpan, KeymapWrapper::ComputeKeyModifiers(aEvent->state));
+
+    DispatchPinchGestureInput(event);
+  }
+  return TRUE;
 }
 
 gboolean nsWindow::OnTouchEvent(GdkEventTouch* aEvent) {
@@ -4223,7 +4396,8 @@ bool nsWindow::IsToplevelWindowTransparent() {
       } else {
         // Enable transparent toplevel window if we can draw main window
         // without system titlebar as Gtk+ themes use titlebar round corners.
-        sTransparentMainWindow = GetSystemCSDSupportLevel() != CSD_SUPPORT_NONE;
+        sTransparentMainWindow =
+            GetSystemCSDSupportLevel() != GTK_DECORATION_NONE;
       }
     }
     transparencyConfigured = true;
@@ -4425,8 +4599,7 @@ nsresult nsWindow::Create(nsIWidget* aParent, nsNativeWidget aNativeParent,
 
       if (mWindowType == eWindowType_toplevel ||
           mWindowType == eWindowType_dialog) {
-        bool isPopup = mIsPIPWindow || mWindowType == eWindowType_dialog;
-        mCSDSupportLevel = GetSystemCSDSupportLevel(isPopup);
+        mCSDSupportLevel = GetSystemCSDSupportLevel();
       }
 
       // Don't use transparency for PictureInPicture windows.
@@ -4610,7 +4783,7 @@ nsresult nsWindow::Create(nsIWidget* aParent, nsNativeWidget aNativeParent,
        */
       GtkStyleContext* style = gtk_widget_get_style_context(mShell);
       mDrawToContainer = !mIsX11Display ||
-                         (mCSDSupportLevel == CSD_SUPPORT_CLIENT) ||
+                         (mCSDSupportLevel == GTK_DECORATION_CLIENT) ||
                          gtk_style_context_has_class(style, "csd");
       eventWidget = (mDrawToContainer) ? container : mShell;
 
@@ -4852,6 +5025,10 @@ nsresult nsWindow::Create(nsIWidget* aParent, nsNativeWidget aNativeParent,
                      G_CALLBACK(button_release_event_cb), nullptr);
     g_signal_connect(eventWidget, "scroll-event", G_CALLBACK(scroll_event_cb),
                      nullptr);
+    if (gtk_check_version(3, 18, 0) == nullptr) {
+      g_signal_connect(eventWidget, "event", G_CALLBACK(generic_event_cb),
+                       nullptr);
+    }
     g_signal_connect(eventWidget, "touch-event", G_CALLBACK(touch_event_cb),
                      nullptr);
   }
@@ -5718,6 +5895,14 @@ nsresult nsWindow::UpdateTranslucentWindowAlphaInternal(const nsIntRect& aRect,
     ApplyTransparencyBitmap();
   }
   return NS_OK;
+}
+
+LayoutDeviceIntRect nsWindow::GetTitlebarRect() {
+  if (!mGdkWindow || !mDrawInTitlebar) {
+    return LayoutDeviceIntRect();
+  }
+
+  return LayoutDeviceIntRect(0, 0, mBounds.width, TITLEBAR_SHAPE_MASK_HEIGHT);
 }
 
 void nsWindow::UpdateTitlebarTransparencyBitmap() {
@@ -6975,6 +7160,25 @@ static gboolean touch_event_cb(GtkWidget* aWidget, GdkEventTouch* aEvent) {
   return window->OnTouchEvent(aEvent);
 }
 
+// This function called generic because there is no signal specific to touchpad
+// pinch events.
+static gboolean generic_event_cb(GtkWidget* widget, GdkEvent* aEvent) {
+  if (aEvent->type != GDK_TOUCHPAD_PINCH) {
+    return FALSE;
+  }
+  // Using reinterpret_cast because the touchpad_pinch field of GdkEvent is not
+  // available in GTK+ versions lower than v3.18
+  GdkEventTouchpadPinch* event =
+      reinterpret_cast<GdkEventTouchpadPinch*>(aEvent);
+
+  nsWindow* window = GetFirstNSWindowForGDKWindow(event->window);
+
+  if (!window) {
+    return FALSE;
+  }
+  return window->OnTouchpadPinchEvent(event);
+}
+
 //////////////////////////////////////////////////////////////////////
 // These are all of our drag and drop operations
 
@@ -7505,14 +7709,19 @@ void nsWindow::SetDrawsInTitlebar(bool aState) {
   LOG(("nsWindow::SetDrawsInTitlebar() [%p] State %d mCSDSupportLevel %d\n",
        (void*)this, aState, (int)mCSDSupportLevel));
 
-  if (!mShell || mCSDSupportLevel == CSD_SUPPORT_NONE ||
+  if (mIsPIPWindow && aState == mDrawInTitlebar) {
+    gtk_window_set_decorated(GTK_WINDOW(mShell), !aState);
+    return;
+  }
+
+  if (!mShell || mCSDSupportLevel == GTK_DECORATION_NONE ||
       aState == mDrawInTitlebar) {
     return;
   }
 
-  if (mCSDSupportLevel == CSD_SUPPORT_SYSTEM) {
+  if (mCSDSupportLevel == GTK_DECORATION_SYSTEM) {
     SetWindowDecoration(aState ? eBorderStyle_border : mBorderStyle);
-  } else if (mCSDSupportLevel == CSD_SUPPORT_CLIENT) {
+  } else if (mCSDSupportLevel == GTK_DECORATION_CLIENT) {
     LOG(("    Using CSD mode\n"));
 
     /* Window manager does not support GDK_DECOR_BORDER,
@@ -7629,10 +7838,10 @@ gint nsWindow::GdkScaleFactor() {
       (gint(*)(GdkWindow*))dlsym(RTLD_DEFAULT, "gdk_window_get_scale_factor");
   if (sGdkWindowGetScaleFactorPtr && scaledGdkWindow) {
     mWindowScaleFactor = (*sGdkWindowGetScaleFactorPtr)(scaledGdkWindow);
+    mWindowScaleFactorChanged = false;
   } else {
     mWindowScaleFactor = ScreenHelperGTK::GetGTKMonitorScaleFactor();
   }
-  mWindowScaleFactorChanged = false;
 
   return mWindowScaleFactor;
 }
@@ -7852,8 +8061,8 @@ nsresult nsWindow::SynthesizeNativeTouchPoint(uint32_t aPointerId,
   return NS_OK;
 }
 
-nsWindow::CSDSupportLevel nsWindow::GetSystemCSDSupportLevel(bool aIsPopup) {
-  if (sCSDSupportLevel != CSD_SUPPORT_UNKNOWN) {
+nsWindow::CSDSupportLevel nsWindow::GetSystemCSDSupportLevel() {
+  if (sCSDSupportLevel != GTK_DECORATION_UNKNOWN) {
     return sCSDSupportLevel;
   }
 
@@ -7861,11 +8070,11 @@ nsWindow::CSDSupportLevel nsWindow::GetSystemCSDSupportLevel(bool aIsPopup) {
   const char* decorationOverride = getenv("MOZ_GTK_TITLEBAR_DECORATION");
   if (decorationOverride) {
     if (strcmp(decorationOverride, "none") == 0) {
-      sCSDSupportLevel = CSD_SUPPORT_NONE;
+      sCSDSupportLevel = GTK_DECORATION_NONE;
     } else if (strcmp(decorationOverride, "client") == 0) {
-      sCSDSupportLevel = CSD_SUPPORT_CLIENT;
+      sCSDSupportLevel = GTK_DECORATION_CLIENT;
     } else if (strcmp(decorationOverride, "system") == 0) {
-      sCSDSupportLevel = CSD_SUPPORT_SYSTEM;
+      sCSDSupportLevel = GTK_DECORATION_SYSTEM;
     }
     return sCSDSupportLevel;
   }
@@ -7873,7 +8082,7 @@ nsWindow::CSDSupportLevel nsWindow::GetSystemCSDSupportLevel(bool aIsPopup) {
   // nsWindow::GetSystemCSDSupportLevel can be called from various threads
   // so we can't use gfxPlatformGtk here.
   if (!GDK_IS_X11_DISPLAY(gdk_display_get_default())) {
-    sCSDSupportLevel = CSD_SUPPORT_CLIENT;
+    sCSDSupportLevel = GTK_DECORATION_CLIENT;
     return sCSDSupportLevel;
   }
 
@@ -7881,60 +8090,60 @@ nsWindow::CSDSupportLevel nsWindow::GetSystemCSDSupportLevel(bool aIsPopup) {
   if (currentDesktop) {
     // GNOME Flashback (fallback)
     if (strstr(currentDesktop, "GNOME-Flashback:GNOME") != nullptr) {
-      sCSDSupportLevel = aIsPopup ? CSD_SUPPORT_CLIENT : CSD_SUPPORT_SYSTEM;
+      sCSDSupportLevel = GTK_DECORATION_SYSTEM;
       // Pop Linux Bug 1629198
     } else if (strstr(currentDesktop, "pop:GNOME") != nullptr) {
-      sCSDSupportLevel = CSD_SUPPORT_CLIENT;
+      sCSDSupportLevel = GTK_DECORATION_CLIENT;
       // gnome-shell
     } else if (strstr(currentDesktop, "GNOME") != nullptr) {
-      sCSDSupportLevel = aIsPopup ? CSD_SUPPORT_CLIENT : CSD_SUPPORT_SYSTEM;
+      sCSDSupportLevel = GTK_DECORATION_SYSTEM;
     } else if (strstr(currentDesktop, "XFCE") != nullptr) {
-      sCSDSupportLevel = CSD_SUPPORT_CLIENT;
+      sCSDSupportLevel = GTK_DECORATION_CLIENT;
     } else if (strstr(currentDesktop, "X-Cinnamon") != nullptr) {
-      sCSDSupportLevel = CSD_SUPPORT_SYSTEM;
+      sCSDSupportLevel = GTK_DECORATION_SYSTEM;
       // KDE Plasma
     } else if (strstr(currentDesktop, "KDE") != nullptr) {
-      sCSDSupportLevel = CSD_SUPPORT_CLIENT;
+      sCSDSupportLevel = GTK_DECORATION_CLIENT;
     } else if (strstr(currentDesktop, "Enlightenment") != nullptr) {
-      sCSDSupportLevel = CSD_SUPPORT_CLIENT;
+      sCSDSupportLevel = GTK_DECORATION_CLIENT;
     } else if (strstr(currentDesktop, "LXDE") != nullptr) {
-      sCSDSupportLevel = CSD_SUPPORT_CLIENT;
+      sCSDSupportLevel = GTK_DECORATION_CLIENT;
     } else if (strstr(currentDesktop, "openbox") != nullptr) {
-      sCSDSupportLevel = CSD_SUPPORT_CLIENT;
+      sCSDSupportLevel = GTK_DECORATION_CLIENT;
     } else if (strstr(currentDesktop, "i3") != nullptr) {
-      sCSDSupportLevel = CSD_SUPPORT_NONE;
+      sCSDSupportLevel = GTK_DECORATION_NONE;
     } else if (strstr(currentDesktop, "MATE") != nullptr) {
-      sCSDSupportLevel = CSD_SUPPORT_CLIENT;
+      sCSDSupportLevel = GTK_DECORATION_CLIENT;
       // Ubuntu Unity
     } else if (strstr(currentDesktop, "Unity") != nullptr) {
-      sCSDSupportLevel = CSD_SUPPORT_SYSTEM;
+      sCSDSupportLevel = GTK_DECORATION_SYSTEM;
       // Elementary OS
     } else if (strstr(currentDesktop, "Pantheon") != nullptr) {
-      sCSDSupportLevel = CSD_SUPPORT_SYSTEM;
+      sCSDSupportLevel = GTK_DECORATION_SYSTEM;
     } else if (strstr(currentDesktop, "LXQt") != nullptr) {
-      sCSDSupportLevel = CSD_SUPPORT_SYSTEM;
+      sCSDSupportLevel = GTK_DECORATION_SYSTEM;
     } else if (strstr(currentDesktop, "Deepin") != nullptr) {
-      sCSDSupportLevel = CSD_SUPPORT_CLIENT;
+      sCSDSupportLevel = GTK_DECORATION_CLIENT;
     } else {
 // Release or beta builds are not supposed to be broken
 // so disable titlebar rendering on untested/unknown systems.
 #if defined(RELEASE_OR_BETA)
-      sCSDSupportLevel = CSD_SUPPORT_NONE;
+      sCSDSupportLevel = GTK_DECORATION_NONE;
 #else
-      sCSDSupportLevel = CSD_SUPPORT_CLIENT;
+      sCSDSupportLevel = GTK_DECORATION_CLIENT;
 #endif
     }
   } else {
-    sCSDSupportLevel = CSD_SUPPORT_NONE;
+    sCSDSupportLevel = GTK_DECORATION_NONE;
   }
 
   // GTK_CSD forces CSD mode - use also CSD because window manager
   // decorations does not work with CSD.
   // We check GTK_CSD as well as gtk_window_should_use_csd() does.
-  if (sCSDSupportLevel == CSD_SUPPORT_SYSTEM) {
+  if (sCSDSupportLevel == GTK_DECORATION_SYSTEM) {
     const char* csdOverride = getenv("GTK_CSD");
     if (csdOverride && g_strcmp0(csdOverride, "1") == 0) {
-      sCSDSupportLevel = CSD_SUPPORT_CLIENT;
+      sCSDSupportLevel = GTK_DECORATION_CLIENT;
     }
   }
 
@@ -7975,7 +8184,7 @@ bool nsWindow::HideTitlebarByDefault() {
 
     // Don't hide titlebar when it's disabled on current desktop.
     const char* currentDesktop = getenv("XDG_CURRENT_DESKTOP");
-    if (!currentDesktop || GetSystemCSDSupportLevel() == CSD_SUPPORT_NONE) {
+    if (!currentDesktop || GetSystemCSDSupportLevel() == GTK_DECORATION_NONE) {
       return false;
     }
 

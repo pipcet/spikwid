@@ -340,13 +340,13 @@ static XDRResult XDRParserAtomTable(XDRState<mode>* xdr,
     }
     MOZ_TRY(XDRAtomCount(xdr, &atomCount));
 
-    for (auto& entry : stencil.parserAtomData) {
+    for (uint32_t i = 0; i < atomVectorLength; i++) {
+      auto& entry = stencil.parserAtomData[i];
       if (!entry) {
         continue;
       }
       if (entry->isUsedByStencil()) {
-        uint32_t index = entry->toParserAtomIndex();
-        MOZ_TRY(xdr->codeUint32(&index));
+        MOZ_TRY(xdr->codeUint32(&i));
         MOZ_TRY(XDRParserAtomEntry(xdr, &entry));
       }
     }
@@ -798,9 +798,6 @@ XDRResult XDRStencilDecoder::codeStencils(
     ReportOutOfMemory(cx());
     return fail(JS::TranscodeResult_Throw);
   }
-
-  // All delazification share CompilationStencilSet.allocForDelazifications.
-  stencilAlloc_ = &stencilSet.allocForDelazifications;
 
   for (size_t i = 1; i < nchunks_; i++) {
     stencilSet.delazifications.infallibleEmplaceBack();

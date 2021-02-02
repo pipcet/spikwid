@@ -169,6 +169,9 @@ GfxInfo::GetDesktopEnvironment(nsAString& aDesktopEnvironment) {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
 
+NS_IMETHODIMP
+GfxInfo::GetTestType(nsAString& aTestType) { return NS_ERROR_NOT_IMPLEMENTED; }
+
 static nsresult GetKeyValue(const WCHAR* keyLocation, const WCHAR* keyName,
                             uint32_t& destValue, int type) {
   MOZ_ASSERT(type == REG_DWORD || type == REG_QWORD);
@@ -865,9 +868,9 @@ nsresult GfxInfo::Init() {
 
   // Get monitor information
   for (int deviceIndex = 0;; deviceIndex++) {
-    DISPLAY_DEVICEA device;
+    DISPLAY_DEVICEW device;
     device.cb = sizeof(device);
-    if (!::EnumDisplayDevicesA(nullptr, deviceIndex, &device, 0)) {
+    if (!::EnumDisplayDevicesW(nullptr, deviceIndex, &device, 0)) {
       break;
     }
 
@@ -875,10 +878,10 @@ nsresult GfxInfo::Init() {
       continue;
     }
 
-    DEVMODEA mode;
+    DEVMODEW mode;
     mode.dmSize = sizeof(mode);
     mode.dmDriverExtra = 0;
-    if (!::EnumDisplaySettingsA(device.DeviceName, ENUM_CURRENT_SETTINGS,
+    if (!::EnumDisplaySettingsW(device.DeviceName, ENUM_CURRENT_SETTINGS,
                                 &mode)) {
       continue;
     }
@@ -890,6 +893,7 @@ nsresult GfxInfo::Init() {
     displayInfo.mRefreshRate = mode.dmDisplayFrequency;
     displayInfo.mIsPseudoDisplay =
         !!(device.StateFlags & DISPLAY_DEVICE_MIRRORING_DRIVER);
+    displayInfo.mDeviceString = device.DeviceString;
 
     mDisplayInfo.AppendElement(displayInfo);
   }
@@ -1068,9 +1072,10 @@ NS_IMETHODIMP
 GfxInfo::GetDisplayInfo(nsTArray<nsString>& aDisplayInfo) {
   for (auto displayInfo : mDisplayInfo) {
     nsString value;
-    value.AppendPrintf("%dx%d@%dHz %s", displayInfo.mScreenWidth,
+    value.AppendPrintf("%dx%d@%dHz %s %s", displayInfo.mScreenWidth,
                        displayInfo.mScreenHeight, displayInfo.mRefreshRate,
-                       displayInfo.mIsPseudoDisplay ? "Pseudo Display" : "");
+                       displayInfo.mIsPseudoDisplay ? "Pseudo Display :" : ":",
+                       NS_ConvertUTF16toUTF8(displayInfo.mDeviceString).get());
 
     aDisplayInfo.AppendElement(value);
   }
@@ -1761,13 +1766,14 @@ const nsTArray<GfxDriverInfo>& GfxInfo::GetGfxDriverInfo() {
 
     ////////////////////////////////////
     // FEATURE_WEBRENDER
-
+#ifndef EARLY_BETA_OR_EARLIER
     // Block some specific Nvidia cards for being too low-powered.
     APPEND_TO_DRIVER_BLOCKLIST2(
         OperatingSystem::Windows, DeviceFamily::NvidiaBlockWebRender,
         nsIGfxInfo::FEATURE_WEBRENDER, nsIGfxInfo::FEATURE_BLOCKED_DEVICE,
         DRIVER_LESS_THAN, GfxDriverInfo::allDriverVersions,
         "FEATURE_UNQUALIFIED_WEBRENDER_NVIDIA_BLOCKED");
+#endif
 
     // Block 8.56.1.15/16
     APPEND_TO_DRIVER_BLOCKLIST2(OperatingSystem::Windows, DeviceFamily::AtiAll,
@@ -1778,14 +1784,12 @@ const nsTArray<GfxDriverInfo>& GfxInfo::GetGfxDriverInfo() {
 
     ////////////////////////////////////
     // FEATURE_WEBRENDER - ALLOWLIST
-#ifdef EARLY_BETA_OR_EARLIER
     APPEND_TO_DRIVER_BLOCKLIST2_EXT(
         OperatingSystem::Windows, ScreenSizeStatus::All, BatteryStatus::All,
         DesktopEnvironment::All, WindowProtocol::All, DriverVendor::All,
         DeviceFamily::AmdR600, nsIGfxInfo::FEATURE_WEBRENDER,
         nsIGfxInfo::FEATURE_ALLOW_ALWAYS, DRIVER_COMPARISON_IGNORED,
         V(0, 0, 0, 0), "FEATURE_ROLLOUT_AMD_R600");
-#endif
 
     APPEND_TO_DRIVER_BLOCKLIST2_EXT(
         OperatingSystem::Windows, ScreenSizeStatus::All, BatteryStatus::All,
@@ -1846,16 +1850,14 @@ const nsTArray<GfxDriverInfo>& GfxInfo::GetGfxDriverInfo() {
 
     ////////////////////////////////////
     // FEATURE_WEBRENDER_SOFTWARE - ALLOWLIST
-#ifdef NIGHTLY_BUILD
+#ifdef EARLY_BETA_OR_EARLIER
 #  if defined(_M_IX86) || defined(_M_X64) || defined(__i386__) || \
       defined(__i386) || defined(__amd64__)
-    APPEND_TO_DRIVER_BLOCKLIST2_EXT(
-        OperatingSystem::Windows, ScreenSizeStatus::SmallAndMedium,
-        BatteryStatus::All, DesktopEnvironment::All, WindowProtocol::All,
-        DriverVendor::All, DeviceFamily::All,
-        nsIGfxInfo::FEATURE_WEBRENDER_SOFTWARE,
-        nsIGfxInfo::FEATURE_ALLOW_ALWAYS, DRIVER_COMPARISON_IGNORED,
-        V(0, 0, 0, 0), "FEATURE_ROLLOUT_NIGHTLY_SOFTWARE_WR_S_M_SCRN");
+    APPEND_TO_DRIVER_BLOCKLIST2(OperatingSystem::Windows, DeviceFamily::All,
+                                nsIGfxInfo::FEATURE_WEBRENDER_SOFTWARE,
+                                nsIGfxInfo::FEATURE_ALLOW_ALWAYS,
+                                DRIVER_COMPARISON_IGNORED, V(0, 0, 0, 0),
+                                "FEATURE_ROLLOUT_NIGHTLY_SOFTWARE_WR_S_M_SCRN");
 #  endif
 #endif
   }

@@ -13,7 +13,7 @@ const { XPCOMUtils } = ChromeUtils.import(
 XPCOMUtils.defineLazyModuleGetters(this, {
   AppConstants: "resource://gre/modules/AppConstants.jsm",
   BrowserSearchTelemetry: "resource:///modules/BrowserSearchTelemetry.jsm",
-  BrowserUtils: "resource://gre/modules/BrowserUtils.jsm",
+  BrowserUIUtils: "resource:///modules/BrowserUIUtils.jsm",
   ExtensionSearchHandler: "resource://gre/modules/ExtensionSearchHandler.jsm",
   ObjectUtils: "resource://gre/modules/ObjectUtils.jsm",
   PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.jsm",
@@ -171,7 +171,7 @@ class UrlbarInput {
           return this.inputField[property];
         },
         set(val) {
-          return (this.inputField[property] = val);
+          this.inputField[property] = val;
         },
       });
     }
@@ -330,7 +330,7 @@ class UrlbarInput {
       // only if there's no opener (bug 370555).
       if (
         this.window.isInitialPage(uri) &&
-        BrowserUtils.checkEmptyPageOrigin(
+        BrowserUIUtils.checkEmptyPageOrigin(
           this.window.gBrowser.selectedBrowser,
           uri
         )
@@ -349,7 +349,7 @@ class UrlbarInput {
         !this.window.isBlankPageURL(uri.spec) || uri.schemeIs("moz-extension");
     } else if (
       this.window.isInitialPage(value) &&
-      BrowserUtils.checkEmptyPageOrigin(this.window.gBrowser.selectedBrowser)
+      BrowserUIUtils.checkEmptyPageOrigin(this.window.gBrowser.selectedBrowser)
     ) {
       value = "";
       valid = true;
@@ -1076,10 +1076,10 @@ class UrlbarInput {
     if (
       result.type == UrlbarUtils.RESULT_TYPE.URL &&
       UrlbarPrefs.get("trimURLs") &&
-      result.payload.url.startsWith(BrowserUtils.trimURLProtocol)
+      result.payload.url.startsWith(BrowserUIUtils.trimURLProtocol)
     ) {
       let fixupInfo = this._getURIFixupInfo(
-        BrowserUtils.trimURL(result.payload.url)
+        BrowserUIUtils.trimURL(result.payload.url)
       );
       if (fixupInfo?.keywordAsSent) {
         allowTrim = false;
@@ -1560,7 +1560,7 @@ class UrlbarInput {
   }
 
   set value(val) {
-    return this._setValue(val, true);
+    this._setValue(val, true);
   }
 
   get lastSearchString() {
@@ -2089,12 +2089,12 @@ class UrlbarInput {
     // url. First check for a trimmed value.
 
     if (
-      !selectedVal.startsWith(BrowserUtils.trimURLProtocol) &&
+      !selectedVal.startsWith(BrowserUIUtils.trimURLProtocol) &&
       // Note _trimValue may also trim a trailing slash, thus we can't just do
       // a straight string compare to tell if the protocol was trimmed.
       !displaySpec.startsWith(this._trimValue(displaySpec))
     ) {
-      selectedVal = BrowserUtils.trimURLProtocol + selectedVal;
+      selectedVal = BrowserUIUtils.trimURLProtocol + selectedVal;
     }
 
     return selectedVal;
@@ -2155,7 +2155,7 @@ class UrlbarInput {
     const isOneOff = this.view.oneOffSearchButtons.eventTargetIsAOneOff(event);
 
     BrowserSearchTelemetry.recordSearch(
-      this.window.gBrowser,
+      this.window.gBrowser.selectedBrowser,
       engine,
       // Without checking !isOneOff, we might record the string
       // oneoff_urlbar-searchmode in the SEARCH_COUNTS probe (in addition to
@@ -2176,7 +2176,7 @@ class UrlbarInput {
    *   The trimmed string
    */
   _trimValue(val) {
-    return UrlbarPrefs.get("trimURLs") ? BrowserUtils.trimURL(val) : val;
+    return UrlbarPrefs.get("trimURLs") ? BrowserUIUtils.trimURL(val) : val;
   }
 
   /**
@@ -2921,7 +2921,7 @@ class UrlbarInput {
     // We should do nothing during composition or if composition was canceled
     // and we didn't close the popup on composition start.
     if (
-      UrlbarPrefs.get("imeCompositionClosesPanel") &&
+      !UrlbarPrefs.get("keepPanelOpenDuringImeComposition") &&
       (compositionState == UrlbarUtils.COMPOSITION.COMPOSING ||
         (compositionState == UrlbarUtils.COMPOSITION.CANCELED &&
           !compositionClosedPopup))
@@ -3106,7 +3106,7 @@ class UrlbarInput {
     }
     this._compositionState = UrlbarUtils.COMPOSITION.COMPOSING;
 
-    if (!UrlbarPrefs.get("imeCompositionClosesPanel")) {
+    if (UrlbarPrefs.get("keepPanelOpenDuringImeComposition")) {
       return;
     }
 
@@ -3136,7 +3136,7 @@ class UrlbarInput {
       throw new Error("Trying to stop a non existing composition?");
     }
 
-    if (UrlbarPrefs.get("imeCompositionClosesPanel")) {
+    if (!UrlbarPrefs.get("keepPanelOpenDuringImeComposition")) {
       // Clear the selection and the cached result, since they refer to the
       // state before this composition. A new input even will be generated
       // after this.
@@ -3257,10 +3257,11 @@ function getDroppableData(event) {
     }
 
     try {
-      // If this throws, urlSecurityCheck would also throw, as that's what it
-      // does with things that don't pass the IO service's newURI constructor
-      // without fixup. It's conceivable we may want to relax this check in
-      // the future (so e.g. www.foo.com gets fixed up), but not right now.
+      // If this throws, checkLoadURStrWithPrincipal would also throw,
+      // as that's what it does with things that don't pass the IO
+      // service's newURI constructor without fixup. It's conceivable we
+      // may want to relax this check in the future (so e.g. www.foo.com
+      // gets fixed up), but not right now.
       let url = new URL(href);
       // If we succeed, try to pass security checks. If this works, return the
       // URL object. If the *security checks* fail, return null.
@@ -3268,9 +3269,9 @@ function getDroppableData(event) {
         let principal = Services.droppedLinkHandler.getTriggeringPrincipal(
           event
         );
-        BrowserUtils.urlSecurityCheck(
-          url,
+        Services.scriptSecurityManager.checkLoadURIStrWithPrincipal(
           principal,
+          url.href,
           Ci.nsIScriptSecurityManager.DISALLOW_INHERIT_PRINCIPAL
         );
         return url;

@@ -6,7 +6,6 @@
 
 #include "gc/Marking-inl.h"
 
-#include "mozilla/ArrayUtils.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/IntegerRange.h"
 #include "mozilla/Maybe.h"
@@ -388,10 +387,6 @@ void js::gc::AssertRootMarkingPhase(JSTracer* trc) {
 /*** Tracing Interface ******************************************************/
 
 template <typename T>
-bool DoCallback(GenericTracer* trc, T** thingp, const char* name);
-template <typename T>
-bool DoCallback(GenericTracer* trc, T* thingp, const char* name);
-template <typename T>
 void DoMarking(GCMarker* gcmarker, T* thing);
 template <typename T>
 void DoMarking(GCMarker* gcmarker, const T& thing);
@@ -588,14 +583,17 @@ void js::TraceProcessGlobalRoot(JSTracer* trc, T* thing, const char* name) {
   // them. Fortunately, atoms (permanent and non) cannot refer to other GC
   // things so they do not need to go through the mark stack and may simply
   // be marked directly.  Moreover, well-known symbols can refer only to
-  // permanent atoms, so likewise require no subsquent marking.
-  CheckTracedThing(trc, *ConvertToBase(&thing));
-  AutoClearTracingSource acts(trc);
+  // permanent atoms, so likewise require no subsequent marking.
   if (trc->isMarkingTracer()) {
+    CheckTracedThing(trc, *ConvertToBase(&thing));
+    AutoClearTracingSource acts(trc);
     thing->asTenured().markIfUnmarked(gc::MarkColor::Black);
-  } else {
-    DoCallback(trc->asCallbackTracer(), ConvertToBase(&thing), name);
+    return;
   }
+
+  T* tmp = thing;
+  TraceEdgeInternal(trc, ConvertToBase(&tmp), name);
+  MOZ_ASSERT(tmp == thing);  // We shouldn't move process global roots.
 }
 template void js::TraceProcessGlobalRoot<JSAtom>(JSTracer*, JSAtom*,
                                                  const char*);
@@ -659,6 +657,48 @@ void js::TraceGCCellPtrRoot(JSTracer* trc, JS::GCCellPtr* thingp,
   } else if (traced != thingp->asCell()) {
     *thingp = JS::GCCellPtr(traced, thingp->kind());
   }
+}
+
+template <typename T>
+inline bool DoCallback(GenericTracer* trc, T** thingp, const char* name) {
+  CheckTracedThing(trc, *thingp);
+  JS::AutoTracingName ctx(trc, name);
+
+  T* thing = *thingp;
+  T* post = DispatchToOnEdge(trc, thing);
+  if (post != thing) {
+    *thingp = post;
+  }
+
+  return post;
+}
+
+template <typename T>
+inline bool DoCallback(GenericTracer* trc, T* thingp, const char* name) {
+  JS::AutoTracingName ctx(trc, name);
+
+  // Return true by default. For some types the lambda below won't be called.
+  bool ret = true;
+  auto thing = MapGCThingTyped(*thingp, [trc, &ret](auto thing) {
+    CheckTracedThing(trc, thing);
+
+    auto* post = DispatchToOnEdge(trc, thing);
+    if (!post) {
+      ret = false;
+      return TaggedPtr<T>::empty();
+    }
+
+    return TaggedPtr<T>::wrap(post);
+  });
+
+  // Only update *thingp if the value changed, to avoid TSan false positives for
+  // template objects when using DumpHeapTracer or UbiNode tracers while Ion
+  // compiling off-thread.
+  if (thing.isSome() && thing.value() != *thingp) {
+    *thingp = thing.value();
+  }
+
+  return ret;
 }
 
 // This method is responsible for dynamic dispatch to the real tracer
@@ -2121,35 +2161,20 @@ MarkStack::~MarkStack() {
   MOZ_ASSERT(iteratorCount_ == 0);
 }
 
-bool MarkStack::init(JSGCMode gcMode, StackType which) {
+bool MarkStack::init(StackType which, bool incrementalGCEnabled) {
   MOZ_ASSERT(isEmpty());
-
-  return setCapacityForMode(gcMode, which);
+  return setStackCapacity(which, incrementalGCEnabled);
 }
 
-void MarkStack::setGCMode(JSGCMode gcMode) {
-  // Ignore failure to resize the stack and keep using the existing stack.
-  mozilla::Unused << setCapacityForMode(gcMode, MainStack);
-}
-
-bool MarkStack::setCapacityForMode(JSGCMode mode, StackType which) {
+bool MarkStack::setStackCapacity(StackType which, bool incrementalGCEnabled) {
   size_t capacity;
 
   if (which == AuxiliaryStack) {
     capacity = SMALL_MARK_STACK_BASE_CAPACITY;
+  } else if (incrementalGCEnabled) {
+    capacity = INCREMENTAL_MARK_STACK_BASE_CAPACITY;
   } else {
-    switch (mode) {
-      case JSGC_MODE_GLOBAL:
-      case JSGC_MODE_ZONE:
-        capacity = NON_INCREMENTAL_MARK_STACK_BASE_CAPACITY;
-        break;
-      case JSGC_MODE_INCREMENTAL:
-      case JSGC_MODE_ZONE_INCREMENTAL:
-        capacity = INCREMENTAL_MARK_STACK_BASE_CAPACITY;
-        break;
-      default:
-        MOZ_CRASH("bad gc mode");
-    }
+    capacity = NON_INCREMENTAL_MARK_STACK_BASE_CAPACITY;
   }
 
   if (capacity > maxCapacity_) {
@@ -2236,14 +2261,14 @@ inline MarkStack::SlotsOrElementsRange MarkStack::popSlotsOrElementsRange() {
 }
 
 inline bool MarkStack::ensureSpace(size_t count) {
-  if ((topIndex_ + count) <= capacity()) {
+  if (MOZ_LIKELY((topIndex_ + count) <= capacity())) {
     return !js::oom::ShouldFailWithOOM();
   }
 
   return enlarge(count);
 }
 
-bool MarkStack::enlarge(size_t count) {
+MOZ_NEVER_INLINE bool MarkStack::enlarge(size_t count) {
   size_t newCapacity = std::min(maxCapacity_.ref(), capacity() * 2);
   if (newCapacity < capacity() + count) {
     return false;
@@ -2353,9 +2378,10 @@ GCMarker::GCMarker(JSRuntime* rt)
   setMarkColorUnchecked(MarkColor::Black);
 }
 
-bool GCMarker::init(JSGCMode gcMode) {
-  return stack.init(gcMode, gc::MarkStack::MainStack) &&
-         auxStack.init(gcMode, gc::MarkStack::AuxiliaryStack);
+bool GCMarker::init() {
+  bool incrementalGCEnabled = runtime()->gc.isIncrementalGCEnabled();
+  return stack.init(gc::MarkStack::MainStack, incrementalGCEnabled) &&
+         auxStack.init(gc::MarkStack::AuxiliaryStack, incrementalGCEnabled);
 }
 
 void GCMarker::start() {
@@ -2450,10 +2476,10 @@ void GCMarker::setMainStackColor(gc::MarkColor newColor) {
 }
 
 template <typename T>
-void GCMarker::pushTaggedPtr(T* ptr) {
+inline void GCMarker::pushTaggedPtr(T* ptr) {
   checkZone(ptr);
   if (!currentStack().push(ptr)) {
-    delayMarkingChildren(ptr);
+    delayMarkingChildrenOnOOM(ptr);
   }
 }
 
@@ -2468,7 +2494,7 @@ void GCMarker::pushValueRange(JSObject* obj, SlotsOrElementsKind kind,
   }
 
   if (!currentStack().push(obj, kind, start)) {
-    delayMarkingChildren(obj);
+    delayMarkingChildrenOnOOM(obj);
   }
 }
 
@@ -2596,6 +2622,10 @@ void GCMarker::leaveWeakMarkingMode() {
 
   // The gcWeakKeys table is still populated and may be used during a future
   // weak marking mode within this GC.
+}
+
+MOZ_NEVER_INLINE void GCMarker::delayMarkingChildrenOnOOM(Cell* cell) {
+  delayMarkingChildren(cell);
 }
 
 void GCMarker::delayMarkingChildren(Cell* cell) {
@@ -3143,8 +3173,11 @@ void js::TenuringTracer::traceBigInt(JS::BigInt* bi) {
 }
 
 #ifdef DEBUG
+static inline uintptr_t OffsetFromChunkStart(void* p) {
+  return uintptr_t(p) & gc::ChunkMask;
+}
 static inline ptrdiff_t OffsetToChunkEnd(void* p) {
-  return ChunkLocationOffset - (uintptr_t(p) & gc::ChunkMask);
+  return ChunkSize - (uintptr_t(p) & gc::ChunkMask);
 }
 #endif
 
@@ -3213,6 +3246,7 @@ JSObject* js::TenuringTracer::moveToTenuredSlow(JSObject* src) {
   tenuredCells++;
 
   // Copy the Cell contents.
+  MOZ_ASSERT(OffsetFromChunkStart(src) >= sizeof(ChunkBase));
   MOZ_ASSERT(OffsetToChunkEnd(src) >= ptrdiff_t(srcSize));
   js_memcpy(dst, src, srcSize);
 
@@ -3260,6 +3294,7 @@ inline JSObject* js::TenuringTracer::movePlainObjectToTenured(
   tenuredCells++;
 
   // Copy the Cell contents.
+  MOZ_ASSERT(OffsetFromChunkStart(src) >= sizeof(ChunkBase));
   MOZ_ASSERT(OffsetToChunkEnd(src) >= ptrdiff_t(srcSize));
   js_memcpy(dst, src, srcSize);
 
@@ -4101,8 +4136,9 @@ uintptr_t* GetMarkWordAddress(Cell* cell) {
 
   MarkBitmapWord* wordp;
   uintptr_t mask;
-  js::gc::detail::GetGCThingMarkWordAndMask(uintptr_t(cell), ColorBit::BlackBit,
-                                            &wordp, &mask);
+  TenuredChunkBase* chunk = gc::detail::GetCellChunkBase(&cell->asTenured());
+  chunk->markBits.getMarkWordAndMask(&cell->asTenured(), ColorBit::BlackBit,
+                                     &wordp, &mask);
   return reinterpret_cast<uintptr_t*>(wordp);
 }
 
@@ -4116,8 +4152,8 @@ uintptr_t GetMarkMask(Cell* cell, uint32_t colorBit) {
   ColorBit bit = colorBit == 0 ? ColorBit::BlackBit : ColorBit::GrayOrBlackBit;
   MarkBitmapWord* wordp;
   uintptr_t mask;
-  js::gc::detail::GetGCThingMarkWordAndMask(uintptr_t(cell), bit, &wordp,
-                                            &mask);
+  TenuredChunkBase* chunk = gc::detail::GetCellChunkBase(&cell->asTenured());
+  chunk->markBits.getMarkWordAndMask(&cell->asTenured(), bit, &wordp, &mask);
   return mask;
 }
 

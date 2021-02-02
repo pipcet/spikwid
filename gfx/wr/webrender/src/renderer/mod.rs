@@ -107,7 +107,6 @@ use std::{
     f32,
     mem,
     num::NonZeroUsize,
-    os::raw::c_void,
     path::PathBuf,
     rc::Rc,
     sync::Arc,
@@ -1059,11 +1058,7 @@ impl Renderer {
         // On other GL platforms, like macOS or Android, creating many PBOs is very inefficient.
         // This is what happens in GPU cache updates in PBO path. Instead, we switch everything
         // except software GL to use the GPU scattered updates.
-        let supports_scatter = match gl_type {
-            gl::GlType::Gl => true,
-            gl::GlType::Gles => device.supports_extension("GL_EXT_color_buffer_float"),
-        };
-
+        let supports_scatter = device.get_capabilities().supports_color_buffer_float;
         let gpu_cache_texture = gpu_cache::GpuCacheTexture::new(
             &mut device,
             supports_scatter && !is_software,
@@ -1959,6 +1954,14 @@ impl Renderer {
                 let compositor = self.compositor_config.compositor().unwrap();
                 let surface_size = self.debug_overlay_state.current_size.unwrap();
 
+                // Ensure old surface is invalidated before binding
+                compositor.invalidate_tile(
+                    NativeTileId::DEBUG_OVERLAY,
+                    DeviceIntRect::new(
+                        DeviceIntPoint::zero(),
+                        surface_size,
+                    ),
+                );
                 // Bind the native surface
                 let surface_info = compositor.bind(
                     NativeTileId::DEBUG_OVERLAY,
@@ -3038,7 +3041,7 @@ impl Renderer {
                     }
 
                     self.shaders.borrow_mut()
-                        .get(&batch.key, batch.features, self.debug_flags)
+                        .get(&batch.key, batch.features, self.debug_flags, &self.device)
                         .bind(
                             &mut self.device, projection,
                             &mut self.renderer_errors,
@@ -3078,6 +3081,7 @@ impl Renderer {
                     &batch.key,
                     batch.features | BatchFeatures::ALPHA_PASS,
                     self.debug_flags,
+                    &self.device,
                 );
 
                 if batch.key.blend_mode != prev_blend_mode {
@@ -4527,7 +4531,10 @@ impl Renderer {
                     if !tile.dirty_rect.is_empty() {
                         if let CompositeTileSurface::Texture { surface: ResolvedSurfaceTexture::Native { id, .. } } =
                             tile.surface {
-                            compositor.invalidate_tile(id);
+                            let valid_rect = tile.valid_rect
+                                .round()
+                                .to_i32();
+                            compositor.invalidate_tile(id, valid_rect);
                         }
                     }
                 }
@@ -4537,8 +4544,9 @@ impl Renderer {
             // composition to happen only when the external surface is updated.
             // See update_external_native_surfaces for more details.
             for surface in &frame.composite_state.external_surfaces {
-                if let Some((native_surface_id, _)) = surface.update_params {
-                    compositor.invalidate_tile(NativeTileId { surface_id: native_surface_id, x: 0, y: 0 });
+                if let Some((native_surface_id, size)) = surface.update_params {
+                    let surface_rect = size.into();
+                    compositor.invalidate_tile(NativeTileId { surface_id: native_surface_id, x: 0, y: 0 }, surface_rect);
                 }
             }
             // Finally queue native surfaces for early composition, if applicable. By now,
@@ -5285,8 +5293,8 @@ impl Renderer {
     }
 
     fn size_of<T>(&self, ptr: *const T) -> usize {
-        let op = self.size_of_ops.as_ref().unwrap().size_of_op;
-        unsafe { op(ptr as *const c_void) }
+        let ops = self.size_of_ops.as_ref().unwrap();
+        unsafe { ops.malloc_size_of(ptr) }
     }
 
     /// Collects a memory report.
@@ -6124,7 +6132,7 @@ impl CompositeState {
                 surface.image_rendering,
             );
         }
-        compositor.start_compositing(dirty_rects);
+        compositor.start_compositing(dirty_rects, &[]);
     }
 }
 

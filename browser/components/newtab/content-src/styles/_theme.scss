@@ -100,9 +100,11 @@ body {
   --newtab-snippets-hairline-color: transparent;
 
   // New New Tab
+  --newtab-background-primary-text-color: #{$newtab-background-primary-text-color};
   --newtab-focus-outline: #{$newtab-focus-outline-color};
   --newtab-focus-border: #{$blue-60};
   --newtab-focus-border-selected: #{$newtab-card-tint};
+  --newtab-seperator-line-color: #{$newtab-card-separator-line-color};
   --newtab-primary-action-background: #{$blue-60};
   --newtab-primary-action-background-off: #{$newtab-primary-action-background-off};
   --customize-menu-primary-text-color: #{$newtab-card-primary-text-color};
@@ -119,7 +121,8 @@ body {
   --newtab-search-first-shadow: #{$newtab-card-firstshadow};
   --newtab-search-second-shadow: #{$newtab-card-secondshadow};
   --newtab-search-text-color: #{$newtab-card-secondary-text-color};
-  --newtab-search-new-border-color: #{$newtab-card-separator-line-color};
+  --newtab-card-first-shadow: #{$newtab-card-firstshadow};
+  --newtab-card-second-shadow: #{$newtab-card-secondshadow};
 
   &[lwt-newtab-brighttext] {
     // General styles
@@ -197,11 +200,13 @@ body {
     --newtab-snippets-hairline-color: #{$white-10};
 
     // New New Tab
+    --newtab-background-primary-text-color: #{$newtab-background-darktheme-primary-text-color};
     --newtab-focus-outline: #{$newtab-darktheme-focus-outline-color};
     --newtab-focus-border: #{$newtab-darktheme-focus-border};
     --newtab-focus-border-selected: #{$newtab-darktheme-focus-border-selected};
     --newtab-primary-action-background: #{$newtab-darktheme-primary-action-background};
     --newtab-primary-action-background-off: #{$newtab-darktheme-primary-action-background-off};
+    --newtab-seperator-line-color: #{$newtab-card-darktheme-separator-line-color};
     --customize-menu-primary-text-color: #{$newtab-card-darktheme-primary-text-color};
     --customize-menu-check-fill: #{$newtab-card-darktheme-primary-text-color};
     --customize-menu-background: #{$grey-70};
@@ -216,6 +221,7 @@ body {
     --newtab-search-first-shadow: #{$newtab-card-darktheme-firstshadow};
     --newtab-search-second-shadow: #{$newtab-darktheme-card-secondshadow};
     --newtab-search-text-color: #{$newtab-card-darktheme-secondary-text-color};
-    --newtab-search-new-border-color: #{$grey-70};
+    --newtab-card-first-shadow: #{$newtab-card-darktheme-firstshadow};
+    --newtab-card-second-shadow: #{$newtab-darktheme-card-secondshadow};
   }
 }

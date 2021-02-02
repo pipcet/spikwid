@@ -10,13 +10,13 @@
 
 #include "jsnum.h"
 
-#include "mozilla/ArrayUtils.h"
 #include "mozilla/FloatingPoint.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/RangedPtr.h"
 #include "mozilla/TextUtils.h"
 #include "mozilla/Utf8.h"
 
+#include <iterator>
 #ifdef HAVE_LOCALECONV
 #  include <locale.h>
 #endif
@@ -26,7 +26,7 @@
 #include "jstypes.h"
 
 #include "double-conversion/double-conversion.h"
-#include "frontend/ParserAtom.h"  // frontend::ParserAtom, frontend::ParserAtomsTable
+#include "frontend/ParserAtom.h"  // frontend::{ParserAtomsTable, TaggedParserAtomIndex}
 #include "jit/InlinableNatives.h"
 #include "js/CharacterEncoding.h"
 #include "js/Conversions.h"
@@ -52,7 +52,6 @@
 using namespace js;
 
 using mozilla::Abs;
-using mozilla::ArrayLength;
 using mozilla::AsciiAlphanumericToNumber;
 using mozilla::IsAsciiAlphanumeric;
 using mozilla::IsAsciiDigit;
@@ -809,7 +808,7 @@ JSLinearString* js::Int32ToString(JSContext* cx, int32_t si) {
   Latin1Char buffer[JSFatInlineString::MAX_LENGTH_LATIN1 + 1];
   size_t length;
   Latin1Char* start =
-      BackfillInt32InBuffer(si, buffer, ArrayLength(buffer), &length);
+      BackfillInt32InBuffer(si, buffer, std::size(buffer), &length);
 
   mozilla::Range<const Latin1Char> chars(start, length);
   JSInlineString* str =
@@ -862,7 +861,7 @@ JSAtom* js::Int32ToAtom(JSContext* cx, int32_t si) {
   return atom;
 }
 
-const frontend::ParserAtom* js::Int32ToParserAtom(
+frontend::TaggedParserAtomIndex js::Int32ToParserAtom(
     JSContext* cx, frontend::ParserAtomsTable& parserAtoms, int32_t si) {
   char buffer[JSFatInlineString::MAX_LENGTH_TWO_BYTE + 1];
   size_t length;
@@ -1670,7 +1669,7 @@ JSAtom* js::NumberToAtom(JSContext* cx, double d) {
   return atom;
 }
 
-const frontend::ParserAtom* js::NumberToParserAtom(
+frontend::TaggedParserAtomIndex js::NumberToParserAtom(
     JSContext* cx, frontend::ParserAtomsTable& parserAtoms, double d) {
   int32_t si;
   if (NumberEqualsInt32(d, &si)) {
@@ -1681,7 +1680,7 @@ const frontend::ParserAtom* js::NumberToParserAtom(
   char* numStr = FracNumberToCString(cx, &cbuf, d);
   if (!numStr) {
     ReportOutOfMemory(cx);
-    return nullptr;
+    return frontend::TaggedParserAtomIndex::null();
   }
   MOZ_ASSERT(!cbuf.dbuf && numStr >= cbuf.sbuf &&
              numStr < cbuf.sbuf + cbuf.sbufSize);

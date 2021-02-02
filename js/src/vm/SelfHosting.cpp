@@ -6,7 +6,6 @@
 
 #include "vm/SelfHosting.h"
 
-#include "mozilla/ArrayUtils.h"
 #include "mozilla/Casting.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Maybe.h"
@@ -18,6 +17,7 @@
 #include "jsdate.h"
 #include "jsfriendapi.h"
 #include "jsmath.h"
+#include "jsnum.h"
 #include "selfhosted.out.h"
 
 #include "builtin/Array.h"
@@ -51,6 +51,7 @@
 #include "jit/InlinableNatives.h"
 #include "js/CharacterEncoding.h"
 #include "js/CompilationAndEvaluation.h"
+#include "js/Conversions.h"
 #include "js/Date.h"
 #include "js/ErrorReport.h"  // JS::PrintError
 #include "js/Exception.h"
@@ -73,8 +74,9 @@
 #include "vm/BytecodeLocation.h"
 #include "vm/Compression.h"
 #include "vm/DateObject.h"
-#include "vm/FrameIter.h"      // js::ScriptFrameIter
-#include "vm/FunctionFlags.h"  // js::FunctionFlags
+#include "vm/ErrorReporting.h"  // js::MaybePrintAndClearPendingException
+#include "vm/FrameIter.h"       // js::ScriptFrameIter
+#include "vm/FunctionFlags.h"   // js::FunctionFlags
 #include "vm/GeneratorObject.h"
 #include "vm/Interpreter.h"
 #include "vm/Iteration.h"
@@ -1087,9 +1089,8 @@ static bool intrinsic_ArrayBufferByteLength(JSContext* cx, unsigned argc,
   MOZ_ASSERT(args[0].isObject());
   MOZ_ASSERT(args[0].toObject().is<T>());
 
-  size_t byteLength =
-      args[0].toObject().as<T>().byteLength().deprecatedGetUint32();
-  args.rval().setInt32(mozilla::AssertedCast<int32_t>(byteLength));
+  size_t byteLength = args[0].toObject().as<T>().byteLength().get();
+  args.rval().setNumber(byteLength);
   return true;
 }
 
@@ -1106,9 +1107,16 @@ static bool intrinsic_PossiblyWrappedArrayBufferByteLength(JSContext* cx,
     return false;
   }
 
-  uint32_t length = obj->byteLength().deprecatedGetUint32();
-  args.rval().setInt32(mozilla::AssertedCast<int32_t>(length));
+  size_t byteLength = obj->byteLength().get();
+  args.rval().setNumber(byteLength);
   return true;
+}
+
+static void AssertNonNegativeInteger(const Value& v) {
+  MOZ_ASSERT(v.isNumber());
+  MOZ_ASSERT(v.toNumber() >= 0);
+  MOZ_ASSERT(v.toNumber() < DOUBLE_INTEGRAL_PRECISION_LIMIT);
+  MOZ_ASSERT(JS::ToInteger(v.toNumber()) == v.toNumber());
 }
 
 template <typename T>
@@ -1116,9 +1124,9 @@ static bool intrinsic_ArrayBufferCopyData(JSContext* cx, unsigned argc,
                                           Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
   MOZ_ASSERT(args.length() == 6);
-  MOZ_RELEASE_ASSERT(args[1].isInt32());
-  MOZ_RELEASE_ASSERT(args[3].isInt32());
-  MOZ_RELEASE_ASSERT(args[4].isInt32());
+  AssertNonNegativeInteger(args[1]);
+  AssertNonNegativeInteger(args[3]);
+  AssertNonNegativeInteger(args[4]);
 
   bool isWrapped = args[5].toBoolean();
   Rooted<T*> toBuffer(cx);
@@ -1133,10 +1141,10 @@ static bool intrinsic_ArrayBufferCopyData(JSContext* cx, unsigned argc,
       return false;
     }
   }
-  uint32_t toIndex = uint32_t(args[1].toInt32());
+  size_t toIndex = size_t(args[1].toNumber());
   Rooted<T*> fromBuffer(cx, &args[2].toObject().as<T>());
-  uint32_t fromIndex = uint32_t(args[3].toInt32());
-  uint32_t count = uint32_t(args[4].toInt32());
+  size_t fromIndex = size_t(args[3].toNumber());
+  size_t count = size_t(args[4].toNumber());
 
   T::copyData(toBuffer, toIndex, fromBuffer, fromIndex, count);
 
@@ -1277,8 +1285,7 @@ static bool intrinsic_PossiblyWrappedTypedArrayLength(JSContext* cx,
     return false;
   }
 
-  uint32_t typedArrayLength = obj->length().deprecatedGetUint32();
-  args.rval().setInt32(mozilla::AssertedCast<int32_t>(typedArrayLength));
+  args.rval().set(obj->lengthValue());
   return true;
 }
 
@@ -1371,8 +1378,8 @@ static bool intrinsic_TypedArrayBitwiseSlice(JSContext* cx, unsigned argc,
   MOZ_ASSERT(args.length() == 4);
   MOZ_ASSERT(args[0].isObject());
   MOZ_ASSERT(args[1].isObject());
-  MOZ_RELEASE_ASSERT(args[2].isInt32());
-  MOZ_RELEASE_ASSERT(args[3].isInt32());
+  AssertNonNegativeInteger(args[2]);
+  AssertNonNegativeInteger(args[3]);
 
   Rooted<TypedArrayObject*> source(cx,
                                    &args[0].toObject().as<TypedArrayObject>());
@@ -1395,16 +1402,12 @@ static bool intrinsic_TypedArrayBitwiseSlice(JSContext* cx, unsigned argc,
     return true;
   }
 
-  MOZ_ASSERT(args[2].toInt32() >= 0);
-  uint32_t sourceOffset = uint32_t(args[2].toInt32());
+  size_t sourceOffset = size_t(args[2].toNumber());
+  size_t count = size_t(args[3].toNumber());
 
-  MOZ_ASSERT(args[3].toInt32() >= 0);
-  uint32_t count = uint32_t(args[3].toInt32());
-
-  MOZ_ASSERT(count > 0 && count <= source->length().deprecatedGetUint32());
-  MOZ_ASSERT(sourceOffset <= source->length().deprecatedGetUint32() - count);
-  MOZ_ASSERT(count <=
-             unsafeTypedArrayCrossCompartment->length().deprecatedGetUint32());
+  MOZ_ASSERT(count > 0 && count <= source->length().get());
+  MOZ_ASSERT(sourceOffset <= source->length().get() - count);
+  MOZ_ASSERT(count <= unsafeTypedArrayCrossCompartment->length().get());
 
   size_t elementSize = TypedArrayElemSize(sourceType);
   MOZ_ASSERT(elementSize ==
@@ -1416,7 +1419,7 @@ static bool intrinsic_TypedArrayBitwiseSlice(JSContext* cx, unsigned argc,
   SharedMem<uint8_t*> unsafeTargetDataCrossCompartment =
       unsafeTypedArrayCrossCompartment->dataPointerEither().cast<uint8_t*>();
 
-  uint32_t byteLength = count * elementSize;
+  size_t byteLength = count * elementSize;
 
   // The same-type case requires exact copying preserving the bit-level
   // encoding of the source data, so use memcpy if possible. If source and
@@ -2721,29 +2724,6 @@ GlobalObject* JSRuntime::createSelfHostingGlobal(JSContext* cx) {
   return shg;
 }
 
-static void MaybePrintAndClearPendingException(JSContext* cx, FILE* file) {
-  if (!cx->isExceptionPending()) {
-    return;
-  }
-
-  AutoClearPendingException acpe(cx);
-
-  JS::ExceptionStack exnStack(cx);
-  if (!JS::StealPendingExceptionStack(cx, &exnStack)) {
-    fprintf(file, "error getting pending exception\n");
-    return;
-  }
-
-  JS::ErrorReportBuilder report(cx);
-  if (!report.init(cx, exnStack, JS::ErrorReportBuilder::WithSideEffects)) {
-    fprintf(file, "out of memory initializing JS::ErrorReportBuilder\n");
-    return;
-  }
-
-  MOZ_ASSERT(!report.report()->isWarning());
-  JS::PrintError(cx, file, report, true);
-}
-
 class MOZ_STACK_CLASS AutoSelfHostingErrorReporter {
   JSContext* cx_;
   JS::WarningReporter oldReporter_;
@@ -2760,7 +2740,7 @@ class MOZ_STACK_CLASS AutoSelfHostingErrorReporter {
     // instance, ReportOutOfMemory will throw the "out of memory" string
     // without going through ErrorToException. We handle these other
     // exceptions here.
-    MaybePrintAndClearPendingException(cx_, stderr);
+    MaybePrintAndClearPendingException(cx_);
   }
 };
 

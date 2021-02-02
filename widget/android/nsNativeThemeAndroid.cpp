@@ -59,10 +59,13 @@ static const CSSIntCoord kMinimumAndroidWidgetSize = 17;
 
 NS_IMPL_ISUPPORTS_INHERITED(nsNativeThemeAndroid, nsNativeTheme, nsITheme)
 
+static uint32_t GetDPIRatio(nsPresContext* aPresContext) {
+  return AppUnitsPerCSSPixel() /
+         aPresContext->DeviceContext()->AppUnitsPerDevPixelAtUnitFullZoom();
+}
+
 static uint32_t GetDPIRatio(nsIFrame* aFrame) {
-  return AppUnitsPerCSSPixel() / aFrame->PresContext()
-                                     ->DeviceContext()
-                                     ->AppUnitsPerDevPixelAtUnitFullZoom();
+  return GetDPIRatio(aFrame->PresContext());
 }
 
 static bool IsDateTimeResetButton(nsIFrame* aFrame) {
@@ -387,7 +390,7 @@ static void PaintMenulistArrowButton(nsIFrame* aFrame, DrawTarget* aDrawTarget,
   const int32_t arrowSize = 8;
   int32_t arrowPolygonX[] = {-4, -2, 0};
   int32_t arrowPolygonY[] = {-1, 1, -1};
-  const int32_t arrowNumPoints = sizeof(arrowPolygonX) / sizeof(int32_t);
+  const int32_t arrowNumPoints = ArrayLength(arrowPolygonX);
 
   PaintArrow(aDrawTarget, aRect, arrowPolygonX, arrowPolygonY, arrowNumPoints,
              arrowSize,
@@ -408,7 +411,7 @@ static void PaintSpinnerButton(DrawTarget* aDrawTarget, const Rect& aRect,
   const int32_t arrowSize = 8;
   int32_t arrowPolygonX[] = {0, 2, 4};
   int32_t arrowPolygonY[] = {-3, -1, -3};
-  const int32_t arrowNumPoints = sizeof(arrowPolygonX) / sizeof(int32_t);
+  const int32_t arrowNumPoints = ArrayLength(arrowPolygonX);
 
   if (aAppearance == StyleAppearance::SpinnerUpbutton) {
     for (int32_t i = 0; i < arrowNumPoints; i++) {
@@ -506,7 +509,7 @@ static void PaintScrollbarbutton(DrawTarget* aDrawTarget,
   // Start with Up arrow.
   int32_t arrowPolygonX[] = {3, 0, -3};
   int32_t arrowPolygonY[] = {2, -1, 2};
-  const int32_t arrowNumPoints = sizeof(arrowPolygonX) / sizeof(int32_t);
+  const int32_t arrowNumPoints = ArrayLength(arrowPolygonX);
   const int32_t arrowSize = 14;
 
   switch (aAppearance) {
@@ -798,6 +801,12 @@ nsNativeThemeAndroid::GetMinimumWidgetSize(nsPresContext* aPresContext,
   return NS_OK;
 }
 
+auto nsNativeThemeAndroid::GetScrollbarSizes(
+    nsPresContext* aPresContext, StyleScrollbarWidth aWidth, Overlay aOverlay) -> ScrollbarSizes {
+  int32_t size = kMinimumAndroidWidgetSize * int32_t(GetDPIRatio(aPresContext));
+  return {size, size};
+}
+
 nsITheme::Transparency nsNativeThemeAndroid::GetWidgetTransparency(
     nsIFrame* aFrame, StyleAppearance aAppearance) {
   return eUnknownTransparency;
@@ -872,7 +881,6 @@ bool nsNativeThemeAndroid::ThemeSupportsWidget(nsPresContext* aPresContext,
     case StyleAppearance::ScrollbarthumbHorizontal:
     case StyleAppearance::ScrollbarthumbVertical:
     case StyleAppearance::ScrollbarHorizontal:
-    case StyleAppearance::ScrollbarNonDisappearing:
     case StyleAppearance::ScrollbarVertical:
     case StyleAppearance::Scrollcorner:
     case StyleAppearance::Button:

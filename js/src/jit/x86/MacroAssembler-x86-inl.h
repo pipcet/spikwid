@@ -17,8 +17,8 @@ namespace jit {
 //{{{ check_macroassembler_style
 
 void MacroAssembler::move64(Imm64 imm, Register64 dest) {
-  movl(Imm32(imm.value & 0xFFFFFFFFL), dest.low);
-  movl(Imm32((imm.value >> 32) & 0xFFFFFFFFL), dest.high);
+  move32(Imm32(imm.value & 0xFFFFFFFFL), dest.low);
+  move32(Imm32((imm.value >> 32) & 0xFFFFFFFFL), dest.high);
 }
 
 void MacroAssembler::move64(Register64 src, Register64 dest) {
@@ -95,6 +95,10 @@ void MacroAssembler::move32To64SignExtend(Register src, Register64 dest) {
     movl(dest.low, dest.high);
     sarl(Imm32(31), dest.high);
   }
+}
+
+void MacroAssembler::move32SignExtendToPtr(Register src, Register dest) {
+  movl(src, dest);
 }
 
 void MacroAssembler::move32ZeroExtendToPtr(Register src, Register dest) {
@@ -988,6 +992,17 @@ void MacroAssembler::cmp32LoadPtr(Condition cond, const Address& lhs, Imm32 rhs,
   cmovCCl(cond, Operand(src), dest);
 }
 
+void MacroAssembler::cmpPtrMovePtr(Condition cond, Register lhs, Register rhs,
+                                   Register src, Register dest) {
+  cmp32Move32(cond, lhs, rhs, src, dest);
+}
+
+void MacroAssembler::cmpPtrMovePtr(Condition cond, Register lhs,
+                                   const Address& rhs, Register src,
+                                   Register dest) {
+  cmp32Move32(cond, lhs, rhs, src, dest);
+}
+
 void MacroAssembler::test32LoadPtr(Condition cond, const Address& addr,
                                    Imm32 mask, const Address& src,
                                    Register dest) {
@@ -1060,6 +1075,19 @@ void MacroAssembler::spectreBoundsCheck32(Register index, const Address& length,
   MOZ_ASSERT(index != maybeScratch);
 
   spectreBoundsCheck32(index, Operand(length), maybeScratch, failure);
+}
+
+void MacroAssembler::spectreBoundsCheckPtr(Register index, Register length,
+                                           Register maybeScratch,
+                                           Label* failure) {
+  spectreBoundsCheck32(index, length, maybeScratch, failure);
+}
+
+void MacroAssembler::spectreBoundsCheckPtr(Register index,
+                                           const Address& length,
+                                           Register maybeScratch,
+                                           Label* failure) {
+  spectreBoundsCheck32(index, length, maybeScratch, failure);
 }
 
 // ========================================================================

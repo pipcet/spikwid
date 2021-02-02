@@ -303,8 +303,6 @@ nsHttpHandler::nsHttpHandler()
       mEnforceH1Framing(FRAMECHECK_BARELY),
       mDefaultHpackBuffer(4096),
       mBug1563538(true),
-      mBug1563695(true),
-      mBug1556491(true),
       mHttp3Enabled(true),
       mQpackTableSize(4096),
       mHttp3MaxBlockedStreams(10),
@@ -1967,18 +1965,6 @@ void nsHttpHandler::PrefsChanged(const char* pref) {
       mBug1563538 = cVar;
     }
   }
-  if (PREF_CHANGED(HTTP_PREF("spdy.bug1563695"))) {
-    rv = Preferences::GetBool(HTTP_PREF("spdy.bug1563695"), &cVar);
-    if (NS_SUCCEEDED(rv)) {
-      mBug1563695 = cVar;
-    }
-  }
-  if (PREF_CHANGED(HTTP_PREF("spdy.bug1556491"))) {
-    rv = Preferences::GetBool(HTTP_PREF("spdy.bug1556491"), &cVar);
-    if (NS_SUCCEEDED(rv)) {
-      mBug1556491 = cVar;
-    }
-  }
 
   if (PREF_CHANGED(HTTP_PREF("http3.enabled"))) {
     rv = Preferences::GetBool(HTTP_PREF("http3.enabled"), &cVar);
@@ -2648,12 +2634,8 @@ nsresult nsHttpHandler::SpeculativeConnectInternal(
   nsAutoCString username;
   aURI->GetUsername(username);
 
-  // TODO For now pass ""_ns for topWindowOrigin for all speculative
-  // connection attempts, but ideally we should pass the accurate top window
-  // origin here.  This would require updating the nsISpeculativeConnect API
-  // and all of its consumers.
   RefPtr<nsHttpConnectionInfo> ci =
-      new nsHttpConnectionInfo(host, port, ""_ns, username, ""_ns, nullptr,
+      new nsHttpConnectionInfo(host, port, ""_ns, username, nullptr,
                                originAttributes, aURI->SchemeIs("https"));
   ci->SetAnonymous(anonymous);
 
@@ -3015,8 +2997,7 @@ void nsHttpHandler::SetDeviceModelId(const nsCString& aModelId) {
 }
 
 void nsHttpHandler::MaybeAddAltSvcForTesting(
-    nsIURI* aUri, const nsACString& aUsername,
-    const nsACString& aTopWindowOrigin, bool aPrivateBrowsing, bool aIsolated,
+    nsIURI* aUri, const nsACString& aUsername, bool aPrivateBrowsing,
     nsIInterfaceRequestor* aCallbacks,
     const OriginAttributes& aOriginAttributes) {
   if (!IsHttp3Enabled() || mAltSvcMappingTemptativeMap.IsEmpty()) {
@@ -3040,10 +3021,9 @@ void nsHttpHandler::MaybeAddAltSvcForTesting(
     aUri->GetPort(&originPort);
     LOG(("nsHttpHandler::MaybeAddAltSvcForTesting for %s map: %s",
          originHost.get(), PromiseFlatCString(*map).get()));
-    AltSvcMapping::ProcessHeader(*map, nsCString("https"), originHost,
-                                 originPort, aUsername, aTopWindowOrigin,
-                                 aPrivateBrowsing, aIsolated, aCallbacks,
-                                 nullptr, 0, aOriginAttributes, true);
+    AltSvcMapping::ProcessHeader(
+        *map, nsCString("https"), originHost, originPort, aUsername,
+        aPrivateBrowsing, aCallbacks, nullptr, 0, aOriginAttributes, true);
   }
 }
 

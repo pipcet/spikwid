@@ -38,6 +38,7 @@
 #include "nsCycleCollectionNoteRootCallback.h"
 #include "nsCycleCollector.h"
 #include "jsapi.h"
+#include "js/ArrayBuffer.h"
 #include "js/ContextOptions.h"
 #include "js/MemoryMetrics.h"
 #include "js/OffThreadScriptCompilation.h"
@@ -941,6 +942,9 @@ static void LoadStartupJSPrefs(XPCJSContext* xpccx) {
   }
 
   JS::SetUseOffThreadParseGlobal(useOffThreadParseGlobal);
+
+  JS::SetLargeArrayBuffersEnabled(
+      StaticPrefs::javascript_options_large_arraybuffers());
 }
 
 static void ReloadPrefsCallback(const char* pref, void* aXpccx) {
@@ -1449,9 +1453,12 @@ void XPCJSContext::AfterProcessTask(uint32_t aNewRecursionDepth) {
       }
 
       auto uriType = mExecutedChromeScript ? "browser"_ns : "content"_ns;
+      // Use AppendFloat to avoid printf-type APIs using locale-specific
+      // decimal separators, when we definitely want a `.`.
+      nsCString durationStr;
+      durationStr.AppendFloat(hangDuration);
       auto extra = Some<nsTArray<Telemetry::EventExtraEntry>>(
-          {Telemetry::EventExtraEntry{"hang_duration"_ns,
-                                      nsPrintfCString("%.2f", hangDuration)},
+          {Telemetry::EventExtraEntry{"hang_duration"_ns, durationStr},
            Telemetry::EventExtraEntry{"uri_type"_ns, uriType}});
       Telemetry::RecordEvent(
           Telemetry::EventID::Slow_script_warning_Shown_Browser, Nothing(),

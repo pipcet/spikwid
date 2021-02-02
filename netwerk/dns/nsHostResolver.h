@@ -37,18 +37,12 @@ namespace mozilla {
 namespace net {
 class TRR;
 class TRRQuery;
-enum ResolverMode {
-  MODE_NATIVEONLY,  // 0 - TRR OFF (by default)
-  MODE_RESERVED1,   // 1 - Reserved value. Used to be parallel resolve.
-  MODE_TRRFIRST,    // 2 - fallback to native on TRR failure
-  MODE_TRRONLY,     // 3 - don't even fallback
-  MODE_RESERVED4,   // 4 - Reserved value. Used to be race TRR with native.
-  MODE_TRROFF       // 5 - identical to MODE_NATIVEONLY but explicitly selected
-};
 }  // namespace net
 }  // namespace mozilla
 
-#define TRR_DISABLED(x) (((x) == MODE_NATIVEONLY) || ((x) == MODE_TRROFF))
+#define TRR_DISABLED(x)                       \
+  (((x) == nsIDNSService::MODE_NATIVEONLY) || \
+   ((x) == nsIDNSService::MODE_TRROFF))
 
 extern mozilla::Atomic<bool, mozilla::Relaxed> gNativeIsLocalhost;
 
@@ -108,8 +102,8 @@ class nsHostRecord : public mozilla::LinkedListElement<RefPtr<nsHostRecord>>,
     TRR_DISABLED_FLAG = 10,           // the DISABLE_TRR flag was set
     TRR_TIMEOUT = 11,                 // the TRR channel timed out
     TRR_CHANNEL_DNS_FAIL = 12,        // DoH server name failed to resolve
-    TRR_IS_OFFLINE = 13,     // The browser is offline or lacks connectivity
-    TRR_NOT_CONFIRMED = 14,  // TRR confirmation is not done yet
+    TRR_IS_OFFLINE = 13,              // The browser is offline/no interfaces up
+    TRR_NOT_CONFIRMED = 14,           // TRR confirmation is not done yet
     TRR_DID_NOT_MAKE_QUERY = 15,  // TrrLookup exited without doing a TRR query
     TRR_UNKNOWN_CHANNEL_FAILURE = 16,  // unknown channel failure reason
     TRR_HOST_BLOCKED_TEMPORARY = 17,   // host blocklisted
@@ -124,6 +118,7 @@ class nsHostRecord : public mozilla::LinkedListElement<RefPtr<nsHostRecord>>,
     TRR_EXCLUDED = 26,             // ExcludedFromTRR
     TRR_SERVER_RESPONSE_ERR = 27,  // Server responded with non-200 code
     TRR_RCODE_FAIL = 28,           // DNS response contains a non-NOERROR rcode
+    TRR_NO_CONNECTIVITY = 29,      // Not confirmed because of no connectivity
   };
 
   // Records the first reason that caused TRR to be skipped or to fail.
@@ -564,7 +559,7 @@ class nsHostResolver : public nsISupports, public AHostResolver {
                          nsHostRecord** result) override;
   nsresult TrrLookup_unlocked(nsHostRecord*,
                               mozilla::net::TRR* pushedTRR = nullptr) override;
-  static mozilla::net::ResolverMode Mode();
+  static nsIDNSService::ResolverMode Mode();
 
   virtual void MaybeRenewHostRecord(nsHostRecord* aRec) override;
 

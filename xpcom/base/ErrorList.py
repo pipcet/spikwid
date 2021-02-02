@@ -86,6 +86,9 @@ modules["URL_CLASSIFIER"] = Mod(42)
 # ErrorResult gets its own module to reduce the chance of someone accidentally
 # defining an error code matching one of the ErrorResult ones.
 modules["ERRORRESULT"] = Mod(43)
+# Win32 system error codes, which are not mapped to a specific other value,
+# see Bug 1686041.
+modules["WIN32"] = Mod(44)
 
 # NS_ERROR_MODULE_GENERAL should be used by modules that do not
 # care if return code values overlap. Callers of methods that
@@ -230,15 +233,9 @@ with modules["GFX"]:
 with modules["WIDGET"]:
     # Used by:
     #   - nsIWidget::NotifyIME()
-    #   - nsIWidget::OnWindowedPluginKeyEvent()
     # Returned when the notification or the event is handled and it's consumed
     # by somebody.
     errors["NS_SUCCESS_EVENT_CONSUMED"] = SUCCESS(1)
-    # Used by:
-    #   - nsIWidget::OnWindowedPluginKeyEvent()
-    # Returned when the event is handled correctly but the result will be
-    # notified asynchronously.
-    errors["NS_SUCCESS_EVENT_HANDLED_ASYNCHRONOUSLY"] = SUCCESS(2)
 
 
 # =======================================================================

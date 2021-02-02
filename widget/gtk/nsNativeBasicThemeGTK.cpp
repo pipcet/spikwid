@@ -6,6 +6,7 @@
 #include "nsNativeBasicThemeGTK.h"
 
 #include "nsLayoutUtils.h"
+#include "mozilla/dom/Document.h"
 
 using namespace mozilla;
 
@@ -24,15 +25,27 @@ already_AddRefed<nsITheme> do_GetBasicNativeThemeDoNotUseDirectly() {
 
 nsITheme::Transparency nsNativeBasicThemeGTK::GetWidgetTransparency(
     nsIFrame* aFrame, StyleAppearance aAppearance) {
-  switch (aAppearance) {
-    case StyleAppearance::ScrollbarVertical:
-    case StyleAppearance::ScrollbarHorizontal:
-      // Make scrollbar tracks opaque on the window's scroll frame to prevent
-      // leaf layers from overlapping. See bug 1179780.
-      return IsRootScrollbar(aFrame) ? eOpaque : eTransparent;
-    default:
-      return nsNativeBasicTheme::GetWidgetTransparency(aFrame, aAppearance);
+  if (aAppearance == StyleAppearance::ScrollbarVertical ||
+      aAppearance == StyleAppearance::ScrollbarHorizontal) {
+    auto docState = aFrame->PresContext()->Document()->GetDocumentState();
+    const auto* style = nsLayoutUtils::StyleForScrollbar(aFrame);
+    auto [trackColor, borderColor] =
+        ComputeScrollbarColors(aFrame, *style, docState);
+    Unused << borderColor;
+    return trackColor.a == 1.0 ? eOpaque : eTransparent;
   }
+  return nsNativeBasicTheme::GetWidgetTransparency(aFrame, aAppearance);
+}
+
+auto nsNativeBasicThemeGTK::GetScrollbarSizes(nsPresContext* aPresContext,
+                                              StyleScrollbarWidth aWidth,
+                                              Overlay) -> ScrollbarSizes {
+  DPIRatio dpiRatio = GetDPIRatioForScrollbarPart(aPresContext);
+  CSSCoord size = aWidth == StyleScrollbarWidth::Thin
+                      ? kGtkMinimumThinScrollbarSize
+                      : kGtkMinimumScrollbarSize;
+  LayoutDeviceIntCoord s = (size * dpiRatio).Truncated();
+  return {s, s};
 }
 
 NS_IMETHODIMP
@@ -41,39 +54,24 @@ nsNativeBasicThemeGTK::GetMinimumWidgetSize(nsPresContext* aPresContext,
                                             StyleAppearance aAppearance,
                                             LayoutDeviceIntSize* aResult,
                                             bool* aIsOverridable) {
-  DPIRatio dpiRatio = GetDPIRatio(aFrame);
-
-  switch (aAppearance) {
-    case StyleAppearance::ScrollbarVertical:
-    case StyleAppearance::ScrollbarHorizontal:
-    case StyleAppearance::ScrollbarbuttonUp:
-    case StyleAppearance::ScrollbarbuttonDown:
-    case StyleAppearance::ScrollbarbuttonLeft:
-    case StyleAppearance::ScrollbarbuttonRight:
-    case StyleAppearance::ScrollbarthumbVertical:
-    case StyleAppearance::ScrollbarthumbHorizontal:
-    case StyleAppearance::ScrollbartrackHorizontal:
-    case StyleAppearance::ScrollbartrackVertical:
-    case StyleAppearance::Scrollcorner: {
-      ComputedStyle* style = nsLayoutUtils::StyleForScrollbar(aFrame);
-      if (style->StyleUIReset()->mScrollbarWidth == StyleScrollbarWidth::Thin) {
-        aResult->SizeTo(kGtkMinimumThinScrollbarSize * dpiRatio,
-                        kGtkMinimumThinScrollbarSize * dpiRatio);
-      } else {
-        aResult->SizeTo(kGtkMinimumScrollbarSize * dpiRatio,
-                        kGtkMinimumScrollbarSize * dpiRatio);
-      }
-      break;
-    }
-    default:
-      return nsNativeBasicTheme::GetMinimumWidgetSize(
-          aPresContext, aFrame, aAppearance, aResult, aIsOverridable);
+  if (!IsWidgetScrollbarPart(aAppearance)) {
+    return nsNativeBasicTheme::GetMinimumWidgetSize(
+        aPresContext, aFrame, aAppearance, aResult, aIsOverridable);
   }
 
+  DPIRatio dpiRatio = GetDPIRatioForScrollbarPart(aPresContext);
+  ComputedStyle* style = nsLayoutUtils::StyleForScrollbar(aFrame);
+  auto sizes = GetScrollbarSizes(
+      aPresContext, style->StyleUIReset()->mScrollbarWidth, Overlay::No);
+  MOZ_ASSERT(sizes.mHorizontal == sizes.mVertical);
+  aResult->SizeTo(sizes.mHorizontal, sizes.mHorizontal);
+
   switch (aAppearance) {
+    case StyleAppearance::ScrollbarHorizontal:
     case StyleAppearance::ScrollbarthumbHorizontal:
       aResult->width = kGtkMinimumScrollbarThumbSize * dpiRatio;
       break;
+    case StyleAppearance::ScrollbarVertical:
     case StyleAppearance::ScrollbarthumbVertical:
       aResult->height = kGtkMinimumScrollbarThumbSize * dpiRatio;
       break;
@@ -91,7 +89,7 @@ void nsNativeBasicThemeGTK::PaintScrollbarThumb(
     const EventStates& aElementState, const EventStates& aDocumentState,
     DPIRatio aDpiRatio) {
   sRGBColor thumbColor =
-      ComputeScrollbarthumbColor(aStyle, aElementState, aDocumentState);
+      ComputeScrollbarThumbColor(aFrame, aStyle, aElementState, aDocumentState);
   LayoutDeviceRect thumbRect(aRect);
   thumbRect.Deflate(floorf((aHorizontal ? aRect.height : aRect.width) / 4.0f));
   LayoutDeviceCoord radius =
@@ -105,8 +103,10 @@ void nsNativeBasicThemeGTK::PaintScrollbar(DrawTarget* aDrawTarget,
                                            bool aHorizontal, nsIFrame* aFrame,
                                            const ComputedStyle& aStyle,
                                            const EventStates& aDocumentState,
-                                           DPIRatio aDpiRatio, bool aIsRoot) {
-  sRGBColor trackColor = ComputeScrollbarColor(aStyle, aDocumentState, aIsRoot);
+                                           DPIRatio aDpiRatio) {
+  auto [trackColor, borderColor] =
+      ComputeScrollbarColors(aFrame, aStyle, aDocumentState);
+  Unused << borderColor;
   aDrawTarget->FillRect(aRect.ToUnknownRect(),
                         gfx::ColorPattern(ToDeviceColor(trackColor)));
 }
@@ -114,8 +114,10 @@ void nsNativeBasicThemeGTK::PaintScrollbar(DrawTarget* aDrawTarget,
 void nsNativeBasicThemeGTK::PaintScrollCorner(
     DrawTarget* aDrawTarget, const LayoutDeviceRect& aRect, nsIFrame* aFrame,
     const ComputedStyle& aStyle, const EventStates& aDocumentState,
-    DPIRatio aDpiRatio, bool aIsRoot) {
-  sRGBColor trackColor = ComputeScrollbarColor(aStyle, aDocumentState, aIsRoot);
+    DPIRatio aDpiRatio) {
+  auto [trackColor, borderColor] =
+      ComputeScrollbarColors(aFrame, aStyle, aDocumentState);
+  Unused << borderColor;
   aDrawTarget->FillRect(aRect.ToUnknownRect(),
                         gfx::ColorPattern(ToDeviceColor(trackColor)));
 }

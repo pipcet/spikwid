@@ -51,7 +51,6 @@ namespace gc {
 
 class Arena;
 enum class AllocKind : uint8_t;
-struct Chunk;
 class StoreBuffer;
 class TenuredCell;
 
@@ -220,7 +219,7 @@ struct Cell {
 
  protected:
   uintptr_t address() const;
-  inline Chunk* chunk() const;
+  inline TenuredChunk* chunk() const;
 
  private:
   // Cells are destroyed by the GC. Do not delete them directly.
@@ -330,32 +329,30 @@ MOZ_ALWAYS_INLINE bool Cell::isMarkedAtLeast(gc::MarkColor color) const {
 }
 
 inline JSRuntime* Cell::runtimeFromMainThread() const {
-  JSRuntime* rt = chunk()->trailer.runtime;
+  JSRuntime* rt = chunk()->runtime;
   MOZ_ASSERT(CurrentThreadCanAccessRuntime(rt));
   return rt;
 }
 
 inline JSRuntime* Cell::runtimeFromAnyThread() const {
-  return chunk()->trailer.runtime;
+  return chunk()->runtime;
 }
 
 inline uintptr_t Cell::address() const {
   uintptr_t addr = uintptr_t(this);
   MOZ_ASSERT(addr % CellAlignBytes == 0);
-  MOZ_ASSERT(Chunk::withinValidRange(addr));
+  MOZ_ASSERT(TenuredChunk::withinValidRange(addr));
   return addr;
 }
 
-Chunk* Cell::chunk() const {
+TenuredChunk* Cell::chunk() const {
   uintptr_t addr = uintptr_t(this);
   MOZ_ASSERT(addr % CellAlignBytes == 0);
   addr &= ~ChunkMask;
-  return reinterpret_cast<Chunk*>(addr);
+  return reinterpret_cast<TenuredChunk*>(addr);
 }
 
-inline StoreBuffer* Cell::storeBuffer() const {
-  return chunk()->trailer.storeBuffer;
-}
+inline StoreBuffer* Cell::storeBuffer() const { return chunk()->storeBuffer; }
 
 JS::Zone* Cell::zone() const {
   if (isTenured()) {
@@ -403,32 +400,32 @@ inline JS::TraceKind Cell::getTraceKind() const {
 
 bool TenuredCell::isMarkedAny() const {
   MOZ_ASSERT(arena()->allocated());
-  return chunk()->bitmap.isMarkedAny(this);
+  return chunk()->markBits.isMarkedAny(this);
 }
 
 bool TenuredCell::isMarkedBlack() const {
   MOZ_ASSERT(arena()->allocated());
-  return chunk()->bitmap.isMarkedBlack(this);
+  return chunk()->markBits.isMarkedBlack(this);
 }
 
 bool TenuredCell::isMarkedGray() const {
   MOZ_ASSERT(arena()->allocated());
-  return chunk()->bitmap.isMarkedGray(this);
+  return chunk()->markBits.isMarkedGray(this);
 }
 
 bool TenuredCell::markIfUnmarked(MarkColor color /* = Black */) const {
-  return chunk()->bitmap.markIfUnmarked(this, color);
+  return chunk()->markBits.markIfUnmarked(this, color);
 }
 
-void TenuredCell::markBlack() const { chunk()->bitmap.markBlack(this); }
+void TenuredCell::markBlack() const { chunk()->markBits.markBlack(this); }
 
 void TenuredCell::copyMarkBitsFrom(const TenuredCell* src) {
-  ChunkBitmap& bitmap = chunk()->bitmap;
-  bitmap.copyMarkBit(this, src, ColorBit::BlackBit);
-  bitmap.copyMarkBit(this, src, ColorBit::GrayOrBlackBit);
+  MarkBitmap& markBits = chunk()->markBits;
+  markBits.copyMarkBit(this, src, ColorBit::BlackBit);
+  markBits.copyMarkBit(this, src, ColorBit::GrayOrBlackBit);
 }
 
-void TenuredCell::unmark() { chunk()->bitmap.unmark(this); }
+void TenuredCell::unmark() { chunk()->markBits.unmark(this); }
 
 inline Arena* TenuredCell::arena() const {
   MOZ_ASSERT(isTenured());
@@ -557,6 +554,32 @@ MOZ_ALWAYS_INLINE void PreWriteBarrier(T* thing) {
   if (thing && !thing->isPermanentAndMayBeShared()) {
     PreWriteBarrierImpl(thing);
   }
+}
+
+// Pre-write barrier implementation for structures containing GC cells, taking a
+// functor to trace the structure.
+template <typename T, typename F>
+MOZ_ALWAYS_INLINE void PreWriteBarrier(JS::Zone* zone, T* data,
+                                       const F& traceFn) {
+  MOZ_ASSERT(!CurrentThreadIsIonCompiling());
+  MOZ_ASSERT(!CurrentThreadIsGCMarking());
+
+  auto* shadowZone = JS::shadow::Zone::from(zone);
+  if (!shadowZone->needsIncrementalBarrier()) {
+    return;
+  }
+
+  MOZ_ASSERT(CurrentThreadCanAccessRuntime(shadowZone->runtimeFromAnyThread()));
+  MOZ_ASSERT(!RuntimeFromMainThreadIsHeapMajorCollecting(shadowZone));
+
+  traceFn(shadowZone->barrierTracer(), data);
+}
+
+// Pre-write barrier implementation for structures containing GC cells. T must
+// support a |trace| method.
+template <typename T>
+MOZ_ALWAYS_INLINE void PreWriteBarrier(JS::Zone* zone, T* data) {
+  PreWriteBarrier(zone, data, [](JSTracer* trc, T* data) { data->trace(trc); });
 }
 
 #ifdef DEBUG

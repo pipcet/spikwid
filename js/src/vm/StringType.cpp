@@ -21,6 +21,7 @@
 #include "mozilla/Vector.h"
 
 #include <algorithm>    // std::{all_of,copy_n,enable_if,is_const,move}
+#include <iterator>     // std::size
 #include <type_traits>  // std::is_same, std::is_unsigned
 
 #include "jsfriendapi.h"
@@ -1271,7 +1272,8 @@ bool StaticStrings::init(JSContext* cx) {
   }
 
   for (uint32_t i = 0; i < NUM_SMALL_CHARS * NUM_SMALL_CHARS; i++) {
-    Latin1Char buffer[] = {fromSmallChar(i >> 6), fromSmallChar(i & 0x3F)};
+    Latin1Char buffer[] = {fromSmallChar(i >> SMALL_CHAR_BITS),
+                           fromSmallChar(i & SMALL_CHAR_MASK)};
     JSLinearString* s =
         NewInlineString<NoGC>(cx, Latin1Range(buffer, 2), gc::TenuredHeap);
     if (!s) {
@@ -1285,7 +1287,7 @@ bool StaticStrings::init(JSContext* cx) {
     if (i < 10) {
       intStaticTable[i] = unitStaticTable[i + '0'];
     } else if (i < 100) {
-      size_t index = ((size_t)toSmallChar((i / 10) + '0') << 6) +
+      size_t index = ((size_t)toSmallChar((i / 10) + '0') << SMALL_CHAR_BITS) +
                      toSmallChar((i % 10) + '0');
       intStaticTable[i] = length2StaticTable[index];
     } else {
@@ -2108,17 +2110,16 @@ bool JSString::fillWithRepresentatives(JSContext* cx, HandleArrayObject array) {
   // Append TwoByte strings.
   static const char16_t twoByteChars[] =
       u"\u1234abc\0def\u5678ghijklmasdfa\0xyz0123456789";
-  if (!FillWithRepresentatives(cx, array, &index, twoByteChars,
-                               mozilla::ArrayLength(twoByteChars) - 1,
-                               JSFatInlineString::MAX_LENGTH_TWO_BYTE,
-                               CheckTwoByte)) {
+  if (!FillWithRepresentatives(
+          cx, array, &index, twoByteChars, std::size(twoByteChars) - 1,
+          JSFatInlineString::MAX_LENGTH_TWO_BYTE, CheckTwoByte)) {
     return false;
   }
 
   // Append Latin1 strings.
   static const Latin1Char latin1Chars[] = "abc\0defghijklmasdfa\0xyz0123456789";
   if (!FillWithRepresentatives(
-          cx, array, &index, latin1Chars, mozilla::ArrayLength(latin1Chars) - 1,
+          cx, array, &index, latin1Chars, std::size(latin1Chars) - 1,
           JSFatInlineString::MAX_LENGTH_LATIN1, CheckLatin1)) {
     return false;
   }
@@ -2131,16 +2132,15 @@ bool JSString::fillWithRepresentatives(JSContext* cx, HandleArrayObject array) {
   gc::AutoSuppressNurseryCellAlloc suppress(cx);
 
   // Append TwoByte strings.
-  if (!FillWithRepresentatives(cx, array, &index, twoByteChars,
-                               mozilla::ArrayLength(twoByteChars) - 1,
-                               JSFatInlineString::MAX_LENGTH_TWO_BYTE,
-                               CheckTwoByte)) {
+  if (!FillWithRepresentatives(
+          cx, array, &index, twoByteChars, std::size(twoByteChars) - 1,
+          JSFatInlineString::MAX_LENGTH_TWO_BYTE, CheckTwoByte)) {
     return false;
   }
 
   // Append Latin1 strings.
   if (!FillWithRepresentatives(
-          cx, array, &index, latin1Chars, mozilla::ArrayLength(latin1Chars) - 1,
+          cx, array, &index, latin1Chars, std::size(latin1Chars) - 1,
           JSFatInlineString::MAX_LENGTH_LATIN1, CheckLatin1)) {
     return false;
   }

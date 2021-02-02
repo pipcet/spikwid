@@ -255,8 +255,12 @@ class nsContextMenu {
       this.selectionInfo = this.contentData.selectionInfo;
       this.actor = this.contentData.actor;
     } else {
+      const { SelectionUtils } = ChromeUtils.import(
+        "resource://gre/modules/SelectionUtils.jsm"
+      );
+
       this.browser = this.ownerDoc.defaultView.docShell.chromeEventHandler;
-      this.selectionInfo = BrowserUtils.getSelectionDetails(window);
+      this.selectionInfo = SelectionUtils.getSelectionDetails(window);
       this.actor = this.browser.browsingContext.currentWindowGlobal.getActor(
         "ContextMenu"
       );
@@ -427,6 +431,31 @@ class nsContextMenu {
 
     this.showItem("context-reload", stopReloadItem == "reload");
     this.showItem("context-stop", stopReloadItem == "stop");
+
+    function initBackForwardMenuItemTooltip(menuItemId, l10nId, shortcutId) {
+      let shortcut = document.getElementById(shortcutId);
+      if (shortcut) {
+        shortcut = ShortcutUtils.prettifyShortcut(shortcut);
+      } else {
+        // Sidebar doesn't have navigation buttons or shortcuts, but we still
+        // want to format the menu item tooltip to remove "$shortcut" string.
+        shortcut = "";
+      }
+      let menuItem = document.getElementById(menuItemId);
+      document.l10n.setAttributes(menuItem, l10nId, { shortcut });
+    }
+
+    initBackForwardMenuItemTooltip(
+      "context-back",
+      "main-context-menu-back-2",
+      "goBackKb"
+    );
+
+    initBackForwardMenuItemTooltip(
+      "context-forward",
+      "main-context-menu-forward-2",
+      "goForwardKb"
+    );
   }
 
   initLeaveDOMFullScreenItems() {
@@ -853,7 +882,8 @@ class nsContextMenu {
           "media.videocontrols.picture-in-picture.enabled"
         ) &&
         this.onVideo &&
-        !this.target.ownerDocument.fullscreen;
+        !this.target.ownerDocument.fullscreen &&
+        this.target.readyState > 0;
       this.showItem("context-video-pictureinpicture", shouldDisplay);
     }
     this.showItem("context-media-eme-learnmore", this.onDRMMedia);

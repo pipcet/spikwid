@@ -5080,9 +5080,6 @@ void nsGlobalWindowOuter::FocusOuter(CallerType aCallerType,
     return;
   }
 
-  // Don't look for a presshell if we're a root chrome window that's got
-  // about:blank loaded.  We don't want to focus our widget in that case.
-  // XXXbz should we really be checking for IsInitialDocument() instead?
   RefPtr<BrowsingContext> parent;
   BrowsingContext* bc = GetBrowsingContext();
   if (bc) {
@@ -5104,12 +5101,8 @@ void nsGlobalWindowOuter::FocusOuter(CallerType aCallerType,
       }
       return;
     }
-    nsCOMPtr<Document> parentdoc = parent->GetDocument();
-    if (!parentdoc) {
-      return;
-    }
 
-    if (Element* frame = parentdoc->FindContentForSubDocument(mDoc)) {
+    if (Element* frame = mDoc->GetEmbedderElement()) {
       nsContentUtils::RequestFrameFocus(*frame, canFocus, aCallerType);
     }
     return;
@@ -6941,17 +6934,22 @@ nsresult nsGlobalWindowOuter::OpenInternal(
   nsAutoCString options;
   features.Stringify(options);
 
-  // If current's top-level browsing context's active document's
-  // cross-origin-opener-policy is "same-origin" or "same-origin + COEP" then
-  // if currentDoc's origin is not same origin with currentDoc's top-level
-  // origin, then set noopener to true and name to "_blank".
+  // If noopener is force-enabled for the current document, then set noopener to
+  // true, and clear the name to "_blank".
   nsAutoString windowName(aName);
-  auto topPolicy = mBrowsingContext->Top()->GetOpenerPolicy();
-  if ((topPolicy == nsILoadInfo::OPENER_POLICY_SAME_ORIGIN ||
-       topPolicy ==
-           nsILoadInfo::
-               OPENER_POLICY_SAME_ORIGIN_EMBEDDER_POLICY_REQUIRE_CORP) &&
-      !mBrowsingContext->SameOriginWithTop()) {
+  if (nsDocShell::Cast(GetDocShell())->NoopenerForceEnabled()) {
+    // FIXME: Eventually bypass force-enabling noopener if `aPrintKind !=
+    // PrintKind::None`, so that we can print pages with noopener force-enabled.
+    // This will require relaxing assertions elsewhere.
+    if (aPrintKind != PrintKind::None) {
+      NS_WARNING(
+          "printing frames with noopener force-enabled isn't supported yet");
+      return NS_ERROR_FAILURE;
+    }
+
+    MOZ_DIAGNOSTIC_ASSERT(aNavigate,
+                          "cannot OpenNoNavigate if noopener is force-enabled");
+
     forceNoOpener = true;
     windowName = u"_blank"_ns;
   }

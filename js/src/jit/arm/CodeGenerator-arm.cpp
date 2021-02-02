@@ -6,10 +6,11 @@
 
 #include "jit/arm/CodeGenerator-arm.h"
 
-#include "mozilla/ArrayUtils.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/MathAlgorithms.h"
 #include "mozilla/Maybe.h"
+
+#include <iterator>
 
 #include "jsnum.h"
 
@@ -1305,7 +1306,7 @@ void CodeGenerator::visitWasmBuiltinTruncateFToInt32(
 static const uint32_t FrameSizes[] = {128, 256, 512, 1024};
 
 FrameSizeClass FrameSizeClass::FromDepth(uint32_t frameDepth) {
-  for (uint32_t i = 0; i < mozilla::ArrayLength(FrameSizes); i++) {
+  for (uint32_t i = 0; i < std::size(FrameSizes); i++) {
     if (frameDepth < FrameSizes[i]) {
       return FrameSizeClass(i);
     }
@@ -1315,12 +1316,12 @@ FrameSizeClass FrameSizeClass::FromDepth(uint32_t frameDepth) {
 }
 
 FrameSizeClass FrameSizeClass::ClassLimit() {
-  return FrameSizeClass(mozilla::ArrayLength(FrameSizes));
+  return FrameSizeClass(std::size(FrameSizes));
 }
 
 uint32_t FrameSizeClass::frameSize() const {
   MOZ_ASSERT(class_ != NO_FRAME_SIZE_CLASS_ID);
-  MOZ_ASSERT(class_ < mozilla::ArrayLength(FrameSizes));
+  MOZ_ASSERT(class_ < std::size(FrameSizes));
 
   return FrameSizes[class_];
 }
@@ -1604,13 +1605,13 @@ void CodeGenerator::visitCompareExchangeTypedArrayElement(
   Register newval = ToRegister(lir->newval());
 
   Scalar::Type arrayType = lir->mir()->arrayType();
-  size_t width = Scalar::byteSize(arrayType);
 
   if (lir->index()->isConstant()) {
-    Address dest(elements, ToInt32(lir->index()) * width);
+    Address dest = ToAddress(elements, lir->index(), arrayType);
     masm.compareExchangeJS(arrayType, Synchronization::Full(), dest, oldval,
                            newval, temp, output);
   } else {
+    size_t width = Scalar::byteSize(arrayType);
     BaseIndex dest(elements, ToRegister(lir->index()),
                    ScaleFromElemWidth(width));
     masm.compareExchangeJS(arrayType, Synchronization::Full(), dest, oldval,
@@ -1628,13 +1629,13 @@ void CodeGenerator::visitAtomicExchangeTypedArrayElement(
   Register value = ToRegister(lir->value());
 
   Scalar::Type arrayType = lir->mir()->arrayType();
-  size_t width = Scalar::byteSize(arrayType);
 
   if (lir->index()->isConstant()) {
-    Address dest(elements, ToInt32(lir->index()) * width);
+    Address dest = ToAddress(elements, lir->index(), arrayType);
     masm.atomicExchangeJS(arrayType, Synchronization::Full(), dest, value, temp,
                           output);
   } else {
+    size_t width = Scalar::byteSize(arrayType);
     BaseIndex dest(elements, ToRegister(lir->index()),
                    ScaleFromElemWidth(width));
     masm.atomicExchangeJS(arrayType, Synchronization::Full(), dest, value, temp,
@@ -1654,14 +1655,14 @@ void CodeGenerator::visitAtomicTypedArrayElementBinop(
   Register value = ToRegister(lir->value());
 
   Scalar::Type arrayType = lir->mir()->arrayType();
-  size_t width = Scalar::byteSize(arrayType);
 
   if (lir->index()->isConstant()) {
-    Address mem(elements, ToInt32(lir->index()) * width);
+    Address mem = ToAddress(elements, lir->index(), arrayType);
     masm.atomicFetchOpJS(arrayType, Synchronization::Full(),
                          lir->mir()->operation(), value, mem, flagTemp, outTemp,
                          output);
   } else {
+    size_t width = Scalar::byteSize(arrayType);
     BaseIndex mem(elements, ToRegister(lir->index()),
                   ScaleFromElemWidth(width));
     masm.atomicFetchOpJS(arrayType, Synchronization::Full(),
@@ -1678,13 +1679,13 @@ void CodeGenerator::visitAtomicTypedArrayElementBinopForEffect(
   Register flagTemp = ToRegister(lir->flagTemp());
   Register value = ToRegister(lir->value());
   Scalar::Type arrayType = lir->mir()->arrayType();
-  size_t width = Scalar::byteSize(arrayType);
 
   if (lir->index()->isConstant()) {
-    Address mem(elements, ToInt32(lir->index()) * width);
+    Address mem = ToAddress(elements, lir->index(), arrayType);
     masm.atomicEffectOpJS(arrayType, Synchronization::Full(),
                           lir->mir()->operation(), value, mem, flagTemp);
   } else {
+    size_t width = Scalar::byteSize(arrayType);
     BaseIndex mem(elements, ToRegister(lir->index()),
                   ScaleFromElemWidth(width));
     masm.atomicEffectOpJS(arrayType, Synchronization::Full(),

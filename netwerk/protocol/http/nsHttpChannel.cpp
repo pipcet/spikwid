@@ -621,11 +621,13 @@ nsresult nsHttpChannel::MaybeUseHTTPSRRForUpgrade(bool aShouldUpgrade,
     return ContinueOnBeforeConnect(aShouldUpgrade, aStatus);
   }
 
-  if (mHTTPSSVCRecord) {
-    LOG(("nsHttpChannel::MaybeUseHTTPSRRForUpgrade [%p] already got HTTPS RR",
-         this));
+  if (mHTTPSSVCRecord.isSome()) {
+    LOG((
+        "nsHttpChannel::MaybeUseHTTPSRRForUpgrade [%p] mHTTPSSVCRecord is some",
+        this));
     StoreWaitHTTPSSVCRecord(false);
-    return ContinueOnBeforeConnect(true, aStatus);
+    bool hasHTTPSRR = (mHTTPSSVCRecord.ref() != nullptr);
+    return ContinueOnBeforeConnect(hasHTTPSRR, aStatus);
   }
 
   LOG(("nsHttpChannel::MaybeUseHTTPSRRForUpgrade [%p] wait for HTTPS RR",
@@ -680,7 +682,6 @@ nsresult nsHttpChannel::ContinueOnBeforeConnect(bool aShouldUpgrade,
   // Finalize ConnectionInfo flags before SpeculativeConnect
   mConnectionInfo->SetAnonymous((mLoadFlags & LOAD_ANONYMOUS) != 0);
   mConnectionInfo->SetPrivate(mPrivateBrowsing);
-  mConnectionInfo->SetIsolated(IsIsolated());
   mConnectionInfo->SetNoSpdy(mCaps & NS_HTTP_DISALLOW_SPDY);
   mConnectionInfo->SetBeConservative((mCaps & NS_HTTP_BE_CONSERVATIVE) ||
                                      LoadBeConservative());
@@ -689,29 +690,6 @@ nsresult nsHttpChannel::ContinueOnBeforeConnect(bool aShouldUpgrade,
   mConnectionInfo->SetTRRMode(nsIRequest::GetTRRMode());
   mConnectionInfo->SetIPv4Disabled(mCaps & NS_HTTP_DISABLE_IPV4);
   mConnectionInfo->SetIPv6Disabled(mCaps & NS_HTTP_DISABLE_IPV6);
-
-  if (mHTTPSSVCRecord) {
-    MOZ_ASSERT(mURI->SchemeIs("https"));
-
-    LOG((" Using connection info with HTTPSSVC record"));
-    nsCOMPtr<nsIDNSHTTPSSVCRecord> rec;
-    mHTTPSSVCRecord.swap(rec);
-
-    bool http3Allowed = !mUpgradeProtocolCallback && !mProxyInfo &&
-                        !(mCaps & NS_HTTP_BE_CONSERVATIVE) &&
-                        !LoadBeConservative();
-
-    nsCOMPtr<nsISVCBRecord> record;
-    if (NS_SUCCEEDED(rec->GetServiceModeRecord(mCaps & NS_HTTP_DISALLOW_SPDY,
-                                               !http3Allowed,
-                                               getter_AddRefs(record)))) {
-      MOZ_ASSERT(record);
-
-      RefPtr<nsHttpConnectionInfo> newConnInfo =
-          mConnectionInfo->CloneAndAdoptHTTPSSVCRecord(record);
-      mConnectionInfo = std::move(newConnInfo);
-    }
-  }
 
   // notify "http-on-before-connect" observers
   gHttpHandler->OnBeforeConnect(this);
@@ -2115,9 +2093,8 @@ void nsHttpChannel::ProcessAltService() {
   }
 
   AltSvcMapping::ProcessHeader(
-      altSvc, scheme, originHost, originPort, mUsername, GetTopWindowOrigin(),
-      mPrivateBrowsing, IsIsolated(), callbacks, proxyInfo,
-      mCaps & NS_HTTP_DISALLOW_SPDY, originAttributes);
+      altSvc, scheme, originHost, originPort, mUsername, mPrivateBrowsing,
+      callbacks, proxyInfo, mCaps & NS_HTTP_DISALLOW_SPDY, originAttributes);
 }
 
 nsresult nsHttpChannel::ProcessResponse() {
@@ -2843,9 +2820,12 @@ nsresult nsHttpChannel::ProxyFailover() {
   return AsyncDoReplaceWithProxy(pi);
 }
 
-void nsHttpChannel::SetHTTPSSVCRecord(nsIDNSHTTPSSVCRecord* aRecord) {
+void nsHttpChannel::SetHTTPSSVCRecord(
+    already_AddRefed<nsIDNSHTTPSSVCRecord>&& aRecord) {
   LOG(("nsHttpChannel::SetHTTPSSVCRecord [this=%p]\n", this));
-  mHTTPSSVCRecord = aRecord;
+  nsCOMPtr<nsIDNSHTTPSSVCRecord> record = aRecord;
+  MOZ_ASSERT(!mHTTPSSVCRecord);
+  mHTTPSSVCRecord.emplace(std::move(record));
 }
 
 void nsHttpChannel::HandleAsyncRedirectChannelToHttps() {
@@ -2933,10 +2913,9 @@ nsresult nsHttpChannel::StartRedirectChannelToURI(nsIURI* upgradedURI,
 
   if (mHTTPSSVCRecord) {
     RefPtr<nsHttpChannel> httpChan = do_QueryObject(newChannel);
-    if (httpChan) {
-      nsCOMPtr<nsIDNSHTTPSSVCRecord> rec;
-      mHTTPSSVCRecord.swap(rec);
-      httpChan->SetHTTPSSVCRecord(rec);
+    nsCOMPtr<nsIDNSHTTPSSVCRecord> rec = mHTTPSSVCRecord.ref();
+    if (httpChan && rec) {
+      httpChan->SetHTTPSSVCRecord(rec.forget());
     }
   }
 
@@ -3675,43 +3654,6 @@ nsresult nsHttpChannel::OpenCacheEntry(bool isHttps) {
   return OpenCacheEntryInternal(isHttps, mApplicationCache, true);
 }
 
-bool nsHttpChannel::IsIsolated() {
-  if (LoadHasBeenIsolatedChecked()) {
-    return LoadIsIsolated();
-  }
-  StoreIsIsolated(
-      StaticPrefs::browser_cache_cache_isolation() ||
-      (IsThirdPartyTrackingResource() &&
-       !ContentBlocking::ShouldAllowAccessFor(this, mURI, nullptr)));
-  StoreHasBeenIsolatedChecked(true);
-  return LoadIsIsolated();
-}
-
-const nsCString& nsHttpChannel::GetTopWindowOrigin() {
-  if (LoadTopWindowOriginComputed()) {
-    return mTopWindowOrigin;
-  }
-
-  nsCOMPtr<nsIURI> topWindowURI;
-  nsresult rv = GetTopWindowURI(getter_AddRefs(topWindowURI));
-  bool isDocument = false;
-  if (NS_FAILED(rv) && NS_SUCCEEDED(GetIsMainDocumentChannel(&isDocument)) &&
-      isDocument) {
-    // For top-level documents, use the document channel's origin to compute
-    // the unique storage space identifier instead of the top Window URI.
-    rv = NS_GetFinalChannelURI(this, getter_AddRefs(topWindowURI));
-    NS_ENSURE_SUCCESS(rv, mTopWindowOrigin);
-  }
-
-  rv = nsContentUtils::GetASCIIOrigin(topWindowURI ? topWindowURI : mURI,
-                                      mTopWindowOrigin);
-  NS_ENSURE_SUCCESS(rv, mTopWindowOrigin);
-
-  StoreTopWindowOriginComputed(true);
-
-  return mTopWindowOrigin;
-}
-
 nsresult nsHttpChannel::OpenCacheEntryInternal(
     bool isHttps, nsIApplicationCache* applicationCache,
     bool allowApplicationCache) {
@@ -3832,16 +3774,6 @@ nsresult nsHttpChannel::OpenCacheEntryInternal(
   }
   if (mRequestHead.IsHead()) {
     mCacheIdExtension.Append("HEAD");
-  }
-
-  if (IsIsolated()) {
-    auto& topWindowOrigin = GetTopWindowOrigin();
-    if (topWindowOrigin.IsEmpty()) {
-      return NS_ERROR_FAILURE;
-    }
-
-    mCacheIdExtension.Append("-unique:");
-    mCacheIdExtension.Append(topWindowOrigin);
   }
 
   mCacheOpenWithPriority = cacheEntryOpenFlags & nsICacheStorage::OPEN_PRIORITY;
@@ -6598,13 +6530,11 @@ nsresult nsHttpChannel::BeginConnect() {
     StoreAllowHttp3(false);
   }
 
-  gHttpHandler->MaybeAddAltSvcForTesting(mURI, mUsername, GetTopWindowOrigin(),
-                                         mPrivateBrowsing, IsIsolated(),
+  gHttpHandler->MaybeAddAltSvcForTesting(mURI, mUsername, mPrivateBrowsing,
                                          mCallbacks, originAttributes);
 
   RefPtr<nsHttpConnectionInfo> connInfo = new nsHttpConnectionInfo(
-      host, port, ""_ns, mUsername, GetTopWindowOrigin(), proxyInfo,
-      originAttributes, isHttps);
+      host, port, ""_ns, mUsername, proxyInfo, originAttributes, isHttps);
   bool http2Allowed = !gHttpHandler->IsHttp2Excluded(connInfo);
   if (!LoadAllowHttp3()) {
     mCaps |= NS_HTTP_DISALLOW_HTTP3;
@@ -6613,9 +6543,10 @@ nsresult nsHttpChannel::BeginConnect() {
                       !(mCaps & NS_HTTP_BE_CONSERVATIVE) &&
                       !LoadBeConservative() && LoadAllowHttp3();
 
-  // No need to lookup HTTPSSVC record if we already have one.
+  // No need to lookup HTTPSSVC record if mHTTPSSVCRecord already contains a
+  // value.
   StoreUseHTTPSSVC(StaticPrefs::network_dns_upgrade_with_https_rr() &&
-                   !mHTTPSSVCRecord);
+                   mHTTPSSVCRecord.isNothing());
 
   RefPtr<AltSvcMapping> mapping;
   if (!mConnectionInfo && LoadAllowAltSvc() &&  // per channel
@@ -6623,8 +6554,7 @@ nsresult nsHttpChannel::BeginConnect() {
       AltSvcMapping::AcceptableProxy(proxyInfo) &&
       (scheme.EqualsLiteral("http") || scheme.EqualsLiteral("https")) &&
       (mapping = gHttpHandler->GetAltServiceMapping(
-           scheme, host, port, mPrivateBrowsing, IsIsolated(),
-           GetTopWindowOrigin(), originAttributes, http2Allowed,
+           scheme, host, port, mPrivateBrowsing, originAttributes, http2Allowed,
            http3Allowed))) {
     LOG(("nsHttpChannel %p Alt Service Mapping Found %s://%s:%d [%s]\n", this,
          scheme.get(), mapping->AlternateHost().get(), mapping->AlternatePort(),
@@ -6681,7 +6611,8 @@ nsresult nsHttpChannel::BeginConnect() {
 
   // Need to re-ask the handler, since mConnectionInfo may not be the connInfo
   // we used earlier
-  if (gHttpHandler->IsHttp2Excluded(mConnectionInfo)) {
+  if (!mConnectionInfo->IsHttp3() &&
+      gHttpHandler->IsHttp2Excluded(mConnectionInfo)) {
     StoreAllowSpdy(0);
     mCaps |= NS_HTTP_DISALLOW_SPDY;
     mConnectionInfo->SetNoSpdy(true);
@@ -6847,12 +6778,23 @@ nsresult nsHttpChannel::MaybeStartDNSPrefetch() {
       mDNSBlockingThenable = mDNSBlockingPromise.Ensure(__func__);
     }
 
+    // When LoadUseHTTPSSVC() is true, we should really "fetch" the HTTPS RR,
+    // not "prefetch", since DNS prefetch can be disabled by the pref.
     if (LoadUseHTTPSSVC() ||
-        gHttpHandler->UseHTTPSRRForSpeculativeConnection()) {
+        (gHttpHandler->UseHTTPSRRForSpeculativeConnection() &&
+         !mHTTPSSVCRecord)) {
+      MOZ_ASSERT(!mHTTPSSVCRecord);
+
+      OriginAttributes originAttributes;
+      StoragePrincipalHelper::GetOriginAttributesForHTTPSRR(this,
+                                                            originAttributes);
+
+      RefPtr<nsDNSPrefetch> resolver =
+          new nsDNSPrefetch(mURI, originAttributes, nsIRequest::GetTRRMode());
       nsWeakPtr weakPtrThis(
           do_GetWeakReference(static_cast<nsIHttpChannel*>(this)));
-      rv = mDNSPrefetch->FetchHTTPSSVC(
-          mCaps & NS_HTTP_REFRESH_DNS,
+      nsresult rv = resolver->FetchHTTPSSVC(
+          mCaps & NS_HTTP_REFRESH_DNS, !LoadUseHTTPSSVC(),
           [weakPtrThis](nsIDNSHTTPSSVCRecord* aRecord) {
             nsCOMPtr<nsIHttpChannel> channel = do_QueryReferent(weakPtrThis);
             RefPtr<nsHttpChannel> httpChannelImpl = do_QueryObject(channel);
@@ -7352,6 +7294,13 @@ nsHttpChannel::OnStartRequest(nsIRequest* request) {
 
   Telemetry::Accumulate(Telemetry::HTTP_CHANNEL_ONSTART_SUCCESS,
                         NS_SUCCEEDED(mStatus));
+
+  if (mTransaction) {
+    Telemetry::Accumulate(
+        Telemetry::HTTP3_CHANNEL_ONSTART_SUCCESS,
+        (mTransaction->IsHttp3Used()) ? "http3"_ns : "no_http3"_ns,
+        NS_SUCCEEDED(mStatus));
+  }
 
   if (gTRRService && gTRRService->IsConfirmed()) {
     Telemetry::Accumulate(Telemetry::HTTP_CHANNEL_ONSTART_SUCCESS_TRR,
@@ -9027,25 +8976,31 @@ void nsHttpChannel::OnHTTPSRRAvailable(nsIDNSHTTPSSVCRecord* aRecord) {
 
   LOG(("nsHttpChannel::OnHTTPSRRAvailable [this=%p, aRecord=%p]\n", this,
        aRecord));
-  // This record will be used in the new redirect channel.
-  MOZ_ASSERT(!mHTTPSSVCRecord);
-  mHTTPSSVCRecord = aRecord;
+
+  if (mHTTPSSVCRecord) {
+    MOZ_ASSERT(false, "OnHTTPSRRAvailable called twice!");
+    return;
+  }
+
+  nsCOMPtr<nsIDNSHTTPSSVCRecord> record = aRecord;
+  mHTTPSSVCRecord.emplace(std::move(record));
+  const nsCOMPtr<nsIDNSHTTPSSVCRecord>& httprr = mHTTPSSVCRecord.ref();
 
   if (LoadWaitHTTPSSVCRecord()) {
     MOZ_ASSERT(mURI->SchemeIs("http"));
 
     StoreWaitHTTPSSVCRecord(false);
-    nsresult rv = ContinueOnBeforeConnect(!!mHTTPSSVCRecord, mStatus);
+    nsresult rv = ContinueOnBeforeConnect(!!httprr, mStatus);
     if (NS_FAILED(rv)) {
       CloseCacheEntry(false);
       Unused << AsyncAbort(rv);
     }
   } else {
     // This channel is not canceled and the transaction is not created.
-    if (mHTTPSSVCRecord && NS_SUCCEEDED(mStatus) && !mTransaction &&
+    if (httprr && NS_SUCCEEDED(mStatus) && !mTransaction &&
         (mFirstResponseSource != RESPONSE_FROM_CACHE)) {
       bool hasIPAddress = false;
-      Unused << mHTTPSSVCRecord->GetHasIPAddresses(&hasIPAddress);
+      Unused << httprr->GetHasIPAddresses(&hasIPAddress);
       Telemetry::Accumulate(Telemetry::DNS_HTTPSSVC_RECORD_RECEIVING_STAGE,
                             hasIPAddress
                                 ? HTTPSSVC_WITH_IPHINT_RECEIVED_STAGE_0
@@ -9742,8 +9697,11 @@ nsresult nsHttpChannel::MaybeRaceCacheWithNetwork() {
   rv = netLinkSvc->GetLinkType(&linkType);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  if (!(linkType == nsINetworkLinkService::LINK_TYPE_UNKNOWN ||
-        linkType == nsINetworkLinkService::LINK_TYPE_ETHERNET ||
+  if (!(linkType == nsINetworkLinkService::LINK_TYPE_ETHERNET ||
+#ifndef MOZ_WIDGET_ANDROID
+        // On Android we don't assume an unknown link type is unmetered
+        linkType == nsINetworkLinkService::LINK_TYPE_UNKNOWN ||
+#endif
         linkType == nsINetworkLinkService::LINK_TYPE_USB ||
         linkType == nsINetworkLinkService::LINK_TYPE_WIFI)) {
     return NS_OK;

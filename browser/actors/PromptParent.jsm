@@ -36,6 +36,12 @@ XPCOMUtils.defineLazyPreferenceGetter(
   false
 );
 
+XPCOMUtils.defineLazyGetter(this, "gTabBrowserBundle", () => {
+  return Services.strings.createBundle(
+    "chrome://browser/locale/tabbrowser.properties"
+  );
+});
+
 /**
  * @typedef {Object} Prompt
  * @property {Function} resolver
@@ -192,26 +198,23 @@ class PromptParent extends JSWindowActorParent {
 
       this.unregisterPrompt(id);
 
-      PromptUtils.fireDialogEvent(window, "DOMModalDialogClosed", browser, {
-        wasPermitUnload: args.inPermitUnload,
-        areLeaving: args.ok,
-      });
+      PromptUtils.fireDialogEvent(
+        window,
+        "DOMModalDialogClosed",
+        browser,
+        this.getClosingEventDetail(args)
+      );
       resolver(args);
       browser.maybeLeaveModalState();
     };
 
     try {
       browser.enterModalState();
-      let eventDetail = {
-        tabPrompt: true,
-        promptPrincipal: args.promptPrincipal,
-        inPermitUnload: args.inPermitUnload,
-      };
       PromptUtils.fireDialogEvent(
         window,
         "DOMWillOpenModalDialog",
         browser,
-        eventDetail
+        this.getOpenEventDetail(args)
       );
 
       args.promptActive = true;
@@ -270,15 +273,6 @@ class PromptParent extends JSWindowActorParent {
       throw new Error("Cannot call openModalWindow on a hidden window");
     }
 
-    let eventDetail =
-      args.modalType === Services.prompt.MODAL_TYPE_CONTENT
-        ? {
-            wasPermitUnload: args.inPermitUnload,
-            promptPrincipal: args.promptPrincipal,
-            tabPrompt: true,
-          }
-        : null;
-
     try {
       if (browser) {
         browser.enterModalState();
@@ -286,13 +280,15 @@ class PromptParent extends JSWindowActorParent {
           win,
           "DOMWillOpenModalDialog",
           browser,
-          eventDetail
+          this.getOpenEventDetail(args)
         );
       }
 
       args.promptAborted = false;
+      args.openedWithTabDialog = true;
 
-      let bag = PromptUtils.objectToPropBag(args);
+      // Convert args object to a prop bag for the dialog to consume.
+      let bag;
 
       if (
         args.modalType === Services.prompt.MODAL_TYPE_TAB ||
@@ -307,16 +303,24 @@ class PromptParent extends JSWindowActorParent {
         }
         // Tab or content level prompt
         let dialogBox = win.gBrowser.getTabDialogBox(browser);
+
+        if (dialogBox._allowTabFocusByPromptPrincipal) {
+          this.addTabSwitchCheckboxToArgs(dialogBox, args);
+        }
+
+        bag = PromptUtils.objectToPropBag(args);
         await dialogBox.open(
           uri,
           {
             features: "resizable=no",
             modalType: args.modalType,
+            allowFocusCheckbox: args.allowFocusCheckbox,
           },
           bag
         );
       } else {
         // Window prompt
+        bag = PromptUtils.objectToPropBag(args);
         Services.ww.openWindow(
           win,
           uri,
@@ -334,10 +338,62 @@ class PromptParent extends JSWindowActorParent {
           win,
           "DOMModalDialogClosed",
           browser,
-          eventDetail
+          this.getClosingEventDetail(args)
         );
       }
     }
     return args;
+  }
+
+  getClosingEventDetail(args) {
+    let details =
+      args.modalType === Services.prompt.MODAL_TYPE_CONTENT
+        ? {
+            wasPermitUnload: args.inPermitUnload,
+            areLeaving: args.ok,
+          }
+        : null;
+
+    return details;
+  }
+
+  getOpenEventDetail(args) {
+    let details =
+      args.modalType === Services.prompt.MODAL_TYPE_CONTENT
+        ? {
+            inPermitUnload: args.inPermitUnload,
+            promptPrincipal: args.promptPrincipal,
+            tabPrompt: true,
+          }
+        : null;
+
+    return details;
+  }
+
+  /**
+   * Set properties on `args` needed by the dialog to allow tab switching for the
+   * page that opened the prompt.
+   *
+   * @param {TabDialogBox}  dialogBox
+   *        The dialog to show the tab-switch checkbox for.
+   * @param {Object}  args
+   *        The `args` object to set tab switching permission info on.
+   */
+  addTabSwitchCheckboxToArgs(dialogBox, args) {
+    let allowTabFocusByPromptPrincipal =
+      dialogBox._allowTabFocusByPromptPrincipal;
+
+    if (
+      allowTabFocusByPromptPrincipal &&
+      args.modalType === Services.prompt.MODAL_TYPE_CONTENT
+    ) {
+      let allowTabswitchCheckboxLabel = gTabBrowserBundle.formatStringFromName(
+        "tabs.allowTabFocusByPromptForSite",
+        [allowTabFocusByPromptPrincipal.URI.host]
+      );
+
+      args.allowFocusCheckbox = true;
+      args.checkLabel = allowTabswitchCheckboxLabel;
+    }
   }
 }

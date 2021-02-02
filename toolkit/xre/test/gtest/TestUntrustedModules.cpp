@@ -6,6 +6,7 @@
 #include "gtest/gtest.h"
 
 #include "js/RegExp.h"
+#include "mozilla/BinarySearch.h"
 #include "mozilla/SpinEventLoopUntil.h"
 #include "mozilla/UntrustedModulesProcessor.h"
 #include "mozilla/WinDllServices.h"
@@ -135,6 +136,22 @@ class UntrustedModulesCollector {
 };
 
 static void ValidateUntrustedModules(const UntrustedModulesData& aData) {
+  // This defines a list of modules which are listed on our blocklist and
+  // thus its loading status is not expected to be Status::Loaded.
+  // Although the UntrustedModulesFixture test does not touch any of them,
+  // the current process might have run a test like TestDllBlocklist where
+  // we try to load and block them.
+  const struct {
+    const wchar_t* mName;
+    ModuleLoadInfo::Status mStatus;
+  } kKnownModules[] = {
+      // Sorted by mName for binary-search
+      {L"TestDllBlocklist_MatchByName.dll", ModuleLoadInfo::Status::Blocked},
+      {L"TestDllBlocklist_MatchByVersion.dll", ModuleLoadInfo::Status::Blocked},
+      {L"TestDllBlocklist_NoOpEntryPoint.dll",
+       ModuleLoadInfo::Status::Redirected},
+  };
+
   EXPECT_EQ(aData.mProcessType, GeckoProcessType_Default);
   EXPECT_EQ(aData.mPid, ::GetCurrentProcessId());
 
@@ -145,7 +162,25 @@ static void ValidateUntrustedModules(const UntrustedModulesData& aData) {
   }
 
   for (const auto& evt : aData.mEvents) {
-    EXPECT_EQ(evt.mThreadId, ::GetCurrentThreadId());
+    const nsDependentSubstring leafName =
+        nt::GetLeafName(evt.mModule->mResolvedNtName);
+    const nsAutoString leafNameStr(leafName.Data(), leafName.Length());
+    size_t match;
+    if (BinarySearchIf(
+            kKnownModules, 0, ArrayLength(kKnownModules),
+            [&leafNameStr](const auto& aVal) {
+              return _wcsicmp(leafNameStr.get(), aVal.mName);
+            },
+            &match)) {
+      // No check for mThreadId because a known module may be loaded
+      // in a different thread.
+      EXPECT_EQ(evt.mLoadStatus,
+                static_cast<uint32_t>(kKnownModules[match].mStatus));
+    } else {
+      EXPECT_EQ(evt.mThreadId, ::GetCurrentThreadId());
+      EXPECT_EQ(evt.mLoadStatus, 0);
+    }
+
     // Make sure mModule is pointing to an entry of mModules.
     EXPECT_TRUE(moduleSet.Contains(evt.mModule));
     EXPECT_FALSE(evt.mIsDependent);
@@ -313,7 +348,7 @@ BOOL CALLBACK UntrustedModulesFixture::InitialModuleLoadOnce(PINIT_ONCE, void*,
       u"\"processUptimeMS\":\\d+,\"loadDurationMS\":\\d+\\.\\d+," \
       u"\"threadID\":\\d+,\"threadName\":\"Main Thread\"," \
       u"\"baseAddress\":\"0x[0-9a-f]+\",\"moduleIndex\":0," \
-      u"\"isDependent\":false}\\]," \
+      u"\"isDependent\":false,\"loadStatus\":0}\\]," \
     u"\"combinedStacks\":{" \
       u"\"memoryMap\":\\[\\[\"\\w+\\.\\w+\",\"[0-9A-Z]+\"\\]" \
         u"(,\\[\"\\w+\\.\\w+\",\"[0-9A-Z]+\\\"\\])*\\]," \

@@ -469,6 +469,11 @@
     type: RelaxedAtomicBool
     value: true
     mirror: always
+    
+-   name: apz.gtk.touchpad_pinch.enabled
+    type: RelaxedAtomicBool
+    value: false
+    mirror: always
 #endif
 
 - name: apz.keyboard.enabled
@@ -768,12 +773,6 @@
 - name: browser.cache.disk.capacity
   type: RelaxedAtomicUint32
   value: 256000
-  mirror: always
-
-# Enable/Disable Origin based cache isolation
-- name: browser.cache.cache_isolation
-  type: RelaxedAtomicBool
-  value: false
   mirror: always
 
 # -1 = determine dynamically, 0 = none, n = memory capacity in kilobytes.
@@ -1781,8 +1780,14 @@
   value: true
   mirror: always
 
-# Disable clipboard read() and write() by default
+# Disable clipboard read() by default
 - name: dom.events.asyncClipboard.dataTransfer
+  type: bool
+  value: false
+  mirror: always
+
+# Disable ClipboardItem and clipboard.write by default
+- name: dom.events.asyncClipboard.clipboardItem
   type: bool
   value: false
   mirror: always
@@ -1973,7 +1978,7 @@
 
 - name: dom.input_events.beforeinput.enabled
   type: bool
-  value: @IS_EARLY_BETA_OR_EARLIER@
+  value: true
   mirror: always
 
 # Whether innerWidth / innerHeight return rounded or fractional sizes.
@@ -2207,16 +2212,6 @@
 - name: dom.keyboardevent.keypress.set_keycode_and_charcode_to_same_value
   type: bool
   value: true
-  mirror: always
-
-# Whether the LinkStyle.sheet and DocumentOrShadowRoot.styleSheets accessor
-# exposes in-progress-loading stylesheets.
-#
-# Historical behavior is `true`, but other browsers (and also a bit of common
-# sense) match `false`.
-- name: dom.expose-incomplete-stylesheets
-  type: bool
-  value: false
   mirror: always
 
 # Whether the Large-Allocation header is enabled.
@@ -3288,12 +3283,6 @@
   value: false
   mirror: always
 
-# W3C draft pointer events
-- name: dom.w3c_pointer_events.enabled
-  type: RelaxedAtomicBool
-  value: @IS_NOT_ANDROID@
-  mirror: always
-
 #ifdef XP_WIN
   # Control firing WidgetMouseEvent by handling Windows pointer messages or
   # mouse messages.
@@ -3309,17 +3298,10 @@
   value: -1
   mirror: always
 
-# If the pref is set to true, pointer events are enabled on GeckoView, but only
-# in the case it is using separate child processes.
-- name: dom.w3c_pointer_events.multiprocess.android.enabled
-  type: bool
-  value: true
-  mirror: always
-
 # W3C pointer events draft.
 - name: dom.w3c_pointer_events.implicit_capture
   type: bool
-  value: false
+  value: @IS_NIGHTLY_BUILD@
   mirror: always
 
 # Is support for Navigator.webdriver enabled?
@@ -3653,18 +3635,6 @@
 - name: extensions.serviceWorkerRegister.allowed
   type: bool
   value: false
-  mirror: always
-
-# This pref governs whether we enable content script CSP in extensions.
-- name: extensions.content_script_csp.enabled
-  type: bool
-  value: false
-  mirror: always
-
-# This pref governs whether content script CSP is report-only.
-- name: extensions.content_script_csp.report_only
-  type: bool
-  value: true
   mirror: always
 
 # This pref governs whether we run webextensions in a separate process (true)
@@ -4471,6 +4441,12 @@
   value: false
   mirror: always
 
+# Prefer EGL over GLX if available.
+- name: gfx.prefer-x11-egl
+  type: bool
+  value: false
+  mirror: once
+
 - name: gfx.testing.device-fail
   type: RelaxedAtomicBool
   value: false
@@ -4708,6 +4684,26 @@
   value: true
   mirror: once
 
+# Whether or not to fallback from WebRender/WebRender Software to Basic.
+- name: gfx.webrender.fallback.basic
+  type: bool
+  value: true
+  mirror: once
+
+# Whether or not to fallback from WebRender to Software WebRender.
+- name: gfx.webrender.fallback.software
+  type: bool
+  value: @IS_NIGHTLY_BUILD@
+  mirror: once
+
+#ifdef XP_WIN
+  # Whether or not to fallback from WebRender to Software WebRender + D3D11.
+-   name: gfx.webrender.fallback.software-d3d11
+    type: bool
+    value: @IS_NIGHTLY_BUILD@
+    mirror: once
+#endif
+
 - name: gfx.webrender.use-optimized-shaders
   type: bool
   value: true
@@ -4801,6 +4797,16 @@
   type: RelaxedAtomicInt32
   value: 512
   mirror: always
+
+# Whether to use EGL robustness or not.
+- name: gfx.webrender.prefer-robustness
+  type: bool
+#if defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
+  value: true
+#else
+  value: false
+#endif
+  mirror: once
 
 # Whether to use the WebRender software backend
 - name: gfx.webrender.software
@@ -5354,6 +5360,11 @@
   value: false
   mirror: always
 #endif
+
+- name: javascript.options.large_arraybuffers
+  type: RelaxedAtomicBool
+  value: false
+  mirror: always
 
 #---------------------------------------------------------------------------
 # Prefs starting with "layers."
@@ -8358,7 +8369,7 @@
 # 3=no-referrer-when-downgrade.
 - name: network.http.referer.defaultPolicy
   type: uint32_t
-  value: 3
+  value: 2
   mirror: always
 
 # Set the default Referrer Policy applied to third-party trackers when the
@@ -8773,6 +8784,30 @@
   value: true
   mirror: always
 
+# Whether to enable odoh.
+- name: network.trr.odoh.enabled
+  type: RelaxedAtomicBool
+  value: false
+  mirror: always
+
+# The uri of Oblivious Proxy.
+- name: network.trr.odoh.proxy_uri
+  type: String
+  value: ""
+  mirror: never
+
+# The host name of Oblivious Target.
+- name: network.trr.odoh.target_host
+  type: String
+  value: ""
+  mirror: never
+
+# The uri path of the odoh uri.
+- name: network.trr.odoh.target_path
+  type: String
+  value: ""
+  mirror: never
+
 # Allow the network changed event to get sent when a network topology or setup
 # change is noticed while running.
 - name: network.notify.changed
@@ -8921,7 +8956,7 @@
 
 - name: network.cache.frecency_array_check_enabled
   type: RelaxedAtomicBool
-  value: @IS_NIGHTLY_BUILD@
+  value: @IS_EARLY_BETA_OR_EARLIER@
   mirror: always
 
 #---------------------------------------------------------------------------
@@ -9443,7 +9478,7 @@
 
 - name: privacy.window.name.update.enabled
   type: bool
-  value: @IS_NIGHTLY_BUILD@
+  value: true
   mirror: always
 
 # By default, the network state isolation is not active when there is a proxy
@@ -9616,6 +9651,36 @@
 -   name: security.sandbox.socket.win32k-disable
     type: RelaxedAtomicBool
     value: true
+    mirror: always
+
+  # Whether CET Shadow Stacks Strict mode is enabled for the content processes.
+-   name: security.sandbox.content.shadow-stacks-strict
+    type: RelaxedAtomicBool
+    value: false
+    mirror: always
+
+  # Whether CET Shadow Stacks Strict mode is enabled for the RDD processes.
+-   name: security.sandbox.rdd.shadow-stacks-strict
+    type: RelaxedAtomicBool
+    value: false
+    mirror: always
+
+  # Whether CET Shadow Stacks Strict mode is enabled for the socket processes.
+-   name: security.sandbox.socket.shadow-stacks-strict
+    type: RelaxedAtomicBool
+    value: false
+    mirror: always
+
+  # Whether CET Shadow Stacks Strict mode is enabled for the GPU processes.
+-   name: security.sandbox.gpu.shadow-stacks-strict
+    type: RelaxedAtomicBool
+    value: false
+    mirror: always
+
+  # Whether CET Shadow Stacks Strict mode is enabled for the GMP processes.
+-   name: security.sandbox.gmp.shadow-stacks-strict
+    type: RelaxedAtomicBool
+    value: false
     mirror: always
 
   # This controls the depth of stack trace that is logged when Windows sandbox
@@ -9838,7 +9903,7 @@
 # for this pref means we call _exit(0) earlier during shutdown.
 - name: toolkit.shutdown.fastShutdownStage
   type: int32_t
-#if !defined(DEBUG) && !defined(MOZ_ASAN) && !defined(MOZ_TSAN) && !defined(MOZ_CODE_COVERAGE) && !defined(MOZ_VALGRIND) && !defined(MOZ_PROFILE_GENERATE)
+#if !defined(DEBUG) && !defined(MOZ_ASAN) && !defined(MOZ_TSAN) && !defined(MOZ_CODE_COVERAGE) && !defined(MOZ_VALGRIND) && !defined(MOZ_PROFILE_GENERATE) && !defined(JS_STRUCTURED_SPEW)
   #ifdef NIGHTLY_BUILD
   value: 3
   #else
@@ -10400,7 +10465,11 @@
 # Global user preference for disabling native theme in content processes.
 - name: widget.disable-native-theme-for-content
   type: RelaxedAtomicBool
+#if defined(XP_LINUX) && defined(NIGHTLY_BUILD) && !defined(ANDROID)
+  value: true
+#else
   value: false
+#endif
   mirror: always
 
 # Preference to disable dark scrollbar implementation.

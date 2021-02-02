@@ -8,7 +8,6 @@
 #include "vm/TypedArrayObject.h"
 
 #include "mozilla/Alignment.h"
-#include "mozilla/CheckedInt.h"
 #include "mozilla/FloatingPoint.h"
 #include "mozilla/PodOperations.h"
 #include "mozilla/TextUtils.h"
@@ -64,7 +63,6 @@ using namespace js;
 using JS::CanonicalizeNaN;
 using JS::ToInt32;
 using JS::ToUint32;
-using mozilla::CheckedUint32;
 using mozilla::IsAsciiDigit;
 
 /*
@@ -115,7 +113,7 @@ bool TypedArrayObject::ensureHasBuffer(JSContext* cx,
     return true;
   }
 
-  size_t byteLength = tarray->byteLength().deprecatedGetUint32();
+  size_t byteLength = tarray->byteLength().get();
 
   AutoRealm ar(cx, tarray);
   Rooted<ArrayBufferObject*> buffer(
@@ -220,7 +218,8 @@ size_t TypedArrayObject::objectMoved(JSObject* obj, JSObject* old) {
   // Determine if we can use inline data for the target array. If this is
   // possible, the nursery will have picked an allocation size that is large
   // enough.
-  size_t nbytes = oldObj->byteLength().deprecatedGetUint32();
+  size_t nbytes = oldObj->byteLength().get();
+  MOZ_ASSERT(nbytes <= Nursery::MaxNurseryBufferSize);
 
   constexpr size_t headerSize = dataOffset() + sizeof(HeapSlot);
 
@@ -240,8 +239,6 @@ size_t TypedArrayObject::objectMoved(JSObject* obj, JSObject* old) {
     newObj->setInlineElements();
   } else {
     MOZ_ASSERT(!oldObj->hasInlineElements());
-    MOZ_ASSERT((CheckedUint32(nbytes) + sizeof(Value)).isValid(),
-               "RoundUp must not overflow");
 
     AutoEnterOOMUnsafeRegion oomUnsafe;
     nbytes = RoundUp(nbytes, sizeof(Value));
@@ -415,7 +412,7 @@ class TypedArrayObjectTemplate : public TypedArrayObject {
       JSContext* cx, Handle<ArrayBufferObjectMaybeShared*> buffer,
       BufferSize byteOffset, BufferSize len, HandleObject proto,
       HandleObjectGroup group = nullptr) {
-    MOZ_ASSERT(len.get() < maxByteLength() / BYTES_PER_ELEMENT);
+    MOZ_ASSERT(len.get() <= maxByteLength() / BYTES_PER_ELEMENT);
 
     gc::AllocKind allocKind =
         buffer ? gc::GetGCObjectKind(instanceClass())
@@ -511,13 +508,15 @@ class TypedArrayObjectTemplate : public TypedArrayObject {
 
   static TypedArrayObject* makeTypedArrayWithTemplate(
       JSContext* cx, TypedArrayObject* templateObj, int32_t len) {
-    if (len < 0 || uint32_t(len) >= maxByteLength() / BYTES_PER_ELEMENT) {
+    if (len < 0 || size_t(len) > maxByteLength() / BYTES_PER_ELEMENT) {
       JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
                                 JSMSG_BAD_ARRAY_LENGTH);
       return nullptr;
     }
 
     size_t nbytes = size_t(len) * BYTES_PER_ELEMENT;
+    MOZ_ASSERT(nbytes <= maxByteLength());
+
     bool fitsInline = nbytes <= INLINE_BUFFER_LIMIT;
 
     AutoSetNewObjectMetadata metadata(cx);
@@ -538,8 +537,6 @@ class TypedArrayObjectTemplate : public TypedArrayObject {
     void* buf = nullptr;
     if (!fitsInline) {
       MOZ_ASSERT(len > 0);
-      MOZ_ASSERT((CheckedUint32(nbytes) + sizeof(Value)).isValid(),
-                 "RoundUp must not overflow");
 
       nbytes = RoundUp(nbytes, sizeof(Value));
       buf = cx->nursery().allocateZeroedBuffer(obj, nbytes,
@@ -743,12 +740,7 @@ class TypedArrayObjectTemplate : public TypedArrayObject {
       len = size_t(lengthIndex);
     }
 
-    // ArrayBuffer is too large for TypedArrays:
-    // Standalone ArrayBuffers can hold up to INT32_MAX bytes, whereas
-    // buffers in TypedArrays must have less than or equal to
-    // MAX_BYTE_LENGTH - BYTES_PER_ELEMENT - MAX_BYTE_LENGTH % BYTES_PER_ELEMENT
-    // bytes.
-    if (len >= maxByteLength() / BYTES_PER_ELEMENT) {
+    if (len > maxByteLength() / BYTES_PER_ELEMENT) {
       JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
                                 JSMSG_TYPED_ARRAY_CONSTRUCT_BOUNDS);
       return false;
@@ -870,14 +862,14 @@ class TypedArrayObjectTemplate : public TypedArrayObject {
   static bool maybeCreateArrayBuffer(JSContext* cx, uint64_t count,
                                      HandleObject nonDefaultProto,
                                      MutableHandle<ArrayBufferObject*> buffer) {
-    if (count >= maxByteLength() / BYTES_PER_ELEMENT) {
+    if (count > maxByteLength() / BYTES_PER_ELEMENT) {
       JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
                                 JSMSG_BAD_ARRAY_LENGTH);
       return false;
     }
     BufferSize byteLength = BufferSize(count * BYTES_PER_ELEMENT);
 
-    MOZ_ASSERT(byteLength.get() < maxByteLength());
+    MOZ_ASSERT(byteLength.get() <= maxByteLength());
     static_assert(INLINE_BUFFER_LIMIT % BYTES_PER_ELEMENT == 0,
                   "ArrayBuffer inline storage shouldn't waste any space");
 
@@ -2189,13 +2181,13 @@ bool TypedArrayObject::getElementPure(size_t index, Value* vp) {
 bool TypedArrayObject::getElements(JSContext* cx,
                                    Handle<TypedArrayObject*> tarray,
                                    Value* vp) {
-  uint32_t length = tarray->length().deprecatedGetUint32();
+  size_t length = tarray->length().get();
   MOZ_ASSERT_IF(length > 0, !tarray->hasDetachedBuffer());
 
   switch (tarray->type()) {
 #define GET_ELEMENTS(T, N)                                                     \
   case Scalar::N:                                                              \
-    for (uint32_t i = 0; i < length; ++i, ++vp) {                              \
+    for (size_t i = 0; i < length; ++i, ++vp) {                                \
       if (!N##Array::getElement(cx, tarray, i,                                 \
                                 MutableHandleValue::fromMarkedLocation(vp))) { \
         return false;                                                          \
@@ -2342,28 +2334,28 @@ bool js::IsBufferSource(JSObject* object, SharedMem<uint8_t*>* dataPointer,
   if (object->is<TypedArrayObject>()) {
     TypedArrayObject& view = object->as<TypedArrayObject>();
     *dataPointer = view.dataPointerEither().cast<uint8_t*>();
-    *byteLength = view.byteLength().deprecatedGetUint32();
+    *byteLength = view.byteLength().get();
     return true;
   }
 
   if (object->is<DataViewObject>()) {
     DataViewObject& view = object->as<DataViewObject>();
     *dataPointer = view.dataPointerEither().cast<uint8_t*>();
-    *byteLength = view.byteLength().deprecatedGetUint32();
+    *byteLength = view.byteLength().get();
     return true;
   }
 
   if (object->is<ArrayBufferObject>()) {
     ArrayBufferObject& buffer = object->as<ArrayBufferObject>();
     *dataPointer = buffer.dataPointerShared();
-    *byteLength = buffer.byteLength().deprecatedGetUint32();
+    *byteLength = buffer.byteLength().get();
     return true;
   }
 
   if (object->is<SharedArrayBufferObject>()) {
     SharedArrayBufferObject& buffer = object->as<SharedArrayBufferObject>();
     *dataPointer = buffer.dataPointerShared();
-    *byteLength = buffer.byteLength().deprecatedGetUint32();
+    *byteLength = buffer.byteLength().get();
     return true;
   }
 
@@ -2643,7 +2635,7 @@ struct ExternalTypeOf<uint8_clamped> {
 
 #define IMPL_TYPED_ARRAY_JSAPI_CONSTRUCTORS(NativeType, Name)                \
   JS_FRIEND_API JSObject* JS_New##Name##Array(JSContext* cx,                 \
-                                              uint32_t nelements) {          \
+                                              size_t nelements) {            \
     return TypedArrayObjectTemplate<NativeType>::fromLength(cx, nelements);  \
   }                                                                          \
                                                                              \
@@ -2722,20 +2714,20 @@ JS_FRIEND_API uint32_t JS_GetTypedArrayLength(JSObject* obj) {
   return tarr->length().deprecatedGetUint32();
 }
 
-JS_FRIEND_API uint32_t JS_GetTypedArrayByteOffset(JSObject* obj) {
+JS_FRIEND_API size_t JS_GetTypedArrayByteOffset(JSObject* obj) {
   TypedArrayObject* tarr = obj->maybeUnwrapAs<TypedArrayObject>();
   if (!tarr) {
     return 0;
   }
-  return tarr->byteOffset().deprecatedGetUint32();
+  return tarr->byteOffset().get();
 }
 
-JS_FRIEND_API uint32_t JS_GetTypedArrayByteLength(JSObject* obj) {
+JS_FRIEND_API size_t JS_GetTypedArrayByteLength(JSObject* obj) {
   TypedArrayObject* tarr = obj->maybeUnwrapAs<TypedArrayObject>();
   if (!tarr) {
     return 0;
   }
-  return tarr->byteLength().deprecatedGetUint32();
+  return tarr->byteLength().get();
 }
 
 JS_FRIEND_API bool JS_GetTypedArraySharedness(JSObject* obj) {

@@ -100,7 +100,8 @@ struct FrameMetrics {
         mVisualScrollUpdateType(eNone),
         mCompositionSizeWithoutDynamicToolbar(),
         mIsRootContent(false),
-        mIsScrollInfoLayer(false) {}
+        mIsScrollInfoLayer(false),
+        mHasNonZeroDisplayPortMargins(false) {}
 
   // Default copy ctor and operator= are fine
 
@@ -126,6 +127,8 @@ struct FrameMetrics {
            mVisualScrollUpdateType == aOther.mVisualScrollUpdateType &&
            mIsRootContent == aOther.mIsRootContent &&
            mIsScrollInfoLayer == aOther.mIsScrollInfoLayer &&
+           mHasNonZeroDisplayPortMargins ==
+               aOther.mHasNonZeroDisplayPortMargins &&
            mFixedLayerMargins == aOther.mFixedLayerMargins &&
            mCompositionSizeWithoutDynamicToolbar ==
                aOther.mCompositionSizeWithoutDynamicToolbar;
@@ -402,6 +405,13 @@ struct FrameMetrics {
   }
   bool IsScrollInfoLayer() const { return mIsScrollInfoLayer; }
 
+  void SetHasNonZeroDisplayPortMargins(bool aHasNonZeroDisplayPortMargins) {
+    mHasNonZeroDisplayPortMargins = aHasNonZeroDisplayPortMargins;
+  }
+  bool HasNonZeroDisplayPortMargins() const {
+    return mHasNonZeroDisplayPortMargins;
+  }
+
   void SetVisualDestination(const CSSPoint& aVisualDestination) {
     mVisualDestination = aVisualDestination;
   }
@@ -554,10 +564,6 @@ struct FrameMetrics {
   // pixels.
   CSSSize mRootCompositionSize;
 
-  // A display port expressed as layer margins that apply to the rect of what
-  // is drawn of the scrollable element.
-  ScreenMargin mDisplayPortMargins;
-
   uint32_t mPresShellId;
 
   // For a root scroll frame (RSF), the document's layout viewport
@@ -610,6 +616,9 @@ struct FrameMetrics {
   // metrics are still sent to and updated by the compositor, with the updates
   // being reflected on the next paint rather than the next composite.
   bool mIsScrollInfoLayer : 1;
+
+  // Whether there are non-zero display port margins set on this element.
+  bool mHasNonZeroDisplayPortMargins : 1;
 
   // WARNING!!!!
   //

@@ -565,15 +565,6 @@ this.TelemetryFeed = class TelemetryFeed {
     );
   }
 
-  createUndesiredEvent(action) {
-    return Object.assign(
-      this.createPing(au.getPortIdOfSender(action)),
-      { value: 0 }, // Default value
-      action.data,
-      { action: "activity_stream_undesired_event" }
-    );
-  }
-
   createSessionEndEvent(session) {
     return Object.assign(this.createPing(), {
       session_id: session.session_id,
@@ -612,6 +603,9 @@ this.TelemetryFeed = class TelemetryFeed {
       case "badge_user_event":
       case "whats-new-panel_user_event":
         event = await this.applyWhatsNewPolicy(event);
+        break;
+      case "infobar_user_event":
+        event = await this.applyInfoBarPolicy(event);
         break;
       case "moments_user_event":
         event = await this.applyMomentsPolicy(event);
@@ -659,6 +653,13 @@ this.TelemetryFeed = class TelemetryFeed {
     // Attach page info to `event_context` if there is a session associated with this ping
     delete ping.action;
     return { ping, pingType: "whats-new-panel" };
+  }
+
+  async applyInfoBarPolicy(ping) {
+    ping.client_id = await this.telemetryClientId;
+    ping.browser_session_id = browserSessionId;
+    delete ping.action;
+    return { ping, pingType: "infobar" };
   }
 
   /**
@@ -833,8 +834,14 @@ this.TelemetryFeed = class TelemetryFeed {
     );
   }
 
-  handleUndesiredEvent(action) {
-    this.sendEvent(this.createUndesiredEvent(action));
+  /**
+   * This function is used by ActivityStreamStorage to report errors
+   * trying to access IndexedDB.
+   */
+  SendASRouterUndesiredEvent(data) {
+    this.handleASRouterUserEvent({
+      data: { ...data, action: "asrouter_undesired_event" },
+    });
   }
 
   async sendPageTakeoverData() {
@@ -935,9 +942,6 @@ this.TelemetryFeed = class TelemetryFeed {
           action.data
         );
         break;
-      case at.TELEMETRY_UNDESIRED_EVENT:
-        this.handleUndesiredEvent(action);
-        break;
       case at.TELEMETRY_USER_EVENT:
         this.handleUserEvent(action);
         break;
@@ -950,6 +954,8 @@ this.TelemetryFeed = class TelemetryFeed {
       case msg.MOMENTS_PAGE_TELEMETRY:
       // Intentional fall-through
       case msg.DOORHANGER_TELEMETRY:
+      // Intentional fall-through
+      case msg.INFOBAR_TELEMETRY:
       // Intentional fall-through
       case at.AS_ROUTER_TELEMETRY_USER_EVENT:
         this.handleASRouterUserEvent(action);

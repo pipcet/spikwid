@@ -286,33 +286,26 @@ menu-window-bring-all-to-front =
 
 ## Help Menu
 
+# NOTE: For Engineers, any additions or changes to Help menu strings should
+# also be reflected in the related strings in appmenu.ftl. Those strings, by
+# convention, will have the same ID as these, but prefixed with "app".
+# Example: appmenu-get-help
+#
+# These strings are duplicated to allow for different casing depending on
+# where the strings appear.
+
 menu-help =
     .label = Help
     .accesskey = H
-menu-help-product =
-    .label = { -brand-shorter-name } Help
+menu-get-help =
+    .label = Get Help
     .accesskey = H
-menu-help-show-tour =
-    .label = { -brand-shorter-name } Tour
-    .accesskey = o
-menu-help-import-from-another-browser =
-    .label = Import From Another Browser…
-    .accesskey = I
-menu-help-keyboard-shortcuts =
-    .label = Keyboard Shortcuts
-    .accesskey = K
 menu-help-troubleshooting-info =
     .label = Troubleshooting Information
     .accesskey = T
 menu-help-feedback-page =
     .label = Submit Feedback…
     .accesskey = S
-menu-help-safe-mode-without-addons =
-    .label = Restart With Add-ons Disabled…
-    .accesskey = R
-menu-help-safe-mode-with-addons =
-    .label = Restart With Add-ons Enabled
-    .accesskey = R
 # Label of the Help menu item. Either this or
 # menu-help-notdeceptive is shown.
 menu-help-report-deceptive-site =
@@ -323,3 +316,4 @@ menu-help-not-deceptive =
     .accesskey = D
 menu-help-check-for-update =
     .label = Check for Updates…
+    .accesskey = C

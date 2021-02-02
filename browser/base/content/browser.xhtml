@@ -619,12 +619,12 @@
     <tooltip id="tabbrowser-tab-tooltip" onpopupshowing="gBrowser.createTooltip(event);"/>
 
     <tooltip id="back-button-tooltip">
-      <description class="tooltip-label" data-l10n-id="navbar-tooltip-back"/>
+      <description id="back-button-tooltip-description" class="tooltip-label"/>
       <description class="tooltip-label" data-l10n-id="navbar-tooltip-instruction"/>
     </tooltip>
 
     <tooltip id="forward-button-tooltip">
-      <description class="tooltip-label" data-l10n-id="navbar-tooltip-forward"/>
+      <description id="forward-button-tooltip-description" class="tooltip-label"/>
       <description class="tooltip-label" data-l10n-id="navbar-tooltip-instruction"/>
     </tooltip>
 
@@ -948,6 +948,133 @@
 #endif
       </vbox>
     </panelview>
+
+    <!-- This is a placeholder app menu which should be replaced with the "real"
+         Proton app menu before the Proton pref starts getting enabled. -->
+    <panelview id="appMenu-protonMainView" class="PanelUI-subView"
+               descriptionheightworkaround="true">
+      <vbox class="panel-subview-body">
+        <toolbarbutton id="appMenu-new-tab-button2"
+                       class="subviewbutton subviewbutton-iconic"
+                       label="&tabCmd.label;"
+                       key="key_newNavigatorTab"
+                       command="cmd_newNavigatorTab"/>
+        <toolbarbutton id="appMenu-new-window-button2"
+                       class="subviewbutton subviewbutton-iconic"
+                       data-l10n-id="appmenuitem-new-window"
+                       key="key_newNavigator"
+                       command="cmd_newNavigator"/>
+        <toolbarbutton id="appMenu-new-private-window-button2"
+                       class="subviewbutton subviewbutton-iconic"
+                       data-l10n-id="appmenuitem-new-private-window"
+                       key="key_privatebrowsing"
+                       command="Tools:PrivateBrowsing"/>
+        <toolbarseparator/>
+        <toolbarbutton id="appMenu-bookmarks-button"
+                       class="subviewbutton subviewbutton-iconic subviewbutton-nav"
+                       data-l10n-id="library-bookmarks-menu"
+                       closemenu="none"
+                       oncommand="BookmarkingUI.showSubView(this);"/>
+        <toolbarbutton id="appMenu-history-button"
+                       class="subviewbutton subviewbutton-iconic subviewbutton-nav"
+                       label="&historyMenu.label;"
+                       closemenu="none"
+                       oncommand="PanelUI.showSubView('PanelUI-history', this)"/>
+        <toolbarbutton id="appMenu-downloads-button"
+                       class="subviewbutton subviewbutton-iconic"
+                       label="&libraryDownloads.label;"
+                       key="key_openDownloads"
+                       command="Tools:Downloads"/>
+        <toolbarbutton id="appMenu-passwords-button"
+                       class="subviewbutton subviewbutton-iconic"
+                       data-l10n-id="appmenuitem-passwords"
+                       oncommand="LoginHelper.openPasswordManager(window, { entryPoint: 'mainmenu' })"
+                       />
+        <toolbarbutton id="appMenu-extensions-themes-button"
+                       class="subviewbutton subviewbutton-iconic"
+                       data-l10n-id="appmenuitem-extensions-and-themes"
+                       key="key_openAddons"
+                       command="Tools:Addons"
+                       />
+        <toolbarseparator/>
+        <toolbarbutton id="appMenu-print-button2"
+                       class="subviewbutton subviewbutton-iconic"
+                       label="&printCmd.label;"
+                       key="printKb"
+#ifdef XP_MACOSX
+                       command="cmd_print"
+#else
+                       command="cmd_printPreview"
+#endif
+                       />
+        <toolbarbutton id="appMenu-save-file-button2"
+                       class="subviewbutton subviewbutton-iconic"
+                       data-l10n-id="appmenuitem-save-page"
+                       key="key_savePage"
+                       command="Browser:SavePage"/>
+        <toolbarbutton id="appMenu-find-button2"
+                       class="subviewbutton subviewbutton-iconic"
+                       data-l10n-id="appmenuitem-find-in-page"
+                       key="key_find"
+                       command="cmd_find"/>
+        <toolbaritem id="appMenu-zoom-controls2" class="toolbaritem-combined-buttons" closemenu="none">
+          <!-- Use a spacer, because panel sizing code gets confused when using CSS methods. -->
+          <spacer class="before-label"/>
+          <label value="&fullZoom.label;"/>
+          <!-- This spacer keeps the scrollbar from overlapping the view. -->
+          <spacer class="after-label"/>
+          <toolbarbutton id="appMenu-zoomReduce-button2"
+                         class="subviewbutton subviewbutton-iconic"
+                         command="cmd_fullZoomReduce"
+                         data-l10n-id="appmenuitem-zoom-reduce"
+                         tooltip="dynamic-shortcut-tooltip"/>
+          <toolbarbutton id="appMenu-zoomReset-button2"
+                         class="subviewbutton"
+                         command="cmd_fullZoomReset"
+                         tooltip="dynamic-shortcut-tooltip"/>
+          <toolbarbutton id="appMenu-zoomEnlarge-button2"
+                         class="subviewbutton subviewbutton-iconic"
+                         command="cmd_fullZoomEnlarge"
+                         data-l10n-id="appmenuitem-zoom-enlarge"
+                         tooltip="dynamic-shortcut-tooltip"/>
+          <toolbarseparator orient="vertical"/>
+          <toolbarbutton id="appMenu-fullscreen-button2"
+                         class="subviewbutton subviewbutton-iconic"
+                         label="&fullScreenCmd.label;"
+                         observes="View:FullScreen"
+                         type="checkbox"
+                         closemenu="auto"
+                         onclick="if (event.button == 0) this.closest('panel').hidePopup();"
+                         tooltip="dynamic-shortcut-tooltip"/>
+        </toolbaritem>
+        <toolbarseparator/>
+        <toolbarbutton id="appMenu-settings-button"
+                       class="subviewbutton subviewbutton-iconic"
+                       data-l10n-id="appmenuitem-settings"
+#ifdef XP_MACOSX
+                       key="key_preferencesCmdMac"
+#endif
+                       oncommand="openPreferences()"/>
+        <toolbarbutton id="appMenu-more-button2"
+                       class="subviewbutton subviewbutton-iconic subviewbutton-nav"
+                       data-l10n-id="appmenuitem-more-tools"
+                       closemenu="none"
+                       oncommand="PanelUI.showSubView('appMenu-moreView', this)"/>
+        <toolbarbutton id="appMenu-help-button2"
+                       class="subviewbutton subviewbutton-iconic subviewbutton-nav"
+                       label="&appMenuHelp.label;"
+                       closemenu="none"
+                       oncommand="PanelUI.showSubView('PanelUI-helpView', this)"/>
+#ifndef XP_MACOSX
+        <toolbarseparator/>
+        <toolbarbutton id="appMenu-quit-button2"
+                       class="subviewbutton subviewbutton-iconic"
+                       data-l10n-id="appmenuitem-exit"
+                       command="cmd_quitApplication"/>
+#endif
+      </vbox>
+    </panelview>
+
     <panelview id="PanelUI-history" flex="1">
       <vbox class="panel-subview-body">
         <toolbarbutton id="appMenuViewHistorySidebar"
@@ -999,7 +1126,7 @@
       <vbox id="PanelUI-containersItems"/>
     </panelview>
 
-    <panelview id="PanelUI-helpView" flex="1" class="PanelUI-subView">
+    <panelview id="PanelUI-helpView" flex="1" class="PanelUI-subView" data-l10n-id="appmenu-help-header" data-l10n-attrs="title">
       <vbox id="PanelUI-helpItems" class="panel-subview-body"/>
     </panelview>
 
@@ -1046,11 +1173,11 @@
       <vbox id="PanelUI-profiler-container">
         <vbox id="PanelUI-profiler-header" animationready="false">
           <hbox id="PanelUI-profiler-header-bar">
-            <label flex="1" value="Firefox Profiler" />
+            <label flex="1" data-l10n-id="profiler-popup-title" />
             <vbox class="PanelUI-profiler-toolbarbutton-container">
               <toolbarbutton id="PanelUI-profiler-info-button"
                             class="panel-info-button"
-                            aria-label="Reveal more information">
+                            data-l10n-id="profiler-popup-reveal-description-button">
                 <image/>
               </toolbarbutton>
             </vbox>
@@ -1064,12 +1191,12 @@
                   <image class="PanelUI-profiler-info-icon" />
                 </vbox>
               </hbox>
-              <label value="Record, analyze, share" />
-              <description>
-                Collaborate on performance issues by publishing profiles to share with your team.
-              </description>
+              <label data-l10n-id="profiler-popup-description-title" />
+              <description data-l10n-id="profiler-popup-description" />
               <hbox>
-                <button id="PanelUI-profiler-learn-more" tabindex="-1">Learn more</button>
+                <button id="PanelUI-profiler-learn-more"
+                        tabindex="-1"
+                        data-l10n-id="profiler-popup-learn-more" />
                 <space flex="1" />
               </hbox>
             </vbox>
@@ -1078,7 +1205,7 @@
         <vbox id="PanelUI-profiler-content">
           <vbox id="PanelUI-profiler-content-settings">
             <label class="PanelUI-profiler-content-label"
-                   value="Settings" />
+                   data-l10n-id="profiler-popup-settings" />
             <menulist id="PanelUI-profiler-presets"
                       flex="1"
                       value="custom">
@@ -1086,49 +1213,52 @@
                 <!-- The rest of the values get dynamically inserted. The "presetsbuilt"
                     attribute will get updated to "true" once the presets have been
                     built. -->
-                <menuitem id="PanelUI-profiler-presets-custom" label="Custom" value="custom"/>
+                <menuitem id="PanelUI-profiler-presets-custom"
+                          data-l10n-id="profiler-popup-presets-custom"
+                          value="custom"/>
               </menupopup>
             </menulist>
             <!-- The following description gets inserted dynamically. -->
             <description id="PanelUI-profiler-content-description" />
             <hbox id="PanelUI-profiler-content-custom">
-              <button id="PanelUI-profiler-content-custom-button">
-                Edit Settings…
+              <button id="PanelUI-profiler-content-custom-button"
+                      data-l10n-id="profiler-popup-edit-settings">
               </button>
             </hbox>
           </vbox>
           <hbox id="PanelUI-profiler-content-recording">
             <spacer flex="1" />
             <image class="PanelUI-profiler-recording-icon" />
-            <label class="PanelUI-profiler-recording-label">Recording…</label>
+            <label class="PanelUI-profiler-recording-label" data-l10n-id="profiler-popup-recording-screen" />
             <spacer flex="1" />
           </hbox>
-          <description id="PanelUI-profiler-locked">
-            The profiler is currently disabled, most likely due to a Private Browsing
-            window being open.
-          </description>
+          <description id="PanelUI-profiler-locked"
+                       data-l10n-id="profiler-popup-disabled" />
           <hbox id="PanelUI-profiler-inactive" class="PanelUI-profiler-buttons">
             <spacer flex="1" />
             <vbox>
-              <button label="Start Recording"
+              <button data-l10n-id="profiler-popup-start-recording-button"
                       id="PanelUI-profiler-startRecording"
                       class="PanelUI-profiler-button PanelUI-profiler-button-primary" />
-              <label class="PanelUI-profiler-shortcut">^⇧1</label>
+              <label class="PanelUI-profiler-shortcut"
+                     data-l10n-id="profiler-popup-start-shortcut" />
             </vbox>
             <spacer flex="1" />
           </hbox>
           <hbox id="PanelUI-profiler-active" class="PanelUI-profiler-buttons">
             <vbox flex="1">
-              <button label="Discard"
+              <button data-l10n-id="profiler-popup-discard-button"
                       class="PanelUI-profiler-button"
                       id="PanelUI-profiler-stopAndDiscard" />
-              <label class="PanelUI-profiler-shortcut">^⇧1</label>
+              <label class="PanelUI-profiler-shortcut"
+                     data-l10n-id="profiler-popup-start-shortcut" />
             </vbox>
             <vbox flex="1">
-              <button label="Capture"
+              <button data-l10n-id="profiler-popup-capture-button"
                       class="PanelUI-profiler-button PanelUI-profiler-button-primary"
                       id="PanelUI-profiler-stopAndCapture" />
-              <label class="PanelUI-profiler-shortcut">^⇧2</label>
+              <label data-l10n-id="profiler-popup-capture-shortcut"
+                     class="PanelUI-profiler-shortcut" />
             </vbox>
           </hbox>
         </vbox>
@@ -1456,37 +1586,15 @@
                        data-l10n-id="library-bookmarks-menu"
                        closemenu="none"
                        oncommand="BookmarkingUI.showSubView(this);"/>
-        <toolbarbutton id="appMenu-library-pocket-button"
-                       class="subviewbutton subviewbutton-iconic"
-                       label="&pocketMenuitem.label;"
-                       oncommand="Pocket.openList(event)"/>
         <toolbarbutton id="appMenu-library-history-button"
                        class="subviewbutton subviewbutton-iconic subviewbutton-nav"
                        label="&historyMenu.label;"
                        closemenu="none"
                        oncommand="PanelUI.showSubView('PanelUI-history', this)"/>
         <toolbarbutton id="appMenu-library-downloads-button"
-                       class="subviewbutton subviewbutton-iconic subviewbutton-nav"
+                       class="subviewbutton subviewbutton-iconic"
                        label="&libraryDownloads.label;"
-                       closemenu="none"
-                       oncommand="DownloadsSubview.show(this);"/>
-        <toolbarbutton id="appMenu-library-remotetabs-button"
-                       class="subviewbutton subviewbutton-iconic subviewbutton-nav sync-ui-item"
-                       label="&appMenuRemoteTabs.label;"
-                       closemenu="none"
-                       oncommand="PanelUI.showSubView('PanelUI-remotetabs', this)"/>
-        <toolbarseparator hidden="true"/>
-        <label value="&appMenuRecentHighlights.label;"
-               hidden="true"
-               class="subview-subheader"/>
-        <toolbaritem id="appMenu-library-recentHighlights"
-                     hidden="true"
-                     orient="vertical"
-                     smoothscroll="false"
-                     flatList="true"
-                     tooltip="bhTooltip">
-          <!-- Recent Highlights will go here -->
-        </toolbaritem>
+                       oncommand="DownloadsPanel.showDownloadsHistory();"/>
       </vbox>
     </panelview>
 
@@ -1653,7 +1761,7 @@
       <toolbartabstop/>
       <hbox id="nav-bar-customization-target" flex="1">
         <toolbarbutton id="back-button" class="toolbarbutton-1 chromeclass-toolbar-additional"
-                       data-l10n-id="toolbar-button-back"
+                       data-l10n-id="toolbar-button-back-2"
                        removable="false" overflows="false"
                        keepbroadcastattributeswhencustomizing="true"
                        command="Browser:BackOrBackDuplicate"
@@ -1661,7 +1769,7 @@
                        tooltip="back-button-tooltip"
                        context="backForwardMenu"/>
         <toolbarbutton id="forward-button" class="toolbarbutton-1 chromeclass-toolbar-additional"
-                       data-l10n-id="toolbar-button-forward"
+                       data-l10n-id="toolbar-button-forward-2"
                        removable="false" overflows="false"
                        keepbroadcastattributeswhencustomizing="true"
                        command="Browser:ForwardOrForwardDuplicate"

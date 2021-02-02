@@ -181,12 +181,10 @@ class AbstractBindingName<frontend::TaggedParserAtomIndex> {
 
   AbstractBindingName(TaggedParserAtomIndex name, bool closedOver,
                       bool isTopLevelFunction = false)
-      : bits_(*name.rawData() | (closedOver ? ClosedOverFlag : 0x0) |
+      : bits_(name.rawData() | (closedOver ? ClosedOverFlag : 0x0) |
               (isTopLevelFunction ? TopLevelFunctionFlag : 0x0)) {}
 
  public:
-  uint32_t* rawData() { return &bits_; }
-
   NamePointerT name() const {
     return TaggedParserAtomIndex::fromRaw(bits_ & ~FlagMask);
   }
@@ -885,8 +883,7 @@ class GlobalScope : public Scope {
     return create(cx, kind, nullptr);
   }
 
-  static GlobalScope* clone(JSContext* cx, Handle<GlobalScope*> scope,
-                            ScopeKind kind);
+  static GlobalScope* clone(JSContext* cx, Handle<GlobalScope*> scope);
 
   template <XDRMode mode>
   static XDRResult XDR(XDRState<mode>* xdr, ScopeKind kind,

@@ -191,7 +191,7 @@ class RegExpStencil {
   JS::RegExpFlags flags() const { return JS::RegExpFlags(flags_); }
 
   RegExpObject* createRegExp(JSContext* cx,
-                             CompilationAtomCache& atomCache) const;
+                             const CompilationAtomCache& atomCache) const;
 
   // This is used by `Reflect.parse` when we need the RegExpObject but are not
   // doing a complete instantiation of the BaseCompilationStencil.
@@ -212,33 +212,23 @@ class RegExpStencil {
 class BigIntStencil {
   friend class StencilXDR;
 
-  UniqueTwoByteChars buf_;
-  size_t length_ = 0;
+  // Source of the BigInt literal.
+  // It's not null-terminated, and also trailing 'n' suffix is not included.
+  mozilla::Span<char16_t> source_;
 
  public:
   BigIntStencil() = default;
 
-  MOZ_MUST_USE bool init(JSContext* cx, const Vector<char16_t, 32>& buf) {
-#ifdef DEBUG
-    // Assert we have no separators; if we have a separator then the algorithm
-    // used in BigInt::literalIsZero will be incorrect.
-    for (char16_t c : buf) {
-      MOZ_ASSERT(c != '_');
-    }
-#endif
-    length_ = buf.length();
-    buf_ = js::DuplicateString(cx, buf.begin(), buf.length());
-    return buf_ != nullptr;
-  }
+  MOZ_MUST_USE bool init(JSContext* cx, LifoAlloc& alloc,
+                         const Vector<char16_t, 32>& buf);
 
   BigInt* createBigInt(JSContext* cx) const {
-    mozilla::Range<const char16_t> source(buf_.get(), length_);
-
+    mozilla::Range<const char16_t> source(source_.data(), source_.size());
     return js::ParseBigIntLiteral(cx, source);
   }
 
   bool isZero() const {
-    mozilla::Range<const char16_t> source(buf_.get(), length_);
+    mozilla::Range<const char16_t> source(source_.data(), source_.size());
     return js::BigIntLiteralIsZero(source);
   }
 
@@ -645,7 +635,7 @@ class TaggedScriptThingIndex {
   TaggedScriptThingIndex() : data_(NullTag) {}
 
   explicit TaggedScriptThingIndex(TaggedParserAtomIndex index)
-      : data_(*index.rawData()) {}
+      : data_(index.rawData()) {}
   explicit TaggedScriptThingIndex(BigIntIndex index)
       : data_(uint32_t(index) | BigIntTag) {
     MOZ_ASSERT(uint32_t(index) < IndexLimit);
@@ -699,7 +689,8 @@ class TaggedScriptThingIndex {
   ScopeIndex toScope() const { return ScopeIndex(data_ & IndexMask); }
   ScriptIndex toFunction() const { return ScriptIndex(data_ & IndexMask); }
 
-  uint32_t* rawData() { return &data_; }
+  uint32_t* rawDataRef() { return &data_; }
+  uint32_t rawData() const { return data_; }
 
   Kind tag() const { return Kind((data_ & TagMask) >> TagShift); }
 
@@ -718,8 +709,6 @@ class ScriptStencil {
   //   * Module
   //   * non-lazy Function (except asm.js module)
   //   * lazy Function (cannot be asm.js module)
-
-  uint32_t memberInitializers_ = 0;
 
   // GCThings are stored into
   // {CompilationState,BaseCompilationStencil}.gcThingData, in [gcThingsOffset,
@@ -751,7 +740,7 @@ class ScriptStencil {
 
   // This is set by the BytecodeEmitter of the enclosing script when a reference
   // to this function is generated.
-  static constexpr uint16_t WasFunctionEmittedFlag = 1 << 0;
+  static constexpr uint16_t WasEmittedByEnclosingScriptFlag = 1 << 0;
 
   // If this is for the root of delazification, this represents
   // MutableScriptFlagsEnum::AllowRelazify value of the script *after*
@@ -763,13 +752,9 @@ class ScriptStencil {
   // The shared data is stored into BaseCompilationStencil.sharedData.
   static constexpr uint16_t HasSharedDataFlag = 1 << 2;
 
-  // Set if this script has member initializer.
-  // `memberInitializers_` is valid only if this flag is set.
-  static constexpr uint16_t HasMemberInitializersFlag = 1 << 3;
-
   // True if this script is lazy function and has enclosing scope.
   // `lazyFunctionEnclosingScopeIndex_` is valid only if this flag is set.
-  static constexpr uint16_t HasLazyFunctionEnclosingScopeIndexFlag = 1 << 4;
+  static constexpr uint16_t HasLazyFunctionEnclosingScopeIndexFlag = 1 << 3;
 
   uint16_t flags_ = 0;
 
@@ -787,11 +772,15 @@ class ScriptStencil {
   bool hasGCThings() const { return gcThingsLength; }
 
   mozilla::Span<TaggedScriptThingIndex> gcthings(
-      BaseCompilationStencil& stencil) const;
+      const BaseCompilationStencil& stencil) const;
 
-  bool wasFunctionEmitted() const { return flags_ & WasFunctionEmittedFlag; }
+  bool wasEmittedByEnclosingScript() const {
+    return flags_ & WasEmittedByEnclosingScriptFlag;
+  }
 
-  void setWasFunctionEmitted() { flags_ |= WasFunctionEmittedFlag; }
+  void setWasEmittedByEnclosingScript() {
+    flags_ |= WasEmittedByEnclosingScriptFlag;
+  }
 
   bool allowRelazify() const { return flags_ & AllowRelazifyFlag; }
 
@@ -800,24 +789,6 @@ class ScriptStencil {
   bool hasSharedData() const { return flags_ & HasSharedDataFlag; }
 
   void setHasSharedData() { flags_ |= HasSharedDataFlag; }
-
-  bool hasMemberInitializers() const {
-    return flags_ & HasMemberInitializersFlag;
-  }
-
- private:
-  void setHasMemberInitializers() { flags_ |= HasMemberInitializersFlag; }
-
- public:
-  void setMemberInitializers(MemberInitializers member) {
-    memberInitializers_ = member.serialize();
-    setHasMemberInitializers();
-  }
-
-  MemberInitializers memberInitializers() const {
-    MOZ_ASSERT(hasMemberInitializers());
-    return MemberInitializers(memberInitializers_);
-  }
 
   bool hasLazyFunctionEnclosingScopeIndex() const {
     return flags_ & HasLazyFunctionEnclosingScopeIndexFlag;
@@ -855,6 +826,10 @@ class ScriptStencilExtra {
   // The location of this script in the source.
   SourceExtent extent;
 
+  // See `PrivateScriptData::memberInitializers_`.
+  // This data only valid when `UseMemberInitializers` script flag is true.
+  uint32_t memberInitializers_ = 0;
+
   // See `JSFunction::nargs_`.
   uint16_t nargs = 0;
 
@@ -865,6 +840,21 @@ class ScriptStencilExtra {
 
   bool isModule() const {
     return immutableFlags.hasFlag(ImmutableScriptFlagsEnum::IsModule);
+  }
+
+  bool useMemberInitializers() const {
+    return immutableFlags.hasFlag(
+        ImmutableScriptFlagsEnum::UseMemberInitializers);
+  }
+
+  void setMemberInitializers(MemberInitializers member) {
+    MOZ_ASSERT(useMemberInitializers());
+    memberInitializers_ = member.serialize();
+  }
+
+  MemberInitializers memberInitializers() const {
+    MOZ_ASSERT(useMemberInitializers());
+    return MemberInitializers(memberInitializers_);
   }
 
 #if defined(DEBUG) || defined(JS_JITSPEW)
@@ -878,6 +868,10 @@ class ScriptStencilExtra {
 void DumpTaggedParserAtomIndex(js::JSONPrinter& json,
                                TaggedParserAtomIndex taggedIndex,
                                BaseCompilationStencil* stencil);
+
+void DumpTaggedParserAtomIndexNoQuote(GenericPrinter& out,
+                                      TaggedParserAtomIndex taggedIndex,
+                                      BaseCompilationStencil* stencil);
 #endif
 
 } /* namespace frontend */

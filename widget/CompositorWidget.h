@@ -164,6 +164,13 @@ class CompositorWidget {
   virtual bool NeedsToDeferEndRemoteDrawing() { return false; }
 
   /**
+   * Some widgets (namely Gtk) may need clean up underlying surface
+   * before painting to draw transparent objects correctly. Return
+   * the transparent region where this clearing is required.
+   */
+  virtual LayoutDeviceIntRegion GetTransparentRegion();
+
+  /**
    * Called when shutting down the LayerManager to clean-up any cached
    * resources.
    *

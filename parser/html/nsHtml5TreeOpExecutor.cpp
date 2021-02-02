@@ -7,6 +7,7 @@
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Likely.h"
 #include "mozilla/dom/BrowsingContext.h"
+#include "mozilla/dom/MediaList.h"
 #include "mozilla/dom/ScriptLoader.h"
 #include "mozilla/dom/nsCSPContext.h"
 #include "mozilla/dom/nsCSPService.h"
@@ -18,10 +19,12 @@
 #include "mozilla/StaticPrefs_content.h"
 #include "mozilla/StaticPrefs_security.h"
 #include "mozilla/StaticPrefs_view_source.h"
+#include "mozilla/Telemetry.h"
 #include "mozilla/css/Loader.h"
 #include "nsContentUtils.h"
 #include "nsDocShell.h"
 #include "nsError.h"
+#include "nsHTMLDocument.h"
 #include "nsHtml5AutoPauseUpdate.h"
 #include "nsHtml5Parser.h"
 #include "nsHtml5StreamParser.h"
@@ -41,6 +44,10 @@
 
 using namespace mozilla;
 
+static LazyLogModule gCharsetMenuLog("Chardetng");
+
+#define LOGCHARDETNG(args) MOZ_LOG(gCharsetMenuLog, LogLevel::Debug, args)
+
 NS_IMPL_ISUPPORTS_CYCLE_COLLECTION_INHERITED(nsHtml5TreeOpExecutor,
                                              nsHtml5DocumentBuilder,
                                              nsIContentSink)
@@ -51,9 +58,9 @@ class nsHtml5ExecutorReflusher : public Runnable {
 
  public:
   explicit nsHtml5ExecutorReflusher(nsHtml5TreeOpExecutor* aExecutor)
-      : mozilla::Runnable("nsHtml5ExecutorReflusher"), mExecutor(aExecutor) {}
+      : Runnable("nsHtml5ExecutorReflusher"), mExecutor(aExecutor) {}
   NS_IMETHOD Run() override {
-    Document* doc = mExecutor->GetDocument();
+    dom::Document* doc = mExecutor->GetDocument();
     if (XRE_IsContentProcess() &&
         nsContentUtils::
             HighPriorityEventPendingForTopLevelDocumentBeforeContentfulPaint(
@@ -104,8 +111,7 @@ class MOZ_RAII nsHtml5AutoFlush final {
   }
 };
 
-static mozilla::LinkedList<nsHtml5TreeOpExecutor>* gBackgroundFlushList =
-    nullptr;
+static LinkedList<nsHtml5TreeOpExecutor>* gBackgroundFlushList = nullptr;
 StaticRefPtr<IdleTaskRunner> gBackgroundFlushRunner;
 
 nsHtml5TreeOpExecutor::nsHtml5TreeOpExecutor()
@@ -202,6 +208,118 @@ nsHtml5TreeOpExecutor::DidBuildModel(bool aTerminated) {
   // OnStartRequest call.
   if (mStarted) {
     mDocument->EndLoad();
+
+    // Gather chardetng telemetry
+    MOZ_ASSERT(mDocument->IsHTMLDocument());
+    if (!aTerminated && !mDocument->AsHTMLDocument()->IsViewSource()) {
+      // We deliberately measure only normally-completed (non-aborted) loads
+      // that are not View Source loads. This seems like a better place for
+      // checking normal completion than anything in nsHtml5StreamParser.
+      bool plain = mDocument->AsHTMLDocument()->IsPlainText();
+      int32_t charsetSource = mDocument->GetDocumentCharacterSetSource();
+      switch (charsetSource) {
+        case kCharsetFromInitialAutoDetectionWouldHaveBeenUTF8:
+          if (plain) {
+            LOGCHARDETNG(("TEXT::UtfInitial"));
+            Telemetry::AccumulateCategorical(
+                Telemetry::LABELS_ENCODING_DETECTION_OUTCOME_TEXT::UtfInitial);
+          } else {
+            LOGCHARDETNG(("HTML::UtfInitial"));
+            Telemetry::AccumulateCategorical(
+                Telemetry::LABELS_ENCODING_DETECTION_OUTCOME_HTML::UtfInitial);
+          }
+          break;
+        case kCharsetFromInitialAutoDetectionWouldNotHaveBeenUTF8Generic:
+          if (plain) {
+            LOGCHARDETNG(("TEXT::GenericInitial"));
+            Telemetry::AccumulateCategorical(
+                Telemetry::LABELS_ENCODING_DETECTION_OUTCOME_TEXT::
+                    GenericInitial);
+          } else {
+            LOGCHARDETNG(("HTML::GenericInitial"));
+            Telemetry::AccumulateCategorical(
+                Telemetry::LABELS_ENCODING_DETECTION_OUTCOME_HTML::
+                    GenericInitial);
+          }
+          break;
+        case kCharsetFromInitialAutoDetectionWouldNotHaveBeenUTF8Content:
+          if (plain) {
+            LOGCHARDETNG(("TEXT::ContentInitial"));
+            Telemetry::AccumulateCategorical(
+                Telemetry::LABELS_ENCODING_DETECTION_OUTCOME_TEXT::
+                    ContentInitial);
+          } else {
+            LOGCHARDETNG(("HTML::ContentInitial"));
+            Telemetry::AccumulateCategorical(
+                Telemetry::LABELS_ENCODING_DETECTION_OUTCOME_HTML::
+                    ContentInitial);
+          }
+          break;
+        case kCharsetFromInitialAutoDetectionWouldNotHaveBeenUTF8DependedOnTLD:
+          if (plain) {
+            LOGCHARDETNG(("TEXT::TldInitial"));
+            Telemetry::AccumulateCategorical(
+                Telemetry::LABELS_ENCODING_DETECTION_OUTCOME_TEXT::TldInitial);
+          } else {
+            LOGCHARDETNG(("HTML::TldInitial"));
+            Telemetry::AccumulateCategorical(
+                Telemetry::LABELS_ENCODING_DETECTION_OUTCOME_HTML::TldInitial);
+          }
+          break;
+        // Deliberately no final version of ASCII
+        case kCharsetFromFinalAutoDetectionWouldHaveBeenUTF8:
+          if (plain) {
+            LOGCHARDETNG(("TEXT::UtfFinal"));
+            Telemetry::AccumulateCategorical(
+                Telemetry::LABELS_ENCODING_DETECTION_OUTCOME_TEXT::UtfFinal);
+          } else {
+            LOGCHARDETNG(("HTML::UtfFinal"));
+            Telemetry::AccumulateCategorical(
+                Telemetry::LABELS_ENCODING_DETECTION_OUTCOME_HTML::UtfFinal);
+          }
+          break;
+        case kCharsetFromFinalAutoDetectionWouldNotHaveBeenUTF8Generic:
+          if (plain) {
+            LOGCHARDETNG(("TEXT::GenericFinal"));
+            Telemetry::AccumulateCategorical(
+                Telemetry::LABELS_ENCODING_DETECTION_OUTCOME_TEXT::
+                    GenericFinal);
+          } else {
+            LOGCHARDETNG(("HTML::GenericFinal"));
+            Telemetry::AccumulateCategorical(
+                Telemetry::LABELS_ENCODING_DETECTION_OUTCOME_HTML::
+                    GenericFinal);
+          }
+          break;
+        case kCharsetFromFinalAutoDetectionWouldNotHaveBeenUTF8Content:
+          if (plain) {
+            LOGCHARDETNG(("TEXT::ContentFinal"));
+            Telemetry::AccumulateCategorical(
+                Telemetry::LABELS_ENCODING_DETECTION_OUTCOME_TEXT::
+                    ContentFinal);
+          } else {
+            LOGCHARDETNG(("HTML::ContentFinal"));
+            Telemetry::AccumulateCategorical(
+                Telemetry::LABELS_ENCODING_DETECTION_OUTCOME_HTML::
+                    ContentFinal);
+          }
+          break;
+        case kCharsetFromFinalAutoDetectionWouldNotHaveBeenUTF8DependedOnTLD:
+          if (plain) {
+            LOGCHARDETNG(("TEXT::TldFinal"));
+            Telemetry::AccumulateCategorical(
+                Telemetry::LABELS_ENCODING_DETECTION_OUTCOME_TEXT::TldFinal);
+          } else {
+            LOGCHARDETNG(("HTML::TldFinal"));
+            Telemetry::AccumulateCategorical(
+                Telemetry::LABELS_ENCODING_DETECTION_OUTCOME_HTML::TldFinal);
+          }
+          break;
+        default:
+          // Chardetng didn't run automatically or the input was all ASCII.
+          break;
+      }
+    }
   }
 
   // Dropping the stream parser changes the parser's apparent
@@ -303,7 +421,7 @@ void nsHtml5TreeOpExecutor::ContinueInterruptedParsingAsync() {
     }
   } else {
     if (!gBackgroundFlushList) {
-      gBackgroundFlushList = new mozilla::LinkedList<nsHtml5TreeOpExecutor>();
+      gBackgroundFlushList = new LinkedList<nsHtml5TreeOpExecutor>();
     }
     if (!isInList()) {
       gBackgroundFlushList->insertBack(this);
@@ -387,8 +505,7 @@ void nsHtml5TreeOpExecutor::RunFlushLoop() {
   if (mParser) {
     streamParserGrip = GetParser()->GetStreamParser();
   }
-  mozilla::Unused
-      << streamParserGrip;  // Intentionally not used within function
+  Unused << streamParserGrip;  // Intentionally not used within function
 
   // Remember the entry time
   (void)nsContentSink::WillParseImpl();
@@ -577,14 +694,12 @@ nsresult nsHtml5TreeOpExecutor::FlushDocumentWrite() {
   // avoid crashing near EOF
   RefPtr<nsHtml5TreeOpExecutor> kungFuDeathGrip(this);
   RefPtr<nsParserBase> parserKungFuDeathGrip(mParser);
-  mozilla::Unused
-      << parserKungFuDeathGrip;  // Intentionally not used within function
+  Unused << parserKungFuDeathGrip;  // Intentionally not used within function
   RefPtr<nsHtml5StreamParser> streamParserGrip;
   if (mParser) {
     streamParserGrip = GetParser()->GetStreamParser();
   }
-  mozilla::Unused
-      << streamParserGrip;  // Intentionally not used within function
+  Unused << streamParserGrip;  // Intentionally not used within function
 
   MOZ_RELEASE_ASSERT(!mReadingFromStage,
                      "Got doc write flush when reading from stage");
@@ -811,7 +926,7 @@ void nsHtml5TreeOpExecutor::MaybeComplainAboutCharset(const char* aMsgId,
   // the embedded different-origin pages anyway and can't fix problems even
   // if alerted about them.
   if (!strcmp(aMsgId, "EncNoDeclaration") && mDocShell) {
-    BrowsingContext* const bc = mDocShell->GetBrowsingContext();
+    dom::BrowsingContext* const bc = mDocShell->GetBrowsingContext();
     if (bc && bc->GetParent()) {
       return;
     }
@@ -927,6 +1042,30 @@ nsIURI* nsHtml5TreeOpExecutor::BaseURIForPreload() {
              : documentBaseURI;
 }
 
+already_AddRefed<nsIURI>
+nsHtml5TreeOpExecutor::ConvertIfNotPreloadedYetAndMediaApplies(
+    const nsAString& aURL, const nsAString& aMedia) {
+  nsCOMPtr<nsIURI> uri = ConvertIfNotPreloadedYet(aURL);
+  if (!uri) {
+    return nullptr;
+  }
+
+  if (!MediaApplies(aMedia)) {
+    return nullptr;
+  }
+  return uri.forget();
+}
+
+bool nsHtml5TreeOpExecutor::MediaApplies(const nsAString& aMedia) {
+  using dom::MediaList;
+
+  if (aMedia.IsEmpty()) {
+    return true;
+  }
+  RefPtr<MediaList> media = MediaList::Create(NS_ConvertUTF16toUTF8(aMedia));
+  return media->Matches(*mDocument);
+}
+
 already_AddRefed<nsIURI> nsHtml5TreeOpExecutor::ConvertIfNotPreloadedYet(
     const nsAString& aURL) {
   if (aURL.IsEmpty()) {
@@ -974,10 +1113,11 @@ dom::ReferrerPolicy nsHtml5TreeOpExecutor::GetPreloadReferrerPolicy(
 
 void nsHtml5TreeOpExecutor::PreloadScript(
     const nsAString& aURL, const nsAString& aCharset, const nsAString& aType,
-    const nsAString& aCrossOrigin, const nsAString& aIntegrity,
-    dom::ReferrerPolicy aReferrerPolicy, bool aScriptFromHead, bool aAsync,
-    bool aDefer, bool aNoModule, bool aLinkPreload) {
-  nsCOMPtr<nsIURI> uri = ConvertIfNotPreloadedYet(aURL);
+    const nsAString& aCrossOrigin, const nsAString& aMedia,
+    const nsAString& aIntegrity, dom::ReferrerPolicy aReferrerPolicy,
+    bool aScriptFromHead, bool aAsync, bool aDefer, bool aNoModule,
+    bool aLinkPreload) {
+  nsCOMPtr<nsIURI> uri = ConvertIfNotPreloadedYetAndMediaApplies(aURL, aMedia);
   if (!uri) {
     return;
   }
@@ -990,30 +1130,41 @@ void nsHtml5TreeOpExecutor::PreloadScript(
 void nsHtml5TreeOpExecutor::PreloadStyle(const nsAString& aURL,
                                          const nsAString& aCharset,
                                          const nsAString& aCrossOrigin,
+                                         const nsAString& aMedia,
                                          const nsAString& aReferrerPolicy,
                                          const nsAString& aIntegrity,
                                          bool aLinkPreload) {
-  nsCOMPtr<nsIURI> uri = ConvertIfNotPreloadedYet(aURL);
+  nsCOMPtr<nsIURI> uri = ConvertIfNotPreloadedYetAndMediaApplies(aURL, aMedia);
   if (!uri) {
     return;
   }
 
+  if (aLinkPreload) {
+    auto hashKey = PreloadHashKey::CreateAsStyle(
+        uri, mDocument->NodePrincipal(),
+        dom::Element::StringToCORSMode(aCrossOrigin),
+        css::eAuthorSheetFeatures);
+    if (mDocument->Preloads().PreloadExists(hashKey)) {
+      return;
+    }
+  }
+
   mDocument->PreloadStyle(uri, Encoding::ForLabel(aCharset), aCrossOrigin,
                           GetPreloadReferrerPolicy(aReferrerPolicy), aIntegrity,
-                          aLinkPreload);
+                          aLinkPreload
+                              ? css::StylePreloadKind::FromLinkRelPreloadElement
+                              : css::StylePreloadKind::FromParser);
 }
 
-void nsHtml5TreeOpExecutor::PreloadImage(const nsAString& aURL,
-                                         const nsAString& aCrossOrigin,
-                                         const nsAString& aSrcset,
-                                         const nsAString& aSizes,
-                                         const nsAString& aImageReferrerPolicy,
-                                         bool aLinkPreload) {
+void nsHtml5TreeOpExecutor::PreloadImage(
+    const nsAString& aURL, const nsAString& aCrossOrigin,
+    const nsAString& aMedia, const nsAString& aSrcset, const nsAString& aSizes,
+    const nsAString& aImageReferrerPolicy, bool aLinkPreload) {
   nsCOMPtr<nsIURI> baseURI = BaseURIForPreload();
   bool isImgSet = false;
   nsCOMPtr<nsIURI> uri =
       mDocument->ResolvePreloadImage(baseURI, aURL, aSrcset, aSizes, &isImgSet);
-  if (uri && ShouldPreloadURI(uri)) {
+  if (uri && ShouldPreloadURI(uri) && MediaApplies(aMedia)) {
     // use document wide referrer policy
     mDocument->MaybePreLoadImage(uri, aCrossOrigin,
                                  GetPreloadReferrerPolicy(aImageReferrerPolicy),
@@ -1032,8 +1183,9 @@ void nsHtml5TreeOpExecutor::PreloadPictureSource(const nsAString& aSrcset,
 
 void nsHtml5TreeOpExecutor::PreloadFont(const nsAString& aURL,
                                         const nsAString& aCrossOrigin,
+                                        const nsAString& aMedia,
                                         const nsAString& aReferrerPolicy) {
-  nsCOMPtr<nsIURI> uri = ConvertIfNotPreloadedYet(aURL);
+  nsCOMPtr<nsIURI> uri = ConvertIfNotPreloadedYetAndMediaApplies(aURL, aMedia);
   if (!uri) {
     return;
   }
@@ -1043,8 +1195,9 @@ void nsHtml5TreeOpExecutor::PreloadFont(const nsAString& aURL,
 
 void nsHtml5TreeOpExecutor::PreloadFetch(const nsAString& aURL,
                                          const nsAString& aCrossOrigin,
+                                         const nsAString& aMedia,
                                          const nsAString& aReferrerPolicy) {
-  nsCOMPtr<nsIURI> uri = ConvertIfNotPreloadedYet(aURL);
+  nsCOMPtr<nsIURI> uri = ConvertIfNotPreloadedYetAndMediaApplies(aURL, aMedia);
   if (!uri) {
     return;
   }

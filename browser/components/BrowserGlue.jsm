@@ -25,13 +25,14 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   ASRouterDefaultConfig:
     "resource://activity-stream/lib/ASRouterDefaultConfig.jsm",
   ASRouterNewTabHook: "resource://activity-stream/lib/ASRouterNewTabHook.jsm",
+  ASRouter: "resource://activity-stream/lib/ASRouter.jsm",
   AsyncShutdown: "resource://gre/modules/AsyncShutdown.jsm",
   Blocklist: "resource://gre/modules/Blocklist.jsm",
   BookmarkHTMLUtils: "resource://gre/modules/BookmarkHTMLUtils.jsm",
   BookmarkJSONUtils: "resource://gre/modules/BookmarkJSONUtils.jsm",
   BrowserSearchTelemetry: "resource:///modules/BrowserSearchTelemetry.jsm",
   BrowserUsageTelemetry: "resource:///modules/BrowserUsageTelemetry.jsm",
-  BrowserUtils: "resource://gre/modules/BrowserUtils.jsm",
+  BrowserUIUtils: "resource:///modules/BrowserUIUtils.jsm",
   BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.jsm",
   ContextualIdentityService:
     "resource://gre/modules/ContextualIdentityService.jsm",
@@ -43,6 +44,7 @@ XPCOMUtils.defineLazyModuleGetters(this, {
     "resource:///modules/DownloadsViewableInternally.jsm",
   E10SUtils: "resource://gre/modules/E10SUtils.jsm",
   ExtensionsUI: "resource:///modules/ExtensionsUI.jsm",
+  ExperimentAPI: "resource://messaging-system/experiments/ExperimentAPI.jsm",
   FeatureGate: "resource://featuregates/FeatureGate.jsm",
   FirefoxMonitor: "resource:///modules/FirefoxMonitor.jsm",
   FxAccounts: "resource://gre/modules/FxAccounts.jsm",
@@ -82,6 +84,7 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   TelemetryUtils: "resource://gre/modules/TelemetryUtils.jsm",
   TRRRacer: "resource:///modules/TRRPerformance.jsm",
   UIState: "resource://services-sync/UIState.jsm",
+  UrlbarPrefs: "resource:///modules/UrlbarPrefs.jsm",
   WebChannel: "resource://gre/modules/WebChannel.jsm",
   WindowsRegistry: "resource://gre/modules/WindowsRegistry.jsm",
 });
@@ -189,6 +192,7 @@ let JSWINDOWACTORS = {
         AboutLoginsDismissBreachAlert: { wantUntrusted: true },
         AboutLoginsImportFromBrowser: { wantUntrusted: true },
         AboutLoginsImportFromFile: { wantUntrusted: true },
+        AboutLoginsImportReportInit: { wantUntrusted: true },
         AboutLoginsInit: { wantUntrusted: true },
         AboutLoginsGetHelp: { wantUntrusted: true },
         AboutLoginsOpenPreferences: { wantUntrusted: true },
@@ -202,7 +206,7 @@ let JSWINDOWACTORS = {
         AboutLoginsExportPasswords: { wantUntrusted: true },
       },
     },
-    matches: ["about:logins", "about:logins?*"],
+    matches: ["about:logins", "about:logins?*", "about:loginsimportreport"],
   },
 
   AboutNewInstall: {
@@ -403,17 +407,18 @@ let JSWINDOWACTORS = {
     },
     child: {
       moduleURI: "resource:///actors/ContentSearchChild.jsm",
-      matches: [
-        "about:home",
-        "about:newtab",
-        "about:welcome",
-        "about:privatebrowsing",
-        "chrome://mochitests/content/*",
-      ],
       events: {
         ContentSearchClient: { capture: true, wantUntrusted: true },
       },
     },
+    matches: [
+      "about:home",
+      "about:welcome",
+      "about:newtab",
+      "about:privatebrowsing",
+      "about:test-about-content-search-ui",
+    ],
+    remoteTypes: ["privilegedabout"],
   },
 
   ContextMenu: {
@@ -1124,7 +1129,11 @@ BrowserGlue.prototype = {
           Cu.reportError(ex);
         }
         let win = BrowserWindowTracker.getTopWindow();
-        BrowserSearchTelemetry.recordSearch(win.gBrowser, engine, "urlbar");
+        BrowserSearchTelemetry.recordSearch(
+          win.gBrowser.selectedBrowser,
+          engine,
+          "urlbar"
+        );
         break;
       case "browser-search-engine-modified":
         // Ensure we cleanup the hiddenOneOffs pref when removing
@@ -2413,6 +2422,14 @@ BrowserGlue.prototype = {
         },
       },
 
+      {
+        task: () => {
+          // We postponed loading bookmarks toolbar content until startup
+          // has finished, so we can start loading it now:
+          PlacesUIUtils.unblockToolbars();
+        },
+      },
+
       // Begin listening for incoming push messages.
       {
         task: () => {
@@ -2746,6 +2763,8 @@ BrowserGlue.prototype = {
       () => OsEnvironment.reportAllowedAppSources(),
 
       () => Services.search.checkWebExtensionEngines(),
+
+      () => BrowserUsageTelemetry.reportInstallationTelemetry(),
     ];
 
     for (let task of idleTasks) {
@@ -3271,7 +3290,7 @@ BrowserGlue.prototype = {
   _migrateUI: function BG__migrateUI() {
     // Use an increasing number to keep track of the current migration state.
     // Completely unrelated to the current Firefox release number.
-    const UI_VERSION = 104;
+    const UI_VERSION = 106;
     const BROWSER_DOCURL = AppConstants.BROWSER_CHROME_URL;
 
     if (!Services.prefs.prefHasUserValue("browser.migration.version")) {
@@ -3814,26 +3833,65 @@ BrowserGlue.prototype = {
       );
     }
 
+    // Renamed and flipped the logic of a pref to make its purpose more clear.
+    if (currentUIVersion < 105) {
+      const oldPrefName = "browser.urlbar.imeCompositionClosesPanel";
+      const oldPrefValue = Services.prefs.getBoolPref(oldPrefName, true);
+      Services.prefs.setBoolPref(
+        "browser.urlbar.keepPanelOpenDuringImeComposition",
+        !oldPrefValue
+      );
+      Services.prefs.clearUserPref(oldPrefName);
+    }
+
+    // Initialize the new browser.urlbar.showSuggestionsBeforeGeneral pref.
+    if (currentUIVersion < 106) {
+      UrlbarPrefs.initializeShowSearchSuggestionsFirstPref();
+    }
+
     // Update the migration version.
     Services.prefs.setIntPref("browser.migration.version", UI_VERSION);
   },
 
   _maybeShowDefaultBrowserPrompt() {
-    DefaultBrowserCheck.willCheckDefaultBrowser(/* isStartupCheck */ true).then(
-      async willPrompt => {
-        let { DefaultBrowserNotification } = ChromeUtils.import(
-          "resource:///actors/AboutNewTabParent.jsm",
-          {}
-        );
-        if (willPrompt) {
-          // Prevent the related notification from appearing and
-          // show the modal prompt.
-          DefaultBrowserNotification.notifyModalDisplayed();
-          let win = BrowserWindowTracker.getTopWindow();
-          DefaultBrowserCheck.prompt(win);
-        }
+    Promise.all([
+      DefaultBrowserCheck.willCheckDefaultBrowser(/* isStartupCheck */ true),
+      ExperimentAPI.ready,
+    ]).then(async ([willPrompt]) => {
+      let { DefaultBrowserNotification } = ChromeUtils.import(
+        "resource:///actors/AboutNewTabParent.jsm",
+        {}
+      );
+      let isFeatureEnabled = false;
+      try {
+        isFeatureEnabled = ExperimentAPI.getExperiment({
+          featureId: "infobar",
+          sendExposurePing: false,
+        })?.branch.feature.enabled;
+      } catch (e) {}
+      if (willPrompt) {
+        // Prevent the related notification from appearing and
+        // show the modal prompt.
+        DefaultBrowserNotification.notifyModalDisplayed();
       }
-    );
+      // If no experiment go ahead with default experience
+      if (willPrompt && !isFeatureEnabled) {
+        let win = BrowserWindowTracker.getTopWindow();
+        DefaultBrowserCheck.prompt(win);
+      }
+      // If in experiment notify ASRouter to dispatch message
+      if (isFeatureEnabled) {
+        ASRouter.waitForInitialized.then(() =>
+          ASRouter.sendTriggerMessage({
+            browser: BrowserWindowTracker.getTopWindow()?.gBrowser
+              .selectedBrowser,
+            // triggerId and triggerContext
+            id: "defaultBrowserCheck",
+            context: { willShowDefaultPrompt: willPrompt },
+          })
+        );
+      }
+    });
   },
 
   /**
@@ -3925,7 +3983,7 @@ BrowserGlue.prototype = {
         // same way that the url bar would.
         body = URIs[0].uri.replace(/([?#]).*$/, "$1");
         let wasTruncated = body.length < URIs[0].uri.length;
-        body = BrowserUtils.trimURL(body);
+        body = BrowserUIUtils.trimURL(body);
         if (wasTruncated) {
           body = bundle.formatStringFromName(
             "singleTabArrivingWithTruncatedURL.body",
@@ -4632,10 +4690,10 @@ var DefaultBrowserCheck = {
         "browser.shell.didSkipDefaultBrowserCheckOnFirstRun"
       );
 
-    const usePromptLimit = !AppConstants.RELEASE_OR_BETA;
-    let promptCount = usePromptLimit
-      ? Services.prefs.getIntPref("browser.shell.defaultBrowserCheckCount")
-      : 0;
+    let promptCount = Services.prefs.getIntPref(
+      "browser.shell.defaultBrowserCheckCount",
+      0
+    );
 
     // If SessionStartup's state is not initialized, checking sessionType will set
     // its internal state to "do not restore".
@@ -4671,9 +4729,7 @@ var DefaultBrowserCheck = {
           );
         }
         willPrompt = false;
-      }
-
-      if (usePromptLimit) {
+      } else {
         promptCount++;
         if (isStartupCheck) {
           Services.prefs.setIntPref(
@@ -4681,7 +4737,7 @@ var DefaultBrowserCheck = {
             promptCount
           );
         }
-        if (promptCount > 3) {
+        if (!AppConstants.RELEASE_OR_BETA && promptCount > 3) {
           willPrompt = false;
         }
       }

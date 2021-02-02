@@ -2954,6 +2954,7 @@ static bool IsResumableMIRType(MIRType type) {
     case MIRType::Int64:
     case MIRType::RefOrNull:
     case MIRType::StackResults:
+    case MIRType::IntPtr:
       return false;
   }
   MOZ_CRASH("Unknown MIRType.");
@@ -3188,9 +3189,17 @@ SimpleLinearSum jit::ExtractLinearSum(MDefinition* ins, MathSpace space,
     return SimpleLinearSum(ins, 0);
   }
 
+  // Unwrap Int32ToIntPtr. This instruction only changes the representation
+  // (int32_t to intptr_t) without affecting the value.
+  if (ins->isInt32ToIntPtr()) {
+    ins = ins->toInt32ToIntPtr()->input();
+  }
+
   if (ins->isBeta()) {
     ins = ins->getOperand(0);
   }
+
+  MOZ_ASSERT(!ins->isInt32ToIntPtr());
 
   if (ins->type() != MIRType::Int32) {
     return SimpleLinearSum(ins, 0);
@@ -4166,30 +4175,26 @@ bool jit::FoldLoadsWithUnbox(MIRGenerator* mir, MIRGraph& graph) {
 
       MIRType type = unbox->type();
       MUnbox::Mode mode = unbox->mode();
-      BailoutKind bailoutKind = unbox->bailoutKind();
 
       MInstruction* replacement;
       switch (load->op()) {
         case MDefinition::Opcode::LoadFixedSlot: {
           auto* loadIns = load->toLoadFixedSlot();
           replacement = MLoadFixedSlotAndUnbox::New(
-              graph.alloc(), loadIns->object(), loadIns->slot(), mode, type,
-              bailoutKind);
+              graph.alloc(), loadIns->object(), loadIns->slot(), mode, type);
           break;
         }
         case MDefinition::Opcode::LoadDynamicSlot: {
           auto* loadIns = load->toLoadDynamicSlot();
           replacement = MLoadDynamicSlotAndUnbox::New(
-              graph.alloc(), loadIns->slots(), loadIns->slot(), mode, type,
-              bailoutKind);
+              graph.alloc(), loadIns->slots(), loadIns->slot(), mode, type);
           break;
         }
         case MDefinition::Opcode::LoadElement: {
           auto* loadIns = load->toLoadElement();
           MOZ_ASSERT_IF(loadIns->needsHoleCheck(), unbox->fallible());
           replacement = MLoadElementAndUnbox::New(
-              graph.alloc(), loadIns->elements(), loadIns->index(), mode, type,
-              bailoutKind);
+              graph.alloc(), loadIns->elements(), loadIns->index(), mode, type);
           break;
         }
         default:

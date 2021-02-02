@@ -696,7 +696,9 @@ void MacroAssembler::initTypedArraySlots(Register obj, Register temp,
       "typed array inline buffer is limited by the maximum object byte size");
 
   // Initialise data elements to zero.
-  int32_t length = templateObj->length().deprecatedGetUint32();
+  size_t length = templateObj->length().get();
+  MOZ_ASSERT(length <= INT32_MAX,
+             "Template objects are only created for int32 lengths");
   size_t nbytes = length * templateObj->bytesPerElement();
 
   if (lengthKind == TypedArrayLength::Fixed &&
@@ -1740,9 +1742,15 @@ void MacroAssembler::setIsDefinitelyTypedArrayConstructor(Register obj,
 }
 
 void MacroAssembler::loadArrayBufferByteLengthInt32(Register obj,
-                                                    Register output) {
+                                                    Register output,
+                                                    Label* fail) {
   Address slotAddr(obj, ArrayBufferObject::offsetOfByteLengthSlot());
   loadPrivate(slotAddr, output);
+
+  if (fail && ArrayBufferObject::maxBufferByteLength() > INT32_MAX) {
+    branchPtr(Assembler::Above, output, Imm32(INT32_MAX), fail);
+    return;
+  }
 
 #ifdef DEBUG
   Label ok;
@@ -1753,9 +1761,15 @@ void MacroAssembler::loadArrayBufferByteLengthInt32(Register obj,
 }
 
 void MacroAssembler::loadArrayBufferViewByteOffsetInt32(Register obj,
-                                                        Register output) {
+                                                        Register output,
+                                                        Label* fail) {
   Address slotAddr(obj, ArrayBufferViewObject::byteOffsetOffset());
   loadPrivate(slotAddr, output);
+
+  if (fail && ArrayBufferObject::maxBufferByteLength() > INT32_MAX) {
+    branchPtr(Assembler::Above, output, Imm32(INT32_MAX), fail);
+    return;
+  }
 
 #ifdef DEBUG
   Label ok;
@@ -1766,9 +1780,14 @@ void MacroAssembler::loadArrayBufferViewByteOffsetInt32(Register obj,
 }
 
 void MacroAssembler::loadArrayBufferViewLengthInt32(Register obj,
-                                                    Register output) {
-  Address slotAddr(obj, ArrayBufferViewObject::lengthOffset());
-  loadPrivate(slotAddr, output);
+                                                    Register output,
+                                                    Label* fail) {
+  loadArrayBufferViewLengthPtr(obj, output);
+
+  if (fail && ArrayBufferObject::maxBufferByteLength() > INT32_MAX) {
+    branchPtr(Assembler::Above, output, Imm32(INT32_MAX), fail);
+    return;
+  }
 
 #ifdef DEBUG
   Label ok;
@@ -1776,6 +1795,12 @@ void MacroAssembler::loadArrayBufferViewLengthInt32(Register obj,
   assumeUnreachable("Expecting length to fit in int32");
   bind(&ok);
 #endif
+}
+
+void MacroAssembler::loadArrayBufferViewLengthPtr(Register obj,
+                                                  Register output) {
+  Address slotAddr(obj, ArrayBufferViewObject::lengthOffset());
+  loadPrivate(slotAddr, output);
 }
 
 void MacroAssembler::loadDOMExpandoValueGuardGeneration(
@@ -2449,11 +2474,13 @@ void MacroAssembler::convertValueToInt(
   }
 
   // The value is null or undefined in truncation contexts - just emit 0.
-  if (isNull.used()) {
-    bind(&isNull);
+  if (conversion == IntConversionInputKind::Any) {
+    if (isNull.used()) {
+      bind(&isNull);
+    }
+    mov(ImmWord(0), output);
+    jump(&done);
   }
-  mov(ImmWord(0), output);
-  jump(&done);
 
   // |output| needs to be different from |stringReg| to load string indices.
   bool handleStringIndices = handleStrings && output != stringReg;
@@ -3318,6 +3345,98 @@ void MacroAssembler::sameValueDouble(FloatRegister left, FloatRegister right,
   bind(&done);
 }
 
+void MacroAssembler::minMaxArrayInt32(Register array, Register result,
+                                      Register temp1, Register temp2,
+                                      Register temp3, bool isMax, Label* fail) {
+  // array must be a packed array. Load its elements.
+  Register elements = temp1;
+  loadPtr(Address(array, NativeObject::offsetOfElements()), elements);
+
+  // Load the length and guard that it is non-zero.
+  Address lengthAddr(elements, ObjectElements::offsetOfInitializedLength());
+  load32(lengthAddr, temp3);
+  branchTest32(Assembler::Zero, temp3, temp3, fail);
+
+  // Compute the address of the last element.
+  Register elementsEnd = temp2;
+  BaseObjectElementIndex elementsEndAddr(elements, temp3,
+                                         -int32_t(sizeof(Value)));
+  computeEffectiveAddress(elementsEndAddr, elementsEnd);
+
+  // Load the first element into result.
+  fallibleUnboxInt32(Address(elements, 0), result, fail);
+
+  Label loop, done;
+  bind(&loop);
+
+  // Check whether we're done.
+  branchPtr(Assembler::Equal, elements, elementsEnd, &done);
+
+  // If not, advance to the next element and load it.
+  addPtr(Imm32(sizeof(Value)), elements);
+  fallibleUnboxInt32(Address(elements, 0), temp3, fail);
+
+  // Update result if necessary.
+  Assembler::Condition cond =
+      isMax ? Assembler::GreaterThan : Assembler::LessThan;
+  cmp32Move32(cond, temp3, result, temp3, result);
+
+  jump(&loop);
+  bind(&done);
+}
+
+void MacroAssembler::minMaxArrayNumber(Register array, FloatRegister result,
+                                       FloatRegister floatTemp, Register temp1,
+                                       Register temp2, bool isMax,
+                                       Label* fail) {
+  // array must be a packed array. Load its elements.
+  Register elements = temp1;
+  loadPtr(Address(array, NativeObject::offsetOfElements()), elements);
+
+  // Load the length and check if the array is empty.
+  Label isEmpty;
+  Address lengthAddr(elements, ObjectElements::offsetOfInitializedLength());
+  load32(lengthAddr, temp2);
+  branchTest32(Assembler::Zero, temp2, temp2, &isEmpty);
+
+  // Compute the address of the last element.
+  Register elementsEnd = temp2;
+  BaseObjectElementIndex elementsEndAddr(elements, temp2,
+                                         -int32_t(sizeof(Value)));
+  computeEffectiveAddress(elementsEndAddr, elementsEnd);
+
+  // Load the first element into result.
+  ensureDouble(Address(elements, 0), result, fail);
+
+  Label loop, done;
+  bind(&loop);
+
+  // Check whether we're done.
+  branchPtr(Assembler::Equal, elements, elementsEnd, &done);
+
+  // If not, advance to the next element and load it into floatTemp.
+  addPtr(Imm32(sizeof(Value)), elements);
+  ensureDouble(Address(elements, 0), floatTemp, fail);
+
+  // Update result if necessary.
+  if (isMax) {
+    maxDouble(floatTemp, result, /* handleNaN = */ true);
+  } else {
+    minDouble(floatTemp, result, /* handleNaN = */ true);
+  }
+  jump(&loop);
+
+  // With no arguments, min/max return +Infinity/-Infinity respectively.
+  bind(&isEmpty);
+  if (isMax) {
+    loadConstantDouble(mozilla::NegativeInfinity<double>(), result);
+  } else {
+    loadConstantDouble(mozilla::PositiveInfinity<double>(), result);
+  }
+
+  bind(&done);
+}
+
 void MacroAssembler::branchIfNotRegExpPrototypeOptimizable(Register proto,
                                                            Register temp,
                                                            Label* fail) {
@@ -3763,13 +3882,13 @@ void MacroAssembler::emitPreBarrierFastPath(JSRuntime* rt, MIRType type,
   // If the GC thing is in the nursery, we don't need to barrier it.
   if (type == MIRType::Value || type == MIRType::Object ||
       type == MIRType::String) {
-    branch32(Assembler::Equal, Address(temp2, gc::ChunkLocationOffset),
-             Imm32(int32_t(gc::ChunkLocation::Nursery)), noBarrier);
+    branchPtr(Assembler::NotEqual, Address(temp2, gc::ChunkStoreBufferOffset),
+              ImmWord(0), noBarrier);
   } else {
 #ifdef DEBUG
     Label isTenured;
-    branch32(Assembler::NotEqual, Address(temp2, gc::ChunkLocationOffset),
-             Imm32(int32_t(gc::ChunkLocation::Nursery)), &isTenured);
+    branchPtr(Assembler::Equal, Address(temp2, gc::ChunkStoreBufferOffset),
+              ImmWord(0), &isTenured);
     assumeUnreachable("JIT pre-barrier: unexpected nursery pointer");
     bind(&isTenured);
 #endif
@@ -3801,26 +3920,32 @@ void MacroAssembler::emitPreBarrierFastPath(JSRuntime* rt, MIRType type,
   andPtr(Imm32(gc::ChunkMask), temp1);
   rshiftPtr(Imm32(3), temp1);
 
-  static const size_t nbits = sizeof(uintptr_t) * CHAR_BIT;
-  static_assert(nbits == JS_BITS_PER_WORD, "Calculation below relies on this");
+  static_assert(gc::MarkBitmapWordBits == JS_BITS_PER_WORD,
+                "Calculation below relies on this");
 
   // Load the bitmap word in temp2.
   //
-  // word = chunk.bitmap[bit / nbits];
+  // word = chunk.bitmap[bit / MarkBitmapWordBits];
+
+  // Fold the adjustment for the fact that arenas don't start at the beginning
+  // of the chunk into the offset to the chunk bitmap.
+  const size_t firstArenaAdjustment = gc::FirstArenaAdjustmentBits / CHAR_BIT;
+  const intptr_t offset =
+      intptr_t(gc::ChunkMarkBitmapOffset) - intptr_t(firstArenaAdjustment);
+
   movePtr(temp1, temp3);
 #if JS_BITS_PER_WORD == 64
   rshiftPtr(Imm32(6), temp1);
-  loadPtr(BaseIndex(temp2, temp1, TimesEight, gc::ChunkMarkBitmapOffset),
-          temp2);
+  loadPtr(BaseIndex(temp2, temp1, TimesEight, offset), temp2);
 #else
   rshiftPtr(Imm32(5), temp1);
-  loadPtr(BaseIndex(temp2, temp1, TimesFour, gc::ChunkMarkBitmapOffset), temp2);
+  loadPtr(BaseIndex(temp2, temp1, TimesFour, offset), temp2);
 #endif
 
   // Load the mask in temp1.
   //
-  // mask = uintptr_t(1) << (bit % nbits);
-  andPtr(Imm32(nbits - 1), temp3);
+  // mask = uintptr_t(1) << (bit % MarkBitmapWordBits);
+  andPtr(Imm32(gc::MarkBitmapWordBits - 1), temp3);
   move32(Imm32(1), temp1);
 #ifdef JS_CODEGEN_X64
   MOZ_ASSERT(temp3 == rcx);
@@ -3869,8 +3994,8 @@ void MacroAssembler::atomicIsLockFreeJS(Register value, Register output) {
 // ========================================================================
 // Spectre Mitigations.
 
-void MacroAssembler::spectreMaskIndex(Register index, Register length,
-                                      Register output) {
+void MacroAssembler::spectreMaskIndex32(Register index, Register length,
+                                        Register output) {
   MOZ_ASSERT(JitOptions.spectreIndexMasking);
   MOZ_ASSERT(length != output);
   MOZ_ASSERT(index != output);
@@ -3879,8 +4004,8 @@ void MacroAssembler::spectreMaskIndex(Register index, Register length,
   cmp32Move32(Assembler::Below, index, length, index, output);
 }
 
-void MacroAssembler::spectreMaskIndex(Register index, const Address& length,
-                                      Register output) {
+void MacroAssembler::spectreMaskIndex32(Register index, const Address& length,
+                                        Register output) {
   MOZ_ASSERT(JitOptions.spectreIndexMasking);
   MOZ_ASSERT(index != length.base);
   MOZ_ASSERT(length.base != output);
@@ -3888,6 +4013,27 @@ void MacroAssembler::spectreMaskIndex(Register index, const Address& length,
 
   move32(Imm32(0), output);
   cmp32Move32(Assembler::Below, index, length, index, output);
+}
+
+void MacroAssembler::spectreMaskIndexPtr(Register index, Register length,
+                                         Register output) {
+  MOZ_ASSERT(JitOptions.spectreIndexMasking);
+  MOZ_ASSERT(length != output);
+  MOZ_ASSERT(index != output);
+
+  movePtr(ImmWord(0), output);
+  cmpPtrMovePtr(Assembler::Below, index, length, index, output);
+}
+
+void MacroAssembler::spectreMaskIndexPtr(Register index, const Address& length,
+                                         Register output) {
+  MOZ_ASSERT(JitOptions.spectreIndexMasking);
+  MOZ_ASSERT(index != length.base);
+  MOZ_ASSERT(length.base != output);
+  MOZ_ASSERT(index != output);
+
+  movePtr(ImmWord(0), output);
+  cmpPtrMovePtr(Assembler::Below, index, length, index, output);
 }
 
 void MacroAssembler::boundsCheck32PowerOfTwo(Register index, uint32_t length,

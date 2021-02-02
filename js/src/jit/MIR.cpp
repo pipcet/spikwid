@@ -801,7 +801,11 @@ MConstant* MConstant::NewFloat32(TempAllocator& alloc, double d) {
 }
 
 MConstant* MConstant::NewInt64(TempAllocator& alloc, int64_t i) {
-  return new (alloc) MConstant(i);
+  return new (alloc) MConstant(MIRType::Int64, i);
+}
+
+MConstant* MConstant::NewIntPtr(TempAllocator& alloc, intptr_t i) {
+  return new (alloc) MConstant(MIRType::IntPtr, i);
 }
 
 MConstant* MConstant::New(TempAllocator& alloc, const Value& v, MIRType type) {
@@ -877,9 +881,15 @@ MConstant::MConstant(float f) : MNullaryInstruction(classOpcode) {
   setMovable();
 }
 
-MConstant::MConstant(int64_t i) : MNullaryInstruction(classOpcode) {
-  setResultType(MIRType::Int64);
-  payload_.i64 = i;
+MConstant::MConstant(MIRType type, int64_t i)
+    : MNullaryInstruction(classOpcode) {
+  MOZ_ASSERT(type == MIRType::Int64 || type == MIRType::IntPtr);
+  setResultType(type);
+  if (type == MIRType::Int64) {
+    payload_.i64 = i;
+  } else {
+    payload_.iptr = i;
+  }
   setMovable();
 }
 
@@ -911,6 +921,7 @@ void MConstant::assertInitializedPayload() const {
     case MIRType::Object:
     case MIRType::Symbol:
     case MIRType::BigInt:
+    case MIRType::IntPtr:
 #  if MOZ_LITTLE_ENDIAN()
       MOZ_ASSERT_IF(JS_BITS_PER_WORD == 32, (payload_.asBits >> 32) == 0);
 #  else
@@ -970,6 +981,9 @@ void MConstant::printOpcode(GenericPrinter& out) const {
       break;
     case MIRType::Int64:
       out.printf("0x%" PRIx64, uint64_t(toInt64()));
+      break;
+    case MIRType::IntPtr:
+      out.printf("0x%" PRIxPTR, uintptr_t(toIntPtr()));
       break;
     case MIRType::Double:
       out.printf("%.16g", toDouble());
@@ -1116,6 +1130,7 @@ bool MConstant::valueToBoolean(bool* res) const {
       *res = toString()->length() != 0;
       return true;
     case MIRType::Object:
+      // TODO(Warp): Lazy groups have been removed.
       // We have to call EmulatesUndefined but that reads obj->group->clasp
       // and so it's racy when the object has a lazy group. The main callers
       // of this (MTest, MNot) already know how to fold the object case, so
@@ -1615,8 +1630,10 @@ MDefinition* MUnbox::foldsTo(TempAllocator& alloc) {
     // MUnbox<Int32>(MBox<Double>(x)) will always fail, even if x can be
     // represented as an Int32. Fold to avoid unnecessary bailouts.
     if (type() == MIRType::Int32 && unboxed->type() == MIRType::Double) {
-      return MToNumberInt32::New(alloc, unboxed,
-                                 IntConversionInputKind::NumbersOnly);
+      auto* folded = MToNumberInt32::New(alloc, unboxed,
+                                         IntConversionInputKind::NumbersOnly);
+      folded->setGuard();
+      return folded;
     }
   }
 
@@ -2514,6 +2531,20 @@ MDefinition* MPow::foldsTo(TempAllocator& alloc) {
   return this;
 }
 
+MDefinition* MInt32ToIntPtr::foldsTo(TempAllocator& alloc) {
+  MDefinition* def = input();
+  if (def->isConstant()) {
+    int32_t i = def->toConstant()->toInt32();
+    return MConstant::NewIntPtr(alloc, intptr_t(i));
+  }
+
+  if (def->isNonNegativeIntPtrToInt32()) {
+    return def->toNonNegativeIntPtrToInt32()->input();
+  }
+
+  return this;
+}
+
 bool MAbs::fallible() const {
   return !implicitTruncate_ && (!range() || !range()->hasInt32Bounds());
 }
@@ -2719,10 +2750,13 @@ MDefinition* MSub::foldsTo(TempAllocator& alloc) {
     return this;
   }
 
-  // This optimization is only valid for Int32 values. Subtracting a floating
-  // point value from itself returns NaN when the operand is either Infinity
-  // or NaN.
+  // Optimize X - X to 0. This optimization is only valid for Int32
+  // values. Subtracting a floating point value from itself returns
+  // NaN when the operand is either Infinity or NaN.
   if (lhs() == rhs()) {
+    // Ensure that any bailouts that we depend on to guarantee that X
+    // is Int32 are not removed.
+    lhs()->setGuardRangeBailoutsUnchecked();
     return MConstant::New(alloc, Int32Value(0));
   }
 
@@ -2808,6 +2842,8 @@ MIRType MCompare::inputType() {
     case Compare_UInt32:
     case Compare_Int32:
       return MIRType::Int32;
+    case Compare_UIntPtr:
+      return MIRType::IntPtr;
     case Compare_Double:
       return MIRType::Double;
     case Compare_Float32:
@@ -3489,15 +3525,15 @@ bool MCompare::tryFoldEqualOperands(bool* result) {
     return false;
   }
 
-  MOZ_ASSERT(compareType_ == Compare_Undefined ||
-             compareType_ == Compare_Null || compareType_ == Compare_Int32 ||
-             compareType_ == Compare_UInt32 || compareType_ == Compare_Double ||
-             compareType_ == Compare_Float32 ||
-             compareType_ == Compare_String || compareType_ == Compare_Object ||
-             compareType_ == Compare_Symbol || compareType_ == Compare_BigInt ||
-             compareType_ == Compare_BigInt_Int32 ||
-             compareType_ == Compare_BigInt_Double ||
-             compareType_ == Compare_BigInt_String);
+  MOZ_ASSERT(
+      compareType_ == Compare_Undefined || compareType_ == Compare_Null ||
+      compareType_ == Compare_Int32 || compareType_ == Compare_UInt32 ||
+      compareType_ == Compare_Double || compareType_ == Compare_Float32 ||
+      compareType_ == Compare_UIntPtr || compareType_ == Compare_String ||
+      compareType_ == Compare_Object || compareType_ == Compare_Symbol ||
+      compareType_ == Compare_BigInt || compareType_ == Compare_BigInt_Int32 ||
+      compareType_ == Compare_BigInt_Double ||
+      compareType_ == Compare_BigInt_String);
 
   if (isDoubleComparison() || isFloat32Comparison()) {
     if (!operandsAreNeverNaN()) {
@@ -4389,10 +4425,10 @@ template <typename T>
 static int32_t Bitmask(const T& v) {
   constexpr size_t count = sizeof(T) / sizeof(*v);
   constexpr size_t shift = 8 * sizeof(*v) - 1;
-  static_assert(shift == 7 || shift == 15 || shift == 31);
+  static_assert(shift == 7 || shift == 15 || shift == 31 || shift == 63);
   int32_t result = 0;
   for (unsigned i = 0; i < count; i++) {
-    result = result | (((v[i] >> shift) & 1) << i);
+    result = result | int32_t(((v[i] >> shift) & 1) << i);
   }
   return result;
 }
@@ -4407,7 +4443,7 @@ MDefinition* MWasmReduceSimd128::foldsTo(TempAllocator& alloc) {
     SimdConstant c = input()->toWasmFloatConstant()->toSimd128();
     int32_t i32Result = 0;
     switch (simdOp()) {
-      case wasm::SimdOp::I8x16AnyTrue:
+      case wasm::SimdOp::V128AnyTrue:
       case wasm::SimdOp::I16x8AnyTrue:
       case wasm::SimdOp::I32x4AnyTrue:
         i32Result = !c.isZeroBits();
@@ -4435,6 +4471,10 @@ MDefinition* MWasmReduceSimd128::foldsTo(TempAllocator& alloc) {
       case wasm::SimdOp::I32x4Bitmask:
         i32Result = Bitmask(
             SimdConstant::CreateSimd128((int32_t*)c.bytes()).asInt32x4());
+        break;
+      case wasm::SimdOp::I64x2Bitmask:
+        i32Result = Bitmask(
+            SimdConstant::CreateSimd128((int64_t*)c.bytes()).asInt64x2());
         break;
       case wasm::SimdOp::I8x16ExtractLaneS:
         i32Result =
@@ -4805,7 +4845,8 @@ MDefinition* MPopcnt::foldsTo(TempAllocator& alloc) {
 }
 
 MDefinition* MBoundsCheck::foldsTo(TempAllocator& alloc) {
-  if (index()->isConstant() && length()->isConstant()) {
+  if (type() == MIRType::Int32 && index()->isConstant() &&
+      length()->isConstant()) {
     uint32_t len = length()->toConstant()->toInt32();
     uint32_t idx = index()->toConstant()->toInt32();
     if (idx + uint32_t(minimum()) < len && idx + uint32_t(maximum()) < len) {
@@ -4886,26 +4927,34 @@ MDefinition* MGetFirstDollarIndex::foldsTo(TempAllocator& alloc) {
   return MConstant::New(alloc, Int32Value(index));
 }
 
-MDefinition* MTypedArrayIndexToInt32::foldsTo(TempAllocator& alloc) {
-  MDefinition* input = getOperand(0);
+MDefinition* MGuardNumberToIntPtrIndex::foldsTo(TempAllocator& alloc) {
+  MDefinition* input = this->input();
 
   if (input->isToDouble() && input->getOperand(0)->type() == MIRType::Int32) {
-    return input->getOperand(0);
+    return MInt32ToIntPtr::New(alloc, input->getOperand(0));
   }
 
-  if (!input->isConstant() || input->type() != MIRType::Double) {
+  if (!input->isConstant()) {
     return this;
   }
 
-  // Fold constant double representable as int32 to int32.
-  int32_t ival;
-  if (!mozilla::NumberEqualsInt32(input->toConstant()->numberToDouble(),
-                                  &ival)) {
-    // If not representable as an int32, this access is equal to an OOB access.
-    // So replace it with a known int32 value which also produces an OOB access.
+  // Fold constant double representable as intptr to intptr.
+  int64_t ival;
+  if (!mozilla::NumberEqualsInt64(input->toConstant()->toDouble(), &ival)) {
+    // If not representable as an int64, this access is equal to an OOB access.
+    // So replace it with a known int64/intptr value which also produces an OOB
+    // access. If we don't support OOB accesses we have to bail out.
+    if (!supportOOB()) {
+      return this;
+    }
     ival = -1;
   }
-  return MConstant::New(alloc, Int32Value(ival));
+
+  if (ival < INTPTR_MIN || ival > INTPTR_MAX) {
+    return this;
+  }
+
+  return MConstant::NewIntPtr(alloc, intptr_t(ival));
 }
 
 MDefinition* MIsObject::foldsTo(TempAllocator& alloc) {

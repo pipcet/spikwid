@@ -96,15 +96,14 @@ const PanelUI = {
 
     XPCOMUtils.defineLazyPreferenceGetter(
       this,
-      "libraryRecentHighlightsEnabled",
-      "browser.library.activity-stream.enabled",
-      false,
-      (pref, previousValue, newValue) => {
-        if (!newValue) {
-          this.clearLibraryRecentHighlights();
-        }
-      }
+      "protonAppMenuEnabled",
+      "browser.proton.appmenu.enabled",
+      false
     );
+
+    if (this.protonAppMenuEnabled) {
+      this.multiView.setAttribute("mainViewId", "appMenu-protonMainView");
+    }
 
     window.addEventListener("activate", this);
     CustomizableUI.addListener(this);
@@ -332,9 +331,7 @@ const PanelUI = {
         this._updateNotifications();
         break;
       case "ViewShowing":
-        if (aEvent.target == this.libraryView) {
-          this.onLibraryViewShowing(aEvent.target).catch(Cu.reportError);
-        } else if (aEvent.target == this.whatsNewPanel) {
+        if (aEvent.target == this.whatsNewPanel) {
           this.onWhatsNewPanelShowing();
         }
         break;
@@ -549,154 +546,6 @@ const PanelUI = {
   },
 
   /**
-   * When the Library view is showing, we can start fetching and populating the
-   * list of Recent Highlights.
-   * This is done asynchronously and may finish when the view is already visible.
-   *
-   * @param {panelview} viewNode The library view.
-   */
-  async onLibraryViewShowing(viewNode) {
-    // Since the library is the first view shown, we don't want to add a blocker
-    // to the event, which would make PanelMultiView wait to show it. Instead,
-    // we keep the space currently reserved for the items, but we hide them.
-    if (this._loadingRecentHighlights || !this.libraryRecentHighlightsEnabled) {
-      return;
-    }
-
-    if (!this.libraryRecentHighlights) {
-      this.libraryRecentHighlights = document.getElementById(
-        "appMenu-library-recentHighlights"
-      );
-    }
-
-    // When these prefs are made the default, add this data-l10n-id directly to browser.xhtml.
-    if (
-      Services.prefs.getBoolPref(
-        "browser.newtabpage.activity-stream.customizationMenu.enabled"
-      ) ||
-      Services.prefs.getBoolPref(
-        "browser.newtabpage.activity-stream.newNewtabExperience.enabled"
-      )
-    ) {
-      this.libraryRecentHighlights.previousElementSibling.setAttribute(
-        "data-l10n-id",
-        "library-recent-activity-label"
-      );
-    } else {
-      this.libraryRecentHighlights.previousElementSibling.removeAttribute(
-        "data-l10n-id"
-      );
-    }
-
-    // Make the elements invisible synchronously, before the view is shown.
-    this.makeLibraryRecentHighlightsInvisible();
-
-    // Perform the rest asynchronously while protecting from re-entrancy.
-    this._loadingRecentHighlights = true;
-    try {
-      await this.fetchAndPopulateLibraryRecentHighlights();
-    } finally {
-      this._loadingRecentHighlights = false;
-    }
-  },
-
-  /**
-   * Fetches the list of Recent Highlights and replaces the items in the Library
-   * view with the results.
-   */
-  async fetchAndPopulateLibraryRecentHighlights() {
-    let highlights = await NewTabUtils.activityStreamLinks
-      .getHighlights({
-        // As per bug 1402023, hard-coded limit, until Activity Stream develops a
-        // richer list.
-        numItems: 6,
-        withFavicons: true,
-        excludePocket: true,
-      })
-      .catch(ex => {
-        // Just hide the section if we can't retrieve the items from the database.
-        Cu.reportError(ex);
-        return [];
-      });
-
-    // Since the call above is asynchronous, the panel may be already hidden
-    // at this point, but we still prepare the items for the next time the
-    // panel is shown, so their space is reserved. The part of this function
-    // that adds the elements is the least expensive anyways.
-    this.clearLibraryRecentHighlights();
-    if (!highlights.length) {
-      return;
-    }
-
-    let container = this.libraryRecentHighlights;
-    container.hidden = container.previousElementSibling.hidden = container.previousElementSibling.previousElementSibling.hidden = false;
-    let fragment = document.createDocumentFragment();
-    for (let highlight of highlights) {
-      let button = document.createXULElement("toolbarbutton");
-      button.classList.add(
-        "subviewbutton",
-        "highlight",
-        "subviewbutton-iconic",
-        "bookmark-item"
-      );
-      let title = highlight.title || highlight.url;
-      button.setAttribute("label", title);
-      button.setAttribute("tooltiptext", title);
-      button.setAttribute("type", "highlight-" + highlight.type);
-      button.setAttribute("onclick", "PanelUI.onLibraryHighlightClick(event)");
-      if (highlight.favicon) {
-        button.setAttribute("image", highlight.favicon);
-      }
-      button._highlight = highlight;
-      fragment.appendChild(button);
-    }
-    container.appendChild(fragment);
-  },
-
-  /**
-   * Make all nodes from the 'Recent Highlights' section invisible while we
-   * refresh its contents. This is done while the Library view is opening to
-   * avoid showing potentially stale items, but still keep the space reserved.
-   */
-  makeLibraryRecentHighlightsInvisible() {
-    for (let button of this.libraryRecentHighlights.children) {
-      button.style.visibility = "hidden";
-    }
-  },
-
-  /**
-   * Remove all the nodes from the 'Recent Highlights' section and hide it as well.
-   */
-  clearLibraryRecentHighlights() {
-    let container = this.libraryRecentHighlights;
-    while (container.firstChild) {
-      container.firstChild.remove();
-    }
-    container.hidden = container.previousElementSibling.hidden = container.previousElementSibling.previousElementSibling.hidden = true;
-  },
-
-  /**
-   * Event handler; invoked when an item of the Recent Highlights is clicked.
-   *
-   * @param {MouseEvent} event Click event, originating from the Highlight.
-   */
-  onLibraryHighlightClick(event) {
-    let button = event.target;
-    if (event.button > 1 || !button._highlight) {
-      return;
-    }
-    if (event.button == 1) {
-      // Bug 1402849, close library panel on mid mouse click
-      CustomizableUI.hidePanelForNode(button);
-    }
-    window.openUILink(button._highlight.url, event, {
-      triggeringPrincipal: Services.scriptSecurityManager.createNullPrincipal(
-        {}
-      ),
-    });
-  },
-
-  /**
    * Sets up the event listener for when the What's New panel is shown.
    *
    * @param {panelview} panelView The What's New panelview.
@@ -795,7 +644,7 @@ const PanelUI = {
 
     let helpMenu = document.getElementById("menu_HelpPopup");
     let items = this.getElementsByTagName("vbox")[0];
-    let attrs = ["command", "oncommand", "onclick", "label", "key", "disabled"];
+    let attrs = ["command", "oncommand", "onclick", "key", "disabled"];
 
     // Remove all buttons from the view
     while (items.firstChild) {
@@ -819,6 +668,12 @@ const PanelUI = {
         }
         button.setAttribute(attrName, node.getAttribute(attrName));
       }
+
+      // We have AppMenu-specific strings for the Help menu. By convention,
+      // their localization IDs are set on "appmenu-data-l10n-id" attributes.
+      let l10nId = node.getAttribute("appmenu-data-l10n-id");
+      button.setAttribute("data-l10n-id", l10nId);
+
       if (node.id) {
         button.id = "appMenu_" + node.id;
       }
@@ -979,7 +834,12 @@ const PanelUI = {
 
   get mainView() {
     if (!this._mainView) {
-      this._mainView = PanelMultiView.getViewNode(document, "appMenu-mainView");
+      this._mainView = PanelMultiView.getViewNode(
+        document,
+        this.protonAppMenuEnabled
+          ? "appMenu-protonMainView"
+          : "appMenu-mainView"
+      );
     }
     return this._mainView;
   },
@@ -1122,18 +982,20 @@ const PanelUI = {
   _addedShortcuts: false,
   _formatPrintButtonShortcuts() {
     let printButton = this.mainView.querySelector("#appMenu-print-button");
-    if (
-      !Services.prefs.getBoolPref("print.tab_modal.enabled") &&
-      AppConstants.platform !== "macosx"
-    ) {
-      printButton.removeAttribute("shortcut");
-    } else if (!printButton.hasAttribute("shortcut")) {
-      printButton.setAttribute(
-        "shortcut",
-        ShortcutUtils.prettifyShortcut(
-          document.getElementById(printButton.getAttribute("key"))
-        )
-      );
+    if (printButton) {
+      if (
+        !Services.prefs.getBoolPref("print.tab_modal.enabled") &&
+        AppConstants.platform !== "macosx"
+      ) {
+        printButton.removeAttribute("shortcut");
+      } else if (!printButton.hasAttribute("shortcut")) {
+        printButton.setAttribute(
+          "shortcut",
+          ShortcutUtils.prettifyShortcut(
+            document.getElementById(printButton.getAttribute("key"))
+          )
+        );
+      }
     }
   },
   _ensureShortcutsShown(view = this.mainView) {

@@ -133,8 +133,14 @@ void CodeGeneratorX86Shared::emitCompare(MCompare::CompareType type,
                                          const LAllocation* left,
                                          const LAllocation* right) {
 #ifdef JS_CODEGEN_X64
-  if (type == MCompare::Compare_Object || type == MCompare::Compare_Symbol) {
-    masm.cmpPtr(ToRegister(left), ToOperand(right));
+  if (type == MCompare::Compare_Object || type == MCompare::Compare_Symbol ||
+      type == MCompare::Compare_UIntPtr) {
+    if (right->isConstant()) {
+      MOZ_ASSERT(type == MCompare::Compare_UIntPtr);
+      masm.cmpPtr(ToRegister(left), Imm32(ToInt32(right)));
+    } else {
+      masm.cmpPtr(ToRegister(left), ToOperand(right));
+    }
     return;
   }
 #endif
@@ -1998,13 +2004,13 @@ void CodeGenerator::visitCompareExchangeTypedArrayElement(
   Register newval = ToRegister(lir->newval());
 
   Scalar::Type arrayType = lir->mir()->arrayType();
-  size_t width = Scalar::byteSize(arrayType);
 
   if (lir->index()->isConstant()) {
-    Address dest(elements, ToInt32(lir->index()) * width);
+    Address dest = ToAddress(elements, lir->index(), arrayType);
     masm.compareExchangeJS(arrayType, Synchronization::Full(), dest, oldval,
                            newval, temp, output);
   } else {
+    size_t width = Scalar::byteSize(arrayType);
     BaseIndex dest(elements, ToRegister(lir->index()),
                    ScaleFromElemWidth(width));
     masm.compareExchangeJS(arrayType, Synchronization::Full(), dest, oldval,
@@ -2022,13 +2028,13 @@ void CodeGenerator::visitAtomicExchangeTypedArrayElement(
   Register value = ToRegister(lir->value());
 
   Scalar::Type arrayType = lir->mir()->arrayType();
-  size_t width = Scalar::byteSize(arrayType);
 
   if (lir->index()->isConstant()) {
-    Address dest(elements, ToInt32(lir->index()) * width);
+    Address dest = ToAddress(elements, lir->index(), arrayType);
     masm.atomicExchangeJS(arrayType, Synchronization::Full(), dest, value, temp,
                           output);
   } else {
+    size_t width = Scalar::byteSize(arrayType);
     BaseIndex dest(elements, ToRegister(lir->index()),
                    ScaleFromElemWidth(width));
     masm.atomicExchangeJS(arrayType, Synchronization::Full(), dest, value, temp,
@@ -2064,13 +2070,13 @@ void CodeGenerator::visitAtomicTypedArrayElementBinop(
   const LAllocation* value = lir->value();
 
   Scalar::Type arrayType = lir->mir()->arrayType();
-  size_t width = Scalar::byteSize(arrayType);
 
   if (lir->index()->isConstant()) {
-    Address mem(elements, ToInt32(lir->index()) * width);
+    Address mem = ToAddress(elements, lir->index(), arrayType);
     AtomicBinopToTypedArray(masm, lir->mir()->operation(), arrayType, value,
                             mem, temp1, temp2, output);
   } else {
+    size_t width = Scalar::byteSize(arrayType);
     BaseIndex mem(elements, ToRegister(lir->index()),
                   ScaleFromElemWidth(width));
     AtomicBinopToTypedArray(masm, lir->mir()->operation(), arrayType, value,
@@ -2099,13 +2105,13 @@ void CodeGenerator::visitAtomicTypedArrayElementBinopForEffect(
   Register elements = ToRegister(lir->elements());
   const LAllocation* value = lir->value();
   Scalar::Type arrayType = lir->mir()->arrayType();
-  size_t width = Scalar::byteSize(arrayType);
 
   if (lir->index()->isConstant()) {
-    Address mem(elements, ToInt32(lir->index()) * width);
+    Address mem = ToAddress(elements, lir->index(), arrayType);
     AtomicBinopToTypedArray(masm, arrayType, lir->mir()->operation(), value,
                             mem);
   } else {
+    size_t width = Scalar::byteSize(arrayType);
     BaseIndex mem(elements, ToRegister(lir->index()),
                   ScaleFromElemWidth(width));
     AtomicBinopToTypedArray(masm, arrayType, lir->mir()->operation(), value,
@@ -2575,6 +2581,45 @@ void CodeGenerator::visitWasmBinarySimd128(LWasmBinarySimd128* ins) {
       break;
     case wasm::SimdOp::I32x4DotSI16x8:
       masm.widenDotInt16x8(rhs, lhsDest);
+      break;
+    case wasm::SimdOp::I16x8ExtMulLowSI8x16:
+      masm.extMulLowInt8x16(rhs, lhsDest);
+      break;
+    case wasm::SimdOp::I16x8ExtMulHighSI8x16:
+      masm.extMulHighInt8x16(rhs, lhsDest);
+      break;
+    case wasm::SimdOp::I16x8ExtMulLowUI8x16:
+      masm.unsignedExtMulLowInt8x16(rhs, lhsDest);
+      break;
+    case wasm::SimdOp::I16x8ExtMulHighUI8x16:
+      masm.unsignedExtMulHighInt8x16(rhs, lhsDest);
+      break;
+    case wasm::SimdOp::I32x4ExtMulLowSI16x8:
+      masm.extMulLowInt16x8(rhs, lhsDest);
+      break;
+    case wasm::SimdOp::I32x4ExtMulHighSI16x8:
+      masm.extMulHighInt16x8(rhs, lhsDest);
+      break;
+    case wasm::SimdOp::I32x4ExtMulLowUI16x8:
+      masm.unsignedExtMulLowInt16x8(rhs, lhsDest);
+      break;
+    case wasm::SimdOp::I32x4ExtMulHighUI16x8:
+      masm.unsignedExtMulHighInt16x8(rhs, lhsDest);
+      break;
+    case wasm::SimdOp::I64x2ExtMulLowSI32x4:
+      masm.extMulLowInt32x4(rhs, lhsDest);
+      break;
+    case wasm::SimdOp::I64x2ExtMulHighSI32x4:
+      masm.extMulHighInt32x4(rhs, lhsDest);
+      break;
+    case wasm::SimdOp::I64x2ExtMulLowUI32x4:
+      masm.unsignedExtMulLowInt32x4(rhs, lhsDest);
+      break;
+    case wasm::SimdOp::I64x2ExtMulHighUI32x4:
+      masm.unsignedExtMulHighInt32x4(rhs, lhsDest);
+      break;
+    case wasm::SimdOp::I16x8Q15MulrSatS:
+      masm.q15MulrSatInt16x8(rhs, lhsDest);
       break;
 #  ifdef ENABLE_WASM_SIMD_WORMHOLE
     case wasm::SimdOp::MozWHSELFTEST: {
@@ -3266,6 +3311,18 @@ void CodeGenerator::visitWasmUnarySimd128(LWasmUnarySimd128* ins) {
     case wasm::SimdOp::I64x2Neg:
       masm.negInt64x2(src, dest);
       break;
+    case wasm::SimdOp::I64x2WidenLowSI32x4:
+      masm.widenLowInt32x4(src, dest);
+      break;
+    case wasm::SimdOp::I64x2WidenHighSI32x4:
+      masm.widenHighInt32x4(src, dest);
+      break;
+    case wasm::SimdOp::I64x2WidenLowUI32x4:
+      masm.unsignedWidenLowInt32x4(src, dest);
+      break;
+    case wasm::SimdOp::I64x2WidenHighUI32x4:
+      masm.unsignedWidenHighInt32x4(src, dest);
+      break;
     case wasm::SimdOp::F32x4Abs:
       masm.absFloat32x4(src, dest);
       break;
@@ -3337,7 +3394,7 @@ void CodeGenerator::visitWasmReduceSimd128(LWasmReduceSimd128* ins) {
   uint32_t imm = ins->imm();
 
   switch (ins->simdOp()) {
-    case wasm::SimdOp::I8x16AnyTrue:
+    case wasm::SimdOp::V128AnyTrue:
     case wasm::SimdOp::I16x8AnyTrue:
     case wasm::SimdOp::I32x4AnyTrue:
       masm.anyTrueSimd128(src, ToRegister(dest));
@@ -3359,6 +3416,9 @@ void CodeGenerator::visitWasmReduceSimd128(LWasmReduceSimd128* ins) {
       break;
     case wasm::SimdOp::I32x4Bitmask:
       masm.bitmaskInt32x4(src, ToRegister(dest));
+      break;
+    case wasm::SimdOp::I64x2Bitmask:
+      masm.bitmaskInt64x2(src, ToRegister(dest));
       break;
     case wasm::SimdOp::I8x16ExtractLaneS:
       masm.extractLaneInt8x16(imm, src, ToRegister(dest));
@@ -3391,7 +3451,7 @@ void CodeGenerator::visitWasmReduceAndBranchSimd128(
   FloatRegister src = ToFloatRegister(ins->src());
 
   switch (ins->simdOp()) {
-    case wasm::SimdOp::I8x16AnyTrue:
+    case wasm::SimdOp::V128AnyTrue:
     case wasm::SimdOp::I16x8AnyTrue:
     case wasm::SimdOp::I32x4AnyTrue:
       // Set the zero flag if all of the lanes are zero, and branch on that.

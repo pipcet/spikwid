@@ -38,7 +38,7 @@ SharedContext::SharedContext(JSContext* cx, Kind kind,
       inClass_(false),
       localStrict(false),
       hasExplicitUseStrict_(false),
-      isScriptFieldCopiedToStencil(false) {
+      isScriptExtraFieldCopiedToStencil(false) {
   // Compute the script kind "input" flags.
   if (kind == Kind::FunctionBox) {
     setFlag(ImmutableFlags::IsFunction);
@@ -68,118 +68,6 @@ SharedContext::SharedContext(JSContext* cx, Kind kind,
   // Initialize the strict flag. This may be updated by the parser as we observe
   // further directives in the body.
   setFlag(ImmutableFlags::Strict, directives.strict());
-}
-
-void ScopeContext::computeThisEnvironment(Scope* scope) {
-  uint32_t envCount = 0;
-  for (ScopeIter si(scope); si; si++) {
-    if (si.kind() == ScopeKind::Function) {
-      JSFunction* fun = si.scope()->as<FunctionScope>().canonicalFunction();
-
-      // Arrow function inherit the "this" environment of the enclosing script,
-      // so continue ignore them.
-      if (!fun->isArrow()) {
-        allowNewTarget = true;
-
-        if (fun->allowSuperProperty()) {
-          allowSuperProperty = true;
-          enclosingThisEnvironmentHops = envCount;
-        }
-
-        if (fun->isClassConstructor()) {
-          memberInitializers =
-              mozilla::Some(fun->baseScript()->getMemberInitializers());
-          MOZ_ASSERT(memberInitializers->valid);
-        }
-
-        if (fun->isDerivedClassConstructor()) {
-          allowSuperCall = true;
-        }
-
-        if (fun->isFieldInitializer()) {
-          allowArguments = false;
-        }
-
-        // Found the effective "this" environment, so stop.
-        return;
-      }
-    }
-
-    if (si.scope()->hasEnvironment()) {
-      envCount++;
-    }
-  }
-}
-
-void ScopeContext::computeThisBinding(Scope* scope) {
-  // Inspect the scope-chain.
-  for (ScopeIter si(scope); si; si++) {
-    if (si.kind() == ScopeKind::Module) {
-      thisBinding = ThisBinding::Module;
-      return;
-    }
-
-    if (si.kind() == ScopeKind::Function) {
-      JSFunction* fun = si.scope()->as<FunctionScope>().canonicalFunction();
-
-      // Arrow functions don't have their own `this` binding.
-      if (fun->isArrow()) {
-        continue;
-      }
-
-      // Derived class constructors (and their nested arrow functions and evals)
-      // use ThisBinding::DerivedConstructor, which ensures TDZ checks happen
-      // when accessing |this|.
-      if (fun->isDerivedClassConstructor()) {
-        thisBinding = ThisBinding::DerivedConstructor;
-      } else {
-        thisBinding = ThisBinding::Function;
-      }
-
-      return;
-    }
-  }
-
-  thisBinding = ThisBinding::Global;
-}
-
-void ScopeContext::computeInScope(Scope* scope) {
-  for (ScopeIter si(scope); si; si++) {
-    if (si.kind() == ScopeKind::ClassBody) {
-      inClass = true;
-    }
-
-    if (si.kind() == ScopeKind::With) {
-      inWith = true;
-    }
-  }
-}
-
-/* static */
-Scope* ScopeContext::determineEffectiveScope(Scope* scope,
-                                             JSObject* environment) {
-  // If the scope-chain is non-syntactic, we may still determine a more precise
-  // effective-scope to use instead.
-  if (environment && scope->hasOnChain(ScopeKind::NonSyntactic)) {
-    JSObject* env = environment;
-    while (env) {
-      // Look at target of any DebugEnvironmentProxy, but be sure to use
-      // enclosingEnvironment() of the proxy itself.
-      JSObject* unwrapped = env;
-      if (env->is<DebugEnvironmentProxy>()) {
-        unwrapped = &env->as<DebugEnvironmentProxy>().environment();
-      }
-
-      if (unwrapped->is<CallObject>()) {
-        JSFunction* callee = &unwrapped->as<CallObject>().callee();
-        return callee->nonLazyScript()->bodyScope();
-      }
-
-      env = env->enclosingEnvironment();
-    }
-  }
-
-  return scope;
 }
 
 GlobalSharedContext::GlobalSharedContext(JSContext* cx, ScopeKind scopeKind,
@@ -223,8 +111,9 @@ FunctionBox::FunctionBox(JSContext* cx, SourceExtent extent,
                          CompilationStencil& stencil,
                          CompilationState& compilationState,
                          Directives directives, GeneratorKind generatorKind,
-                         FunctionAsyncKind asyncKind, const ParserAtom* atom,
-                         FunctionFlags flags, ScriptIndex index)
+                         FunctionAsyncKind asyncKind,
+                         TaggedParserAtomIndex atom, FunctionFlags flags,
+                         ScriptIndex index)
     : SuspendableContext(cx, Kind::FunctionBox, stencil, directives, extent,
                          generatorKind == GeneratorKind::Generator,
                          asyncKind == FunctionAsyncKind::AsyncFunction),
@@ -233,16 +122,31 @@ FunctionBox::FunctionBox(JSContext* cx, SourceExtent extent,
       funcDataIndex_(index),
       flags_(FunctionFlags::clearMutableflags(flags)),
       emitBytecode(false),
-      wasEmitted_(false),
+      wasEmittedByEnclosingScript_(false),
       isAnnexB(false),
       useAsm(false),
       hasParameterExprs(false),
       hasDestructuringArgs(false),
       hasDuplicateParameters(false),
       hasExprBody_(false),
-      isFunctionFieldCopiedToStencil(false) {}
+      isFunctionFieldCopiedToStencil(false),
+      isInitialCompilation(stencil.isInitialStencil()),
+      isStandalone(false),
+      hasNonSyntacticEnclosingScopeForStandalone(false) {}
 
-void FunctionBox::initFromLazyFunction(JSFunction* fun) {
+void FunctionBox::initFromLazyFunction(JSFunction* fun,
+                                       ScopeContext& scopeContext,
+                                       FunctionFlags flags,
+                                       FunctionSyntaxKind kind) {
+  initFromLazyFunctionShared(fun);
+  initStandaloneOrLazy(scopeContext, flags, kind);
+}
+
+void FunctionBox::initFromLazyFunctionToSkip(JSFunction* fun) {
+  initFromLazyFunctionShared(fun);
+}
+
+void FunctionBox::initFromLazyFunctionShared(JSFunction* fun) {
   BaseScript* lazy = fun->baseScript();
   immutableFlags_ = lazy->immutableFlags();
   extent_ = lazy->extent();
@@ -312,6 +216,18 @@ void FunctionBox::initWithEnclosingParseContext(ParseContext* enclosing,
 
 void FunctionBox::initStandalone(ScopeContext& scopeContext,
                                  FunctionFlags flags, FunctionSyntaxKind kind) {
+  initStandaloneOrLazy(scopeContext, flags, kind);
+
+  isStandalone = true;
+  if (scopeContext.effectiveScope) {
+    hasNonSyntacticEnclosingScopeForStandalone =
+        !scopeContext.effectiveScope->as<GlobalScope>().isSyntactic();
+  }
+}
+
+void FunctionBox::initStandaloneOrLazy(ScopeContext& scopeContext,
+                                       FunctionFlags flags,
+                                       FunctionSyntaxKind kind) {
   if (flags.isArrow()) {
     allowNewTarget_ = scopeContext.allowNewTarget;
     allowSuperProperty_ = scopeContext.allowSuperProperty;
@@ -390,37 +306,20 @@ ScriptStencilExtra& FunctionBox::functionExtraStencil() const {
   return compilationState_.scriptExtra[funcDataIndex_];
 }
 
-bool FunctionBox::hasFunctionExtraStencil() const {
-  return funcDataIndex_ < compilationState_.scriptExtra.length();
-}
-
-void SharedContext::copyScriptFields(ScriptStencil& script) {
-  MOZ_ASSERT(!isScriptFieldCopiedToStencil);
-  isScriptFieldCopiedToStencil = true;
-}
-
 void SharedContext::copyScriptExtraFields(ScriptStencilExtra& scriptExtra) {
+  MOZ_ASSERT(!isScriptExtraFieldCopiedToStencil);
+
   scriptExtra.immutableFlags = immutableFlags_;
   scriptExtra.extent = extent_;
+
+  isScriptExtraFieldCopiedToStencil = true;
 }
 
 void FunctionBox::finishScriptFlags() {
-  MOZ_ASSERT(!isScriptFieldCopiedToStencil);
+  MOZ_ASSERT(!isScriptExtraFieldCopiedToStencil);
 
   using ImmutableFlags = ImmutableScriptFlagsEnum;
   immutableFlags_.setFlag(ImmutableFlags::HasMappedArgsObj, hasMappedArgsObj());
-}
-
-void FunctionBox::copyScriptFields(ScriptStencil& script) {
-  MOZ_ASSERT(&script == &functionStencil());
-
-  SharedContext::copyScriptFields(script);
-
-  if (memberInitializers_) {
-    script.setMemberInitializers(*memberInitializers_);
-  }
-
-  isScriptFieldCopiedToStencil = true;
 }
 
 void FunctionBox::copyFunctionFields(ScriptStencil& script) {
@@ -428,26 +327,30 @@ void FunctionBox::copyFunctionFields(ScriptStencil& script) {
   MOZ_ASSERT(!isFunctionFieldCopiedToStencil);
 
   if (atom_) {
-    atom_->markUsedByStencil();
-    script.functionAtom = atom_->toIndex();
+    compilationState_.parserAtoms.markUsedByStencil(atom_);
+    script.functionAtom = atom_;
   }
   script.functionFlags = flags_;
   if (enclosingScopeIndex_) {
     script.setLazyFunctionEnclosingScopeIndex(*enclosingScopeIndex_);
   }
-  if (wasEmitted_) {
-    script.setWasFunctionEmitted();
+  if (wasEmittedByEnclosingScript_) {
+    script.setWasEmittedByEnclosingScript();
   }
 
   isFunctionFieldCopiedToStencil = true;
 }
 
 void FunctionBox::copyFunctionExtraFields(ScriptStencilExtra& scriptExtra) {
+  if (useMemberInitializers()) {
+    scriptExtra.setMemberInitializers(memberInitializers());
+  }
+
   scriptExtra.nargs = nargs_;
 }
 
 void FunctionBox::copyUpdatedImmutableFlags() {
-  if (hasFunctionExtraStencil()) {
+  if (isInitialCompilation) {
     ScriptStencilExtra& scriptExtra = functionExtraStencil();
     scriptExtra.immutableFlags = immutableFlags_;
   }
@@ -459,9 +362,13 @@ void FunctionBox::copyUpdatedExtent() {
 }
 
 void FunctionBox::copyUpdatedMemberInitializers() {
-  ScriptStencil& script = functionStencil();
-  if (memberInitializers_) {
-    script.setMemberInitializers(*memberInitializers_);
+  MOZ_ASSERT(useMemberInitializers());
+  if (isInitialCompilation) {
+    ScriptStencilExtra& scriptExtra = functionExtraStencil();
+    scriptExtra.setMemberInitializers(memberInitializers());
+  } else {
+    // We are delazifying and the original PrivateScriptData has the member
+    // initializer information already. See: JSScript::fullyInitFromStencil.
   }
 }
 
@@ -475,16 +382,16 @@ void FunctionBox::copyUpdatedEnclosingScopeIndex() {
 void FunctionBox::copyUpdatedAtomAndFlags() {
   ScriptStencil& script = functionStencil();
   if (atom_) {
-    atom_->markUsedByStencil();
-    script.functionAtom = atom_->toIndex();
+    compilationState_.parserAtoms.markUsedByStencil(atom_);
+    script.functionAtom = atom_;
   }
   script.functionFlags = flags_;
 }
 
 void FunctionBox::copyUpdatedWasEmitted() {
   ScriptStencil& script = functionStencil();
-  if (wasEmitted_) {
-    script.setWasFunctionEmitted();
+  if (wasEmittedByEnclosingScript_) {
+    script.setWasEmittedByEnclosingScript();
   }
 }
 

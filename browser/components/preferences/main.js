@@ -47,6 +47,10 @@ ChromeUtils.defineModuleGetter(
 );
 
 XPCOMUtils.defineLazyServiceGetters(this, {
+  gApplicationUpdateService: [
+    "@mozilla.org/updates/update-service;1",
+    "nsIApplicationUpdateService",
+  ],
   gHandlerService: [
     "@mozilla.org/uriloader/handler-service;1",
     "nsIHandlerService",

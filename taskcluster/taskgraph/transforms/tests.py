@@ -175,6 +175,26 @@ def fission_filter(task):
 
 
 TEST_VARIANTS = {
+    "a11y-checks": {
+        "description": "{description} with accessibility checks enabled",
+        "suffix": "a11y-checks",
+        "replace": {
+            "run-on-projects": {
+                "by-test-platform": {
+                    "linux.*64(-shippable)?/opt": ["trunk"],
+                    "default": [],
+                },
+            },
+            "tier": 2,
+        },
+        "merge": {
+            "mozharness": {
+                "extra-options": [
+                    "--enable-a11y-checks",
+                ],
+            },
+        },
+    },
     "geckoview-e10s-single": {
         "description": "{description} with single-process e10s",
         "filterfn": gv_e10s_filter,
@@ -1051,34 +1071,34 @@ def setup_browsertime(config, tasks):
 
         cd_fetches = {
             "android.*": [
-                "linux64-chromedriver-85",
                 "linux64-chromedriver-86",
                 "linux64-chromedriver-87",
+                "linux64-chromedriver-88",
             ],
             "linux.*": [
-                "linux64-chromedriver-85",
                 "linux64-chromedriver-86",
                 "linux64-chromedriver-87",
+                "linux64-chromedriver-88",
             ],
             "macosx.*": [
-                "mac64-chromedriver-85",
                 "mac64-chromedriver-86",
                 "mac64-chromedriver-87",
+                "mac64-chromedriver-88",
             ],
             "windows.*aarch64.*": [
-                "win32-chromedriver-85",
                 "win32-chromedriver-86",
                 "win32-chromedriver-87",
+                "win32-chromedriver-88",
             ],
             "windows.*-32.*": [
-                "win32-chromedriver-85",
                 "win32-chromedriver-86",
                 "win32-chromedriver-87",
+                "win32-chromedriver-88",
             ],
             "windows.*-64.*": [
-                "win32-chromedriver-85",
                 "win32-chromedriver-86",
                 "win32-chromedriver-87",
+                "win32-chromedriver-88",
             ],
         }
 

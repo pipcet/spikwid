@@ -9,7 +9,6 @@
 #ifndef vm_JSScript_h
 #define vm_JSScript_h
 
-#include "mozilla/ArrayUtils.h"
 #include "mozilla/Atomics.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/MaybeOneOf.h"
@@ -1405,11 +1404,12 @@ class alignas(uintptr_t) PrivateScriptData final : public TrailingArray {
   static bool Clone(JSContext* cx, js::HandleScript src, js::HandleScript dst,
                     js::MutableHandle<JS::GCVector<js::Scope*>> scopes);
 
-  static bool InitFromStencil(JSContext* cx, js::HandleScript script,
-                              js::frontend::CompilationInput& input,
-                              js::frontend::BaseCompilationStencil& stencil,
-                              js::frontend::CompilationGCOutput& gcOutput,
-                              const js::frontend::ScriptIndex scriptIndex);
+  static bool InitFromStencil(
+      JSContext* cx, js::HandleScript script,
+      const js::frontend::CompilationInput& input,
+      const js::frontend::BaseCompilationStencil& stencil,
+      js::frontend::CompilationGCOutput& gcOutput,
+      const js::frontend::ScriptIndex scriptIndex);
 
   void trace(JSTracer* trc);
 
@@ -1564,6 +1564,17 @@ class BaseScript : public gc::TenuredCellWithNonGCPointer<uint8_t> {
     MOZ_ASSERT(extent_.toStringStart <= extent_.sourceStart);
     MOZ_ASSERT(extent_.sourceStart <= extent_.sourceEnd);
     MOZ_ASSERT(extent_.sourceEnd <= extent_.toStringEnd);
+
+    // The immutableFlags determine if the arguments-analysis will need to be
+    // run. We track if we need to run the analysis and the result of the
+    // analysis on the mutableFlags. The analysis is deterministic so we only
+    // need it once, even if we relazify, etc.
+    if (argumentsHasVarBinding()) {
+      setFlag(MutableFlags::NeedsArgsObj, alwaysNeedsArgsObj());
+      setFlag(MutableFlags::NeedsArgsAnalysis, !alwaysNeedsArgsObj());
+    } else {
+      MOZ_ASSERT(!alwaysNeedsArgsObj());
+    }
   }
 
   void setJitCodeRaw(uint8_t* code) { setHeaderPtr(code); }
@@ -1681,6 +1692,7 @@ class BaseScript : public gc::TenuredCellWithNonGCPointer<uint8_t> {
   IMMUTABLE_FLAG_GETTER(needsHomeObject, NeedsHomeObject)
   IMMUTABLE_FLAG_GETTER(isDerivedClassConstructor, IsDerivedClassConstructor)
   IMMUTABLE_FLAG_GETTER(isFieldInitializer, IsFieldInitializer)
+  IMMUTABLE_FLAG_GETTER(useMemberInitializers, UseMemberInitializers)
   IMMUTABLE_FLAG_GETTER(hasRest, HasRest)
   IMMUTABLE_FLAG_GETTER(needsFunctionEnvironmentObjects,
                         NeedsFunctionEnvironmentObjects)
@@ -1703,6 +1715,7 @@ class BaseScript : public gc::TenuredCellWithNonGCPointer<uint8_t> {
   MUTABLE_FLAG_GETTER_SETTER(hadLICMInvalidation, HadLICMInvalidation)
   MUTABLE_FLAG_GETTER_SETTER(hadEagerTruncationBailout,
                              HadEagerTruncationBailout)
+  MUTABLE_FLAG_GETTER_SETTER(hadUnboxFoldingBailout, HadUnboxFoldingBailout)
   MUTABLE_FLAG_GETTER_SETTER(uninlineable, Uninlineable)
   MUTABLE_FLAG_GETTER_SETTER(failedLexicalCheck, FailedLexicalCheck)
   MUTABLE_FLAG_GETTER_SETTER(hadSpeculativePhiBailout, HadSpeculativePhiBailout)
@@ -1770,6 +1783,7 @@ class BaseScript : public gc::TenuredCellWithNonGCPointer<uint8_t> {
   }
 
   void setMemberInitializers(MemberInitializers memberInitializers) {
+    MOZ_ASSERT(useMemberInitializers());
     MOZ_ASSERT(data_);
     data_->setMemberInitializers(memberInitializers);
   }
@@ -1808,8 +1822,7 @@ class BaseScript : public gc::TenuredCellWithNonGCPointer<uint8_t> {
   template <XDRMode mode>
   static XDRResult XDRLazyScriptData(XDRState<mode>* xdr,
                                      HandleScriptSourceObject sourceObject,
-                                     Handle<BaseScript*> lazy,
-                                     bool hasFieldInitializer);
+                                     Handle<BaseScript*> lazy);
 
   // JIT accessors
   static constexpr size_t offsetOfJitCodeRaw() { return offsetOfHeaderPtr(); }
@@ -1903,8 +1916,8 @@ class JSScript : public js::BaseScript {
 
   friend bool js::PrivateScriptData::InitFromStencil(
       JSContext* cx, js::HandleScript script,
-      js::frontend::CompilationInput& input,
-      js::frontend::BaseCompilationStencil& stencil,
+      const js::frontend::CompilationInput& input,
+      const js::frontend::BaseCompilationStencil& stencil,
       js::frontend::CompilationGCOutput& gcOutput,
       const js::frontend::ScriptIndex scriptIndex);
 
@@ -1931,16 +1944,15 @@ class JSScript : public js::BaseScript {
 
  public:
   static bool fullyInitFromStencil(
-      JSContext* cx, js::frontend::CompilationInput& input,
-      js::frontend::BaseCompilationStencil& stencil,
+      JSContext* cx, const js::frontend::CompilationInput& input,
+      const js::frontend::BaseCompilationStencil& stencil,
       js::frontend::CompilationGCOutput& gcOutput, js::HandleScript script,
       const js::frontend::ScriptIndex scriptIndex);
 
   // Allocate a JSScript and initialize it with bytecode. This consumes
   // allocations within the stencil.
   static JSScript* fromStencil(JSContext* cx,
-                               js::frontend::CompilationInput& input,
-                               js::frontend::CompilationStencil& stencil,
+                               const js::frontend::CompilationStencil& stencil,
                                js::frontend::CompilationGCOutput& gcOutput,
                                const js::frontend::ScriptIndex scriptIndex);
 
@@ -2081,10 +2093,6 @@ class JSScript : public js::BaseScript {
   void setNeedsArgsObj(bool needsArgsObj);
   static void argumentsOptimizationFailed(JSContext* cx,
                                           js::HandleScript script);
-
-  // Update the the arguments analysis flags based on the frontend
-  // derived information.
-  void resetArgsUsageAnalysis();
 
   /*
    * Arguments access (via JSOp::*Arg* opcodes) must access the canonical
@@ -2479,8 +2487,7 @@ JSScript* CloneScriptIntoFunction(JSContext* cx, HandleScope enclosingScope,
                                   Handle<ScriptSourceObject*> sourceObject,
                                   SourceExtent* maybeClassExtent = nullptr);
 
-JSScript* CloneGlobalScript(JSContext* cx, ScopeKind scopeKind,
-                            HandleScript src);
+JSScript* CloneGlobalScript(JSContext* cx, HandleScript src);
 
 bool CheckCompileOptionsMatch(const JS::ReadOnlyCompileOptions& options,
                               js::ImmutableScriptFlags flags,

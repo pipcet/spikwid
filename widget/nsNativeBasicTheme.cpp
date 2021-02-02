@@ -6,6 +6,7 @@
 #include "nsNativeBasicTheme.h"
 
 #include "gfxBlur.h"
+#include "mozilla/MathAlgorithms.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/gfx/Rect.h"
 #include "mozilla/gfx/Types.h"
@@ -21,12 +22,64 @@ using namespace mozilla::gfx;
 
 NS_IMPL_ISUPPORTS_INHERITED(nsNativeBasicTheme, nsNativeTheme, nsITheme)
 
+namespace {
+
+// This pushes and pops a clip rect to the draw target.
+//
+// This is done to reduce fuzz in places where we may have antialiasing,
+// because skia is not clip-invariant: given different clips, it does not
+// guarantee the same result, even if the painted content doesn't intersect
+// the clips.
+//
+// This is a bit sad, overall, but...
+struct MOZ_RAII AutoClipRect {
+  AutoClipRect(DrawTarget& aDt, const LayoutDeviceRect& aRect) : mDt(aDt) {
+    mDt.PushClipRect(aRect.ToUnknownRect());
+  }
+
+  ~AutoClipRect() { mDt.PopClip(); }
+
+ private:
+  DrawTarget& mDt;
+};
+
+static LayoutDeviceIntCoord SnapBorderWidth(
+    CSSCoord aCssWidth, nsNativeBasicTheme::DPIRatio aDpiRatio) {
+  if (aCssWidth == 0.0f) {
+    return 0;
+  }
+  return std::max(LayoutDeviceIntCoord(1), (aCssWidth * aDpiRatio).Truncated());
+}
+
+}  // namespace
+
+static bool IsScrollbarWidthThin(nsIFrame* aFrame) {
+  ComputedStyle* style = nsLayoutUtils::StyleForScrollbar(aFrame);
+  auto scrollbarWidth = style->StyleUIReset()->mScrollbarWidth;
+  return scrollbarWidth == StyleScrollbarWidth::Thin;
+}
+
 /* static */
-auto nsNativeBasicTheme::GetDPIRatio(nsIFrame* aFrame) -> DPIRatio {
+auto nsNativeBasicTheme::GetDPIRatioForScrollbarPart(nsPresContext* aPc)
+    -> DPIRatio {
   return DPIRatio(float(AppUnitsPerCSSPixel()) /
-                  aFrame->PresContext()
-                      ->DeviceContext()
-                      ->AppUnitsPerDevPixelAtUnitFullZoom());
+                  aPc->DeviceContext()->AppUnitsPerDevPixelAtUnitFullZoom());
+}
+
+/* static */
+auto nsNativeBasicTheme::GetDPIRatio(nsPresContext* aPc,
+                                     StyleAppearance aAppearance) -> DPIRatio {
+  // Widgets react to zoom, except scrollbars.
+  if (IsWidgetScrollbarPart(aAppearance)) {
+    return GetDPIRatioForScrollbarPart(aPc);
+  }
+  return DPIRatio(float(AppUnitsPerCSSPixel()) / aPc->AppUnitsPerDevPixel());
+}
+
+/* static */
+auto nsNativeBasicTheme::GetDPIRatio(nsIFrame* aFrame,
+                                     StyleAppearance aAppearance) -> DPIRatio {
+  return GetDPIRatio(aFrame->PresContext(), aAppearance);
 }
 
 /* static */
@@ -44,12 +97,6 @@ bool nsNativeBasicTheme::IsDateTimeResetButton(nsIFrame* aFrame) {
     }
   }
   return false;
-}
-
-/* static */
-bool nsNativeBasicTheme::IsDateTimeTextField(nsIFrame* aFrame) {
-  nsDateTimeControlFrame* dateTimeFrame = do_QueryFrame(aFrame);
-  return dateTimeFrame;
 }
 
 /* static */
@@ -78,26 +125,6 @@ LayoutDeviceRect nsNativeBasicTheme::FixAspectRatio(
   }
 
   return rect;
-}
-
-/* static */
-void nsNativeBasicTheme::GetFocusStrokeRect(DrawTarget* aDrawTarget,
-                                            LayoutDeviceRect& aFocusRect,
-                                            LayoutDeviceCoord aOffset,
-                                            const LayoutDeviceCoord aRadius,
-                                            LayoutDeviceCoord aFocusWidth,
-                                            RefPtr<Path>& aOutRect) {
-  RectCornerRadii radii(aRadius, aRadius, aRadius, aRadius);
-  aFocusRect.y -= aOffset;
-  aFocusRect.x -= aOffset;
-  aFocusRect.width += 2.0f * aOffset;
-  aFocusRect.height += 2.0f * aOffset;
-  // Deflate the rect by half the border width, so that the middle of the
-  // stroke fills exactly the area we want to fill and not more.
-  LayoutDeviceRect focusRect(aFocusRect);
-  focusRect.Deflate(aFocusWidth * 0.5f);
-  aOutRect =
-      MakePathForRoundedRect(*aDrawTarget, focusRect.ToUnknownRect(), radii);
 }
 
 std::pair<sRGBColor, sRGBColor> nsNativeBasicTheme::ComputeCheckboxColors(
@@ -155,7 +182,7 @@ std::pair<sRGBColor, sRGBColor> nsNativeBasicTheme::ComputeRadioCheckmarkColors(
     const EventStates& aState) {
   auto [unusedColor, checkColor] =
       ComputeCheckboxColors(aState, StyleAppearance::Radio);
-  (void)unusedColor;
+  Unused << unusedColor;
 
   return std::make_pair(sColorWhite, checkColor);
 }
@@ -311,14 +338,12 @@ sRGBColor nsNativeBasicTheme::ComputeMenulistArrowButtonColor(
 }
 
 std::array<sRGBColor, 3> nsNativeBasicTheme::ComputeFocusRectColors() {
-  std::array<sRGBColor, 3> colors = {sColorAccent, sColorWhiteAlpha80,
-                                     sColorAccentLight};
-  return colors;
+  return {sColorAccent, sColorWhiteAlpha80, sColorAccentLight};
 }
 
-sRGBColor nsNativeBasicTheme::ComputeScrollbarColor(
-    const ComputedStyle& aStyle, const EventStates& aDocumentState,
-    bool aIsRoot) {
+std::pair<sRGBColor, sRGBColor> nsNativeBasicTheme::ComputeScrollbarColors(
+    nsIFrame* aFrame, const ComputedStyle& aStyle,
+    const EventStates& aDocumentState) {
   const nsStyleUI* ui = aStyle.StyleUI();
   nscolor color;
   if (ui->mScrollbarColor.IsColors()) {
@@ -330,18 +355,12 @@ sRGBColor nsNativeBasicTheme::ComputeScrollbarColor(
     color = LookAndFeel::GetColor(LookAndFeel::ColorID::ThemedScrollbar,
                                   sScrollbarColor.ToABGR());
   }
-  if (aIsRoot) {
-    // Root scrollbars must be opaque.
-    nscolor bg = LookAndFeel::GetColor(LookAndFeel::ColorID::WindowBackground,
-                                       NS_RGB(0xff, 0xff, 0xff));
-    color = NS_ComposeColors(bg, color);
-  }
-  return gfx::sRGBColor::FromABGR(color);
+  return std::make_pair(gfx::sRGBColor::FromABGR(color), sScrollbarBorderColor);
 }
 
-sRGBColor nsNativeBasicTheme::ComputeScrollbarthumbColor(
-    const ComputedStyle& aStyle, const EventStates& aElementState,
-    const EventStates& aDocumentState) {
+sRGBColor nsNativeBasicTheme::ComputeScrollbarThumbColor(
+    nsIFrame* aFrame, const ComputedStyle& aStyle,
+    const EventStates& aElementState, const EventStates& aDocumentState) {
   const nsStyleUI* ui = aStyle.StyleUI();
   nscolor color;
   if (ui->mScrollbarColor.IsColors()) {
@@ -365,107 +384,170 @@ sRGBColor nsNativeBasicTheme::ComputeScrollbarthumbColor(
   return gfx::sRGBColor::FromABGR(color);
 }
 
+std::array<sRGBColor, 3> nsNativeBasicTheme::ComputeScrollbarButtonColors(
+    nsIFrame* aFrame, StyleAppearance aAppearance, const ComputedStyle& aStyle,
+    const EventStates& aElementState, const EventStates& aDocumentState) {
+  bool isActive = aElementState.HasState(NS_EVENT_STATE_ACTIVE);
+  bool isHovered = aElementState.HasState(NS_EVENT_STATE_HOVER);
+
+  bool hasCustomColor = aStyle.StyleUI()->mScrollbarColor.IsColors();
+  sRGBColor buttonColor;
+  if (hasCustomColor) {
+    // When scrollbar-color is in use, use the thumb color for the button.
+    buttonColor = ComputeScrollbarThumbColor(aFrame, aStyle, aElementState,
+                                             aDocumentState);
+  } else if (isActive) {
+    buttonColor = sScrollbarButtonActiveColor;
+  } else if (!hasCustomColor && isHovered) {
+    buttonColor = sScrollbarButtonHoverColor;
+  } else {
+    buttonColor = sScrollbarColor;
+  }
+
+  sRGBColor arrowColor;
+  if (hasCustomColor) {
+    // When scrollbar-color is in use, derive the arrow color from the button
+    // color.
+    nscolor bg = buttonColor.ToABGR();
+    bool darken = NS_GetLuminosity(bg) >= NS_MAX_LUMINOSITY / 2;
+    if (isActive) {
+      float c = darken ? 0.0f : 1.0f;
+      arrowColor = sRGBColor(c, c, c);
+    } else {
+      uint8_t c = darken ? 0 : 255;
+      arrowColor =
+          sRGBColor::FromABGR(NS_ComposeColors(bg, NS_RGBA(c, c, c, 160)));
+    }
+  } else if (isActive) {
+    arrowColor = sScrollbarArrowColorActive;
+  } else if (isHovered) {
+    arrowColor = sScrollbarArrowColorHover;
+  } else {
+    arrowColor = sScrollbarArrowColor;
+  }
+
+  return {buttonColor, arrowColor, sScrollbarBorderColor};
+}
+
+static already_AddRefed<Path> GetFocusStrokePath(
+    DrawTarget* aDrawTarget, LayoutDeviceRect& aFocusRect,
+    LayoutDeviceCoord aOffset, const LayoutDeviceCoord aRadius,
+    LayoutDeviceCoord aFocusWidth) {
+  RectCornerRadii radii(aRadius, aRadius, aRadius, aRadius);
+  aFocusRect.Inflate(aOffset);
+
+  LayoutDeviceRect focusRect(aFocusRect);
+  // Deflate the rect by half the border width, so that the middle of the
+  // stroke fills exactly the area we want to fill and not more.
+  focusRect.Deflate(aFocusWidth * 0.5f);
+
+  return MakePathForRoundedRect(*aDrawTarget, focusRect.ToUnknownRect(), radii);
+}
+
 void nsNativeBasicTheme::PaintRoundedFocusRect(DrawTarget* aDrawTarget,
                                                const LayoutDeviceRect& aRect,
                                                DPIRatio aDpiRatio,
                                                CSSCoord aRadius,
                                                CSSCoord aOffset) {
-  // NOTE(emilio): If the widths or offsets here change, make sure to tweak the
-  // GetWidgetOverflow path for FocusOutline.
+  // NOTE(emilio): If the widths or offsets here change, make sure to tweak
+  // the GetWidgetOverflow path for FocusOutline.
   auto [innerColor, middleColor, outerColor] = ComputeFocusRectColors();
+
   LayoutDeviceRect focusRect(aRect);
-  RefPtr<Path> roundedRect;
+
+  // The focus rect is painted outside of the border area (aRect), see:
+  //
+  //   data:text/html,<div style="border: 1px solid; outline: 2px solid
+  //   red">Foobar</div>
+  //
+  // But some controls might provide a negative offset to cover the border, if
+  // necessary.
   LayoutDeviceCoord offset = aOffset * aDpiRatio;
-  LayoutDeviceCoord strokeRadius((aRadius * aDpiRatio) + offset);
-  LayoutDeviceCoord strokeWidth(CSSCoord(2.0f) * aDpiRatio);
-  GetFocusStrokeRect(aDrawTarget, focusRect, offset, strokeRadius, strokeWidth,
-                     roundedRect);
+  LayoutDeviceCoord strokeWidth = CSSCoord(2.0f) * aDpiRatio;
+  focusRect.Inflate(strokeWidth);
+
+  LayoutDeviceCoord strokeRadius = aRadius * aDpiRatio;
+  RefPtr<Path> roundedRect = GetFocusStrokePath(aDrawTarget, focusRect, offset,
+                                                strokeRadius, strokeWidth);
   aDrawTarget->Stroke(roundedRect, ColorPattern(ToDeviceColor(innerColor)),
                       StrokeOptions(strokeWidth));
 
   offset = CSSCoord(1.0f) * aDpiRatio;
   strokeRadius += offset;
   strokeWidth = CSSCoord(1.0f) * aDpiRatio;
-  GetFocusStrokeRect(aDrawTarget, focusRect, offset, strokeRadius, strokeWidth,
-                     roundedRect);
+  roundedRect = GetFocusStrokePath(aDrawTarget, focusRect, offset, strokeRadius,
+                                   strokeWidth);
   aDrawTarget->Stroke(roundedRect, ColorPattern(ToDeviceColor(middleColor)),
                       StrokeOptions(strokeWidth));
 
   offset = CSSCoord(2.0f) * aDpiRatio;
   strokeRadius += offset;
   strokeWidth = CSSCoord(2.0f) * aDpiRatio;
-  GetFocusStrokeRect(aDrawTarget, focusRect, offset, strokeRadius, strokeWidth,
-                     roundedRect);
+  roundedRect = GetFocusStrokePath(aDrawTarget, focusRect, offset, strokeRadius,
+                                   strokeWidth);
   aDrawTarget->Stroke(roundedRect, ColorPattern(ToDeviceColor(outerColor)),
                       StrokeOptions(strokeWidth));
-}
-
-void nsNativeBasicTheme::PaintRoundedRect(DrawTarget* aDrawTarget,
-                                          const LayoutDeviceRect& aRect,
-                                          const sRGBColor& aBackgroundColor,
-                                          const sRGBColor& aBorderColor,
-                                          CSSCoord aBorderWidth,
-                                          RectCornerRadii aDpiAdjustedRadii,
-                                          DPIRatio aDpiRatio) {
-  const LayoutDeviceCoord borderWidth(aBorderWidth * aDpiRatio);
-
-  LayoutDeviceRect rect(aRect);
-  // Deflate the rect by half the border width, so that the middle of the stroke
-  // fills exactly the area we want to fill and not more.
-  rect.Deflate(borderWidth * 0.5f);
-
-  RefPtr<Path> roundedRect = MakePathForRoundedRect(
-      *aDrawTarget, rect.ToUnknownRect(), aDpiAdjustedRadii);
-
-  aDrawTarget->Fill(roundedRect, ColorPattern(ToDeviceColor(aBackgroundColor)));
-  aDrawTarget->Stroke(roundedRect, ColorPattern(ToDeviceColor(aBorderColor)),
-                      StrokeOptions(borderWidth));
 }
 
 void nsNativeBasicTheme::PaintRoundedRectWithRadius(
     DrawTarget* aDrawTarget, const LayoutDeviceRect& aRect,
     const sRGBColor& aBackgroundColor, const sRGBColor& aBorderColor,
     CSSCoord aBorderWidth, CSSCoord aRadius, DPIRatio aDpiRatio) {
-  const LayoutDeviceCoord radius(aRadius * aDpiRatio);
+  const LayoutDeviceCoord borderWidth(SnapBorderWidth(aBorderWidth, aDpiRatio));
+
+  LayoutDeviceRect rect(aRect);
+  // Deflate the rect by half the border width, so that the middle of the
+  // stroke fills exactly the area we want to fill and not more.
+  rect.Deflate(borderWidth * 0.5f);
+
+  LayoutDeviceCoord radius(aRadius * aDpiRatio);
+  // Fix up the radius if it's too large with the rect we're going to paint.
+  {
+    LayoutDeviceCoord min = std::min(rect.width, rect.height);
+    if (radius * 2.0f > min) {
+      radius = min * 0.5f;
+    }
+  }
+
   RectCornerRadii radii(radius, radius, radius, radius);
-  PaintRoundedRect(aDrawTarget, aRect, aBackgroundColor, aBorderColor,
-                   aBorderWidth, radii, aDpiRatio);
+  RefPtr<Path> roundedRect =
+      MakePathForRoundedRect(*aDrawTarget, rect.ToUnknownRect(), radii);
+
+  aDrawTarget->Fill(roundedRect, ColorPattern(ToDeviceColor(aBackgroundColor)));
+  aDrawTarget->Stroke(roundedRect, ColorPattern(ToDeviceColor(aBorderColor)),
+                      StrokeOptions(borderWidth));
 }
 
 void nsNativeBasicTheme::PaintCheckboxControl(DrawTarget* aDrawTarget,
                                               const LayoutDeviceRect& aRect,
                                               const EventStates& aState,
                                               DPIRatio aDpiRatio) {
-  const CSSCoord borderWidth = 2.0f;
   const CSSCoord radius = 2.0f;
   auto [backgroundColor, borderColor] =
       ComputeCheckboxColors(aState, StyleAppearance::Checkbox);
   PaintRoundedRectWithRadius(aDrawTarget, aRect, backgroundColor, borderColor,
-                             borderWidth, radius, aDpiRatio);
+                             kCheckboxRadioBorderWidth, radius, aDpiRatio);
 
   if (aState.HasState(NS_EVENT_STATE_FOCUSRING)) {
-    PaintRoundedFocusRect(aDrawTarget, aRect, aDpiRatio, radius, 3.0f);
+    PaintRoundedFocusRect(aDrawTarget, aRect, aDpiRatio, 5.0f, 1.0f);
   }
 }
 
-// Returns the right scale to cover aRect in the smaller dimension, accounting
-// for aDpiRatio.
-static float ScaleToWidgetRect(const LayoutDeviceRect& aRect,
-                               nsNativeBasicTheme::DPIRatio aDpiRatio) {
+// Returns the right scale to cover aRect in the smaller dimension.
+static float ScaleToWidgetRect(const LayoutDeviceRect& aRect) {
   return std::min(aRect.width, aRect.height) / kMinimumWidgetSize;
 }
 
 void nsNativeBasicTheme::PaintCheckMark(DrawTarget* aDrawTarget,
                                         const LayoutDeviceRect& aRect,
-                                        const EventStates& aState,
-                                        DPIRatio aDpiRatio) {
+                                        const EventStates& aState) {
   // Points come from the coordinates on a 14X14 unit box centered at 0,0
   const float checkPolygonX[] = {-4.5f, -1.5f, -0.5f, 5.0f, 4.75f,
                                  3.5f,  -0.5f, -1.5f, -3.5f};
   const float checkPolygonY[] = {0.5f,  4.0f, 4.0f,  -2.5f, -4.0f,
                                  -4.0f, 1.0f, 1.25f, -1.0f};
   const int32_t checkNumPoints = sizeof(checkPolygonX) / sizeof(float);
-  const float scale = ScaleToWidgetRect(aRect, aDpiRatio);
+  const float scale = ScaleToWidgetRect(aRect);
   auto center = aRect.Center().ToUnknownPoint();
 
   RefPtr<PathBuilder> builder = aDrawTarget->CreatePathBuilder();
@@ -483,10 +565,9 @@ void nsNativeBasicTheme::PaintCheckMark(DrawTarget* aDrawTarget,
 
 void nsNativeBasicTheme::PaintIndeterminateMark(DrawTarget* aDrawTarget,
                                                 const LayoutDeviceRect& aRect,
-                                                const EventStates& aState,
-                                                DPIRatio aDpiRatio) {
+                                                const EventStates& aState) {
   const CSSCoord borderWidth = 2.0f;
-  const float scale = ScaleToWidgetRect(aRect, aDpiRatio);
+  const float scale = ScaleToWidgetRect(aRect);
 
   Rect rect = aRect.ToUnknownRect();
   rect.y += (rect.height / 2) - (borderWidth * scale / 2);
@@ -576,7 +657,7 @@ void nsNativeBasicTheme::PaintRadioControl(DrawTarget* aDrawTarget,
                       borderWidth, aDpiRatio);
 
   if (aState.HasState(NS_EVENT_STATE_FOCUSRING)) {
-    PaintRoundedFocusRect(aDrawTarget, aRect, aDpiRatio, 2.0f, 3.0f);
+    PaintRoundedFocusRect(aDrawTarget, aRect, aDpiRatio, 5.0f, 1.0f);
   }
 }
 
@@ -585,14 +666,11 @@ void nsNativeBasicTheme::PaintRadioCheckmark(DrawTarget* aDrawTarget,
                                              const EventStates& aState,
                                              DPIRatio aDpiRatio) {
   const CSSCoord borderWidth = 2.0f;
-  const float scale = ScaleToWidgetRect(aRect, aDpiRatio);
+  const float scale = ScaleToWidgetRect(aRect);
   auto [backgroundColor, checkColor] = ComputeRadioCheckmarkColors(aState);
 
   LayoutDeviceRect rect(aRect);
-  rect.y += borderWidth * scale;
-  rect.x += borderWidth * scale;
-  rect.height -= borderWidth * scale * 2;
-  rect.width -= borderWidth * scale * 2;
+  rect.Deflate(borderWidth * scale);
 
   PaintStrokedEllipse(aDrawTarget, rect, checkColor, backgroundColor,
                       borderWidth, aDpiRatio);
@@ -610,7 +688,8 @@ void nsNativeBasicTheme::PaintTextField(DrawTarget* aDrawTarget,
                              kTextFieldBorderWidth, radius, aDpiRatio);
 
   if (aState.HasState(NS_EVENT_STATE_FOCUSRING)) {
-    PaintRoundedFocusRect(aDrawTarget, aRect, aDpiRatio, radius, 0.0f);
+    PaintRoundedFocusRect(aDrawTarget, aRect, aDpiRatio, radius,
+                          -kTextFieldBorderWidth);
   }
 }
 
@@ -625,7 +704,8 @@ void nsNativeBasicTheme::PaintListbox(DrawTarget* aDrawTarget,
                              kMenulistBorderWidth, radius, aDpiRatio);
 
   if (aState.HasState(NS_EVENT_STATE_FOCUSRING)) {
-    PaintRoundedFocusRect(aDrawTarget, aRect, aDpiRatio, radius, 0.0f);
+    PaintRoundedFocusRect(aDrawTarget, aRect, aDpiRatio, radius,
+                          -kMenulistBorderWidth);
   }
 }
 
@@ -640,59 +720,46 @@ void nsNativeBasicTheme::PaintMenulist(DrawTarget* aDrawTarget,
                              kMenulistBorderWidth, radius, aDpiRatio);
 
   if (aState.HasState(NS_EVENT_STATE_FOCUSRING)) {
-    PaintRoundedFocusRect(aDrawTarget, aRect, aDpiRatio, radius, 0.0f);
+    PaintRoundedFocusRect(aDrawTarget, aRect, aDpiRatio, radius,
+                          -kMenulistBorderWidth);
   }
 }
 
-void nsNativeBasicTheme::PaintArrow(
-    DrawTarget* aDrawTarget, const LayoutDeviceRect& aRect,
-    const int32_t aArrowPolygonX[], const int32_t aArrowPolygonY[],
-    const int32_t aArrowNumPoints, const int32_t aArrowSize,
-    const sRGBColor aFillColor, DPIRatio aDpiRatio) {
-  nscoord paintScale = std::min(aRect.width, aRect.height) / aArrowSize;
-  RefPtr<PathBuilder> builder = aDrawTarget->CreatePathBuilder();
-  auto center = aRect.Center().ToUnknownPoint();
-  Point p = center + Point(aArrowPolygonX[0] * paintScale,
-                           aArrowPolygonY[0] * paintScale);
+void nsNativeBasicTheme::PaintArrow(DrawTarget* aDrawTarget,
+                                    const LayoutDeviceRect& aRect,
+                                    const float aArrowPolygonX[],
+                                    const float aArrowPolygonY[],
+                                    const int32_t aArrowNumPoints,
+                                    const sRGBColor aFillColor) {
+  const float scale = ScaleToWidgetRect(aRect);
 
+  auto center = aRect.Center().ToUnknownPoint();
+
+  RefPtr<PathBuilder> builder = aDrawTarget->CreatePathBuilder();
+  Point p =
+      center + Point(aArrowPolygonX[0] * scale, aArrowPolygonY[0] * scale);
   builder->MoveTo(p);
-  for (int32_t polyIndex = 1; polyIndex < aArrowNumPoints; polyIndex++) {
-    p = center + Point(aArrowPolygonX[polyIndex] * paintScale,
-                       aArrowPolygonY[polyIndex] * paintScale);
+  for (int32_t i = 1; i < aArrowNumPoints; i++) {
+    p = center + Point(aArrowPolygonX[i] * scale, aArrowPolygonY[i] * scale);
     builder->LineTo(p);
   }
   RefPtr<Path> path = builder->Finish();
 
-  aDrawTarget->Stroke(path, ColorPattern(ToDeviceColor(aFillColor)),
-                      StrokeOptions(CSSCoord(2.0f) * aDpiRatio));
+  aDrawTarget->Fill(path, ColorPattern(ToDeviceColor(aFillColor)));
 }
 
 void nsNativeBasicTheme::PaintMenulistArrowButton(nsIFrame* aFrame,
                                                   DrawTarget* aDrawTarget,
                                                   const LayoutDeviceRect& aRect,
-                                                  const EventStates& aState,
-                                                  DPIRatio aDpiRatio) {
+                                                  const EventStates& aState) {
   const float arrowPolygonX[] = {-3.5f, -0.5f, 0.5f,  3.5f,  3.5f,
-                                 3.0f,  0.5f,  -0.5f, -3.0f, -3.5};
+                                 3.0f,  0.5f,  -0.5f, -3.0f, -3.5f};
   const float arrowPolygonY[] = {-0.5f, 2.5f, 2.5f, -0.5f, -2.0f,
                                  -2.0f, 1.0f, 1.0f, -2.0f, -2.0f};
-
-  const int32_t arrowNumPoints = sizeof(arrowPolygonX) / sizeof(float);
-  const float scale = ScaleToWidgetRect(aRect, aDpiRatio);
-
-  auto center = aRect.Center().ToUnknownPoint();
-
-  RefPtr<PathBuilder> builder = aDrawTarget->CreatePathBuilder();
-  Point p = center + Point(arrowPolygonX[0] * scale, arrowPolygonY[0] * scale);
-  builder->MoveTo(p);
-  for (int32_t i = 1; i < arrowNumPoints; i++) {
-    p = center + Point(arrowPolygonX[i] * scale, arrowPolygonY[i] * scale);
-    builder->LineTo(p);
-  }
-  RefPtr<Path> path = builder->Finish();
-
+  const int32_t arrowNumPoints = ArrayLength(arrowPolygonX);
   sRGBColor arrowColor = ComputeMenulistArrowButtonColor(aState);
-  aDrawTarget->Fill(path, ColorPattern(ToDeviceColor(arrowColor)));
+  PaintArrow(aDrawTarget, aRect, arrowPolygonX, arrowPolygonY, arrowNumPoints,
+             arrowColor);
 }
 
 void nsNativeBasicTheme::PaintSpinnerButton(nsIFrame* aFrame,
@@ -703,49 +770,28 @@ void nsNativeBasicTheme::PaintSpinnerButton(nsIFrame* aFrame,
                                             DPIRatio aDpiRatio) {
   auto [backgroundColor, borderColor] = ComputeButtonColors(aState);
 
-  RefPtr<Path> pathRect = MakePathForRect(*aDrawTarget, aRect.ToUnknownRect());
+  aDrawTarget->FillRect(aRect.ToUnknownRect(),
+                        ColorPattern(ToDeviceColor(backgroundColor)));
 
-  aDrawTarget->Fill(pathRect, ColorPattern(ToDeviceColor(backgroundColor)));
+  const float arrowPolygonX[] = {-5.25f, -0.75f, 0.75f,  5.25f, 5.25f,
+                                 4.5f,   0.75f,  -0.75f, -4.5f, -5.25f};
+  const float arrowPolygonY[] = {-1.875f, 2.625f, 2.625f, -1.875f, -4.125f,
+                                 -4.125f, 0.375f, 0.375f, -4.125f, -4.125f};
+  const int32_t arrowNumPoints = ArrayLength(arrowPolygonX);
+  const float scaleX = ScaleToWidgetRect(aRect);
+  const float scaleY =
+      aAppearance == StyleAppearance::SpinnerDownbutton ? scaleX : -scaleX;
 
   RefPtr<PathBuilder> builder = aDrawTarget->CreatePathBuilder();
-  Point p;
-  if (IsFrameRTL(aFrame)) {
-    p = Point(aRect.x + aRect.width - 0.5f, aRect.y);
-  } else {
-    p = Point(aRect.x - 0.5f, aRect.y);
-  }
-  builder->MoveTo(p);
-  p = Point(p.x, p.y + aRect.height);
-  builder->LineTo(p);
-  RefPtr<Path> path = builder->Finish();
-
-  aDrawTarget->Stroke(path, ColorPattern(ToDeviceColor(borderColor)),
-                      StrokeOptions(kSpinnerBorderWidth * aDpiRatio));
-
-  const float arrowPolygonX[] = {-3.5f, -0.5f, 0.5f,  3.5f,  3.5f,
-                                 3.0f,  0.5f,  -0.5f, -3.0f, -3.5};
-  float arrowPolygonY[] = {-3.5f, -0.5f, -0.5f, -3.5f, -5.0f,
-                           -5.0f, -2.0f, -2.0f, -5.0f, -5.0f};
-
-  const int32_t arrowNumPoints = sizeof(arrowPolygonX) / sizeof(float);
-  const float scale = ScaleToWidgetRect(aRect, aDpiRatio);
-
-  if (aAppearance == StyleAppearance::SpinnerUpbutton) {
-    for (int32_t i = 0; i < arrowNumPoints; i++) {
-      arrowPolygonY[i] *= -1;
-    }
-  }
-
   auto center = aRect.Center().ToUnknownPoint();
-
-  builder = aDrawTarget->CreatePathBuilder();
-  p = center + Point(arrowPolygonX[0] * scale, arrowPolygonY[0] * scale);
+  Point p =
+      center + Point(arrowPolygonX[0] * scaleX, arrowPolygonY[0] * scaleY);
   builder->MoveTo(p);
   for (int32_t i = 1; i < arrowNumPoints; i++) {
-    p = center + Point(arrowPolygonX[i] * scale, arrowPolygonY[i] * scale);
+    p = center + Point(arrowPolygonX[i] * scaleX, arrowPolygonY[i] * scaleY);
     builder->LineTo(p);
   }
-  path = builder->Finish();
+  RefPtr<Path> path = builder->Finish();
   aDrawTarget->Fill(path, ColorPattern(ToDeviceColor(borderColor)));
 }
 
@@ -842,133 +888,63 @@ void nsNativeBasicTheme::PaintRange(nsIFrame* aFrame, DrawTarget* aDrawTarget,
                       thumbBorderWidth, aDpiRatio);
 
   if (aState.HasState(NS_EVENT_STATE_FOCUSRING)) {
-    PaintRoundedFocusRect(aDrawTarget, aRect, aDpiRatio, radius, 3.0f);
+    PaintRoundedFocusRect(aDrawTarget, aRect, aDpiRatio, radius, 1.0f);
   }
 }
 
-void nsNativeBasicTheme::PaintProgressBar(DrawTarget* aDrawTarget,
-                                          const LayoutDeviceRect& aRect,
-                                          const EventStates& aState,
-                                          DPIRatio aDpiRatio) {
-  const CSSCoord borderWidth = 1.0f;
-  const CSSCoord radius = 2.0f;
+// TODO: Vertical.
+// TODO: Indeterminate state.
+void nsNativeBasicTheme::PaintProgress(
+    nsIFrame* aFrame, DrawTarget* aDrawTarget, const LayoutDeviceRect& aRect,
+    const EventStates& aState, DPIRatio aDpiRatio, bool aIsMeter, bool aBar) {
+  auto [backgroundColor, borderColor] = [&] {
+    if (aIsMeter) {
+      return aBar ? ComputeMeterTrackColors() : ComputeMeterchunkColors(aState);
+    }
+    return aBar ? ComputeProgressTrackColors() : ComputeProgressColors();
+  }();
 
+  const CSSCoord borderWidth = 1.0f;
+  const CSSCoord radius = aIsMeter ? 5.0f : 2.0f;
+
+  // Center it vertically.
   LayoutDeviceRect rect(aRect);
-  const LayoutDeviceCoord height = kProgressbarHeight * aDpiRatio;
+  const LayoutDeviceCoord height =
+      (aIsMeter ? kMeterHeight : kProgressbarHeight) * aDpiRatio;
   rect.y += (rect.height - height) / 2;
   rect.height = height;
 
-  auto [trackColor, trackBorderColor] = ComputeProgressTrackColors();
-
-  PaintRoundedRectWithRadius(aDrawTarget, rect, trackColor, trackBorderColor,
-                             borderWidth, radius, aDpiRatio);
-}
-
-void nsNativeBasicTheme::PaintProgresschunk(nsIFrame* aFrame,
-                                            DrawTarget* aDrawTarget,
-                                            const LayoutDeviceRect& aRect,
-                                            const EventStates& aState,
-                                            DPIRatio aDpiRatio) {
-  // TODO: vertical?
-  // TODO: Address artifacts when position is between 0 and radius + border.
-  // TODO: Handle indeterminate case.
-  nsProgressFrame* progressFrame = do_QueryFrame(aFrame->GetParent());
-  if (!progressFrame) {
-    return;
+  // This is the progress chunk, clip it to the right amount.
+  if (!aBar) {
+    double position = [&] {
+      if (aIsMeter) {
+        auto* meter = dom::HTMLMeterElement::FromNode(aFrame->GetContent());
+        if (!meter) {
+          return 0.0;
+        }
+        return meter->Value() / meter->Max();
+      }
+      auto* progress = dom::HTMLProgressElement::FromNode(aFrame->GetContent());
+      if (!progress) {
+        return 0.0;
+      }
+      return progress->Value() / progress->Max();
+    }();
+    LayoutDeviceRect clipRect = rect;
+    double clipWidth = rect.width * position;
+    clipRect.width = clipWidth;
+    if (IsFrameRTL(aFrame)) {
+      clipRect.x += rect.width - clipWidth;
+    }
+    aDrawTarget->PushClipRect(clipRect.ToUnknownRect());
   }
-
-  const CSSCoord borderWidth = 1.0f;
-  const LayoutDeviceCoord radius = CSSCoord(2.0f) * aDpiRatio;
-  LayoutDeviceCoord progressEndRadius = 0.0f;
-
-  LayoutDeviceRect rect(aRect);
-  const LayoutDeviceCoord height = kProgressbarHeight * aDpiRatio;
-  rect.y += (rect.height - height) / 2;
-  rect.height = height;
-
-  double position = GetProgressValue(aFrame) / GetProgressMaxValue(aFrame);
-  if (rect.width - (rect.width * position) <
-      (borderWidth * aDpiRatio + radius)) {
-    // Round corners when the progress chunk approaches the maximum value to
-    // avoid artifacts.
-    progressEndRadius = radius;
-  }
-  RectCornerRadii radii;
-  if (IsFrameRTL(aFrame)) {
-    radii =
-        RectCornerRadii(progressEndRadius, radius, radius, progressEndRadius);
-  } else {
-    radii =
-        RectCornerRadii(radius, progressEndRadius, progressEndRadius, radius);
-  }
-
-  auto [progressColor, progressBorderColor] = ComputeProgressColors();
-
-  PaintRoundedRect(aDrawTarget, rect, progressColor, progressBorderColor,
-                   borderWidth, radii, aDpiRatio);
-}
-
-void nsNativeBasicTheme::PaintMeter(DrawTarget* aDrawTarget,
-                                    const LayoutDeviceRect& aRect,
-                                    const EventStates& aState,
-                                    DPIRatio aDpiRatio) {
-  const CSSCoord borderWidth = 1.0f;
-  const CSSCoord radius = 5.0f;
-
-  LayoutDeviceRect rect(aRect);
-  const LayoutDeviceCoord height = kMeterHeight * aDpiRatio;
-  rect.y += (rect.height - height) / 2;
-  rect.height = height;
-
-  auto [backgroundColor, borderColor] = ComputeMeterTrackColors();
 
   PaintRoundedRectWithRadius(aDrawTarget, rect, backgroundColor, borderColor,
                              borderWidth, radius, aDpiRatio);
-}
 
-void nsNativeBasicTheme::PaintMeterchunk(nsIFrame* aFrame,
-                                         DrawTarget* aDrawTarget,
-                                         const LayoutDeviceRect& aRect,
-                                         DPIRatio aDpiRatio) {
-  // TODO: Address artifacts when position is between 0 and (radius + border).
-  nsMeterFrame* meterFrame = do_QueryFrame(aFrame->GetParent());
-  if (!meterFrame) {
-    return;
+  if (!aBar) {
+    aDrawTarget->PopClip();
   }
-
-  const CSSCoord borderWidth = 1.0f;
-  const LayoutDeviceCoord radius = CSSCoord(5.0f) * aDpiRatio;
-  LayoutDeviceCoord progressEndRadius = 0.0f;
-
-  LayoutDeviceRect rect(aRect);
-  const LayoutDeviceCoord height = kMeterHeight * aDpiRatio;
-  rect.y += (rect.height - height) / 2;
-  rect.height = height;
-
-  auto* meter =
-      static_cast<mozilla::dom::HTMLMeterElement*>(meterFrame->GetContent());
-  double value = meter->Value();
-  double max = meter->Max();
-  double position = value / max;
-  if (rect.width - (rect.width * position) <
-      (borderWidth * aDpiRatio + radius)) {
-    // Round corners when the progress chunk approaches the maximum value to
-    // avoid artifacts.
-    progressEndRadius = radius;
-  }
-  RectCornerRadii radii;
-  if (IsFrameRTL(aFrame)) {
-    radii =
-        RectCornerRadii(progressEndRadius, radius, radius, progressEndRadius);
-  } else {
-    radii =
-        RectCornerRadii(radius, progressEndRadius, progressEndRadius, radius);
-  }
-
-  auto [chunkColor, borderColor] = ComputeMeterchunkColors(meter->State());
-
-  PaintRoundedRect(aDrawTarget, rect, chunkColor, borderColor, borderWidth,
-                   radii, aDpiRatio);
 }
 
 void nsNativeBasicTheme::PaintButton(nsIFrame* aFrame, DrawTarget* aDrawTarget,
@@ -982,7 +958,8 @@ void nsNativeBasicTheme::PaintButton(nsIFrame* aFrame, DrawTarget* aDrawTarget,
                              kButtonBorderWidth, radius, aDpiRatio);
 
   if (aState.HasState(NS_EVENT_STATE_FOCUSRING)) {
-    PaintRoundedFocusRect(aDrawTarget, aRect, aDpiRatio, radius, 0.0f);
+    PaintRoundedFocusRect(aDrawTarget, aRect, aDpiRatio, radius,
+                          -kButtonBorderWidth);
   }
 }
 
@@ -994,7 +971,8 @@ void nsNativeBasicTheme::PaintScrollbarThumb(DrawTarget* aDrawTarget,
                                              const EventStates& aDocumentState,
                                              DPIRatio aDpiRatio) {
   sRGBColor thumbColor =
-      ComputeScrollbarthumbColor(aStyle, aElementState, aDocumentState);
+      ComputeScrollbarThumbColor(aFrame, aStyle, aElementState, aDocumentState);
+
   aDrawTarget->FillRect(aRect.ToUnknownRect(),
                         ColorPattern(ToDeviceColor(thumbColor)));
 }
@@ -1004,7 +982,7 @@ void nsNativeBasicTheme::PaintScrollbarTrack(DrawTarget* aDrawTarget,
                                              bool aHorizontal, nsIFrame* aFrame,
                                              const ComputedStyle& aStyle,
                                              const EventStates& aDocumentState,
-                                             DPIRatio aDpiRatio, bool aIsRoot) {
+                                             DPIRatio aDpiRatio) {
   // Draw nothing by default. Subclasses can override this.
 }
 
@@ -1013,9 +991,9 @@ void nsNativeBasicTheme::PaintScrollbar(DrawTarget* aDrawTarget,
                                         bool aHorizontal, nsIFrame* aFrame,
                                         const ComputedStyle& aStyle,
                                         const EventStates& aDocumentState,
-                                        DPIRatio aDpiRatio, bool aIsRoot) {
-  sRGBColor scrollbarColor =
-      ComputeScrollbarColor(aStyle, aDocumentState, aIsRoot);
+                                        DPIRatio aDpiRatio) {
+  auto [scrollbarColor, borderColor] =
+      ComputeScrollbarColors(aFrame, aStyle, aDocumentState);
   aDrawTarget->FillRect(aRect.ToUnknownRect(),
                         ColorPattern(ToDeviceColor(scrollbarColor)));
   // FIXME(heycam): We should probably derive the border color when custom
@@ -1030,8 +1008,7 @@ void nsNativeBasicTheme::PaintScrollbar(DrawTarget* aDrawTarget,
         (aHorizontal ? strokeRect.TopRight() : strokeRect.BottomLeft())
             .ToUnknownPoint());
     RefPtr<Path> path = builder->Finish();
-    aDrawTarget->Stroke(path,
-                        ColorPattern(ToDeviceColor(sScrollbarBorderColor)),
+    aDrawTarget->Stroke(path, ColorPattern(ToDeviceColor(borderColor)),
                         StrokeOptions(CSSCoord(1.0f) * aDpiRatio));
   }
 }
@@ -1041,45 +1018,30 @@ void nsNativeBasicTheme::PaintScrollCorner(DrawTarget* aDrawTarget,
                                            nsIFrame* aFrame,
                                            const ComputedStyle& aStyle,
                                            const EventStates& aDocumentState,
-                                           DPIRatio aDpiRatio, bool aIsRoot) {
-  sRGBColor scrollbarColor =
-      ComputeScrollbarColor(aStyle, aDocumentState, aIsRoot);
+                                           DPIRatio aDpiRatio) {
+  auto [scrollbarColor, borderColor] =
+      ComputeScrollbarColors(aFrame, aStyle, aDocumentState);
+  Unused << borderColor;
   aDrawTarget->FillRect(aRect.ToUnknownRect(),
                         ColorPattern(ToDeviceColor(scrollbarColor)));
 }
 
-void nsNativeBasicTheme::PaintScrollbarbutton(DrawTarget* aDrawTarget,
-                                              StyleAppearance aAppearance,
-                                              const LayoutDeviceRect& aRect,
-                                              const ComputedStyle& aStyle,
-                                              const EventStates& aElementState,
-                                              const EventStates& aDocumentState,
-                                              DPIRatio aDpiRatio) {
-  bool isActive = aElementState.HasState(NS_EVENT_STATE_ACTIVE);
-  bool isHovered = aElementState.HasState(NS_EVENT_STATE_HOVER);
-
+void nsNativeBasicTheme::PaintScrollbarButton(
+    DrawTarget* aDrawTarget, StyleAppearance aAppearance,
+    const LayoutDeviceRect& aRect, nsIFrame* aFrame,
+    const ComputedStyle& aStyle, const EventStates& aElementState,
+    const EventStates& aDocumentState, DPIRatio aDpiRatio) {
   bool hasCustomColor = aStyle.StyleUI()->mScrollbarColor.IsColors();
-  sRGBColor buttonColor;
-  if (hasCustomColor) {
-    // When scrollbar-color is in use, use the thumb color for the button.
-    buttonColor =
-        ComputeScrollbarthumbColor(aStyle, aElementState, aDocumentState);
-  } else if (isActive) {
-    buttonColor = sScrollbarButtonActiveColor;
-  } else if (!hasCustomColor && isHovered) {
-    buttonColor = sScrollbarButtonHoverColor;
-  } else {
-    buttonColor = sScrollbarColor;
-  }
+  auto [buttonColor, arrowColor, borderColor] = ComputeScrollbarButtonColors(
+      aFrame, aAppearance, aStyle, aElementState, aDocumentState);
   aDrawTarget->FillRect(aRect.ToUnknownRect(),
                         ColorPattern(ToDeviceColor(buttonColor)));
 
   // Start with Up arrow.
-  int32_t arrowPolygonX[] = {3, 0, -3};
-  int32_t arrowPolygonY[] = {2, -1, 2};
-  const int32_t arrowNumPoints = sizeof(arrowPolygonX) / sizeof(int32_t);
-  const int32_t arrowSize = 14;
+  float arrowPolygonX[] = {-3.0f, 0.0f, 3.0f, 3.0f, 0.0f, -3.0f};
+  float arrowPolygonY[] = {0.4f, -3.1f, 0.4f, 2.7f, -0.8f, 2.7f};
 
+  const int32_t arrowNumPoints = ArrayLength(arrowPolygonX);
   switch (aAppearance) {
     case StyleAppearance::ScrollbarbuttonUp:
       break;
@@ -1105,30 +1067,8 @@ void nsNativeBasicTheme::PaintScrollbarbutton(DrawTarget* aDrawTarget,
     default:
       return;
   }
-
-  sRGBColor arrowColor;
-  if (hasCustomColor) {
-    // When scrollbar-color is in use, derive the arrow color from the button
-    // color.
-    nscolor bg = buttonColor.ToABGR();
-    bool darken = NS_GetLuminosity(bg) >= NS_MAX_LUMINOSITY / 2;
-    if (isActive) {
-      float c = darken ? 0.0f : 1.0f;
-      arrowColor = sRGBColor(c, c, c);
-    } else {
-      uint8_t c = darken ? 0 : 255;
-      arrowColor =
-          sRGBColor::FromABGR(NS_ComposeColors(bg, NS_RGBA(c, c, c, 160)));
-    }
-  } else if (isActive) {
-    arrowColor = sScrollbarArrowColorActive;
-  } else if (isHovered) {
-    arrowColor = sScrollbarArrowColorHover;
-  } else {
-    arrowColor = sScrollbarArrowColor;
-  }
   PaintArrow(aDrawTarget, aRect, arrowPolygonX, arrowPolygonY, arrowNumPoints,
-             arrowSize, arrowColor, aDpiRatio);
+             arrowColor);
 
   // FIXME(heycam): We should probably derive the border color when custom
   // scrollbar colors are in use too.  But for now, just skip painting it,
@@ -1144,19 +1084,9 @@ void nsNativeBasicTheme::PaintScrollbarbutton(DrawTarget* aDrawTarget,
     }
 
     RefPtr<Path> path = builder->Finish();
-    aDrawTarget->Stroke(path,
-                        ColorPattern(ToDeviceColor(sScrollbarBorderColor)),
+    aDrawTarget->Stroke(path, ColorPattern(ToDeviceColor(borderColor)),
                         StrokeOptions(CSSCoord(1.0f) * aDpiRatio));
   }
-}
-
-// Checks whether the frame is for a root <scrollbar> or <scrollcorner>, which
-// influences some platforms' scrollbar rendering.
-bool nsNativeBasicTheme::IsRootScrollbar(nsIFrame* aFrame) {
-  return CheckBooleanAttr(aFrame, nsGkAtoms::root_) &&
-         aFrame->PresContext()->IsRootContentDocument() &&
-         aFrame->GetContent() &&
-         aFrame->GetContent()->IsInNamespace(kNameSpaceID_XUL);
 }
 
 NS_IMETHODIMP
@@ -1165,11 +1095,9 @@ nsNativeBasicTheme::DrawWidgetBackground(gfxContext* aContext, nsIFrame* aFrame,
                                          const nsRect& aRect,
                                          const nsRect& /* aDirtyRect */) {
   DrawTarget* dt = aContext->GetDrawTarget();
-  // FIXME(emilio): Why does this use AppUnitsPerDevPixel() but GetDPIRatio()
-  // uses AppUnitsPerDevPixelAtUnitFullZoom()?
   const nscoord twipsPerPixel = aFrame->PresContext()->AppUnitsPerDevPixel();
   EventStates eventState = GetContentState(aFrame, aAppearance);
-  EventStates docState = aFrame->GetContent()->OwnerDoc()->GetDocumentState();
+  EventStates docState = aFrame->PresContext()->Document()->GetDocumentState();
   auto devPxRect = LayoutDeviceRect::FromUnknownRect(
       NSRectToSnappedRect(aRect, twipsPerPixel, *dt));
 
@@ -1185,7 +1113,16 @@ nsNativeBasicTheme::DrawWidgetBackground(gfxContext* aContext, nsIFrame* aFrame,
     }
   }
 
-  DPIRatio dpiRatio = GetDPIRatio(aFrame);
+  // Hack to avoid skia fuzziness: Add a dummy clip if the widget doesn't
+  // overflow devPxRect.
+  Maybe<AutoClipRect> maybeClipRect;
+  if (aAppearance != StyleAppearance::FocusOutline &&
+      aAppearance != StyleAppearance::Range &&
+      !eventState.HasState(NS_EVENT_STATE_FOCUSRING)) {
+    maybeClipRect.emplace(*dt, devPxRect);
+  }
+
+  DPIRatio dpiRatio = GetDPIRatio(aFrame, aAppearance);
 
   switch (aAppearance) {
     case StyleAppearance::Radio: {
@@ -1200,9 +1137,9 @@ nsNativeBasicTheme::DrawWidgetBackground(gfxContext* aContext, nsIFrame* aFrame,
       auto rect = FixAspectRatio(devPxRect);
       PaintCheckboxControl(dt, rect, eventState, dpiRatio);
       if (GetIndeterminate(aFrame)) {
-        PaintIndeterminateMark(dt, rect, eventState, dpiRatio);
+        PaintIndeterminateMark(dt, rect, eventState);
       } else if (IsChecked(aFrame)) {
-        PaintCheckMark(dt, rect, eventState, dpiRatio);
+        PaintCheckMark(dt, rect, eventState);
       }
       break;
     }
@@ -1219,7 +1156,7 @@ nsNativeBasicTheme::DrawWidgetBackground(gfxContext* aContext, nsIFrame* aFrame,
       PaintMenulist(dt, devPxRect, eventState, dpiRatio);
       break;
     case StyleAppearance::MozMenulistArrowButton:
-      PaintMenulistArrowButton(aFrame, dt, devPxRect, eventState, dpiRatio);
+      PaintMenulistArrowButton(aFrame, dt, devPxRect, eventState);
       break;
     case StyleAppearance::SpinnerUpbutton:
     case StyleAppearance::SpinnerDownbutton:
@@ -1234,16 +1171,24 @@ nsNativeBasicTheme::DrawWidgetBackground(gfxContext* aContext, nsIFrame* aFrame,
       // Painted as part of StyleAppearance::Range.
       break;
     case StyleAppearance::ProgressBar:
-      PaintProgressBar(dt, devPxRect, eventState, dpiRatio);
+      PaintProgress(aFrame, dt, devPxRect, eventState, dpiRatio,
+                    /* aMeter = */ false, /* aBar = */ true);
       break;
     case StyleAppearance::Progresschunk:
-      PaintProgresschunk(aFrame, dt, devPxRect, eventState, dpiRatio);
+      if (nsProgressFrame* f = do_QueryFrame(aFrame->GetParent())) {
+        PaintProgress(f, dt, devPxRect, f->GetContent()->AsElement()->State(),
+                      dpiRatio, /* aMeter = */ false, /* aBar = */ false);
+      }
       break;
     case StyleAppearance::Meter:
-      PaintMeter(dt, devPxRect, eventState, dpiRatio);
+      PaintProgress(aFrame, dt, devPxRect, eventState, dpiRatio,
+                    /* aMeter = */ true, /* aBar = */ true);
       break;
     case StyleAppearance::Meterchunk:
-      PaintMeterchunk(aFrame, dt, devPxRect, dpiRatio);
+      if (nsMeterFrame* f = do_QueryFrame(aFrame->GetParent())) {
+        PaintProgress(f, dt, devPxRect, f->GetContent()->AsElement()->State(),
+                      dpiRatio, /* aMeter = */ true, /* aBar = */ false);
+      }
       break;
     case StyleAppearance::ScrollbarthumbHorizontal:
     case StyleAppearance::ScrollbarthumbVertical: {
@@ -1260,7 +1205,7 @@ nsNativeBasicTheme::DrawWidgetBackground(gfxContext* aContext, nsIFrame* aFrame,
           aAppearance == StyleAppearance::ScrollbartrackHorizontal;
       PaintScrollbarTrack(dt, devPxRect, isHorizontal, aFrame,
                           *nsLayoutUtils::StyleForScrollbar(aFrame), docState,
-                          dpiRatio, IsRootScrollbar(aFrame));
+                          dpiRatio);
       break;
     }
     case StyleAppearance::ScrollbarHorizontal:
@@ -1268,34 +1213,38 @@ nsNativeBasicTheme::DrawWidgetBackground(gfxContext* aContext, nsIFrame* aFrame,
       bool isHorizontal = aAppearance == StyleAppearance::ScrollbarHorizontal;
       PaintScrollbar(dt, devPxRect, isHorizontal, aFrame,
                      *nsLayoutUtils::StyleForScrollbar(aFrame), docState,
-                     dpiRatio, IsRootScrollbar(aFrame));
+                     dpiRatio);
       break;
     }
     case StyleAppearance::Scrollcorner:
       PaintScrollCorner(dt, devPxRect, aFrame,
                         *nsLayoutUtils::StyleForScrollbar(aFrame), docState,
-                        dpiRatio, IsRootScrollbar(aFrame));
+                        dpiRatio);
       break;
     case StyleAppearance::ScrollbarbuttonUp:
     case StyleAppearance::ScrollbarbuttonDown:
     case StyleAppearance::ScrollbarbuttonLeft:
     case StyleAppearance::ScrollbarbuttonRight:
-      PaintScrollbarbutton(dt, aAppearance, devPxRect,
-                           *nsLayoutUtils::StyleForScrollbar(aFrame),
-                           eventState, docState, dpiRatio);
+      // For scrollbar-width:thin, we don't display the buttons.
+      if (!IsScrollbarWidthThin(aFrame)) {
+        PaintScrollbarButton(dt, aAppearance, devPxRect, aFrame,
+                             *nsLayoutUtils::StyleForScrollbar(aFrame),
+                             eventState, docState, dpiRatio);
+      }
       break;
     case StyleAppearance::Button:
       PaintButton(aFrame, dt, devPxRect, eventState, dpiRatio);
       break;
     case StyleAppearance::FocusOutline:
+      // TODO(emilio): Consider supporting outline-radius / outline-offset?
       PaintRoundedFocusRect(dt, devPxRect, dpiRatio, 0.0f, 0.0f);
       break;
     default:
       // Various appearance values are used for XUL elements.  Normally these
       // will not be available in content documents (and thus in the content
-      // processes where the native basic theme can be used), but tests are run
-      // with the remote XUL pref enabled and so we can get in here.  So we
-      // just return an error rather than assert.
+      // processes where the native basic theme can be used), but tests are
+      // run with the remote XUL pref enabled and so we can get in here.  So
+      // we just return an error rather than assert.
       return NS_ERROR_NOT_IMPLEMENTED;
   }
 
@@ -1307,29 +1256,37 @@ nsNativeBasicTheme::CreateWebRenderCommandsForWidget(mozilla::wr::DisplayListBui
 aBuilder, mozilla::wr::IpcResourceUpdateQueue& aResources, const
 mozilla::layers::StackingContextHelper& aSc,
                                       mozilla::layers::RenderRootStateManager*
-aManager, nsIFrame* aFrame, StyleAppearance aAppearance, const nsRect& aRect) {
+aManager, nsIFrame* aFrame, StyleAppearance aAppearance, const nsRect& aRect)
+{
 }*/
 
 LayoutDeviceIntMargin nsNativeBasicTheme::GetWidgetBorder(
     nsDeviceContext* aContext, nsIFrame* aFrame, StyleAppearance aAppearance) {
-  DPIRatio dpiRatio = GetDPIRatio(aFrame);
   switch (aAppearance) {
     case StyleAppearance::Textfield:
     case StyleAppearance::Textarea:
-    case StyleAppearance::NumberInput: {
-      // FIXME: Do we want this margin not to be int-based? The native windows
-      // theme rounds (see ScaleForDPI)...
-      LayoutDeviceIntCoord w = (kTextFieldBorderWidth * dpiRatio).Rounded();
-      return LayoutDeviceIntMargin(w, w, w, w);
-    }
+    case StyleAppearance::NumberInput:
     case StyleAppearance::Listbox:
     case StyleAppearance::Menulist:
-    case StyleAppearance::MenulistButton: {
-      LayoutDeviceIntCoord w = (kMenulistBorderWidth * dpiRatio).Rounded();
-      return LayoutDeviceIntMargin(w, w, w, w);
-    }
-    case StyleAppearance::Button: {
-      LayoutDeviceIntCoord w = (kButtonBorderWidth * dpiRatio).Rounded();
+    case StyleAppearance::MenulistButton:
+    case StyleAppearance::Button:
+      // Return the border size from the UA sheet, even though what we paint
+      // doesn't actually match that. We know this is the UA sheet border
+      // because we disable native theming when different border widths are
+      // specified by authors, see nsNativeBasicTheme::IsWidgetStyled.
+      //
+      // The Rounded() bit is technically redundant, but needed to appease the
+      // type system, we should always end up with full device pixels due to
+      // round_border_to_device_pixels at style time.
+      return LayoutDeviceIntMargin::FromAppUnits(
+                 aFrame->StyleBorder()->GetComputedBorder(),
+                 aFrame->PresContext()->AppUnitsPerDevPixel())
+          .Rounded();
+    case StyleAppearance::Checkbox:
+    case StyleAppearance::Radio: {
+      DPIRatio dpiRatio = GetDPIRatio(aFrame, aAppearance);
+      LayoutDeviceIntCoord w =
+          SnapBorderWidth(kCheckboxRadioBorderWidth, dpiRatio);
       return LayoutDeviceIntMargin(w, w, w, w);
     }
     default:
@@ -1352,53 +1309,12 @@ bool nsNativeBasicTheme::GetWidgetPadding(nsDeviceContext* aContext,
     default:
       break;
   }
+  return false;
+}
 
-  // Respect author padding.
-  //
-  // TODO(emilio): Consider just unconditionally returning false, so that the
-  // default size of all elements matches other platforms and the UA stylesheet.
-  if (aFrame->PresContext()->HasAuthorSpecifiedRules(
-          aFrame, NS_AUTHOR_SPECIFIED_PADDING)) {
-    return false;
-  }
-
-  DPIRatio dpiRatio = GetDPIRatio(aFrame);
-  switch (aAppearance) {
-    case StyleAppearance::Listbox:
-    case StyleAppearance::Menulist:
-      aResult->SizeTo(0, 0, 0, 0);
-      return true;
-    case StyleAppearance::NumberInput:
-      *aResult = (CSSMargin(1.0f, 0, 1.0f, 4.0f) * dpiRatio).Rounded();
-      if (IsFrameRTL(aFrame)) {
-        std::swap(aResult->left, aResult->right);
-      }
-      return true;
-    case StyleAppearance::Textarea:
-    case StyleAppearance::MozMenulistArrowButton:
-    case StyleAppearance::Menuitemtext:
-    case StyleAppearance::Menuitem:
-    case StyleAppearance::MenulistText:
-    case StyleAppearance::MenulistButton:
-      *aResult = (CSSMargin(1.0f, 4.0f, 1.0f, 4.0f) * dpiRatio).Rounded();
-      return true;
-    case StyleAppearance::Button:
-      if (IsColorPickerButton(aFrame)) {
-        *aResult = (CSSMargin(4.0f, 4.0f, 4.0f, 4.0f) * dpiRatio).Rounded();
-        return true;
-      }
-      *aResult = (CSSMargin(1.0f, 4.0f, 1.0f, 4.0f) * dpiRatio).Rounded();
-      return true;
-    case StyleAppearance::Textfield:
-      if (IsDateTimeTextField(aFrame)) {
-        *aResult = (CSSMargin(2.0f, 3.0f, 0.0f, 3.0f) * dpiRatio).Rounded();
-        return true;
-      }
-      *aResult = (CSSMargin(1.0f, 4.0f, 1.0f, 4.0f) * dpiRatio).Rounded();
-      return true;
-    default:
-      return false;
-  }
+static int GetScrollbarButtonCount() {
+  int32_t buttons = LookAndFeel::GetInt(LookAndFeel::IntID::ScrollArrowStyle);
+  return CountPopulation32(static_cast<uint32_t>(buttons));
 }
 
 bool nsNativeBasicTheme::GetWidgetOverflow(nsDeviceContext* aContext,
@@ -1423,6 +1339,8 @@ bool nsNativeBasicTheme::GetWidgetOverflow(nsDeviceContext* aContext,
     case StyleAppearance::MenulistButton:
     case StyleAppearance::Menulist:
     case StyleAppearance::Button:
+      // 2px for each segment, plus 1px separation, but we paint 1px inside
+      // the border area so 4px overflow.
       overflow.SizeTo(4, 4, 4, 4);
       break;
     default:
@@ -1441,13 +1359,24 @@ bool nsNativeBasicTheme::GetWidgetOverflow(nsDeviceContext* aContext,
   return true;
 }
 
+auto nsNativeBasicTheme::GetScrollbarSizes(nsPresContext* aPresContext,
+                                           StyleScrollbarWidth aWidth, Overlay)
+    -> ScrollbarSizes {
+  CSSCoord size = aWidth == StyleScrollbarWidth::Thin
+                      ? kMinimumThinScrollbarSize
+                      : kMinimumScrollbarSize;
+  LayoutDeviceIntCoord s =
+      (size * GetDPIRatioForScrollbarPart(aPresContext)).Rounded();
+  return {s, s};
+}
+
 NS_IMETHODIMP
 nsNativeBasicTheme::GetMinimumWidgetSize(nsPresContext* aPresContext,
                                          nsIFrame* aFrame,
                                          StyleAppearance aAppearance,
                                          LayoutDeviceIntSize* aResult,
                                          bool* aIsOverridable) {
-  DPIRatio dpiRatio = GetDPIRatio(aFrame);
+  DPIRatio dpiRatio = GetDPIRatio(aFrame, aAppearance);
 
   aResult->width = aResult->height = (kMinimumWidgetSize * dpiRatio).Rounded();
 
@@ -1467,25 +1396,48 @@ nsNativeBasicTheme::GetMinimumWidgetSize(nsPresContext* aPresContext,
     case StyleAppearance::SpinnerUpbutton:
     case StyleAppearance::SpinnerDownbutton:
       aResult->width = (kMinimumSpinnerButtonWidth * dpiRatio).Rounded();
+      aResult->height = (kMinimumSpinnerButtonHeight * dpiRatio).Rounded();
       break;
-    case StyleAppearance::ScrollbarVertical:
-    case StyleAppearance::ScrollbarHorizontal:
     case StyleAppearance::ScrollbarbuttonUp:
     case StyleAppearance::ScrollbarbuttonDown:
     case StyleAppearance::ScrollbarbuttonLeft:
     case StyleAppearance::ScrollbarbuttonRight:
+      // For scrollbar-width:thin, we don't display the buttons.
+      if (IsScrollbarWidthThin(aFrame)) {
+        aResult->SizeTo(0, 0);
+        break;
+      }
+      [[fallthrough]];
     case StyleAppearance::ScrollbarthumbVertical:
     case StyleAppearance::ScrollbarthumbHorizontal:
+    case StyleAppearance::ScrollbarVertical:
+    case StyleAppearance::ScrollbarHorizontal:
     case StyleAppearance::ScrollbartrackHorizontal:
     case StyleAppearance::ScrollbartrackVertical:
     case StyleAppearance::Scrollcorner: {
-      ComputedStyle* style = nsLayoutUtils::StyleForScrollbar(aFrame);
-      if (style->StyleUIReset()->mScrollbarWidth == StyleScrollbarWidth::Thin) {
-        aResult->SizeTo((kMinimumThinScrollbarSize * dpiRatio).Rounded(),
-                        (kMinimumThinScrollbarSize * dpiRatio).Rounded());
-      } else {
-        aResult->SizeTo((kMinimumScrollbarSize * dpiRatio).Rounded(),
-                        (kMinimumScrollbarSize * dpiRatio).Rounded());
+      auto* style = nsLayoutUtils::StyleForScrollbar(aFrame);
+      auto width = style->StyleUIReset()->mScrollbarWidth;
+      auto sizes = GetScrollbarSizes(aPresContext, width, Overlay::No);
+      MOZ_ASSERT(sizes.mHorizontal == sizes.mVertical);
+      aResult->SizeTo(sizes.mHorizontal, sizes.mHorizontal);
+      if (width != StyleScrollbarWidth::Thin) {
+        // If the scrollbar has any buttons, then we increase the minimum
+        // size so that they fit too.
+        //
+        // FIXME(heycam): We should probably ensure that the thumb disappears
+        // if a scrollbar is big enough to fit the buttons but not the thumb,
+        // which is what the Windows native theme does.  If we do that, then
+        // the minimum size here needs to be reduced accordingly.
+        switch (aAppearance) {
+          case StyleAppearance::ScrollbarHorizontal:
+            aResult->width *= GetScrollbarButtonCount() + 1;
+            break;
+          case StyleAppearance::ScrollbarVertical:
+            aResult->height *= GetScrollbarButtonCount() + 1;
+            break;
+          default:
+            break;
+        }
       }
       break;
     }

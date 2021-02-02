@@ -610,7 +610,7 @@ class NotNull;
 // through unwrap/unwrapErr/propagateErr, so that this does not prevent NRVO or
 // tail call optimizations when possible.
 #define QM_TRY_RETURN_PROPAGATE_ERR(ns, tryResult, expr) \
-  auto tryResult = (expr);                               \
+  auto tryResult = ::mozilla::ToResult(expr);            \
   if (MOZ_UNLIKELY(tryResult.isErr())) {                 \
     ns::QM_HANDLE_ERROR(expr, tryResult.inspectErr());   \
   }                                                      \
@@ -619,7 +619,7 @@ class NotNull;
 // Handles the four arguments case when a custom return value needs to be
 // returned
 #define QM_TRY_RETURN_CUSTOM_RET_VAL(ns, tryResult, expr, customRetVal) \
-  auto tryResult = (expr);                                              \
+  auto tryResult = ::mozilla::ToResult(expr);                           \
   if (MOZ_UNLIKELY(tryResult.isErr())) {                                \
     auto tryTempError MOZ_MAYBE_UNUSED = tryResult.unwrapErr();         \
     ns::QM_HANDLE_ERROR(expr, tryResult.inspectErr());                  \
@@ -631,7 +631,7 @@ class NotNull;
 // before a custom return value is returned
 #define QM_TRY_RETURN_CUSTOM_RET_VAL_WITH_CLEANUP(ns, tryResult, expr,   \
                                                   customRetVal, cleanup) \
-  auto tryResult = (expr);                                               \
+  auto tryResult = ::mozilla::ToResult(expr);                            \
   if (MOZ_UNLIKELY(tryResult.isErr())) {                                 \
     auto tryTempError = tryResult.unwrapErr();                           \
     ns::QM_HANDLE_ERROR(expr, tryTempError);                             \
@@ -971,6 +971,16 @@ nsDependentCSubstring GetLeafName(const nsACString& aPath);
 
 Result<nsCOMPtr<nsIFile>, nsresult> CloneFileAndAppend(
     nsIFile& aDirectory, const nsAString& aPathElement);
+
+enum class nsIFileKind {
+  ExistsAsDirectory,
+  ExistsAsFile,
+  DoesNotExist,
+};
+
+// XXX We can use this outside of QM and its clients as well, probably. Maybe it
+// could be moved to xpcom/io?
+Result<nsIFileKind, nsresult> GetDirEntryKind(nsIFile& aFile);
 
 Result<nsCOMPtr<mozIStorageStatement>, nsresult> CreateStatement(
     mozIStorageConnection& aConnection, const nsACString& aStatementString);

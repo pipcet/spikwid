@@ -37,7 +37,7 @@ const SUMO_BASE_URL = Services.urlFormatter.formatURLPref(
   "app.support.baseURL"
 );
 const ADDONS_API_URL =
-  "https://services.addons.mozilla.org/api/v3/addons/addon";
+  "https://services.addons.mozilla.org/api/v4/addons/addon";
 
 const DELAY_BEFORE_EXPAND_MS = 1000;
 const CATEGORY_ICONS = {
@@ -521,17 +521,8 @@ class PageAction {
 
     let { content, id } = message;
     let { primary, secondary } = content.buttons;
-
-    let dateFormat = new Services.intl.DateTimeFormat(
-      this.window.gBrowser.ownerGlobal.navigator.language,
-      {
-        month: "long",
-        year: "numeric",
-      }
-    ).format;
-
     let earliestDate = await TrackingDBService.getEarliestRecordedDate();
-    let monthName = dateFormat(new Date(earliestDate));
+    let timestamp = new Date().getTime(earliestDate);
     let panelTitle = "";
     let headerLabel = this.window.document.getElementById(
       "cfr-notification-header-label"
@@ -551,7 +542,7 @@ class PageAction {
         content: message.content.heading_text,
         attributes: {
           blockedCount: reachedMilestone,
-          date: monthName,
+          date: timestamp,
         },
       })
     );

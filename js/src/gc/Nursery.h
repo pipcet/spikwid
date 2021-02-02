@@ -8,6 +8,7 @@
 #ifndef gc_Nursery_h
 #define gc_Nursery_h
 
+#include "mozilla/ArrayUtils.h"
 #include "mozilla/EnumeratedArray.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/TimeStamp.h"
@@ -80,27 +81,29 @@ class MacroAssembler;
 
 class NurseryDecommitTask : public GCParallelTask {
  public:
-  explicit NurseryDecommitTask(gc::GCRuntime* gc) : GCParallelTask(gc) {}
+  explicit NurseryDecommitTask(gc::GCRuntime* gc);
+  bool reserveSpaceForBytes(size_t nbytes);
+
+  bool isEmpty(const AutoLockHelperThreadState& lock) const;
 
   void queueChunk(NurseryChunk* chunk, const AutoLockHelperThreadState& lock);
-
-  // queueRange can also update the current to-decommit range of the
-  // current chunk.
   void queueRange(size_t newCapacity, NurseryChunk& chunk,
                   const AutoLockHelperThreadState& lock);
 
-  void run(AutoLockHelperThreadState& lock) override;
-  void decommitChunk(gc::Chunk* chunk);
-  void decommitRange(AutoLockHelperThreadState& lock);
-
  private:
-  // Use the next pointers in Chunk::info to form a singly-linked list.
-  MainThreadOrGCTaskData<gc::Chunk*> queue;
+  using NurseryChunkVector = Vector<NurseryChunk*, 0, SystemAllocPolicy>;
+
+  void run(AutoLockHelperThreadState& lock) override;
+
+  NurseryChunkVector& chunksToDecommit() { return chunksToDecommit_.ref(); }
+  const NurseryChunkVector& chunksToDecommit() const {
+    return chunksToDecommit_.ref();
+  }
+
+  MainThreadOrGCTaskData<NurseryChunkVector> chunksToDecommit_;
 
   MainThreadOrGCTaskData<NurseryChunk*> partialChunk;
   MainThreadOrGCTaskData<size_t> partialCapacity;
-
-  gc::Chunk* popChunk(const AutoLockHelperThreadState& lock);
 };
 
 class TenuringTracer final : public GenericTracer {
@@ -190,9 +193,6 @@ class Nursery {
  public:
   static const size_t Alignment = gc::ChunkSize;
   static const size_t ChunkShift = gc::ChunkShift;
-
-  // SubChunkStep is the minimum amount to adjust the nursery's size by.
-  static const size_t SubChunkStep = gc::ArenaSize;
 
   using BufferRelocationOverlay = void*;
   using BufferSet = HashSet<void*, PointerHasher<void*>, SystemAllocPolicy>;
@@ -366,7 +366,7 @@ class Nursery {
   size_t capacity() const { return capacity_; }
   size_t committed() const { return spaceToEnd(allocatedChunkCount()); }
 
-  // Used and free space both include chunk trailers for that part of the
+  // Used and free space both include chunk headers for that part of the
   // nursery.
   //
   // usedSpace() + freeSpace() == capacity()
@@ -434,7 +434,7 @@ class Nursery {
 
   // The amount of space in the mapped nursery available to allocations.
   static const size_t NurseryChunkUsableSize =
-      gc::ChunkSize - gc::ChunkTrailerSize;
+      gc::ChunkSize - sizeof(gc::ChunkBase);
 
   void joinDecommitTask() { decommitTask.join(); }
 
@@ -476,8 +476,7 @@ class Nursery {
 
   // The current nursery capacity measured in bytes. It may grow up to this
   // value without a collection, allocating chunks on demand. This limit may be
-  // changed by maybeResizeNursery() each collection. It does not include chunk
-  // trailers.
+  // changed by maybeResizeNursery() each collection. It includes chunk headers.
   size_t capacity_;
 
   mozilla::TimeDuration timeInChunkAlloc_;
@@ -659,7 +658,7 @@ class Nursery {
 
   // extent is advisory, it will be ignored in sub-chunk and generational zeal
   // modes. It will be clamped to Min(NurseryChunkUsableSize, capacity_).
-  void poisonAndInitCurrentChunk(size_t extent = NurseryChunkUsableSize);
+  void poisonAndInitCurrentChunk(size_t extent = gc::ChunkSize);
 
   void setCurrentEnd();
   void setStartPosition();
@@ -722,6 +721,10 @@ class Nursery {
   inline void setElementsForwardingPointer(ObjectElements* oldHeader,
                                            ObjectElements* newHeader,
                                            uint32_t capacity);
+
+#ifdef DEBUG
+  bool checkForwardingPointerLocation(void* ptr, bool expectedInside);
+#endif
 
   // Updates pointers to nursery objects that have been tenured and discards
   // pointers to objects that have been freed.

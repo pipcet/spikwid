@@ -21,9 +21,9 @@ const { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
 );
 XPCOMUtils.defineLazyModuleGetters(this, {
-  BrowserUtils: "resource://gre/modules/BrowserUtils.jsm",
   BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.jsm",
   FormHistory: "resource://gre/modules/FormHistory.jsm",
+  KeywordUtils: "resource://gre/modules/KeywordUtils.jsm",
   Log: "resource://gre/modules/Log.jsm",
   PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.jsm",
   PlacesUIUtils: "resource:///modules/PlacesUIUtils.jsm",
@@ -135,7 +135,7 @@ var UrlbarUtils = {
     // DEFAULT is defined lazily so it doesn't eagerly initialize PlacesUtils.
     EXTENSION: "chrome://browser/content/extension.svg",
     HISTORY: "chrome://browser/skin/history.svg",
-    SEARCH_GLASS: "chrome://browser/skin/search-glass.svg",
+    SEARCH_GLASS: "chrome://global/skin/icons/search-glass.svg",
     SEARCH_GLASS_INVERTED: "chrome://browser/skin/search-glass-inverted.svg",
     TIP: "chrome://browser/skin/tip.svg",
   },
@@ -158,6 +158,7 @@ var UrlbarUtils = {
   // Whether a result should be highlighted up to the point the user has typed
   // or after that point.
   HIGHLIGHT: {
+    NONE: 0,
     TYPED: 1,
     SUGGESTED: 2,
   },
@@ -307,7 +308,7 @@ var UrlbarUtils = {
     }
 
     try {
-      [url, postData] = await BrowserUtils.parseUrlAndPostData(
+      [url, postData] = await KeywordUtils.parseUrlAndPostData(
         entry.url.href,
         entry.postData,
         param

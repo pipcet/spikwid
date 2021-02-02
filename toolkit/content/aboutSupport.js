@@ -1189,6 +1189,16 @@ var snapshotFormatters = {
         : $.new(tag, "", "", {
             "data-l10n-id": "support-third-party-modules-no-value",
           });
+    const createLoadStatusElement = (tag, status) => {
+      const labelLoadStatus = [
+        "support-third-party-modules-status-loaded",
+        "support-third-party-modules-status-blocked",
+        "support-third-party-modules-status-redirected",
+      ];
+      return status >= 0 && status < labelLoadStatus.length
+        ? $.new(tag, "", "", { "data-l10n-id": labelLoadStatus[status] })
+        : $.new(tag, status);
+    };
 
     const iconUp = "chrome://global/skin/icons/arrow-up-12.svg";
     const iconDown = "chrome://global/skin/icons/arrow-dropdown-12.svg";
@@ -1233,6 +1243,7 @@ var snapshotFormatters = {
             // loadDurationMS can be empty (not zero) when a module is loaded
             // very early in the process.  processUptimeMS always has a value.
             createElementWithLabel("td", event.loadDurationMS),
+            createLoadStatusElement("td", event.loadStatus),
           ])
         );
       }
@@ -1259,6 +1270,9 @@ var snapshotFormatters = {
                   }),
                   $.new("th", "", "", {
                     "data-l10n-id": "support-third-party-modules-duration",
+                  }),
+                  $.new("th", "", "", {
+                    "data-l10n-id": "support-third-party-modules-status",
                   }),
                 ]),
                 innerTBody,
@@ -1437,7 +1451,7 @@ function copyRawDataToClipboard(button) {
       ].createInstance(Ci.nsITransferable);
       transferable.init(getLoadContext());
       transferable.addDataFlavor("text/unicode");
-      transferable.setTransferData("text/unicode", str, str.data.length * 2);
+      transferable.setTransferData("text/unicode", str);
       Services.clipboard.setData(
         transferable,
         null,
@@ -1487,12 +1501,12 @@ async function copyContentsToClipboard() {
   // Add the HTML flavor.
   transferable.addDataFlavor("text/html");
   ssHtml.data = dataHtml;
-  transferable.setTransferData("text/html", ssHtml, dataHtml.length * 2);
+  transferable.setTransferData("text/html", ssHtml);
 
   // Add the plain text flavor.
   transferable.addDataFlavor("text/unicode");
   ssText.data = dataText;
-  transferable.setTransferData("text/unicode", ssText, dataText.length * 2);
+  transferable.setTransferData("text/unicode", ssText);
 
   // Store the data into the clipboard.
   Services.clipboard.setData(
@@ -1544,7 +1558,7 @@ Serializer.prototype = {
   },
 
   set _currentLine(val) {
-    return (this._lines[this._lines.length - 1] = val);
+    this._lines[this._lines.length - 1] = val;
   },
 
   _serializeElement(elem) {

@@ -21,6 +21,7 @@
 #include "mozilla/Utf8.h"
 
 #include <algorithm>
+#include <iterator>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -41,6 +42,7 @@
 #include "js/RegExpFlags.h"           // JS::RegExpFlags
 #include "js/UniquePtr.h"
 #include "util/StringBuffer.h"
+#include "util/Text.h"
 #include "util/Unicode.h"
 #include "vm/FrameIter.h"  // js::{,NonBuiltin}FrameIter
 #include "vm/HelperThreads.h"
@@ -48,7 +50,6 @@
 #include "vm/JSContext.h"
 #include "vm/Realm.h"
 
-using mozilla::ArrayLength;
 using mozilla::AsciiAlphanumericToNumber;
 using mozilla::AssertedCast;
 using mozilla::DecodeOneUtf8CodePoint;
@@ -373,19 +374,19 @@ const char* ReservedWordToCharZ(TokenKind tt) {
   return nullptr;
 }
 
-const ParserName* TokenStreamAnyChars::reservedWordToPropertyName(
+TaggedParserAtomIndex TokenStreamAnyChars::reservedWordToPropertyName(
     TokenKind tt) const {
   MOZ_ASSERT(tt != TokenKind::Name);
   switch (tt) {
 #define EMIT_CASE(word, name, type) \
   case type:                        \
-    return cx->parserNames().name;
+    return TaggedParserAtomIndex::WellKnown::name();
     FOR_EACH_JAVASCRIPT_RESERVED_WORD(EMIT_CASE)
 #undef EMIT_CASE
     default:
       MOZ_ASSERT_UNREACHABLE("Not a reserved word TokenKind.");
   }
-  return nullptr;
+  return TaggedParserAtomIndex::null();
 }
 
 SourceCoords::SourceCoords(JSContext* cx, uint32_t initialLineNumber,
@@ -1151,7 +1152,7 @@ TokenStreamChars<Utf8Unit, AnyCharsAccess>::badStructurallyValidCodePoint(
       "FFFF");  // including '\0'
   char codePointCharsArray[MaxHexSize];
 
-  char* codePointStr = codePointCharsArray + ArrayLength(codePointCharsArray);
+  char* codePointStr = std::end(codePointCharsArray);
   *--codePointStr = '\0';
 
   // Note that by do-while looping here rather than while-looping, this
@@ -2099,9 +2100,8 @@ bool TokenStreamSpecific<Unit, AnyCharsAccess>::getDisplayURL(
   // developer would like to refer to the source as from the source's actual
   // URL.
 
-  static const char sourceURLDirective[] = " sourceURL=";
-  constexpr uint8_t sourceURLDirectiveLength =
-      ArrayLength(sourceURLDirective) - 1;
+  static constexpr char sourceURLDirective[] = " sourceURL=";
+  constexpr uint8_t sourceURLDirectiveLength = js_strlen(sourceURLDirective);
   return getDirective(isMultiline, shouldWarnDeprecated, sourceURLDirective,
                       sourceURLDirectiveLength, "sourceURL",
                       &anyCharsAccess().displayURL_);
@@ -2113,9 +2113,9 @@ bool TokenStreamSpecific<Unit, AnyCharsAccess>::getSourceMappingURL(
   // Match comments of the form "//# sourceMappingURL=<url>" or
   // "/\* //# sourceMappingURL=<url> *\/"
 
-  static const char sourceMappingURLDirective[] = " sourceMappingURL=";
+  static constexpr char sourceMappingURLDirective[] = " sourceMappingURL=";
   constexpr uint8_t sourceMappingURLDirectiveLength =
-      ArrayLength(sourceMappingURLDirective) - 1;
+      js_strlen(sourceMappingURLDirective);
   return getDirective(isMultiline, shouldWarnDeprecated,
                       sourceMappingURLDirective,
                       sourceMappingURLDirectiveLength, "sourceMappingURL",
@@ -2285,7 +2285,7 @@ MOZ_MUST_USE bool TokenStreamSpecific<Unit, AnyCharsAccess>::identifierName(
     }
   }
 
-  const ParserAtom* atom = nullptr;
+  TaggedParserAtomIndex atom;
   if (MOZ_UNLIKELY(escaping == IdentifierEscapes::SawUnicodeEscape)) {
     // Identifiers containing Unicode escapes have to be converted into
     // tokenbuf before atomizing.
@@ -2317,10 +2317,10 @@ MOZ_MUST_USE bool TokenStreamSpecific<Unit, AnyCharsAccess>::identifierName(
 
   noteBadToken.release();
   if (visibility == NameVisibility::Private) {
-    newPrivateNameToken(atom->asName(), start, modifier, out);
+    newPrivateNameToken(atom, start, modifier, out);
     return true;
   }
-  newNameToken(atom->asName(), start, modifier, out);
+  newNameToken(atom, start, modifier, out);
   return true;
 }
 
@@ -3731,7 +3731,7 @@ bool TokenStreamSpecific<Unit, AnyCharsAccess>::getStringOrTemplateToken(
     }
   }
 
-  const ParserAtom* atom = drainCharBufferIntoAtom();
+  TaggedParserAtomIndex atom = drainCharBufferIntoAtom();
   if (!atom) {
     return false;
   }

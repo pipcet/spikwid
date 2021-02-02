@@ -856,7 +856,7 @@ class RTCPeerConnection {
         return this.getEH(name);
       },
       set(h) {
-        return this.setEH(name, h);
+        this.setEH(name, h);
       },
     });
   }
@@ -868,7 +868,7 @@ class RTCPeerConnection {
       },
       set(h) {
         this.logWarning(name + " is deprecated! " + msg);
-        return this.setEH(name, h);
+        this.setEH(name, h);
       },
     });
   }
@@ -879,9 +879,6 @@ class RTCPeerConnection {
       onSuccess = optionsOrOnSucc;
     } else {
       options = optionsOrOnSucc;
-    }
-    if (this._localUfragsToReplace.size > 0) {
-      options.iceRestart = true;
     }
     // This entry-point handles both new and legacy call sig. Decipher which one
     if (onSuccess) {
@@ -951,6 +948,9 @@ class RTCPeerConnection {
           `Cannot create offer in ${this.signalingState}`,
           "InvalidStateError"
         );
+    }
+    if (this._localUfragsToReplace.size > 0) {
+      options.iceRestart = true;
     }
     let haveAssertion;
     if (this._localIdp.enabled) {
