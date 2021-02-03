@@ -624,6 +624,10 @@ static void WebRenderDebugPrefChangeCallback(const char* aPrefName, void*) {
   GFX_WEBRENDER_DEBUG(".obscure-images", wr::DebugFlags::OBSCURE_IMAGES)
   GFX_WEBRENDER_DEBUG(".glyph-flashing", wr::DebugFlags::GLYPH_FLASHING)
   GFX_WEBRENDER_DEBUG(".capture-profiler", wr::DebugFlags::PROFILER_CAPTURE)
+  GFX_WEBRENDER_DEBUG(".batched-texture-uploads",
+                      wr::DebugFlags::USE_BATCHED_TEXTURE_UPLOADS)
+  GFX_WEBRENDER_DEBUG(".draw-calls-for-texture-copy",
+                      wr::DebugFlags::USE_DRAW_CALLS_FOR_TEXTURE_COPY)
 #undef GFX_WEBRENDER_DEBUG
 
   gfx::gfxVars::SetWebRenderDebugFlags(flags.bits);
@@ -3380,6 +3384,7 @@ bool gfxPlatform::FallbackFromAcceleration(FeatureStatus aStatus,
   // Before we disable D3D11 and HW_COMPOSITING, we should check if we can
   // fallback from WebRender to Software WebRender + D3D11 compositing.
   if (StaticPrefs::gfx_webrender_fallback_software_d3d11_AtStartup() &&
+      StaticPrefs::gfx_webrender_software_d3d11_AtStartup() &&
       gfxConfig::IsEnabled(Feature::WEBRENDER_SOFTWARE) &&
       gfxConfig::IsEnabled(Feature::D3D11_COMPOSITING) &&
       gfxVars::UseWebRender() && !gfxVars::UseSoftwareWebRender()) {

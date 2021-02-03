@@ -778,11 +778,7 @@
 # -1 = determine dynamically, 0 = none, n = memory capacity in kilobytes.
 - name: browser.cache.memory.capacity
   type: RelaxedAtomicInt32
-#ifdef ANDROID
-  value: 1024
-#else
   value: -1
-#endif
   mirror: always
 
 # When smartsizing is disabled we could potentially fill all disk space by
@@ -5323,14 +5319,6 @@
   value: 2 * 1024 * 1024
 #endif
   mirror: always
-
-# True if off-thread parsing should use a parse GlobalObject in order to
-# directly allocate to the GC from a helper thread. If false, transfer the
-# CompilationStencil back to main thread before allocating GC objects.
-- name: javascript.options.off_thread_parse_global
-  type: bool
-  value: false
-  mirror: once
 
 - name: javascript.options.wasm_optimizingjit
   type: bool

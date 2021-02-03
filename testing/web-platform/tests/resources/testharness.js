@@ -1192,7 +1192,7 @@ policies and contribution forms [3].
                 if (tests.output) {
                     tests.set_assert(name, ...args);
                 }
-                rv = f(...args);
+                const rv = f(...args);
                 status = Test.statuses.PASS;
                 return rv;
             } catch(e) {
@@ -2780,7 +2780,15 @@ policies and contribution forms [3].
 
         this.current_test = null;
         this.asserts_run = [];
-        this.output = settings.output;
+
+        // Track whether output is enabled, and thus whether or not we should
+        // track asserts.
+        //
+        // On workers we don't get properties set from testharnessreport.js, so
+        // we don't know whether or not to track asserts. To avoid the
+        // resulting performance hit, we assume we are not meant to. This means
+        // that assert tracking does not function on workers.
+        this.output = settings.output && 'document' in global_scope;
 
         this.status = new TestsStatus();
 
@@ -3562,9 +3570,11 @@ policies and contribution forms [3].
                 escape_html(test.message ? tests[i].message : " ") +
                 (tests[i].stack ? "<pre>" +
                  escape_html(tests[i].stack) +
-                 "</pre>": "") +
-                 "<details><summary>Asserts run</summary>" + get_asserts_output(test) + "</details>"
-                "</td></tr>";
+                 "</pre>": "");
+            if (!(test instanceof RemoteTest)) {
+                 html += "<details><summary>Asserts run</summary>" + get_asserts_output(test) + "</details>"
+            }
+            html += "</td></tr>";
         }
         html += "</tbody></table>";
         try {
@@ -3765,7 +3775,7 @@ policies and contribution forms [3].
 
     AssertionError.prototype = Object.create(Error.prototype);
 
-    get_stack = function() {
+    const get_stack = function() {
         var stack = new Error().stack;
         // IE11 does not initialize 'Error.stack' until the object is thrown.
         if (!stack) {

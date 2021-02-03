@@ -3072,7 +3072,6 @@ class MCreateArgumentsObject : public MUnaryInstruction,
   MCreateArgumentsObject(MDefinition* callObj, ArgumentsObject* templateObj)
       : MUnaryInstruction(classOpcode, callObj), templateObj_(templateObj) {
     setResultType(MIRType::Object);
-    setGuard();
   }
 
  public:
@@ -11254,6 +11253,10 @@ class MGuardToClass : public MUnaryInstruction,
   NAMED_OPERANDS((0, object))
 
   const JSClass* getClass() const { return class_; }
+  bool isArgumentsObjectClass() const {
+    return class_ == &MappedArgumentsObject::class_ ||
+           class_ == &UnmappedArgumentsObject::class_;
+  }
 
   MDefinition* foldsTo(TempAllocator& alloc) override;
   AliasSet getAliasSet() const override { return AliasSet::None(); }
