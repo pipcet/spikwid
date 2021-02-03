@@ -743,6 +743,22 @@ nsDocShell::SetCancelContentJSEpoch(int32_t aEpoch) {
   return NS_OK;
 }
 
+nsresult nsDocShell::CheckDisallowedJavascriptLoad(
+    nsDocShellLoadState* aLoadState) {
+  if (!net::SchemeIsJavascript(aLoadState->URI())) {
+    return NS_OK;
+  }
+
+  if (nsCOMPtr<nsIPrincipal> targetPrincipal =
+          GetInheritedPrincipal(/* aConsiderCurrentDocument */ true)) {
+    if (!aLoadState->TriggeringPrincipal()->Subsumes(targetPrincipal)) {
+      return NS_ERROR_DOM_BAD_CROSS_ORIGIN_URI;
+    }
+    return NS_OK;
+  }
+  return NS_ERROR_DOM_BAD_CROSS_ORIGIN_URI;
+}
+
 NS_IMETHODIMP
 nsDocShell::LoadURI(nsDocShellLoadState* aLoadState, bool aSetNavigating) {
   return LoadURI(aLoadState, aSetNavigating, false);
@@ -766,6 +782,8 @@ nsresult nsDocShell::LoadURI(nsDocShellLoadState* aLoadState,
     MOZ_ASSERT(false, "LoadURI must have a triggering principal");
     return NS_ERROR_FAILURE;
   }
+
+  MOZ_TRY(CheckDisallowedJavascriptLoad(aLoadState));
 
   bool oldIsNavigating = mIsNavigating;
   auto cleanupIsNavigating =
@@ -9052,6 +9070,7 @@ nsresult nsDocShell::HandleSameDocumentNavigation(
       if (LOAD_TYPE_HAS_FLAGS(mLoadType, LOAD_FLAGS_REPLACE_HISTORY)) {
         mBrowsingContext->ReplaceActiveSessionHistoryEntry(mActiveEntry.get());
       } else {
+        mBrowsingContext->IncrementHistoryEntryCountForBrowsingContext();
         // FIXME We should probably just compute mChildOffset in the parent
         //       instead of passing it over IPC here.
         mBrowsingContext->SetActiveSessionHistoryEntry(
@@ -9194,6 +9213,8 @@ nsresult nsDocShell::InternalLoad(nsDocShellLoadState* aLoadState,
   MOZ_DIAGNOSTIC_ASSERT(
       aLoadState->TargetBrowsingContext() == GetBrowsingContext(),
       "Load must be targeting this BrowsingContext");
+
+  MOZ_TRY(CheckDisallowedJavascriptLoad(aLoadState));
 
   // If we don't have a target, we're loading into ourselves, and our load
   // delegate may want to intercept that load.
@@ -11804,6 +11825,7 @@ void nsDocShell::UpdateActiveEntry(
   if (replace) {
     mBrowsingContext->ReplaceActiveSessionHistoryEntry(mActiveEntry.get());
   } else {
+    mBrowsingContext->IncrementHistoryEntryCountForBrowsingContext();
     // FIXME We should probably just compute mChildOffset in the parent
     //       instead of passing it over IPC here.
     mBrowsingContext->SetActiveSessionHistoryEntry(
@@ -13441,6 +13463,9 @@ void nsDocShell::MoveLoadingToActiveEntry(bool aPersist) {
              this, mLoadingEntry->mInfo.GetURI()->GetSpecOrDefault().get()));
     mActiveEntry = MakeUnique<SessionHistoryInfo>(mLoadingEntry->mInfo);
     mLoadingEntry.swap(loadingEntry);
+    if (!mActiveEntryIsLoadingFromSessionHistory) {
+      mBrowsingContext->IncrementHistoryEntryCountForBrowsingContext();
+    }
   }
 
   if (mActiveEntry) {

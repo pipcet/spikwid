@@ -1798,6 +1798,19 @@ nsresult BrowsingContext::LoadURI(nsDocShellLoadState* aLoadState,
                                     aLoadState->GetLoadIdentifier());
 
   const auto& sourceBC = aLoadState->SourceBrowsingContext();
+
+  if (net::SchemeIsJavascript(aLoadState->URI())) {
+    if (!XRE_IsParentProcess()) {
+      // Web content should only be able to load javascript: URIs into documents
+      // whose principals the caller principal subsumes, which by definition
+      // excludes any document in a cross-process BrowsingContext.
+      return NS_ERROR_DOM_BAD_CROSS_ORIGIN_URI;
+    }
+    MOZ_DIAGNOSTIC_ASSERT(!sourceBC,
+                          "Should never see a cross-process javascript: load "
+                          "triggered from content");
+  }
+
   MOZ_DIAGNOSTIC_ASSERT(!sourceBC || sourceBC->Group() == Group());
   if (sourceBC && sourceBC->IsInProcess()) {
     if (!sourceBC->CanAccess(this)) {
@@ -1880,6 +1893,19 @@ nsresult BrowsingContext::InternalLoad(nsDocShellLoadState* aLoadState) {
   MOZ_TRY(CheckSandboxFlags(aLoadState));
 
   const auto& sourceBC = aLoadState->SourceBrowsingContext();
+
+  if (net::SchemeIsJavascript(aLoadState->URI())) {
+    if (!XRE_IsParentProcess()) {
+      // Web content should only be able to load javascript: URIs into documents
+      // whose principals the caller principal subsumes, which by definition
+      // excludes any document in a cross-process BrowsingContext.
+      return NS_ERROR_DOM_BAD_CROSS_ORIGIN_URI;
+    }
+    MOZ_DIAGNOSTIC_ASSERT(!sourceBC,
+                          "Should never see a cross-process javascript: load "
+                          "triggered from content");
+  }
+
   if (XRE_IsParentProcess()) {
     ContentParent* cp = Canonical()->GetContentParent();
     if (!cp || !cp->CanSend()) {
@@ -2049,6 +2075,10 @@ PopupBlocker::PopupControlState BrowsingContext::RevisePopupAbuseLevel(
   }
 
   return abuse;
+}
+
+void BrowsingContext::IncrementHistoryEntryCountForBrowsingContext() {
+  Unused << SetHistoryEntryCount(GetHistoryEntryCount() + 1);
 }
 
 std::tuple<bool, bool> BrowsingContext::CanFocusCheck(CallerType aCallerType) {
@@ -3144,11 +3174,11 @@ void BrowsingContext::RemoveDynEntriesFromActiveSessionHistoryEntry() {
   }
 }
 
-void BrowsingContext::RemoveFromSessionHistory() {
+void BrowsingContext::RemoveFromSessionHistory(const nsID& aChangeID) {
   if (XRE_IsContentProcess()) {
-    ContentChild::GetSingleton()->SendRemoveFromSessionHistory(this);
+    ContentChild::GetSingleton()->SendRemoveFromSessionHistory(this, aChangeID);
   } else {
-    Canonical()->RemoveFromSessionHistory();
+    Canonical()->RemoveFromSessionHistory(aChangeID);
   }
 }
 
