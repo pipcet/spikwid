@@ -94,6 +94,7 @@ use crate::render_target::{RenderTargetKind, BlitJob, BlitJobSource};
 use crate::texture_cache::{TextureCache, TextureCacheConfig};
 use crate::tile_cache::PictureCacheDebugInfo;
 use crate::util::drain_filter;
+use crate::host_utils::{thread_started, thread_stopped};
 use upload::{upload_to_texture_cache, UploadTexturePool};
 
 use euclid::{rect, Transform3D, Scale, default};
@@ -1118,9 +1119,6 @@ impl Renderer {
         let enclosing_size_of_op = options.enclosing_size_of_op;
         let make_size_of_ops =
             move || size_of_op.map(|o| MallocSizeOfOps::new(o, enclosing_size_of_op));
-        let thread_listener = Arc::new(options.thread_listener);
-        let thread_listener_for_rayon_start = thread_listener.clone();
-        let thread_listener_for_rayon_end = thread_listener.clone();
         let workers = options
             .workers
             .take()
@@ -1129,14 +1127,10 @@ impl Renderer {
                     .thread_name(|idx|{ format!("WRWorker#{}", idx) })
                     .start_handler(move |idx| {
                         register_thread_with_profiler(format!("WRWorker#{}", idx));
-                        if let Some(ref thread_listener) = *thread_listener_for_rayon_start {
-                            thread_listener.thread_started(&format!("WRWorker#{}", idx));
-                        }
+                        thread_started(&format!("WRWorker#{}", idx));
                     })
-                    .exit_handler(move |idx| {
-                        if let Some(ref thread_listener) = *thread_listener_for_rayon_end {
-                            thread_listener.thread_stopped(&format!("WRWorker#{}", idx));
-                        }
+                    .exit_handler(move |_idx| {
+                        thread_stopped();
                     })
                     .build();
                 Arc::new(worker.unwrap())
@@ -1147,9 +1141,6 @@ impl Renderer {
         let font_instances = SharedFontInstanceMap::new();
 
         let blob_image_handler = options.blob_image_handler.take();
-        let thread_listener_for_render_backend = thread_listener.clone();
-        let thread_listener_for_scene_builder = thread_listener.clone();
-        let thread_listener_for_lp_scene_builder = thread_listener.clone();
         let scene_builder_hooks = options.scene_builder_hooks;
         let rb_thread_name = format!("WRRenderBackend#{}", options.renderer_id.unwrap_or(0));
         let scene_thread_name = format!("WRSceneBuilder#{}", options.renderer_id.unwrap_or(0));
@@ -1163,9 +1154,7 @@ impl Renderer {
 
         thread::Builder::new().name(scene_thread_name.clone()).spawn(move || {
             register_thread_with_profiler(scene_thread_name.clone());
-            if let Some(ref thread_listener) = *thread_listener_for_scene_builder {
-                thread_listener.thread_started(&scene_thread_name);
-            }
+            thread_started(&scene_thread_name);
 
             let mut scene_builder = SceneBuilderThread::new(
                 config,
@@ -1177,9 +1166,7 @@ impl Renderer {
             );
             scene_builder.run();
 
-            if let Some(ref thread_listener) = *thread_listener_for_scene_builder {
-                thread_listener.thread_stopped(&scene_thread_name);
-            }
+            thread_stopped();
         })?;
 
         let low_priority_scene_tx = if options.support_low_priority_transactions {
@@ -1192,16 +1179,12 @@ impl Renderer {
 
             thread::Builder::new().name(lp_scene_thread_name.clone()).spawn(move || {
                 register_thread_with_profiler(lp_scene_thread_name.clone());
-                if let Some(ref thread_listener) = *thread_listener_for_lp_scene_builder {
-                    thread_listener.thread_started(&lp_scene_thread_name);
-                }
+                thread_started(&lp_scene_thread_name);
 
                 let mut scene_builder = lp_builder;
                 scene_builder.run();
 
-                if let Some(ref thread_listener) = *thread_listener_for_lp_scene_builder {
-                    thread_listener.thread_stopped(&lp_scene_thread_name);
-                }
+                thread_stopped();
             })?;
 
             low_priority_scene_tx
@@ -1225,9 +1208,7 @@ impl Renderer {
         let enable_multithreading = options.enable_multithreading;
         thread::Builder::new().name(rb_thread_name.clone()).spawn(move || {
             register_thread_with_profiler(rb_thread_name.clone());
-            if let Some(ref thread_listener) = *thread_listener_for_render_backend {
-                thread_listener.thread_started(&rb_thread_name);
-            }
+            thread_started(&rb_thread_name);
 
             let texture_cache = TextureCache::new(
                 max_texture_size,
@@ -1264,9 +1245,7 @@ impl Renderer {
                 namespace_alloc_by_client,
             );
             backend.run();
-            if let Some(ref thread_listener) = *thread_listener_for_render_backend {
-                thread_listener.thread_stopped(&rb_thread_name);
-            }
+            thread_stopped();
         })?;
 
         let debug_method = if !options.enable_gpu_markers {
@@ -2510,7 +2489,6 @@ impl Renderer {
         &mut self,
         draw_target: DrawTarget,
         uses_scissor: bool,
-        source: &RenderTask,
         backdrop: &RenderTask,
         readback: &RenderTask,
     ) {
@@ -2525,16 +2503,19 @@ impl Renderer {
         let (cache_texture, _) = self.texture_resolver
             .resolve(&texture_source).expect("bug: no source texture");
 
+        // Extract the rectangle in the backdrop surface's device space of where
+        // we need to read from.
+        let readback_origin = match readback.kind {
+            RenderTaskKind::Readback(ref info) => info.readback_origin,
+            _ => unreachable!(),
+        };
+
         // Before submitting the composite batch, do the
         // framebuffer readbacks that are needed for each
         // composite operation in this batch.
         let (readback_rect, readback_layer) = readback.get_target_rect();
         let (backdrop_rect, _) = backdrop.get_target_rect();
-        let (backdrop_screen_origin, backdrop_scale) = match backdrop.kind {
-            RenderTaskKind::Picture(ref task_info) => (task_info.content_origin, task_info.device_pixel_scale),
-            _ => panic!("bug: composite on non-picture?"),
-        };
-        let (source_screen_origin, source_scale) = match source.kind {
+        let (backdrop_screen_origin, _) = match backdrop.kind {
             RenderTaskKind::Picture(ref task_info) => (task_info.content_origin, task_info.device_pixel_scale),
             _ => panic!("bug: composite on non-picture?"),
         };
@@ -2549,28 +2530,24 @@ impl Renderer {
             false,
         );
 
-        let source_in_backdrop_space = source_screen_origin * (backdrop_scale.0 / source_scale.0);
+        let src_origin = readback_origin +
+            backdrop_rect.origin.to_f32().to_vector() -
+            backdrop_screen_origin.to_vector();
 
-        let mut src = DeviceIntRect::new(
-            (source_in_backdrop_space + (backdrop_rect.origin.to_f32() - backdrop_screen_origin)).to_i32(),
+        let src = DeviceIntRect::new(
+            src_origin.to_i32(),
             readback_rect.size,
         );
-        let mut dest = readback_rect.to_i32();
-        let device_to_framebuffer = Scale::new(1i32);
 
-        // Need to invert the y coordinates and flip the image vertically when
-        // reading back from the framebuffer.
-        if draw_target.is_default() {
-            src.origin.y = draw_target.dimensions().height as i32 - src.size.height - src.origin.y;
-            dest.origin.y += dest.size.height;
-            dest.size.height = -dest.size.height;
-        }
+        // Should always be drawing to picture cache tiles or off-screen surface!
+        debug_assert!(!draw_target.is_default());
+        let device_to_framebuffer = Scale::new(1i32);
 
         self.device.blit_render_target(
             draw_target.into(),
             src * device_to_framebuffer,
             cache_draw_target,
-            dest * device_to_framebuffer,
+            readback_rect * device_to_framebuffer,
             TextureFilter::Linear,
         );
 
@@ -2920,14 +2897,13 @@ impl Renderer {
                 }
 
                 // Handle special case readback for composites.
-                if let BatchKind::Brush(BrushBatchKind::MixBlend { task_id, source_id, backdrop_id }) = batch.key.kind {
+                if let BatchKind::Brush(BrushBatchKind::MixBlend { task_id, backdrop_id }) = batch.key.kind {
                     // composites can't be grouped together because
                     // they may overlap and affect each other.
                     debug_assert_eq!(batch.instances.len(), 1);
                     self.handle_readback_composite(
                         draw_target,
                         uses_scissor,
-                        &render_tasks[source_id],
                         &render_tasks[task_id],
                         &render_tasks[backdrop_id],
                     );
@@ -5176,11 +5152,6 @@ impl Renderer {
     }
 }
 
-pub trait ThreadListener {
-    fn thread_started(&self, thread_name: &str);
-    fn thread_stopped(&self, thread_name: &str);
-}
-
 /// Allows callers to hook in at certain points of the async scene build. These
 /// functions are all called from the scene builder thread.
 pub trait SceneBuilderHooks {
@@ -5268,7 +5239,6 @@ pub struct RendererOptions {
     pub enable_multithreading: bool,
     pub blob_image_handler: Option<Box<dyn BlobImageHandler>>,
     pub crash_annotator: Option<Box<dyn CrashAnnotator>>,
-    pub thread_listener: Option<Box<dyn ThreadListener + Send + Sync>>,
     pub size_of_op: Option<VoidPtrToSizeFn>,
     pub enclosing_size_of_op: Option<VoidPtrToSizeFn>,
     pub cached_programs: Option<Rc<ProgramCache>>,
@@ -5356,7 +5326,6 @@ impl Default for RendererOptions {
             enable_multithreading: true,
             blob_image_handler: None,
             crash_annotator: None,
-            thread_listener: None,
             size_of_op: None,
             enclosing_size_of_op: None,
             renderer_id: None,

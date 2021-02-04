@@ -1280,7 +1280,13 @@ main {
     @media (min-width: 1122px) {
       .outer-wrapper.newtab-experience .search-wrapper .search-inner-wrapper {
         width: 720px; } }
+  .outer-wrapper.newtab-experience .search-wrapper .search-button:focus {
+    outline: 0;
+    box-shadow: 0 0 0 2px var(--newtab-focus-outline);
+    border: 1px solid var(--newtab-focus-border);
+    border-radius: 0 8px 8px 0; }
   .outer-wrapper.newtab-experience .search-wrapper input:focus {
+    outline: 0;
     border: 1px solid var(--newtab-focus-border);
     box-shadow: 0 0 0 2px var(--newtab-focus-outline); }
   .outer-wrapper.newtab-experience .search-wrapper.fake-focus .search-handoff-button {
@@ -1766,6 +1772,7 @@ main {
       padding-block: 7px;
       padding-inline: 10px 13px;
       margin-inline-start: 2px;
+      margin-bottom: 2px;
       -moz-context-properties: fill;
       fill: var(--customize-menu-primary-text-color);
       background: url("chrome://activity-stream/content/data/content/assets/glyph-arrowhead-down-12.svg") right no-repeat;

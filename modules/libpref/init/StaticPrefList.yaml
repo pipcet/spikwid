@@ -969,9 +969,7 @@
 #
 # This behavior matches both historical and GTK / Windows focus behavior.
 #
-# :focus-visible is intended to provide better heuristics than this, so for now
-# we make this false whenever layout.css.focus-visible.enabled is enabled by
-# default.
+# :focus-visible is intended to provide better heuristics than this.
 - name: browser.display.always_show_rings_after_key_focus
   type: bool
   value: false
@@ -6082,17 +6080,6 @@
   mirror: always
   rust: true
 
-# Whether the `:focus-visible` pseudo-class is enabled.
-#
-# NOTE: You probably want to change the default value of
-# browser.display.always_show_rings_after_key_focus whenever you change the
-# default value of this pref.
-- name: layout.css.focus-visible.enabled
-  type: RelaxedAtomicBool
-  value: true
-  mirror: always
-  rust: true
-
 # Whether the `:autofill` pseudo-class is exposed to content.
 - name: layout.css.autofill.enabled
   type: RelaxedAtomicBool
@@ -9825,6 +9812,18 @@
 - name: telemetry.fog.test.localhost_port
   type: RelaxedAtomicInt32
   value: 0
+  mirror: always
+  rust: true
+
+- name: telemetry.fog.test.activity_limit
+  type: RelaxedAtomicUint32
+  value: 120
+  mirror: always
+  rust: true
+
+- name: telemetry.fog.test.inactivity_limit
+  type: RelaxedAtomicUint32
+  value: 1200
   mirror: always
   rust: true
 
