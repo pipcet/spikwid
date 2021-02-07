@@ -1018,12 +1018,8 @@
                        data-l10n-id="appmenuitem-find-in-page"
                        key="key_find"
                        command="cmd_find"/>
-        <toolbaritem id="appMenu-zoom-controls2" class="toolbaritem-combined-buttons" closemenu="none">
-          <!-- Use a spacer, because panel sizing code gets confused when using CSS methods. -->
-          <spacer class="before-label"/>
-          <label value="&fullZoom.label;"/>
-          <!-- This spacer keeps the scrollbar from overlapping the view. -->
-          <spacer class="after-label"/>
+        <toolbaritem id="appMenu-zoom-controls2" class="subviewbutton subviewbutton-iconic toolbaritem-combined-buttons" closemenu="none">
+          <label class="toolbarbutton-text" value="&fullZoom.label;"/>
           <toolbarbutton id="appMenu-zoomReduce-button2"
                          class="subviewbutton subviewbutton-iconic"
                          command="cmd_fullZoomReduce"
@@ -1038,7 +1034,6 @@
                          command="cmd_fullZoomEnlarge"
                          data-l10n-id="appmenuitem-zoom-enlarge"
                          tooltip="dynamic-shortcut-tooltip"/>
-          <toolbarseparator orient="vertical"/>
           <toolbarbutton id="appMenu-fullscreen-button2"
                          class="subviewbutton subviewbutton-iconic"
                          label="&fullScreenCmd.label;"
@@ -1078,31 +1073,10 @@
 
     <panelview id="PanelUI-history" flex="1">
       <vbox class="panel-subview-body">
-        <toolbarbutton id="appMenuViewHistorySidebar"
-                       label="&appMenuHistory.viewSidebar.label;"
-                       label-checked="&appMenuHistory.hideSidebar.label;"
-                       label-unchecked="&appMenuHistory.viewSidebar.label;"
-                       type="checkbox"
-                       class="subviewbutton subviewbutton-iconic"
-                       key="key_gotoHistory"
-                       oncommand="SidebarUI.toggle('viewHistorySidebar');">
-                       <observes element="sidebar-box" attribute="positionend"/>
-        </toolbarbutton>
         <toolbarbutton id="appMenuClearRecentHistory"
                        label="&appMenuHistory.clearRecent.label;"
                        class="subviewbutton subviewbutton-iconic"
                        command="Tools:Sanitize"/>
-        <toolbarseparator/>
-        <toolbarbutton id="appMenuRecentlyClosedTabs"
-                       label="&historyUndoMenu.label;"
-                       class="subviewbutton subviewbutton-iconic subviewbutton-nav"
-                       closemenu="none"
-                       oncommand="PanelUI.showSubView('appMenu-library-recentlyClosedTabs', this)"/>
-        <toolbarbutton id="appMenuRecentlyClosedWindows"
-                       label="&historyUndoWindowMenu.label;"
-                       class="subviewbutton subviewbutton-iconic subviewbutton-nav"
-                       closemenu="none"
-                       oncommand="PanelUI.showSubView('appMenu-library-recentlyClosedWindows', this)"/>
         <toolbarseparator/>
         <label value="&appMenuHistory.recentHistory.label;"
                class="subview-subheader"/>
@@ -1114,9 +1088,21 @@
           <!-- history menu items will go here -->
         </toolbaritem>
       </vbox>
+      <toolbarseparator/>
+      <toolbarbutton id="appMenuRecentlyClosedTabs"
+                     label="&historyUndoMenu.label;"
+                     class="subviewbutton subviewbutton-iconic subviewbutton-nav"
+                     closemenu="none"
+                     oncommand="PanelUI.showSubView('appMenu-library-recentlyClosedTabs', this)"/>
+      <toolbarbutton id="appMenuRecentlyClosedWindows"
+                     label="&historyUndoWindowMenu.label;"
+                     class="subviewbutton subviewbutton-iconic subviewbutton-nav"
+                     closemenu="none"
+                     oncommand="PanelUI.showSubView('appMenu-library-recentlyClosedWindows', this)"/>
+      <toolbarseparator/>
       <toolbarbutton id="PanelUI-historyMore"
-                     class="panel-subview-footer subviewbutton"
-                     label="&appMenuHistory.showAll.label;"
+                     class="subviewbutton subviewbutton-iconic panel-subview-footer-button"
+                     data-l10n-id="appmenu-manage-history"
                      oncommand="PlacesCommandHook.showPlacesOrganizer('History'); CustomizableUI.hidePanelForNode(this);"/>
     </panelview>
 

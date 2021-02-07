@@ -344,27 +344,16 @@ const MessageLoaderUtils = {
   },
 
   async _experimentsAPILoader(provider, options) {
-    try {
-      await ExperimentAPI.ready();
-    } catch (e) {
-      MessageLoaderUtils.reportError(e);
-      return [];
-    }
+    await ExperimentAPI.ready();
 
     let experiments = [];
     for (const featureId of provider.messageGroups) {
-      let experimentData;
-      try {
-        experimentData = ExperimentAPI.getExperiment({
-          featureId,
-          sendExposurePing: false,
-        });
-        // Not enrolled in any experiment for this feature, we can skip
-        if (!experimentData) {
-          continue;
-        }
-      } catch (e) {
-        MessageLoaderUtils.reportError(e);
+      let experimentData = ExperimentAPI.getExperiment({
+        featureId,
+        sendExposurePing: false,
+      });
+      // Not enrolled in any experiment for this feature, we can skip
+      if (!experimentData) {
         continue;
       }
 
@@ -696,9 +685,11 @@ class _ASRouter {
    */
   _resetInitialization() {
     this.initialized = false;
+    this.initializing = false;
     this.waitForInitialized = new Promise(resolve => {
       this._finishInitializing = () => {
         this.initialized = true;
+        this.initializing = false;
         resolve();
       };
     });
@@ -900,6 +891,10 @@ class _ASRouter {
     updateAdminState,
     dispatchCFRAction,
   }) {
+    if (this.initializing || this.initialized) {
+      return null;
+    }
+    this.initializing = true;
     this._storage = storage;
     this.ALLOWLIST_HOSTS = this._loadSnippetsAllowHosts();
     this.clearChildMessages = this.toWaitForInitFunc(clearChildMessages);

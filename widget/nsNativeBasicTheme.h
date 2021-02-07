@@ -186,9 +186,9 @@ class nsNativeBasicTheme : protected nsNativeTheme, public nsITheme {
   bool WidgetIsContainer(StyleAppearance aAppearance) override;
   bool ThemeDrawsFocusForWidget(StyleAppearance aAppearance) override;
   bool ThemeNeedsComboboxDropmarker() override;
-  ScrollbarSizes GetScrollbarSizes(nsPresContext*,
-                                   StyleScrollbarWidth,
+  ScrollbarSizes GetScrollbarSizes(nsPresContext*, StyleScrollbarWidth,
                                    Overlay) override;
+  static nscolor AdjustUnthemedScrollbarThumbColor(nscolor, EventStates);
 
  protected:
   nsNativeBasicTheme() = default;
@@ -238,7 +238,8 @@ class nsNativeBasicTheme : protected nsNativeTheme, public nsITheme {
 
   void PaintRoundedFocusRect(DrawTarget* aDrawTarget,
                              const LayoutDeviceRect& aRect, DPIRatio aDpiRatio,
-                             CSSCoord aRadius, CSSCoord aOffset);
+                             CSSCoord aRadius, CSSCoord aOffset,
+                             bool aInnerOnly = false);
   void PaintRoundedRectWithRadius(DrawTarget* aDrawTarget,
                                   const LayoutDeviceRect& aRect,
                                   const sRGBColor& aBackgroundColor,

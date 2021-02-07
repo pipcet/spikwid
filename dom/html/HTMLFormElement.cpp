@@ -46,6 +46,7 @@
 #include "mozilla/dom/FormDataEvent.h"
 #include "mozilla/dom/SubmitEvent.h"
 #include "mozilla/Telemetry.h"
+#include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_prompts.h"
 #include "nsIFormSubmitObserver.h"
 #include "nsIObserverService.h"
@@ -505,9 +506,19 @@ void HTMLFormElement::UnbindFromTree(bool aNullParent) {
   ForgetCurrentSubmission();
 }
 
+static bool CanSubmit(WidgetEvent& aEvent) {
+  // According to the UI events spec section "Trusted events", we shouldn't
+  // trigger UA default action with an untrusted event except click.
+  // However, there are still some sites depending on sending untrusted event
+  // to submit form, see Bug 1370630.
+  return !StaticPrefs::dom_forms_submit_trusted_event_only() ||
+         aEvent.IsTrusted();
+}
+
 void HTMLFormElement::GetEventTargetParent(EventChainPreVisitor& aVisitor) {
   aVisitor.mWantsWillHandleEvent = true;
-  if (aVisitor.mEvent->mOriginalTarget == static_cast<nsIContent*>(this)) {
+  if (aVisitor.mEvent->mOriginalTarget == static_cast<nsIContent*>(this) &&
+      CanSubmit(*aVisitor.mEvent)) {
     uint32_t msg = aVisitor.mEvent->mMessage;
     if (msg == eFormSubmit) {
       if (mGeneratingSubmit) {
@@ -544,7 +555,8 @@ void HTMLFormElement::WillHandleEvent(EventChainPostVisitor& aVisitor) {
 }
 
 nsresult HTMLFormElement::PostHandleEvent(EventChainPostVisitor& aVisitor) {
-  if (aVisitor.mEvent->mOriginalTarget == static_cast<nsIContent*>(this)) {
+  if (aVisitor.mEvent->mOriginalTarget == static_cast<nsIContent*>(this) &&
+      CanSubmit(*aVisitor.mEvent)) {
     EventMessage msg = aVisitor.mEvent->mMessage;
     if (msg == eFormSubmit) {
       // let the form know not to defer subsequent submissions
@@ -651,8 +663,7 @@ nsresult HTMLFormElement::DoSubmit(Event* aEvent) {
   nsresult rv = BuildSubmission(getter_Transfers(submission), aEvent);
 
   // Don't raise an error if form cannot navigate.
-  if (StaticPrefs::dom_formdata_event_enabled() &&
-      rv == NS_ERROR_NOT_AVAILABLE) {
+  if (rv == NS_ERROR_NOT_AVAILABLE) {
     return NS_OK;
   }
 
@@ -727,7 +738,7 @@ nsresult HTMLFormElement::BuildSubmission(HTMLFormSubmission** aFormSubmission,
 
   // Step 9. If form cannot navigate, then return.
   // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#form-submission-algorithm
-  if (StaticPrefs::dom_formdata_event_enabled() && !GetComposedDoc()) {
+  if (!GetComposedDoc()) {
     return NS_ERROR_NOT_AVAILABLE;
   }
 
@@ -996,8 +1007,7 @@ nsresult HTMLFormElement::NotifySubmitObservers(nsIURI* aActionURL,
 
 nsresult HTMLFormElement::ConstructEntryList(FormData* aFormData) {
   MOZ_ASSERT(aFormData, "Must have FormData!");
-  bool isFormDataEventEnabled = StaticPrefs::dom_formdata_event_enabled();
-  if (isFormDataEventEnabled && mIsConstructingEntryList) {
+  if (mIsConstructingEntryList) {
     // Step 2.2 of https://xhr.spec.whatwg.org/#dom-formdata.
     return NS_ERROR_DOM_INVALID_STATE_ERR;
   }
@@ -1020,18 +1030,16 @@ nsresult HTMLFormElement::ConstructEntryList(FormData* aFormData) {
     sortedControls[i]->SubmitNamesValues(aFormData);
   }
 
-  if (isFormDataEventEnabled) {
-    FormDataEventInit init;
-    init.mBubbles = true;
-    init.mCancelable = false;
-    init.mFormData = aFormData;
-    RefPtr<FormDataEvent> event =
-        FormDataEvent::Constructor(this, u"formdata"_ns, init);
-    event->SetTrusted(true);
+  FormDataEventInit init;
+  init.mBubbles = true;
+  init.mCancelable = false;
+  init.mFormData = aFormData;
+  RefPtr<FormDataEvent> event =
+      FormDataEvent::Constructor(this, u"formdata"_ns, init);
+  event->SetTrusted(true);
 
-    EventDispatcher::DispatchDOMEvent(ToSupports(this), nullptr, event, nullptr,
-                                      nullptr);
-  }
+  EventDispatcher::DispatchDOMEvent(ToSupports(this), nullptr, event, nullptr,
+                                    nullptr);
 
   return NS_OK;
 }

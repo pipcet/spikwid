@@ -330,6 +330,24 @@ describe("ASRouter", () => {
   });
 
   describe("#init", () => {
+    it("should only be called once", async () => {
+      Router = new _ASRouter();
+      let state = await initASRouter(Router);
+
+      assert.equal(state, Router.state);
+
+      assert.isNull(await Router.init({}));
+    });
+    it("should only be called once", async () => {
+      Router = new _ASRouter();
+      initASRouter(Router);
+      let secondCall = await Router.init({});
+
+      assert.isNull(
+        secondCall,
+        "Should not init twice, it should exit early with null"
+      );
+    });
     it("should set state.messageBlockList to the block list in persistent storage", async () => {
       messageBlockList = ["foo"];
       Router = new _ASRouter();
@@ -2650,19 +2668,6 @@ describe("ASRouter", () => {
         messageGroups: ["asrouter"],
       };
 
-      global.ExperimentAPI.getExperiment.throws();
-      const stub = sandbox.stub(MessageLoaderUtils, "reportError");
-
-      await MessageLoaderUtils.loadMessagesForProvider(args);
-
-      assert.calledOnce(stub);
-    });
-    it("should handle the case of no experiments in the ExperimentAPI", async () => {
-      const args = {
-        type: "remote-experiments",
-        messageGroups: ["asrouter"],
-      };
-
       global.ExperimentAPI.getExperiment.returns(null);
 
       const result = await MessageLoaderUtils.loadMessagesForProvider(args);
@@ -2712,19 +2717,6 @@ describe("ASRouter", () => {
       const result = await MessageLoaderUtils.loadMessagesForProvider(args);
 
       assert.lengthOf(result.messages, 0);
-    });
-    it("should fetch messages from the ExperimentAPI", async () => {
-      global.ExperimentAPI.ready.throws();
-      const args = {
-        type: "remote-experiments",
-        messageGroups: ["asrouter"],
-      };
-      const stub = sandbox.stub(MessageLoaderUtils, "reportError");
-
-      await MessageLoaderUtils.loadMessagesForProvider(args);
-
-      assert.notCalled(global.ExperimentAPI.getExperiment);
-      assert.calledOnce(stub);
     });
     it("should fetch branches with trigger", async () => {
       const args = {
