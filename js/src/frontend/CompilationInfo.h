@@ -17,7 +17,7 @@
 
 #include "builtin/ModuleObject.h"
 #include "ds/LifoAlloc.h"
-#include "frontend/ParserAtom.h"  // ParserAtom, ParserAtomsTable, TaggedParserAtomIndex
+#include "frontend/ParserAtom.h"   // ParserAtomsTable, TaggedParserAtomIndex
 #include "frontend/ScriptIndex.h"  // ScriptIndex
 #include "frontend/SharedContext.h"
 #include "frontend/Stencil.h"
@@ -441,9 +441,9 @@ struct SharedDataContainer {
                    js::SharedImmutableScriptData* data);
 
 #if defined(DEBUG) || defined(JS_JITSPEW)
-  void dump();
-  void dump(js::JSONPrinter& json);
-  void dumpFields(js::JSONPrinter& json);
+  void dump() const;
+  void dump(js::JSONPrinter& json) const;
+  void dumpFields(js::JSONPrinter& json) const;
 #endif
 };
 
@@ -487,9 +487,6 @@ struct BaseCompilationStencil {
   // We need a move-constructor to work with Rooted.
   BaseCompilationStencil(BaseCompilationStencil&& other) = default;
 
-  const ParserAtom* getParserAtomAt(JSContext* cx,
-                                    TaggedParserAtomIndex taggedIndex) const;
-
   bool prepareStorageFor(JSContext* cx, CompilationState& compilationState) {
     // NOTE: At this point CompilationState shouldn't be finished, and
     // BaseCompilationStencil.scriptData field should be empty.
@@ -517,9 +514,11 @@ struct BaseCompilationStencil {
   inline const CompilationStencil& asCompilationStencil() const;
 
 #if defined(DEBUG) || defined(JS_JITSPEW)
-  void dump();
-  void dump(js::JSONPrinter& json);
-  void dumpFields(js::JSONPrinter& json);
+  void dump() const;
+  void dump(js::JSONPrinter& json) const;
+  void dumpFields(js::JSONPrinter& json) const;
+
+  void dumpAtom(TaggedParserAtomIndex index) const;
 #endif
 };
 
@@ -729,9 +728,9 @@ struct CompilationStencil : public BaseCompilationStencil {
   void trace(JSTracer* trc);
 
 #if defined(DEBUG) || defined(JS_JITSPEW)
-  void dump();
-  void dump(js::JSONPrinter& json);
-  void dumpFields(js::JSONPrinter& json);
+  void dump() const;
+  void dump(js::JSONPrinter& json) const;
+  void dumpFields(js::JSONPrinter& json) const;
 #endif
 };
 

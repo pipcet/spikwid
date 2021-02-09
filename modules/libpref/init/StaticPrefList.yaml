@@ -250,7 +250,7 @@
 
 - name: apz.wr.activate_all_scroll_frames_when_fission
   type: RelaxedAtomicBool
-  value: false
+  value: true
   mirror: always
 
 - name: apz.nonwr.activate_all_scroll_frames
@@ -6699,6 +6699,12 @@
   value: true
   mirror: always
 
+# Whether outline should follow the border radius.
+- name: layout.css.outline-follows-border-radius.enabled
+  type: bool
+  value: @IS_NIGHTLY_BUILD@
+  mirror: always
+
 # Pref to control enabling scroll anchoring.
 - name: layout.css.scroll-anchoring.enabled
   type: bool
@@ -8895,7 +8901,7 @@
 # available.
 - name: network.dns.upgrade_with_https_rr
   type: RelaxedAtomicBool
-  value: false
+  value: @IS_NIGHTLY_BUILD@
   mirror: always
 
 # Whether to use HTTPS RR as AltSvc
