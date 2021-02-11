@@ -2241,41 +2241,6 @@ media:
     record_in_processes:
       - 'content'
 
-avif:
-  dav1d_decode_error:
-    bug_numbers:
-      - 1670827
-    description: >
-      Image-decode Error from dav1d decoder
-    kind: uint
-    expires: "never"
-    notification_emails:
-      - cchang@mozilla.com
-      - jbauman@mozilla.com
-    products:
-      - 'firefox'
-      - 'geckoview_streaming'
-    record_in_processes:
-      - 'main'
-      - 'content'
-
-  aom_decode_error:
-    bug_numbers:
-      - 1670827
-    description: >
-      Image-decode Error from aom decoder
-    kind: uint
-    expires: "never"
-    notification_emails:
-      - cchang@mozilla.com
-      - jbauman@mozilla.com
-    products:
-      - 'firefox'
-      - 'geckoview_streaming'
-    record_in_processes:
-      - 'main'
-      - 'content'
-
 # The following section contains content process base counters.
 dom.contentprocess:
   buildID_mismatch:
@@ -3544,6 +3509,7 @@ gfx.hdr:
   windows_display_colorspace_bitfield:
     bug_numbers:
       - 1514840
+      - 1690597
     description: >
       A bitfield representation of the available DXGI color spaces of the connected displays on Windows.
       See (https://docs.microsoft.com/en-us/windows/desktop/api/dxgicommon/ne-dxgicommon-dxgi_color_space_type)
@@ -3551,13 +3517,12 @@ gfx.hdr:
       index 'N' is available on at least one connected monitor.
     keyed: false
     kind: uint
-    expires: "70"
+    expires: never
     notification_emails:
       - gfx-telemetry-alerts@mozilla.com
-      - rhunt@mozilla.com
+      - jmuizelaaar@mozilla.com
     products:
       - 'firefox'
-      - 'fennec'
     record_in_processes:
       - 'main'
 
@@ -5194,11 +5159,14 @@ browser.searchinit:
   engine_invalid_webextension:
     bug_numbers:
       - 1665938
+      - 1691050
     description: >
       Records the WebExtension ID of a search engine where the WebExtension
-      is not installed (= 1), disabled (= 2) or where the submission URL
-      is different between the search engine and the WebExtension (= 3)
-    expires: "89"
+      is not installed (= 1), disabled (= 2), search engine no longer specified (= 4),
+      a different name (= 5), where the submission URL is different between the
+      search engine and the WebExtension (= 6). The value '3' has been replaced
+      by '6' to distinguish newer entries.
+    expires: "94"
     keyed: true
     kind: uint
     notification_emails:
@@ -5639,6 +5607,25 @@ networking:
     record_in_processes:
       - 'main'
       - 'content'
+
+  https_rr_prefs_usage:
+    bug_numbers:
+      - 1686421
+    description: >
+      A bitfield representation for the usage of HTTPS RR prefs.
+      bit 0: network.dns.upgrade_with_https_rr is enabled or not.
+      bit 1: network.dns.use_https_rr_as_altsvc is enabled or not.
+      bit 2: network.dns.echconfig.enabled is enabled or not.
+    expires: never
+    kind: uint
+    keyed: false
+    notification_emails:
+      - necko@mozilla.com
+      - kershaw@mozilla.com
+    products:
+      - 'firefox'
+    record_in_processes:
+      - 'main'
 
 blocklist:
   lastModified_rs_addons:

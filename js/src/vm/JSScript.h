@@ -73,7 +73,6 @@ class JitScript;
 
 class ModuleObject;
 class RegExpObject;
-class ScriptSourceHolder;
 class SourceCompressionTask;
 class Shape;
 class DebugScript;
@@ -610,8 +609,8 @@ class ScriptSource {
   void finalizeGCData();
   ~ScriptSource();
 
-  void incref() { refs++; }
-  void decref() {
+  void AddRef() { refs++; }
+  void Release() {
     MOZ_ASSERT(refs != 0);
     if (--refs == 0) {
       js_delete(this);
@@ -1033,8 +1032,7 @@ class ScriptSource {
   // Caller is responsible for calling `setIncrementalEncoder` after
   // instantiating stencil (so, corresponding canonical ScriptSourceObject
   // gets created).
-  bool xdrEncodeStencils(JSContext* cx,
-                         frontend::CompilationStencilSet& stencilSet,
+  bool xdrEncodeStencils(JSContext* cx, frontend::CompilationStencil& stencil,
                          UniquePtr<XDRIncrementalStencilEncoder>& xdrEncoder);
 
   void setIncrementalEncoder(XDRIncrementalStencilEncoder* xdrEncoder);
@@ -1082,31 +1080,7 @@ class ScriptSource {
   template <XDRMode mode>
   static MOZ_MUST_USE XDRResult
   XDR(XDRState<mode>* xdr, const JS::ReadOnlyCompileOptions* maybeOptions,
-      ScriptSourceHolder& holder);
-};
-
-class ScriptSourceHolder {
-  ScriptSource* ss;
-
- public:
-  ScriptSourceHolder() : ss(nullptr) {}
-  explicit ScriptSourceHolder(ScriptSource* ss) : ss(ss) { ss->incref(); }
-  ~ScriptSourceHolder() {
-    if (ss) {
-      ss->decref();
-    }
-  }
-  void reset(ScriptSource* newss) {
-    // incref before decref just in case ss == newss.
-    if (newss) {
-      newss->incref();
-    }
-    if (ss) {
-      ss->decref();
-    }
-    ss = newss;
-  }
-  ScriptSource* get() const { return ss; }
+      RefPtr<ScriptSource>& source);
 };
 
 // [SMDOC] ScriptSourceObject

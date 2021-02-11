@@ -12,10 +12,11 @@
 #include "jsnum.h"  // CharsToNumber
 
 #include "frontend/BytecodeCompiler.h"  // IsIdentifier
-#include "frontend/CompilationInfo.h"
+#include "frontend/CompilationStencil.h"
 #include "frontend/NameCollections.h"
 #include "frontend/StencilXdr.h"  // CanCopyDataToDisk
 #include "util/StringBuffer.h"    // StringBuffer
+#include "util/Unicode.h"
 #include "vm/JSContext.h"
 #include "vm/Printer.h"  // Sprinter, QuoteString
 #include "vm/Runtime.h"
@@ -88,11 +89,11 @@ void TaggedParserAtomIndex::validateRaw() {
   } else if (isWellKnownAtomId()) {
     MOZ_ASSERT(uint32_t(toWellKnownAtomId()) <
                uint32_t(WellKnownAtomId::Limit));
-  } else if (isStaticParserString1()) {
-    MOZ_ASSERT(size_t(toStaticParserString1()) <
+  } else if (isLength1StaticParserString()) {
+    MOZ_ASSERT(size_t(toLength1StaticParserString()) <
                WellKnownParserAtoms_ROM::ASCII_STATIC_LIMIT);
-  } else if (isStaticParserString2()) {
-    MOZ_ASSERT(size_t(toStaticParserString2()) <
+  } else if (isLength2StaticParserString()) {
+    MOZ_ASSERT(size_t(toLength2StaticParserString()) <
                WellKnownParserAtoms_ROM::NUM_LENGTH2_ENTRIES);
   } else {
     MOZ_ASSERT(isNull());
@@ -408,12 +409,14 @@ const ParserAtom* WellKnownParserAtoms::getWellKnown(
 }
 
 /* static */
-const ParserAtom* WellKnownParserAtoms::getStatic1(StaticParserString1 s) {
+const ParserAtom* WellKnownParserAtoms::getLength1Static(
+    Length1StaticParserString s) {
   return &WellKnownParserAtoms::rom_.length1Table[size_t(s)];
 }
 
 /* static */
-const ParserAtom* WellKnownParserAtoms::getStatic2(StaticParserString2 s) {
+const ParserAtom* WellKnownParserAtoms::getLength2Static(
+    Length2StaticParserString s) {
   return &WellKnownParserAtoms::rom_.length2Table[size_t(s)];
 }
 
@@ -421,12 +424,14 @@ const ParserAtom* ParserAtomsTable::getWellKnown(WellKnownAtomId atomId) const {
   return wellKnownTable_.getWellKnown(atomId);
 }
 
-const ParserAtom* ParserAtomsTable::getStatic1(StaticParserString1 s) const {
-  return WellKnownParserAtoms::getStatic1(s);
+const ParserAtom* ParserAtomsTable::getLength1Static(
+    Length1StaticParserString s) const {
+  return WellKnownParserAtoms::getLength1Static(s);
 }
 
-const ParserAtom* ParserAtomsTable::getStatic2(StaticParserString2 s) const {
-  return WellKnownParserAtoms::getStatic2(s);
+const ParserAtom* ParserAtomsTable::getLength2Static(
+    Length2StaticParserString s) const {
+  return WellKnownParserAtoms::getLength2Static(s);
 }
 
 ParserAtom* ParserAtomsTable::getParserAtom(ParserAtomIndex index) const {
@@ -443,12 +448,12 @@ const ParserAtom* ParserAtomsTable::getParserAtom(
     return getWellKnown(index.toWellKnownAtomId());
   }
 
-  if (index.isStaticParserString1()) {
-    return getStatic1(index.toStaticParserString1());
+  if (index.isLength1StaticParserString()) {
+    return getLength1Static(index.toLength1StaticParserString());
   }
 
-  if (index.isStaticParserString2()) {
-    return getStatic2(index.toStaticParserString2());
+  if (index.isLength2StaticParserString()) {
+    return getLength2Static(index.toLength2StaticParserString());
   }
 
   MOZ_ASSERT(index.isNull());
@@ -491,6 +496,25 @@ bool ParserAtomsTable::isExtendedUnclonedSelfHostedFunctionName(
   }
 
   return atom->charAt(0) == ExtendedUnclonedSelfHostedFunctionNamePrefix;
+}
+
+static bool HasUnpairedSurrogate(mozilla::Range<const char16_t> chars) {
+  for (auto ptr = chars.begin(); ptr < chars.end();) {
+    char16_t ch = *ptr++;
+    if (unicode::IsLeadSurrogate(ch)) {
+      if (ptr == chars.end() || !unicode::IsTrailSurrogate(*ptr++)) {
+        return true;
+      }
+    } else if (unicode::IsTrailSurrogate(ch)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool ParserAtomsTable::isModuleExportName(TaggedParserAtomIndex index) const {
+  const ParserAtom* name = getParserAtom(index);
+  return name->hasLatin1Chars() || !HasUnpairedSurrogate(name->twoByteRange());
 }
 
 bool ParserAtomsTable::isIndex(TaggedParserAtomIndex index,
@@ -581,13 +605,13 @@ JSAtom* ParserAtomsTable::toJSAtom(JSContext* cx, TaggedParserAtomIndex index,
     return GetWellKnownAtom(cx, index.toWellKnownAtomId());
   }
 
-  if (index.isStaticParserString1()) {
-    char16_t ch = static_cast<char16_t>(index.toStaticParserString1());
+  if (index.isLength1StaticParserString()) {
+    char16_t ch = static_cast<char16_t>(index.toLength1StaticParserString());
     return cx->staticStrings().getUnit(ch);
   }
 
-  MOZ_ASSERT(index.isStaticParserString2());
-  size_t s = static_cast<size_t>(index.toStaticParserString2());
+  MOZ_ASSERT(index.isLength2StaticParserString());
+  size_t s = static_cast<size_t>(index.toLength2StaticParserString());
   return cx->staticStrings().getLength2FromIndex(s);
 }
 
@@ -640,8 +664,8 @@ bool WellKnownParserAtoms::initSingle(JSContext* cx, const ParserAtom** name,
   MOZ_ASSERT(len <= MaxWellKnownLength);
   MOZ_ASSERT(romEntry.isAscii());
 
-  // Strings matched by lookupTiny are stored in static table and aliases should
-  // only be added using initTinyStringAlias.
+  // Strings matched by lookupTinyIndex are stored in static table and aliases
+  // should be initialized directly in WellKnownParserAtoms::init.
   MOZ_ASSERT(lookupTinyIndex(str, len) == TaggedParserAtomIndex::null(),
              "Well-known atom matches a tiny StaticString. Did you add it to "
              "the wrong CommonPropertyNames.h list?");
@@ -659,36 +683,21 @@ bool WellKnownParserAtoms::initSingle(JSContext* cx, const ParserAtom** name,
   return true;
 }
 
-bool WellKnownParserAtoms::initTinyStringAlias(JSContext* cx,
-                                               const ParserAtom** name,
-                                               const char* str) {
-  MOZ_ASSERT(name != nullptr);
-
-  unsigned int len = strlen(str);
-
-  // Well-known atoms are all currently ASCII with length <= MaxWellKnownLength.
-  MOZ_ASSERT(len <= MaxWellKnownLength);
-  MOZ_ASSERT(FindSmallestEncoding(JS::UTF8Chars(str, len)) ==
-             JS::SmallestEncoding::ASCII);
-
-  // NOTE: If this assert fails, you may need to change which list is it belongs
-  //       to in CommonPropertyNames.h.
-  auto tiny = lookupTiny(str, len);
-  MOZ_ASSERT(tiny, "Tiny common name was not found");
-
-  // Set alias to existing atom.
-  *name = tiny;
-  return true;
-}
-
 bool WellKnownParserAtoms::init(JSContext* cx) {
   // Tiny strings with a common name need a named alias to an entry in the
   // WellKnownParserAtoms_ROM.
-#define COMMON_NAME_INIT_(_, NAME, TEXT)         \
-  if (!initTinyStringAlias(cx, &(NAME), TEXT)) { \
-    return false;                                \
-  }
-  FOR_EACH_TINY_PROPERTYNAME(COMMON_NAME_INIT_)
+
+  empty = &rom_.emptyAtom;
+
+#define COMMON_NAME_INIT_(_, NAME, TEXT) \
+  (NAME) = &rom_.length1Table[static_cast<size_t>((TEXT)[0])];
+  FOR_EACH_LENGTH1_PROPERTYNAME(COMMON_NAME_INIT_)
+#undef COMMON_NAME_INIT_
+
+#define COMMON_NAME_INIT_(_, NAME, TEXT)                                \
+  (NAME) = &rom_.length2Table[StaticStrings::getLength2Index((TEXT)[0], \
+                                                             (TEXT)[1])];
+  FOR_EACH_LENGTH2_PROPERTYNAME(COMMON_NAME_INIT_)
 #undef COMMON_NAME_INIT_
 
   // Initialize the named fields to point to entries in the ROM. This also adds

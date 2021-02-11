@@ -7373,14 +7373,6 @@ nsresult nsDocShell::RestoreFromHistory() {
     mSavingOldViewer = CanSavePresentation(mLoadType, request, doc);
   }
 
-  nsCOMPtr<nsIContentViewer> oldCv(mContentViewer);
-  nsCOMPtr<nsIContentViewer> newCv(viewer);
-  float overrideDPPX = 0.0f;
-
-  if (oldCv) {
-    oldCv->GetOverrideDPPX(&overrideDPPX);
-  }
-
   // Protect against mLSHE going away via a load triggered from
   // pagehide or unload.
   nsCOMPtr<nsISHEntry> origLSHE = mLSHE;
@@ -7601,10 +7593,6 @@ nsresult nsDocShell::RestoreFromHistory() {
   // in CreateContentViewer.
   if (++gNumberOfDocumentsLoading == 1) {
     FavorPerformanceHint(true);
-  }
-
-  if (oldCv) {
-    newCv->SetOverrideDPPX(overrideDPPX);
   }
 
   if (document) {
@@ -8173,7 +8161,6 @@ nsresult nsDocShell::SetupNewViewer(nsIContentViewer* aNewViewer,
 
   const Encoding* hintCharset = nullptr;
   int32_t hintCharsetSource = kCharsetUninitialized;
-  float overrideDPPX = 1.0;
   // |newMUDV| also serves as a flag to set the data from the above vars
   nsCOMPtr<nsIContentViewer> newCv;
 
@@ -8204,8 +8191,6 @@ nsresult nsDocShell::SetupNewViewer(nsIContentViewer* aNewViewer,
       if (newCv) {
         hintCharset = oldCv->GetHintCharset();
         NS_ENSURE_SUCCESS(oldCv->GetHintCharacterSetSource(&hintCharsetSource),
-                          NS_ERROR_FAILURE);
-        NS_ENSURE_SUCCESS(oldCv->GetOverrideDPPX(&overrideDPPX),
                           NS_ERROR_FAILURE);
       }
     }
@@ -8263,8 +8248,9 @@ nsresult nsDocShell::SetupNewViewer(nsIContentViewer* aNewViewer,
     newCv->SetHintCharset(hintCharset);
     NS_ENSURE_SUCCESS(newCv->SetHintCharacterSetSource(hintCharsetSource),
                       NS_ERROR_FAILURE);
-    NS_ENSURE_SUCCESS(newCv->SetOverrideDPPX(overrideDPPX), NS_ERROR_FAILURE);
   }
+
+  NS_ENSURE_TRUE(mContentViewer, NS_ERROR_FAILURE);
 
   // Stuff the bgcolor from the old pres shell into the new
   // pres shell. This improves page load continuity.
@@ -9163,6 +9149,39 @@ nsresult nsDocShell::HandleSameDocumentNavigation(
   return NS_OK;
 }
 
+static bool NavigationShouldTakeFocus(nsDocShell* aDocShell,
+                                      nsDocShellLoadState* aLoadState) {
+  const auto& sourceBC = aLoadState->SourceBrowsingContext();
+  if (!sourceBC || !sourceBC->IsActive()) {
+    // If the navigation didn't come from a foreground tab, then we don't steal
+    // focus.
+    return false;
+  }
+  auto* bc = aDocShell->GetBrowsingContext();
+  if (sourceBC.get() == bc) {
+    // If it comes from the same tab / frame, don't steal focus either.
+    return false;
+  }
+  auto* fm = nsFocusManager::GetFocusManager();
+  if (fm && bc->IsActive() && fm->IsInActiveWindow(bc)) {
+    // If we're already on the foreground tab of the foreground window, then we
+    // don't need to do this. This helps to e.g. not steal focus from the
+    // browser chrome unnecessarily.
+    return false;
+  }
+  if (auto* doc = aDocShell->GetExtantDocument()) {
+    if (doc->IsInitialDocument()) {
+      // If we're the initial load for the browsing context, the browser
+      // chrome determines what to focus. This is important because the
+      // browser chrome may want to e.g focus the url-bar
+      return false;
+    }
+  }
+  // Take loadDivertedInBackground into account so the behavior would be the
+  // same as how the tab first opened.
+  return !Preferences::GetBool("browser.tabs.loadDivertedInBackground", false);
+}
+
 nsresult nsDocShell::InternalLoad(nsDocShellLoadState* aLoadState,
                                   Maybe<uint32_t> aCacheKey) {
   MOZ_ASSERT(aLoadState, "need a load state!");
@@ -9177,13 +9196,7 @@ nsresult nsDocShell::InternalLoad(nsDocShellLoadState* aLoadState,
     return NS_ERROR_NOT_AVAILABLE;
   }
 
-  // Take loadDivertedInBackground into account so the behavior would be the
-  // same as how the tab first opened.
-  const bool shouldTakeFocus =
-      aLoadState->SourceBrowsingContext() &&
-      aLoadState->SourceBrowsingContext()->IsActive() &&
-      !mBrowsingContext->IsActive() &&
-      !Preferences::GetBool("browser.tabs.loadDivertedInBackground", false);
+  const bool shouldTakeFocus = NavigationShouldTakeFocus(this, aLoadState);
 
   mOriginalUriString.Truncate();
 

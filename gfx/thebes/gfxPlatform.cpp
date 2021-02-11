@@ -150,7 +150,6 @@ static const uint32_t kDefaultGlyphCacheSize = -1;
 #include "VRManager.h"
 #include "VRManagerChild.h"
 #include "mozilla/gfx/GPUParent.h"
-#include "mozilla/layers/MemoryReportingMLGPU.h"
 #include "prsystem.h"
 
 using namespace mozilla;
@@ -791,6 +790,7 @@ WebRenderMemoryReporter::CollectReports(nsIHandleReportCallback* aHandleReport,
                       "texture-cache/structures");
         helper.Report(aReport.shader_cache, "shader-cache");
         helper.Report(aReport.display_list, "display-list");
+        helper.Report(aReport.upload_staging_memory, "upload-stagin-memory");
 
         WEBRENDER_FOR_EACH_INTERNER(REPORT_INTERNER);
         WEBRENDER_FOR_EACH_INTERNER(REPORT_DATA_STORE);
@@ -806,6 +806,8 @@ WebRenderMemoryReporter::CollectReports(nsIHandleReportCallback* aHandleReport,
         helper.ReportTexture(aReport.swap_chain, "swap-chains");
         helper.ReportTexture(aReport.render_texture_hosts,
                              "render-texture-hosts");
+        helper.ReportTexture(aReport.upload_staging_textures,
+                             "upload-staging-textures");
 
         FinishAsyncMemoryReport();
       },
@@ -1063,7 +1065,6 @@ void gfxPlatform::Init() {
 #ifdef USE_SKIA
   RegisterStrongMemoryReporter(new SkMemoryReporter());
 #endif
-  mlg::InitializeMemoryReporters();
 
 #ifdef USE_SKIA
   uint32_t skiaCacheSize = GetSkiaGlyphCacheSize();
@@ -3503,7 +3504,6 @@ void gfxPlatform::ImportGPUDeviceData(
   MOZ_ASSERT(XRE_IsParentProcess());
 
   gfxConfig::ImportChange(Feature::OPENGL_COMPOSITING, aData.oglCompositing());
-  gfxConfig::ImportChange(Feature::ADVANCED_LAYERS, aData.advancedLayers());
 }
 
 bool gfxPlatform::SupportsApzTouchInput() const {

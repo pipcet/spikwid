@@ -337,6 +337,7 @@ pub enum ShaderColorMode {
     Bitmap = 7,
     ColorBitmap = 8,
     Image = 9,
+    MultiplyDualSource = 10,
 }
 
 impl From<GlyphFormat> for ShaderColorMode {
@@ -623,6 +624,39 @@ pub enum BlendMode {
     SubpixelConstantTextColor(ColorF),
     SubpixelWithBgColor,
     Advanced(MixBlendMode),
+    MultiplyDualSource,
+    Screen,
+    Exclusion,
+}
+
+impl BlendMode {
+    /// Decides when a given mix-blend-mode can be implemented in terms of
+    /// simple blending, dual-source blending, advanced blending, or not at
+    /// all based on available capabilities.
+    pub fn from_mix_blend_mode(
+        mode: MixBlendMode,
+        advanced_blend: bool,
+        coherent: bool,
+        dual_source: bool,
+    ) -> Option<BlendMode> {
+        // If we emulate a mix-blend-mode via simple or dual-source blending,
+        // care must be taken to output alpha As + Ad*(1-As) regardless of what
+        // the RGB output is to comply with the mix-blend-mode spec.
+        Some(match mode {
+            // If we have coherent advanced blend, just use that.
+            _ if advanced_blend && coherent => BlendMode::Advanced(mode),
+            // Screen can be implemented as Cs + Cd - Cs*Cd => Cs + Cd*(1-Cs)
+            MixBlendMode::Screen => BlendMode::Screen,
+            // Exclusion can be implemented as Cs + Cd - 2*Cs*Cd => Cs*(1-Cd) + Cd*(1-Cs)
+            MixBlendMode::Exclusion => BlendMode::Exclusion,
+            // Multiply can be implemented as Cs*Cd + Cs*(1-Ad) + Cd*(1-As) => Cs*(1-Ad) + Cd*(1 - SRC1=(As-Cs))
+            MixBlendMode::Multiply if dual_source => BlendMode::MultiplyDualSource,
+            // Otherwise, use advanced blend without coherency if available.
+            _ if advanced_blend => BlendMode::Advanced(mode),
+            // If advanced blend is not available, then we have to use brush_mix_blend.
+            _ => return None,
+        })
+    }
 }
 
 #[derive(PartialEq)]
@@ -2235,6 +2269,8 @@ impl Renderer {
                 surface_origin_is_top_left,
             );
         }
+
+        self.staging_texture_pool.end_frame(&mut self.device);
         self.texture_upload_pbo_pool.end_frame(&mut self.device);
         self.device.end_frame();
 
@@ -2926,6 +2962,15 @@ impl Renderer {
                                 self.device.gl().blend_barrier_khr();
                             }
                             self.device.set_blend_mode_advanced(mode);
+                        }
+                        BlendMode::MultiplyDualSource => {
+                            self.device.set_blend_mode_multiply_dual_source();
+                        }
+                        BlendMode::Screen => {
+                            self.device.set_blend_mode_screen();
+                        }
+                        BlendMode::Exclusion => {
+                            self.device.set_blend_mode_exclusion();
                         }
                     }
                     prev_blend_mode = batch.key.blend_mode;
@@ -5104,6 +5149,8 @@ impl Renderer {
 
         // GPU cache CPU memory.
         self.gpu_cache_texture.report_memory_to(&mut report, self.size_of_ops.as_ref().unwrap());
+
+        self.staging_texture_pool.report_memory_to(&mut report, self.size_of_ops.as_ref().unwrap());
 
         // Render task CPU memory.
         for (_id, doc) in &self.active_documents {

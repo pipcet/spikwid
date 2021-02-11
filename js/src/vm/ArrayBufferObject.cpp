@@ -985,7 +985,7 @@ size_t ArrayBufferObject::wasmMappedSize() const {
   if (isWasm()) {
     return contents().wasmBuffer()->mappedSize();
   }
-  return byteLength().deprecatedGetUint32();
+  return byteLength().get();
 }
 
 size_t js::WasmArrayBufferMappedSize(const ArrayBufferObjectMaybeShared* buf) {
@@ -999,7 +999,7 @@ Maybe<uint64_t> ArrayBufferObject::wasmMaxSize() const {
   if (isWasm()) {
     return contents().wasmBuffer()->maxSize();
   }
-  return Some<uint64_t>(byteLength().deprecatedGetUint32());
+  return Some<uint64_t>(byteLength().get());
 }
 
 Maybe<uint64_t> js::WasmArrayBufferMaxSize(
@@ -1464,6 +1464,10 @@ void ArrayBufferObject::addSizeOfExcludingThis(
     case USER_OWNED:
       // User-owned data should be accounted for by the user.
       break;
+    case EXTERNAL:
+      // External data will be accounted for by the owner of the buffer,
+      // not this view.
+      break;
     case MAPPED:
       info->objectsNonHeapElementsNormal += buffer.byteLength().get();
       break;
@@ -1472,9 +1476,6 @@ void ArrayBufferObject::addSizeOfExcludingThis(
       MOZ_ASSERT(buffer.wasmMappedSize() >= buffer.byteLength().get());
       info->wasmGuardPages +=
           buffer.wasmMappedSize() - buffer.byteLength().get();
-      break;
-    case EXTERNAL:
-      MOZ_CRASH("external buffers not currently supported");
       break;
     case BAD1:
       MOZ_CRASH("bad bufferKind()");
@@ -1669,9 +1670,9 @@ bool JSObject::is<js::ArrayBufferObjectMaybeShared>() const {
   return is<ArrayBufferObject>() || is<SharedArrayBufferObject>();
 }
 
-JS_FRIEND_API uint32_t JS::GetArrayBufferByteLength(JSObject* obj) {
+JS_FRIEND_API size_t JS::GetArrayBufferByteLength(JSObject* obj) {
   ArrayBufferObject* aobj = obj->maybeUnwrapAs<ArrayBufferObject>();
-  return aobj ? aobj->byteLength().deprecatedGetUint32() : 0;
+  return aobj ? aobj->byteLength().get() : 0;
 }
 
 JS_FRIEND_API uint8_t* JS::GetArrayBufferData(JSObject* obj,

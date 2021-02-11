@@ -2228,6 +2228,7 @@ void LIRGenerator::visitInt32ToIntPtr(MInt32ToIntPtr* ins) {
   MOZ_ASSERT(input->type() == MIRType::Int32);
   MOZ_ASSERT(ins->type() == MIRType::IntPtr);
 
+#ifdef JS_64BIT
   // If the result is only used by instructions that expect a bounds-checked
   // index, we must have eliminated or hoisted a bounds check and we can assume
   // the index is non-negative. This lets us generate more efficient code.
@@ -2249,8 +2250,17 @@ void LIRGenerator::visitInt32ToIntPtr(MInt32ToIntPtr* ins) {
     }
   }
 
-  auto* lir = new (alloc()) LInt32ToIntPtr(useRegisterAtStart(input));
-  define(lir, ins);
+  if (ins->canBeNegative()) {
+    auto* lir = new (alloc()) LInt32ToIntPtr(useAnyAtStart(input));
+    define(lir, ins);
+  } else {
+    auto* lir = new (alloc()) LInt32ToIntPtr(useRegisterAtStart(input));
+    defineReuseInput(lir, ins, 0);
+  }
+#else
+  // On 32-bit platforms this is a no-op.
+  redefine(ins, input);
+#endif
 }
 
 void LIRGenerator::visitNonNegativeIntPtrToInt32(
@@ -2259,12 +2269,15 @@ void LIRGenerator::visitNonNegativeIntPtrToInt32(
   MOZ_ASSERT(input->type() == MIRType::IntPtr);
   MOZ_ASSERT(ins->type() == MIRType::Int32);
 
+#ifdef JS_64BIT
   auto* lir =
       new (alloc()) LNonNegativeIntPtrToInt32(useRegisterAtStart(input));
-#ifdef JS_64BIT
   assignSnapshot(lir, ins->bailoutKind());
-#endif
   defineReuseInput(lir, ins, 0);
+#else
+  // On 32-bit platforms this is a no-op.
+  redefine(ins, input);
+#endif
 }
 
 void LIRGenerator::visitAdjustDataViewLength(MAdjustDataViewLength* ins) {
@@ -3312,12 +3325,17 @@ void LIRGenerator::visitStringSplit(MStringSplit* ins) {
 void LIRGenerator::visitLoadUnboxedScalar(MLoadUnboxedScalar* ins) {
   MOZ_ASSERT(ins->elements()->type() == MIRType::Elements);
   MOZ_ASSERT(ins->index()->type() == MIRType::IntPtr);
+  MOZ_ASSERT(IsNumericType(ins->type()) || ins->type() == MIRType::Boolean);
+
+  if (Scalar::isBigIntType(ins->storageType()) &&
+      ins->requiresMemoryBarrier()) {
+    lowerAtomicLoad64(ins);
+    return;
+  }
 
   const LUse elements = useRegister(ins->elements());
   const LAllocation index = useRegisterOrIndexConstant(
       ins->index(), ins->storageType(), ins->offsetAdjustment());
-
-  MOZ_ASSERT(IsNumericType(ins->type()) || ins->type() == MIRType::Boolean);
 
   Synchronization sync = Synchronization::Load();
   if (ins->requiresMemoryBarrier()) {
@@ -3481,6 +3499,11 @@ void LIRGenerator::visitStoreUnboxedScalar(MStoreUnboxedScalar* ins) {
     MOZ_ASSERT(ins->value()->type() == MIRType::BigInt);
   } else {
     MOZ_ASSERT(ins->value()->type() == MIRType::Int32);
+  }
+
+  if (ins->isBigIntWrite() && ins->requiresMemoryBarrier()) {
+    lowerAtomicStore64(ins);
+    return;
   }
 
   LUse elements = useRegister(ins->elements());

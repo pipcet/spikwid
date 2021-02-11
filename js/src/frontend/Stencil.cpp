@@ -15,7 +15,7 @@
 #include "frontend/AbstractScopePtr.h"     // ScopeIndex
 #include "frontend/BytecodeCompilation.h"  // CanLazilyParse
 #include "frontend/BytecodeSection.h"      // EmitScriptThingsVector
-#include "frontend/CompilationInfo.h"  // CompilationStencil, CompilationStencilSet, CompilationGCOutput
+#include "frontend/CompilationStencil.h"  // CompilationStencil, CompilationGCOutput
 #include "frontend/SharedContext.h"
 #include "gc/AllocKind.h"    // gc::AllocKind
 #include "gc/Rooting.h"      // RootedAtom
@@ -81,6 +81,11 @@ bool ScopeContext::init(JSContext* cx, CompilationInput& input,
       return false;
     }
     if (!cachePrivateFieldsForEval(cx, input, effectiveScope, parserAtoms)) {
+      return false;
+    }
+  } else if (input.target ==
+             CompilationInput::CompilationTarget::Delazification) {
+    if (!cacheEnclosingNameLocationForDelazification(cx, input, parserAtoms)) {
       return false;
     }
   }
@@ -366,65 +371,30 @@ bool ScopeContext::cachePrivateFieldsForEval(JSContext* cx,
   return true;
 }
 
-#ifdef DEBUG
-static bool NameIsOnEnvironment(Scope* scope, JSAtom* name) {
-  for (BindingIter bi(scope); bi; bi++) {
-    // If found, the name must already be on the environment or an import,
-    // or else there is a bug in the closed-over name analysis in the
-    // Parser.
-    if (bi.name() == name) {
-      BindingLocation::Kind kind = bi.location().kind();
+// Cache the set of bindings which could be accessed during a delazification.
+//
+// Walks the scope chain outwards, looking for bindings in environments or
+// import, and stores their associated locations in the
+// `enclosingNameLocationCache_`.
+//
+// The hops count in EnvironmentCoordinate is calculated from
+// `input.enclosingScope`, and `searchInDelazificationEnclosingScope` is
+// responsible for adding hops from the reference to the enclosing scope.
+//
+// The algorithm terminates when we determine the fallback location, which is
+// where the remaining names are directed (ie. `NameLocation::Dynamic` if one of
+// our enclosing scopes is a function with an extensible scope.)
+//
+// On debug build, this collects all bindings, and
+// `searchInDelazificationEnclosingScope` asserts that the queried name is
+// on environment or import.
+bool ScopeContext::cacheEnclosingNameLocationForDelazification(
+    JSContext* cx, CompilationInput& input, ParserAtomsTable& parserAtoms) {
+  enclosingNameLocationCache_.emplace();
 
-      if (bi.hasArgumentSlot()) {
-        JSScript* script = scope->as<FunctionScope>().script();
-        if (script->functionAllowsParameterRedeclaration()) {
-          // Check for duplicate positional formal parameters.
-          for (BindingIter bi2(bi); bi2 && bi2.hasArgumentSlot(); bi2++) {
-            if (bi2.name() == name) {
-              kind = bi2.location().kind();
-            }
-          }
-        }
-      }
-
-      return kind == BindingLocation::Kind::Global ||
-             kind == BindingLocation::Kind::Environment ||
-             kind == BindingLocation::Kind::Import;
-    }
-  }
-
-  // If not found, assume it's on the global or dynamically accessed.
-  return true;
-}
-#endif
-
-/* static */
-NameLocation ScopeContext::searchInDelazificationEnclosingScope(
-    JSContext* cx, CompilationInput& input, ParserAtomsTable& parserAtoms,
-    TaggedParserAtomIndex name, uint8_t hops) {
-  MOZ_ASSERT(input.target ==
-             CompilationInput::CompilationTarget::Delazification);
-
-  // TODO-Stencil
-  //   Here, we convert our name into a JSAtom*, and hard-crash on failure
-  //   to allocate.  This conversion should not be required as we should be
-  //   able to iterate up snapshotted scope chains that use parser atoms.
-  //
-  //   This will be fixed when the enclosing scopes are snapshotted.
-  //
-  //   See bug 1690277.
-  JSAtom* jsname = nullptr;
-  {
-    AutoEnterOOMUnsafeRegion oomUnsafe;
-    jsname = parserAtoms.toJSAtom(cx, name, input.atomCache);
-    if (!jsname) {
-      oomUnsafe.crash("EmitterScope::searchAndCache");
-    }
-  }
+  uint8_t hops = 0;
 
   for (ScopeIter si(input.enclosingScope); si; si++) {
-    MOZ_ASSERT(NameIsOnEnvironment(si.scope(), jsname));
-
     bool hasEnv = si.hasSyntacticEnvironment();
 
     switch (si.kind()) {
@@ -432,28 +402,44 @@ NameLocation ScopeContext::searchInDelazificationEnclosingScope(
         if (hasEnv) {
           JSScript* script = si.scope()->as<FunctionScope>().script();
           if (script->funHasExtensibleScope()) {
-            return NameLocation::Dynamic();
+            fallbackNameLocation_ = NameLocation::Dynamic();
+            return true;
           }
 
           for (BindingIter bi(si.scope()); bi; bi++) {
-            if (bi.name() != jsname) {
-              continue;
-            }
-
             BindingLocation bindLoc = bi.location();
             if (bi.hasArgumentSlot() &&
                 script->functionAllowsParameterRedeclaration()) {
               // Check for duplicate positional formal parameters.
               for (BindingIter bi2(bi); bi2 && bi2.hasArgumentSlot(); bi2++) {
-                if (bi2.name() == jsname) {
+                if (bi2.name() == bi.name()) {
                   bindLoc = bi2.location();
                 }
               }
             }
 
-            MOZ_ASSERT(bindLoc.kind() == BindingLocation::Kind::Environment);
-            return NameLocation::EnvironmentCoordinate(bi.kind(), hops,
-                                                       bindLoc.slot());
+            if (bindLoc.kind() != BindingLocation::Kind::Environment) {
+#ifdef DEBUG
+              // For debugging purpose, store the name location in the map.
+              // See the assertion in searchInDelazificationEnclosingScope.
+              auto loc = NameLocation::fromBinding(bi.kind(), bindLoc);
+              MOZ_ASSERT(loc.kind() !=
+                             NameLocation::Kind::EnvironmentCoordinate &&
+                         loc.kind() != NameLocation::Kind::Import);
+              if (!addToEnclosingNameLocationCache(cx, input, parserAtoms,
+                                                   bi.name(), loc)) {
+                return false;
+              }
+#endif
+              continue;
+            }
+
+            if (!addToEnclosingNameLocationCache(
+                    cx, input, parserAtoms, bi.name(),
+                    NameLocation::EnvironmentCoordinate(bi.kind(), hops,
+                                                        bindLoc.slot()))) {
+              return false;
+            }
           }
         }
         break;
@@ -468,17 +454,27 @@ NameLocation ScopeContext::searchInDelazificationEnclosingScope(
       case ScopeKind::ClassBody:
         if (hasEnv) {
           for (BindingIter bi(si.scope()); bi; bi++) {
-            if (bi.name() != jsname) {
+            BindingLocation bindLoc = bi.location();
+            if (bindLoc.kind() != BindingLocation::Kind::Environment) {
+#ifdef DEBUG
+              auto loc = NameLocation::fromBinding(bi.kind(), bindLoc);
+              MOZ_ASSERT(loc.kind() !=
+                             NameLocation::Kind::EnvironmentCoordinate &&
+                         loc.kind() != NameLocation::Kind::Import);
+              if (!addToEnclosingNameLocationCache(cx, input, parserAtoms,
+                                                   bi.name(), loc)) {
+                return false;
+              }
+#endif
               continue;
             }
 
-            // The name must already have been marked as closed
-            // over. If this assertion is hit, there is a bug in the
-            // name analysis.
-            BindingLocation bindLoc = bi.location();
-            MOZ_ASSERT(bindLoc.kind() == BindingLocation::Kind::Environment);
-            return NameLocation::EnvironmentCoordinate(bi.kind(), hops,
-                                                       bindLoc.slot());
+            if (!addToEnclosingNameLocationCache(
+                    cx, input, parserAtoms, bi.name(),
+                    NameLocation::EnvironmentCoordinate(bi.kind(), hops,
+                                                        bindLoc.slot()))) {
+              return false;
+            }
           }
         }
         break;
@@ -489,23 +485,40 @@ NameLocation ScopeContext::searchInDelazificationEnclosingScope(
         // Initial compilation of module doesn't have enlcosing scope.
         if (hasEnv) {
           for (BindingIter bi(si.scope()); bi; bi++) {
-            if (bi.name() != jsname) {
-              continue;
-            }
-
             BindingLocation bindLoc = bi.location();
 
             // Imports are on the environment but are indirect
             // bindings and must be accessed dynamically instead of
             // using an EnvironmentCoordinate.
             if (bindLoc.kind() == BindingLocation::Kind::Import) {
-              MOZ_ASSERT(si.kind() == ScopeKind::Module);
-              return NameLocation::Import();
+              if (!addToEnclosingNameLocationCache(cx, input, parserAtoms,
+                                                   bi.name(),
+                                                   NameLocation::Import())) {
+                return false;
+              }
+              continue;
             }
 
-            MOZ_ASSERT(bindLoc.kind() == BindingLocation::Kind::Environment);
-            return NameLocation::EnvironmentCoordinate(bi.kind(), hops,
-                                                       bindLoc.slot());
+            if (bindLoc.kind() != BindingLocation::Kind::Environment) {
+#ifdef DEBUG
+              auto loc = NameLocation::fromBinding(bi.kind(), bindLoc);
+              MOZ_ASSERT(loc.kind() !=
+                             NameLocation::Kind::EnvironmentCoordinate &&
+                         loc.kind() != NameLocation::Kind::Import);
+              if (!addToEnclosingNameLocationCache(cx, input, parserAtoms,
+                                                   bi.name(), loc)) {
+                return false;
+              }
+#endif
+              continue;
+            }
+
+            if (!addToEnclosingNameLocationCache(
+                    cx, input, parserAtoms, bi.name(),
+                    NameLocation::EnvironmentCoordinate(bi.kind(), hops,
+                                                        bindLoc.slot()))) {
+              return false;
+            }
           }
         }
         break;
@@ -516,20 +529,24 @@ NameLocation ScopeContext::searchInDelazificationEnclosingScope(
         // environment and its immediate enclosing scope is a global
         // scope, all accesses are global.
         if (!hasEnv && si.scope()->enclosing()->is<GlobalScope>()) {
-          return NameLocation::Global(BindingKind::Var);
+          fallbackNameLocation_ = NameLocation::Global(BindingKind::Var);
+          return true;
         }
-        return NameLocation::Dynamic();
+        fallbackNameLocation_ = NameLocation::Dynamic();
+        return true;
 
       case ScopeKind::Global:
-        return NameLocation::Global(BindingKind::Var);
+        fallbackNameLocation_ = NameLocation::Global(BindingKind::Var);
+        return true;
 
       case ScopeKind::With:
       case ScopeKind::NonSyntactic:
-        return NameLocation::Dynamic();
+        fallbackNameLocation_ = NameLocation::Dynamic();
+        return true;
 
       case ScopeKind::WasmInstance:
       case ScopeKind::WasmFunction:
-        MOZ_CRASH("No direct eval inside wasm functions");
+        MOZ_CRASH("No delazification inside wasm functions");
     }
 
     if (hasEnv) {
@@ -538,7 +555,59 @@ NameLocation ScopeContext::searchInDelazificationEnclosingScope(
     }
   }
 
-  MOZ_CRASH("Malformed scope chain");
+  MOZ_CRASH("Fallback location isn't found");
+  return false;
+}
+
+bool ScopeContext::addToEnclosingNameLocationCache(
+    JSContext* cx, CompilationInput& input, ParserAtomsTable& parserAtoms,
+    JSAtom* name, NameLocation loc) {
+  auto parserName = parserAtoms.internJSAtom(cx, input.atomCache, name);
+  if (!parserName) {
+    return false;
+  }
+
+  // Inner most scope's name should be closed over.
+  //
+  // cacheEnclosingNameLocationForDelazification iterates from inner scope, and
+  // inner-most name is added to the map first.
+  //
+  // Do not overwrite the value with outer name.
+  //
+  // On debug build, all other names are stored into the cache, and even if
+  // there's on-environment name in outer scope, the outer name's location
+  // isn't stored into the cache, and if the name is queried by
+  // searchInDelazificationEnclosingScope, it will hit the assertion there.
+  auto p = enclosingNameLocationCache_->lookupForAdd(parserName);
+  if (!p) {
+    if (!enclosingNameLocationCache_->add(p, parserName, loc)) {
+      ReportOutOfMemory(cx);
+      return false;
+    }
+  }
+
+  return true;
+}
+
+NameLocation ScopeContext::searchInDelazificationEnclosingScope(
+    TaggedParserAtomIndex name, uint8_t hops) {
+  auto p = enclosingNameLocationCache_->lookup(name);
+  if (!p) {
+    return fallbackNameLocation_;
+  }
+
+  NameLocation& loc = p->value();
+
+  // The name must already have been marked as closed over and it should be on
+  // environment, or it should be import.
+  // If this assertion is hit, there is a bug in the name analysis.
+  MOZ_ASSERT(loc.kind() == NameLocation::Kind::EnvironmentCoordinate ||
+             loc.kind() == NameLocation::Kind::Import);
+
+  if (loc.kind() == NameLocation::Kind::EnvironmentCoordinate) {
+    return loc.addHops(hops);
+  }
+  return loc;
 }
 
 mozilla::Maybe<ScopeContext::EnclosingLexicalBindingKind>
@@ -1243,21 +1312,71 @@ static void FunctionsFromExistingLazy(CompilationInput& input,
 }
 
 /* static */
-bool CompilationStencil::instantiateStencils(JSContext* cx,
-                                             CompilationStencil& stencil,
-                                             CompilationGCOutput& gcOutput) {
+bool CompilationStencil::instantiateStencils(
+    JSContext* cx, CompilationStencil& stencil, CompilationGCOutput& gcOutput,
+    CompilationGCOutput* gcOutputForDelazification) {
   if (!stencil.preparationIsPerformed) {
-    if (!prepareForInstantiate(cx, stencil, gcOutput)) {
+    if (!prepareForInstantiate(cx, stencil, gcOutput,
+                               gcOutputForDelazification)) {
       return false;
     }
   }
 
-  return instantiateStencilsAfterPreparation(cx, stencil.input, stencil,
-                                             gcOutput);
+  if (!instantiateBaseStencilAfterPreparation(cx, stencil.input, stencil,
+                                              gcOutput)) {
+    return false;
+  }
+
+  if (stencil.delazificationSet) {
+    MOZ_ASSERT(gcOutputForDelazification);
+
+    CompilationAtomCache::AtomCacheVector reusableAtomCache;
+    stencil.input.atomCache.releaseBuffer(reusableAtomCache);
+
+    size_t numDelazifications =
+        stencil.delazificationSet->delazifications.length();
+    for (size_t i = 0; i < numDelazifications; i++) {
+      auto& delazification = stencil.delazificationSet->delazifications[i];
+      auto index = stencil.delazificationSet->delazificationIndices[i];
+
+      JSFunction* fun = gcOutput.functions[index];
+      MOZ_ASSERT(fun);
+
+      BaseScript* lazy = fun->baseScript();
+      MOZ_ASSERT(!lazy->hasBytecode());
+
+      if (!lazy->isReadyForDelazification()) {
+        MOZ_ASSERT(false, "Delazification target is not ready. Bad XDR?");
+        continue;
+      }
+
+      Rooted<CompilationInput> delazificationInput(
+          cx, CompilationInput(stencil.input.options));
+      delazificationInput.get().initFromLazy(lazy);
+
+      delazificationInput.get().atomCache.stealBuffer(reusableAtomCache);
+
+      if (!instantiateBaseStencilAfterPreparation(cx, delazificationInput.get(),
+                                                  delazification,
+                                                  *gcOutputForDelazification)) {
+        return false;
+      }
+
+      // Destroy elements, without unreserving.
+      gcOutputForDelazification->functions.clear();
+      gcOutputForDelazification->scopes.clear();
+
+      delazificationInput.get().atomCache.releaseBuffer(reusableAtomCache);
+    }
+
+    stencil.input.atomCache.stealBuffer(reusableAtomCache);
+  }
+
+  return true;
 }
 
 /* static */
-bool CompilationStencil::instantiateStencilsAfterPreparation(
+bool CompilationStencil::instantiateBaseStencilAfterPreparation(
     JSContext* cx, CompilationInput& input,
     const BaseCompilationStencil& stencil, CompilationGCOutput& gcOutput) {
   // Distinguish between the initial (possibly lazy) compile and any subsequent
@@ -1345,9 +1464,10 @@ bool CompilationStencil::instantiateStencilsAfterPreparation(
   return true;
 }
 
-bool CompilationStencilSet::buildDelazificationIndices(JSContext* cx) {
+bool StencilDelazificationSet::buildDelazificationIndices(
+    JSContext* cx, const CompilationStencil& stencil) {
   // Standalone-functions are not supported by XDR.
-  MOZ_ASSERT(!scriptData[0].isFunction());
+  MOZ_ASSERT(!stencil.scriptData[0].isFunction());
 
   // If no delazifications, we are done.
   if (delazifications.empty()) {
@@ -1372,8 +1492,9 @@ bool CompilationStencilSet::buildDelazificationIndices(JSContext* cx) {
 
   MOZ_ASSERT(keyToIndex.count() == delazifications.length());
 
-  for (size_t i = 1; i < scriptData.size(); i++) {
-    auto key = BaseCompilationStencil::toFunctionKey(scriptExtra[i].extent);
+  for (size_t i = 1; i < stencil.scriptData.size(); i++) {
+    auto key =
+        BaseCompilationStencil::toFunctionKey(stencil.scriptExtra[i].extent);
     auto ptr = keyToIndex.lookup(key);
     if (!ptr) {
       continue;
@@ -1384,85 +1505,17 @@ bool CompilationStencilSet::buildDelazificationIndices(JSContext* cx) {
   return true;
 }
 
-bool CompilationStencilSet::instantiateStencils(
-    JSContext* cx, CompilationGCOutput& gcOutput,
-    CompilationGCOutput& gcOutputForDelazification) {
-  if (!prepareForInstantiate(cx, gcOutput, gcOutputForDelazification)) {
-    return false;
-  }
-
-  return instantiateStencilsAfterPreparation(cx, gcOutput,
-                                             gcOutputForDelazification);
-}
-
-bool CompilationStencilSet::instantiateStencilsAfterPreparation(
-    JSContext* cx, CompilationGCOutput& gcOutput,
-    CompilationGCOutput& gcOutputForDelazification) {
-  if (!CompilationStencil::instantiateStencilsAfterPreparation(cx, input, *this,
-                                                               gcOutput)) {
-    return false;
-  }
-
-  CompilationAtomCache::AtomCacheVector reusableAtomCache;
-  input.atomCache.releaseBuffer(reusableAtomCache);
-
-  for (size_t i = 0; i < delazifications.length(); i++) {
-    auto& delazification = delazifications[i];
-    auto index = delazificationIndices[i];
-
-    JSFunction* fun = gcOutput.functions[index];
-    MOZ_ASSERT(fun);
-
-    BaseScript* lazy = fun->baseScript();
-    MOZ_ASSERT(!lazy->hasBytecode());
-
-    if (!lazy->isReadyForDelazification()) {
-      MOZ_ASSERT(false, "Delazification target is not ready. Bad XDR?");
-      continue;
-    }
-
-    Rooted<CompilationInput> delazificationInput(
-        cx, CompilationInput(input.options));
-    delazificationInput.get().initFromLazy(lazy);
-
-    delazificationInput.get().atomCache.stealBuffer(reusableAtomCache);
-
-    if (!CompilationStencil::prepareGCOutputForInstantiate(
-            cx, delazification, gcOutputForDelazification)) {
-      return false;
-    }
-    if (!CompilationStencil::instantiateStencilsAfterPreparation(
-            cx, delazificationInput.get(), delazification,
-            gcOutputForDelazification)) {
-      return false;
-    }
-
-    // Destroy elements, without unreserving.
-    gcOutputForDelazification.functions.clear();
-    gcOutputForDelazification.scopes.clear();
-
-    delazificationInput.get().atomCache.releaseBuffer(reusableAtomCache);
-  }
-
-  input.atomCache.stealBuffer(reusableAtomCache);
-
-  return true;
-}
-
 /* static */
-bool CompilationStencil::prepareInputAndStencilForInstantiate(
-    JSContext* cx, CompilationInput& input, BaseCompilationStencil& stencil) {
-  if (!input.atomCache.allocate(cx, stencil.parserAtomData.size())) {
-    return false;
-  }
+bool CompilationStencil::prepareForInstantiate(
+    JSContext* cx, CompilationStencil& stencil, CompilationGCOutput& gcOutput,
+    CompilationGCOutput* gcOutputForDelazification) {
+  stencil.preparationIsPerformed = true;
 
-  return true;
-}
+  size_t maxParserAtomDataLength = stencil.parserAtomData.size();
+  size_t maxScriptDataLength = 0;
+  size_t maxScopeDataLength = 0;
 
-/* static */
-bool CompilationStencil::prepareGCOutputForInstantiate(
-    JSContext* cx, BaseCompilationStencil& stencil,
-    CompilationGCOutput& gcOutput) {
+  // Reserve the `gcOutput` vectors.
   if (!gcOutput.functions.reserve(stencil.scriptData.size())) {
     ReportOutOfMemory(cx);
     return false;
@@ -1472,65 +1525,38 @@ bool CompilationStencil::prepareGCOutputForInstantiate(
     return false;
   }
 
-  return true;
-}
+  // Reserve the `gcOutputForDelazification` vectors.
+  if (stencil.delazificationSet) {
+    MOZ_ASSERT(gcOutputForDelazification);
 
-/* static */
-bool CompilationStencil::prepareForInstantiate(JSContext* cx,
-                                               CompilationStencil& stencil,
-                                               CompilationGCOutput& gcOutput) {
-  auto& input = stencil.input;
-
-  if (!prepareInputAndStencilForInstantiate(cx, input, stencil)) {
-    return false;
-  }
-  if (!prepareGCOutputForInstantiate(cx, stencil, gcOutput)) {
-    return false;
-  }
-
-  stencil.preparationIsPerformed = true;
-  return true;
-}
-
-bool CompilationStencilSet::prepareForInstantiate(
-    JSContext* cx, CompilationGCOutput& gcOutput,
-    CompilationGCOutput& gcOutputForDelazification) {
-  if (!CompilationStencil::prepareForInstantiate(cx, *this, gcOutput)) {
-    return false;
-  }
-
-  size_t maxScriptDataLength = 0;
-  size_t maxScopeDataLength = 0;
-  size_t maxParserAtomDataLength = 0;
-  for (auto& delazification : delazifications) {
-    if (maxParserAtomDataLength < delazification.parserAtomData.size()) {
-      maxParserAtomDataLength = delazification.parserAtomData.size();
+    for (auto& delazification : stencil.delazificationSet->delazifications) {
+      if (maxParserAtomDataLength < delazification.parserAtomData.size()) {
+        maxParserAtomDataLength = delazification.parserAtomData.size();
+      }
+      if (maxScriptDataLength < delazification.scriptData.size()) {
+        maxScriptDataLength = delazification.scriptData.size();
+      }
+      if (maxScopeDataLength < delazification.scopeData.size()) {
+        maxScopeDataLength = delazification.scopeData.size();
+      }
     }
-    if (maxScriptDataLength < delazification.scriptData.size()) {
-      maxScriptDataLength = delazification.scriptData.size();
+
+    if (!gcOutputForDelazification->functions.reserve(maxScriptDataLength)) {
+      ReportOutOfMemory(cx);
+      return false;
     }
-    if (maxScopeDataLength < delazification.scopeData.size()) {
-      maxScopeDataLength = delazification.scopeData.size();
+    if (!gcOutputForDelazification->scopes.reserve(maxScopeDataLength)) {
+      ReportOutOfMemory(cx);
+      return false;
+    }
+
+    if (!stencil.delazificationSet->buildDelazificationIndices(cx, stencil)) {
+      return false;
     }
   }
 
-  if (!input.atomCache.extendIfNecessary(cx, maxParserAtomDataLength)) {
-    return false;
-  }
-  if (!gcOutput.functions.reserve(maxScriptDataLength)) {
-    ReportOutOfMemory(cx);
-    return false;
-  }
-  if (!gcOutput.scopes.reserve(maxScopeDataLength)) {
-    ReportOutOfMemory(cx);
-    return false;
-  }
-
-  if (!buildDelazificationIndices(cx)) {
-    return false;
-  }
-
-  return true;
+  // The `atomCache` is used for the base and delazification stencils.
+  return stencil.input.atomCache.allocate(cx, maxParserAtomDataLength);
 }
 
 bool CompilationStencil::serializeStencils(JSContext* cx,
@@ -1566,9 +1592,9 @@ bool CompilationStencil::serializeStencils(JSContext* cx,
   return true;
 }
 
-bool CompilationStencilSet::deserializeStencils(JSContext* cx,
-                                                const JS::TranscodeRange& range,
-                                                bool* succeededOut) {
+bool CompilationStencil::deserializeStencils(JSContext* cx,
+                                             const JS::TranscodeRange& range,
+                                             bool* succeededOut) {
   if (succeededOut) {
     *succeededOut = false;
   }
@@ -1864,20 +1890,20 @@ void frontend::DumpTaggedParserAtomIndex(
     return;
   }
 
-  if (taggedIndex.isStaticParserString1()) {
-    json.property("tag", "Static1");
-    auto index = taggedIndex.toStaticParserString1();
+  if (taggedIndex.isLength1StaticParserString()) {
+    json.property("tag", "Length1Static");
+    auto index = taggedIndex.toLength1StaticParserString();
     GenericPrinter& out = json.beginStringProperty("atom");
-    WellKnownParserAtoms::getStatic1(index)->dumpCharsNoQuote(out);
+    WellKnownParserAtoms::getLength1Static(index)->dumpCharsNoQuote(out);
     json.endString();
     return;
   }
 
-  if (taggedIndex.isStaticParserString2()) {
-    json.property("tag", "Static2");
-    auto index = taggedIndex.toStaticParserString2();
+  if (taggedIndex.isLength2StaticParserString()) {
+    json.property("tag", "Length2Static");
+    auto index = taggedIndex.toLength2StaticParserString();
     GenericPrinter& out = json.beginStringProperty("atom");
-    WellKnownParserAtoms::getStatic2(index)->dumpCharsNoQuote(out);
+    WellKnownParserAtoms::getLength2Static(index)->dumpCharsNoQuote(out);
     json.endString();
     return;
   }
@@ -1930,15 +1956,15 @@ void frontend::DumpTaggedParserAtomIndexNoQuote(
     return;
   }
 
-  if (taggedIndex.isStaticParserString1()) {
-    auto index = taggedIndex.toStaticParserString1();
-    WellKnownParserAtoms::getStatic1(index)->dumpCharsNoQuote(out);
+  if (taggedIndex.isLength1StaticParserString()) {
+    auto index = taggedIndex.toLength1StaticParserString();
+    WellKnownParserAtoms::getLength1Static(index)->dumpCharsNoQuote(out);
     return;
   }
 
-  if (taggedIndex.isStaticParserString2()) {
-    auto index = taggedIndex.toStaticParserString2();
-    WellKnownParserAtoms::getStatic2(index)->dumpCharsNoQuote(out);
+  if (taggedIndex.isLength2StaticParserString()) {
+    auto index = taggedIndex.toLength2StaticParserString();
+    WellKnownParserAtoms::getLength2Static(index)->dumpCharsNoQuote(out);
     return;
   }
 
@@ -2758,13 +2784,13 @@ JSAtom* CompilationAtomCache::getExistingAtomAt(
     return GetWellKnownAtom(cx, index);
   }
 
-  if (taggedIndex.isStaticParserString1()) {
-    auto index = taggedIndex.toStaticParserString1();
+  if (taggedIndex.isLength1StaticParserString()) {
+    auto index = taggedIndex.toLength1StaticParserString();
     return cx->staticStrings().getUnit(char16_t(index));
   }
 
-  MOZ_ASSERT(taggedIndex.isStaticParserString2());
-  auto index = taggedIndex.toStaticParserString2();
+  MOZ_ASSERT(taggedIndex.isLength2StaticParserString());
+  auto index = taggedIndex.toLength2StaticParserString();
   return cx->staticStrings().getLength2FromIndex(size_t(index));
 }
 
@@ -2801,19 +2827,6 @@ bool CompilationAtomCache::setAtomAt(JSContext* cx, ParserAtomIndex index,
 bool CompilationAtomCache::allocate(JSContext* cx, size_t length) {
   MOZ_ASSERT(length >= atoms_.length());
   if (length == atoms_.length()) {
-    return true;
-  }
-
-  if (!atoms_.resize(length)) {
-    ReportOutOfMemory(cx);
-    return false;
-  }
-
-  return true;
-}
-
-bool CompilationAtomCache::extendIfNecessary(JSContext* cx, size_t length) {
-  if (length <= atoms_.length()) {
     return true;
   }
 

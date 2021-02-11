@@ -1235,42 +1235,52 @@ void CodeGenerator::visitFloat32ToIntegerInt32(LFloat32ToIntegerInt32* lir) {
 }
 
 void CodeGenerator::visitInt32ToIntPtr(LInt32ToIntPtr* lir) {
-  Register input = ToRegister(lir->input());
+#ifdef JS_64BIT
   Register output = ToRegister(lir->output());
 
-  // Zero-extension is more efficient than sign-extension, so use that if the
-  // input can't be negative.
-  if (lir->mir()->canBeNegative()) {
-    masm.move32SignExtendToPtr(input, output);
-  } else {
-#ifdef DEBUG
+  // This is a no-op if the input can't be negative. In debug builds assert
+  // (1) the upper 32 bits are zero and (2) the value <= INT32_MAX so that sign
+  // extension isn't needed.
+  if (!lir->mir()->canBeNegative()) {
+    MOZ_ASSERT(ToRegister(lir->input()) == output);
+#  ifdef DEBUG
     Label ok;
-    masm.branch32(Assembler::NotSigned, input, input, &ok);
-    masm.assumeUnreachable("LInt32ToIntPtr: Unexpected negative input");
+    masm.branchPtr(Assembler::BelowOrEqual, output, ImmWord(INT32_MAX), &ok);
+    masm.assumeUnreachable("LInt32ToIntPtr: unexpected range for value");
     masm.bind(&ok);
-#endif
-    masm.move32ZeroExtendToPtr(input, output);
+#  endif
+    return;
   }
+
+  const LAllocation* input = lir->input();
+  if (input->isRegister()) {
+    masm.move32SignExtendToPtr(ToRegister(input), output);
+  } else {
+    masm.load32SignExtendToPtr(ToAddress(input), output);
+  }
+#else
+  MOZ_CRASH("Not used on 32-bit platforms");
+#endif
 }
 
 void CodeGenerator::visitNonNegativeIntPtrToInt32(
     LNonNegativeIntPtrToInt32* lir) {
+#ifdef JS_64BIT
   Register output = ToRegister(lir->output());
   MOZ_ASSERT(ToRegister(lir->input()) == output);
 
-#ifdef DEBUG
+#  ifdef DEBUG
   Label ok;
   masm.branchPtr(Assembler::NotSigned, output, output, &ok);
   masm.assumeUnreachable("Unexpected negative value");
   masm.bind(&ok);
-#endif
+#  endif
 
-#ifdef JS_64BIT
   Label bail;
   masm.branchPtr(Assembler::Above, output, Imm32(INT32_MAX), &bail);
   bailoutFrom(&bail, lir->snapshot());
 #else
-  mozilla::Unused << output;
+  MOZ_CRASH("Not used on 32-bit platforms");
 #endif
 }
 
@@ -4535,9 +4545,10 @@ void CodeGenerator::visitTruncateBigIntToInt64(LTruncateBigIntToInt64* lir) {
   masm.loadBigInt64(operand, output);
 }
 
-void CodeGenerator::emitCreateBigInt(LInstruction* lir, Scalar::Type type,
-                                     Register64 input, Register output,
-                                     Register maybeTemp) {
+OutOfLineCode* CodeGenerator::createBigIntOutOfLine(LInstruction* lir,
+                                                    Scalar::Type type,
+                                                    Register64 input,
+                                                    Register output) {
 #if JS_BITS_PER_WORD == 32
   using Fn = BigInt* (*)(JSContext*, uint32_t, uint32_t);
   auto args = ArgList(input.low, input.high);
@@ -4546,15 +4557,19 @@ void CodeGenerator::emitCreateBigInt(LInstruction* lir, Scalar::Type type,
   auto args = ArgList(input);
 #endif
 
-  OutOfLineCode* ool;
   if (type == Scalar::BigInt64) {
-    ool = oolCallVM<Fn, jit::CreateBigIntFromInt64>(lir, args,
-                                                    StoreRegisterTo(output));
-  } else {
-    MOZ_ASSERT(type == Scalar::BigUint64);
-    ool = oolCallVM<Fn, jit::CreateBigIntFromUint64>(lir, args,
+    return oolCallVM<Fn, jit::CreateBigIntFromInt64>(lir, args,
                                                      StoreRegisterTo(output));
   }
+  MOZ_ASSERT(type == Scalar::BigUint64);
+  return oolCallVM<Fn, jit::CreateBigIntFromUint64>(lir, args,
+                                                    StoreRegisterTo(output));
+}
+
+void CodeGenerator::emitCreateBigInt(LInstruction* lir, Scalar::Type type,
+                                     Register64 input, Register output,
+                                     Register maybeTemp) {
+  OutOfLineCode* ool = createBigIntOutOfLine(lir, type, input, output);
 
   if (maybeTemp != InvalidReg) {
     masm.newGCBigInt(output, maybeTemp, ool->entry(), bigIntsCanBeInNursery());
@@ -12365,12 +12380,12 @@ void CodeGenerator::visitLoadUnboxedScalar(LLoadUnboxedScalar* lir) {
 
   Label fail;
   if (lir->index()->isConstant()) {
-    Address source = ToAddress(elements, lir->index(), storageType);
+    Address source =
+        ToAddress(elements, lir->index(), storageType, mir->offsetAdjustment());
     masm.loadFromTypedArray(storageType, source, out, temp, &fail);
   } else {
-    size_t width = Scalar::byteSize(storageType);
     BaseIndex source(elements, ToRegister(lir->index()),
-                     ScaleFromElemWidth(width), mir->offsetAdjustment());
+                     ScaleFromScalarType(storageType), mir->offsetAdjustment());
     masm.loadFromTypedArray(storageType, source, out, temp, &fail);
   }
 
@@ -12394,9 +12409,8 @@ void CodeGenerator::visitLoadUnboxedBigInt(LLoadUnboxedBigInt* lir) {
         ToAddress(elements, lir->index(), storageType, mir->offsetAdjustment());
     masm.load64(source, temp64);
   } else {
-    size_t width = Scalar::byteSize(storageType);
     BaseIndex source(elements, ToRegister(lir->index()),
-                     ScaleFromElemWidth(width), mir->offsetAdjustment());
+                     ScaleFromScalarType(storageType), mir->offsetAdjustment());
     masm.load64(source, temp64);
   }
 
@@ -12562,9 +12576,8 @@ void CodeGenerator::visitLoadTypedArrayElementHole(
   masm.loadPtr(Address(object, ArrayBufferViewObject::dataOffset()), scratch);
 
   Scalar::Type arrayType = lir->mir()->arrayType();
-  size_t width = Scalar::byteSize(arrayType);
   Label fail;
-  BaseIndex source(scratch, index, ScaleFromElemWidth(width));
+  BaseIndex source(scratch, index, ScaleFromScalarType(arrayType));
   masm.loadFromTypedArray(arrayType, source, out, lir->mir()->allowDouble(),
                           out.scratchReg(), &fail);
   masm.jump(&done);
@@ -12607,8 +12620,7 @@ void CodeGenerator::visitLoadTypedArrayElementHoleBigInt(
   masm.loadPtr(Address(object, ArrayBufferViewObject::dataOffset()), scratch);
 
   Scalar::Type arrayType = lir->mir()->arrayType();
-  size_t width = Scalar::byteSize(arrayType);
-  BaseIndex source(scratch, index, ScaleFromElemWidth(width));
+  BaseIndex source(scratch, index, ScaleFromScalarType(arrayType));
   masm.load64(source, temp64);
 
   Register bigInt = out.scratchReg();
@@ -12758,9 +12770,8 @@ void CodeGenerator::visitStoreUnboxedScalar(LStoreUnboxedScalar* lir) {
     Address dest = ToAddress(elements, lir->index(), writeType);
     StoreToTypedArray(masm, writeType, value, dest);
   } else {
-    size_t width = Scalar::byteSize(mir->writeType());
     BaseIndex dest(elements, ToRegister(lir->index()),
-                   ScaleFromElemWidth(width));
+                   ScaleFromScalarType(writeType));
     StoreToTypedArray(masm, writeType, value, dest);
   }
 }
@@ -12770,8 +12781,7 @@ void CodeGenerator::visitStoreUnboxedBigInt(LStoreUnboxedBigInt* lir) {
   Register value = ToRegister(lir->value());
   Register64 temp = ToRegister64(lir->temp());
 
-  const MStoreUnboxedScalar* mir = lir->mir();
-  Scalar::Type writeType = mir->writeType();
+  Scalar::Type writeType = lir->mir()->writeType();
 
   masm.loadBigInt64(value, temp);
 
@@ -12779,9 +12789,8 @@ void CodeGenerator::visitStoreUnboxedBigInt(LStoreUnboxedBigInt* lir) {
     Address dest = ToAddress(elements, lir->index(), writeType);
     masm.storeToTypedBigIntArray(writeType, temp, dest);
   } else {
-    size_t width = Scalar::byteSize(mir->writeType());
     BaseIndex dest(elements, ToRegister(lir->index()),
-                   ScaleFromElemWidth(width));
+                   ScaleFromScalarType(writeType));
     masm.storeToTypedBigIntArray(writeType, temp, dest);
   }
 }
@@ -12916,7 +12925,6 @@ void CodeGenerator::visitStoreTypedArrayElementHole(
   const LAllocation* value = lir->value();
 
   Scalar::Type arrayType = lir->mir()->arrayType();
-  size_t width = Scalar::byteSize(arrayType);
 
   Register index = ToRegister(lir->index());
   const LAllocation* length = lir->length();
@@ -12929,7 +12937,7 @@ void CodeGenerator::visitStoreTypedArrayElementHole(
     masm.spectreBoundsCheckPtr(index, ToAddress(length), spectreTemp, &skip);
   }
 
-  BaseIndex dest(elements, index, ScaleFromElemWidth(width));
+  BaseIndex dest(elements, index, ScaleFromScalarType(arrayType));
   StoreToTypedArray(masm, arrayType, value, dest);
 
   masm.bind(&skip);
@@ -12942,7 +12950,6 @@ void CodeGenerator::visitStoreTypedArrayElementHoleBigInt(
   Register64 temp = ToRegister64(lir->temp());
 
   Scalar::Type arrayType = lir->mir()->arrayType();
-  size_t width = Scalar::byteSize(arrayType);
 
   Register index = ToRegister(lir->index());
   const LAllocation* length = lir->length();
@@ -12957,7 +12964,7 @@ void CodeGenerator::visitStoreTypedArrayElementHoleBigInt(
 
   masm.loadBigInt64(value, temp);
 
-  BaseIndex dest(elements, index, ScaleFromElemWidth(width));
+  BaseIndex dest(elements, index, ScaleFromScalarType(arrayType));
   masm.storeToTypedBigIntArray(arrayType, temp, dest);
 
   masm.bind(&skip);
