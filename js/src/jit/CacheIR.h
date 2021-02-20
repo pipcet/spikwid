@@ -315,7 +315,8 @@ class CallFlags {
     Standard,
     Spread,
     FunCall,
-    FunApplyArgs,
+    FunApplyMagicArgs,
+    FunApplyArgsObj,
     FunApplyArray,
     LastArgFormat = FunApplyArray
   };
@@ -463,7 +464,8 @@ inline int32_t GetIndexOfArgument(ArgumentKind kind, CallFlags flags,
       break;
     case CallFlags::Unknown:
     case CallFlags::FunCall:
-    case CallFlags::FunApplyArgs:
+    case CallFlags::FunApplyMagicArgs:
+    case CallFlags::FunApplyArgsObj:
     case CallFlags::FunApplyArray:
       MOZ_CRASH("Currently unreachable");
       break;
@@ -840,11 +842,6 @@ class MOZ_RAII CacheIRWriter : public JS::CustomAutoRooter {
   // Instead of calling guardGroup manually, use (or create) a specialization
   // below to clarify what constraint the group guard is implying.
   void guardGroupForProto(ObjOperandId obj, ObjectGroup* group) {
-    guardGroup(obj, group);
-  }
-
-  void guardGroupForLayout(ObjOperandId obj, ObjectGroup* group) {
-    MOZ_ASSERT(IsTypedObjectClass(group->clasp()));
     guardGroup(obj, group);
   }
 
@@ -1280,8 +1277,15 @@ class MOZ_RAII GetPropIRGenerator : public IRGenerator {
                                  HandleId id, ValOperandId receiverId);
   AttachDecision tryAttachObjectLength(HandleObject obj, ObjOperandId objId,
                                        HandleId id);
-  AttachDecision tryAttachTypedArrayLength(HandleObject obj, ObjOperandId objId,
-                                           HandleId id);
+  AttachDecision tryAttachTypedArray(HandleObject obj, ObjOperandId objId,
+                                     HandleId id);
+  AttachDecision tryAttachDataView(HandleObject obj, ObjOperandId objId,
+                                   HandleId id);
+  AttachDecision tryAttachArrayBufferMaybeShared(HandleObject obj,
+                                                 ObjOperandId objId,
+                                                 HandleId id);
+  AttachDecision tryAttachRegExp(HandleObject obj, ObjOperandId objId,
+                                 HandleId id);
   AttachDecision tryAttachModuleNamespace(HandleObject obj, ObjOperandId objId,
                                           HandleId id);
   AttachDecision tryAttachWindowProxy(HandleObject obj, ObjOperandId objId,
@@ -1710,7 +1714,7 @@ class MOZ_RAII CallIRGenerator : public IRGenerator {
                                        bool isPossiblyWrapped);
   AttachDecision tryAttachIsTypedArrayConstructor(HandleFunction callee);
   AttachDecision tryAttachTypedArrayByteOffset(HandleFunction callee);
-  AttachDecision tryAttachTypedArrayElementShift(HandleFunction callee);
+  AttachDecision tryAttachTypedArrayElementSize(HandleFunction callee);
   AttachDecision tryAttachTypedArrayLength(HandleFunction callee,
                                            bool isPossiblyWrapped);
   AttachDecision tryAttachArrayBufferByteLength(HandleFunction callee,

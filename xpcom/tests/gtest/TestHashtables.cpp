@@ -23,6 +23,7 @@
 #include <numeric>
 
 using mozilla::MakeRefPtr;
+using mozilla::MakeUnique;
 using mozilla::UniquePtr;
 
 namespace TestHashtables {
@@ -401,32 +402,32 @@ struct NonDefaultConstructible_NonDefaultConstructible {
   using DataType = NonDefaultConstructible;
   using UserDataType = NonDefaultConstructible;
 
-  static constexpr uint32_t kExpectedAddRefCnt_Contains = 3;
-  static constexpr uint32_t kExpectedAddRefCnt_GetGeneration = 3;
+  static constexpr uint32_t kExpectedAddRefCnt_Contains = 2;
+  static constexpr uint32_t kExpectedAddRefCnt_GetGeneration = 2;
   static constexpr uint32_t kExpectedAddRefCnt_SizeOfExcludingThis = 3;
   static constexpr uint32_t kExpectedAddRefCnt_SizeOfIncludingThis = 3;
-  static constexpr uint32_t kExpectedAddRefCnt_Count = 3;
-  static constexpr uint32_t kExpectedAddRefCnt_IsEmpty = 3;
-  static constexpr uint32_t kExpectedAddRefCnt_Get_OutputParam = 6;
-  static constexpr uint32_t kExpectedAddRefCnt_MaybeGet = 6;
-  static constexpr uint32_t kExpectedAddRefCnt_Put = 3;
-  static constexpr uint32_t kExpectedAddRefCnt_Put_Fallible = 3;
-  static constexpr uint32_t kExpectedAddRefCnt_Put_Rvalue = 3;
-  static constexpr uint32_t kExpectedAddRefCnt_Put_Rvalue_Fallible = 3;
-  static constexpr uint32_t kExpectedAddRefCnt_Remove = 3;
-  static constexpr uint32_t kExpectedAddRefCnt_GetAndRemove = 4;
-  static constexpr uint32_t kExpectedAddRefCnt_RemoveIf = 3;
-  static constexpr uint32_t kExpectedAddRefCnt_Lookup = 3;
-  static constexpr uint32_t kExpectedAddRefCnt_Lookup_Remove = 3;
-  static constexpr uint32_t kExpectedAddRefCnt_Iter = 3;
-  static constexpr uint32_t kExpectedAddRefCnt_ConstIter = 3;
-  static constexpr uint32_t kExpectedAddRefCnt_begin_end = 3;
-  static constexpr uint32_t kExpectedAddRefCnt_cbegin_cend = 3;
-  static constexpr uint32_t kExpectedAddRefCnt_Clear = 3;
-  static constexpr uint32_t kExpectedAddRefCnt_ShallowSizeOfExcludingThis = 3;
-  static constexpr uint32_t kExpectedAddRefCnt_ShallowSizeOfIncludingThis = 3;
-  static constexpr uint32_t kExpectedAddRefCnt_SwapElements = 3;
-  static constexpr uint32_t kExpectedAddRefCnt_MarkImmutable = 3;
+  static constexpr uint32_t kExpectedAddRefCnt_Count = 2;
+  static constexpr uint32_t kExpectedAddRefCnt_IsEmpty = 2;
+  static constexpr uint32_t kExpectedAddRefCnt_Get_OutputParam = 5;
+  static constexpr uint32_t kExpectedAddRefCnt_MaybeGet = 5;
+  static constexpr uint32_t kExpectedAddRefCnt_Put = 2;
+  static constexpr uint32_t kExpectedAddRefCnt_Put_Fallible = 2;
+  static constexpr uint32_t kExpectedAddRefCnt_Put_Rvalue = 2;
+  static constexpr uint32_t kExpectedAddRefCnt_Put_Rvalue_Fallible = 2;
+  static constexpr uint32_t kExpectedAddRefCnt_Remove = 2;
+  static constexpr uint32_t kExpectedAddRefCnt_GetAndRemove = 3;
+  static constexpr uint32_t kExpectedAddRefCnt_RemoveIf = 2;
+  static constexpr uint32_t kExpectedAddRefCnt_Lookup = 2;
+  static constexpr uint32_t kExpectedAddRefCnt_Lookup_Remove = 2;
+  static constexpr uint32_t kExpectedAddRefCnt_Iter = 2;
+  static constexpr uint32_t kExpectedAddRefCnt_ConstIter = 2;
+  static constexpr uint32_t kExpectedAddRefCnt_begin_end = 2;
+  static constexpr uint32_t kExpectedAddRefCnt_cbegin_cend = 2;
+  static constexpr uint32_t kExpectedAddRefCnt_Clear = 2;
+  static constexpr uint32_t kExpectedAddRefCnt_ShallowSizeOfExcludingThis = 2;
+  static constexpr uint32_t kExpectedAddRefCnt_ShallowSizeOfIncludingThis = 2;
+  static constexpr uint32_t kExpectedAddRefCnt_SwapElements = 2;
+  static constexpr uint32_t kExpectedAddRefCnt_MarkImmutable = 2;
 };
 
 struct NonDefaultConstructible_MovingNonDefaultConstructible {
@@ -683,8 +684,7 @@ TYPED_TEST_P(BaseHashtableTest, MaybeGet) {
   EXPECT_EQ(data.CharRef()->GetChar(), 42u);
 }
 
-TYPED_TEST_P(BaseHashtableTest, GetOrInsert) {
-  // The GetOrInsert function can't support non-default-constructible DataType.
+TYPED_TEST_P(BaseHashtableTest, GetOrInsert_Default) {
   if constexpr (std::is_default_constructible_v<typename TypeParam::DataType>) {
     auto table = MakeEmptyBaseHashtable<TypeParam>();
 
@@ -694,6 +694,48 @@ TYPED_TEST_P(BaseHashtableTest, GetOrInsert) {
     data = typename TypeParam::DataType(MakeRefPtr<TestUniCharRefCounted>(
         42, TypeParam::kExpectedAddRefCnt_GetOrInsert));
   }
+}
+
+TYPED_TEST_P(BaseHashtableTest, GetOrInsert_NonDefault) {
+  auto table = MakeEmptyBaseHashtable<TypeParam>();
+
+  typename TypeParam::DataType& data = table.GetOrInsert(
+      1, typename TypeParam::DataType{MakeRefPtr<TestUniCharRefCounted>(42)});
+  EXPECT_NE(data.CharRef(), nullptr);
+}
+
+TYPED_TEST_P(BaseHashtableTest, GetOrInsert_NonDefault_AlreadyPresent) {
+  auto table = MakeEmptyBaseHashtable<TypeParam>();
+
+  typename TypeParam::DataType& data1 = table.GetOrInsert(
+      1, typename TypeParam::DataType{MakeRefPtr<TestUniCharRefCounted>(42)});
+  TestUniCharRefCounted* const address = data1.CharRef();
+  typename TypeParam::DataType& data2 = table.GetOrInsert(
+      1,
+      typename TypeParam::DataType{MakeRefPtr<TestUniCharRefCounted>(42, 1)});
+  EXPECT_EQ(&data1, &data2);
+  EXPECT_EQ(address, data2.CharRef());
+}
+
+TYPED_TEST_P(BaseHashtableTest, GetOrInsertWith) {
+  auto table = MakeEmptyBaseHashtable<TypeParam>();
+
+  typename TypeParam::DataType& data = table.GetOrInsertWith(1, [] {
+    return typename TypeParam::DataType{MakeRefPtr<TestUniCharRefCounted>(42)};
+  });
+  EXPECT_NE(data.CharRef(), nullptr);
+}
+
+TYPED_TEST_P(BaseHashtableTest, GetOrInsertWith_AlreadyPresent) {
+  auto table = MakeEmptyBaseHashtable<TypeParam>();
+
+  table.GetOrInsertWith(1, [] {
+    return typename TypeParam::DataType{MakeRefPtr<TestUniCharRefCounted>(42)};
+  });
+  table.GetOrInsertWith(1, [] {
+    ADD_FAILURE();
+    return typename TypeParam::DataType{MakeRefPtr<TestUniCharRefCounted>(42)};
+  });
 }
 
 TYPED_TEST_P(BaseHashtableTest, Put) {
@@ -950,10 +992,12 @@ TYPED_TEST_P(BaseHashtableTest, MarkImmutable) {
 REGISTER_TYPED_TEST_CASE_P(
     BaseHashtableTest, Contains, GetGeneration, SizeOfExcludingThis,
     SizeOfIncludingThis, Count, IsEmpty, Get_OutputParam, Get, MaybeGet,
-    GetOrInsert, Put, Put_Fallible, Put_Rvalue, Put_Rvalue_Fallible,
-    Remove_OutputParam, Remove, GetAndRemove, RemoveIf, Lookup, Lookup_Remove,
-    WithEntryHandle_NoOp, WithEntryHandle_NotFound_OrInsert,
-    WithEntryHandle_NotFound_OrInsertFrom,
+    GetOrInsert_Default, GetOrInsert_NonDefault,
+    GetOrInsert_NonDefault_AlreadyPresent, GetOrInsertWith,
+    GetOrInsertWith_AlreadyPresent, Put, Put_Fallible, Put_Rvalue,
+    Put_Rvalue_Fallible, Remove_OutputParam, Remove, GetAndRemove, RemoveIf,
+    Lookup, Lookup_Remove, WithEntryHandle_NoOp,
+    WithEntryHandle_NotFound_OrInsert, WithEntryHandle_NotFound_OrInsertFrom,
     WithEntryHandle_NotFound_OrInsertFrom_Exists,
     WithEntryHandle_NotFound_OrRemove, WithEntryHandle_NotFound_OrRemove_Exists,
     Iter, ConstIter, begin_end, cbegin_cend, Clear, ShallowSizeOfExcludingThis,
@@ -1119,8 +1163,8 @@ TEST(Hashtables, ClassHashtable_RangeBasedFor)
   nsClassHashtable<nsCStringHashKey, TestUniChar> EntToUniClass(ENTITY_COUNT);
 
   for (auto& entity : gEntities) {
-    auto* temp = new TestUniChar(entity.mUnicode);
-    EntToUniClass.Put(nsDependentCString(entity.mStr), temp);
+    EntToUniClass.Put(nsDependentCString(entity.mStr),
+                      MakeUnique<TestUniChar>(entity.mUnicode));
   }
 
   // const range-based for
@@ -1420,7 +1464,7 @@ TEST(Hashtables, ClassHashtable_LookupOrAdd_NotPresent)
   EXPECT_EQ(42u, entry->GetChar());
 }
 
-TEST(Hashtables, ClassHashtable_LookupOrAddFromFactory_Present)
+TEST(Hashtables, ClassHashtable_GetOrInsertWith_Present)
 {
   nsClassHashtable<nsCStringHashKey, TestUniChar> EntToUniClass(ENTITY_COUNT);
 
@@ -1429,17 +1473,17 @@ TEST(Hashtables, ClassHashtable_LookupOrAddFromFactory_Present)
                       mozilla::MakeUnique<TestUniCharDerived>(entity.mUnicode));
   }
 
-  auto* entry = EntToUniClass.LookupOrAddFromFactory(
+  const auto& entry = EntToUniClass.GetOrInsertWith(
       "uml"_ns, [] { return mozilla::MakeUnique<TestUniCharDerived>(42); });
   EXPECT_EQ(168u, entry->GetChar());
 }
 
-TEST(Hashtables, ClassHashtable_LookupOrAddFromFactory_NotPresent)
+TEST(Hashtables, ClassHashtable_GetOrInsertWith_NotPresent)
 {
   nsClassHashtable<nsCStringHashKey, TestUniChar> EntToUniClass(ENTITY_COUNT);
 
   // This is going to insert a TestUniCharDerived.
-  auto* entry = EntToUniClass.LookupOrAddFromFactory(
+  const auto& entry = EntToUniClass.GetOrInsertWith(
       "uml"_ns, [] { return mozilla::MakeUnique<TestUniCharDerived>(42); });
   EXPECT_EQ(42u, entry->GetChar());
 }

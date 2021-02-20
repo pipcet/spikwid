@@ -2110,7 +2110,10 @@ class MOZ_STACK_CLASS ModuleValidator : public ModuleValidatorShared {
       }
     }
 
-    SharedCompileArgs args = CompileArgs::build(cx_, std::move(scriptedCaller));
+    // The default options are fine for asm.js
+    FeatureOptions options;
+    SharedCompileArgs args =
+        CompileArgs::build(cx_, std::move(scriptedCaller), options);
     if (!args) {
       return nullptr;
     }
@@ -6725,20 +6728,26 @@ static bool ValidateConstant(JSContext* cx, const AsmJSGlobal& global,
 
 static bool CheckBuffer(JSContext* cx, const AsmJSMetadata& metadata,
                         HandleValue bufferVal,
-                        MutableHandle<ArrayBufferObjectMaybeShared*> buffer) {
+                        MutableHandle<ArrayBufferObject*> buffer) {
+  if (!bufferVal.isObject()) {
+    return LinkFail(cx, "buffer must be an object");
+  }
+  JSObject* bufferObj = &bufferVal.toObject();
+
   if (metadata.memoryUsage == MemoryUsage::Shared) {
-    if (!IsSharedArrayBuffer(bufferVal)) {
+    if (!bufferObj->is<SharedArrayBufferObject>()) {
       return LinkFail(
           cx, "shared views can only be constructed onto SharedArrayBuffer");
     }
-  } else {
-    if (!IsArrayBuffer(bufferVal)) {
-      return LinkFail(
-          cx, "unshared views can only be constructed onto ArrayBuffer");
-    }
+    return LinkFail(cx, "Unable to prepare SharedArrayBuffer for asm.js use");
   }
 
-  buffer.set(&AsAnyArrayBuffer(bufferVal));
+  if (!bufferObj->is<ArrayBufferObject>()) {
+    return LinkFail(cx,
+                    "unshared views can only be constructed onto ArrayBuffer");
+  }
+
+  buffer.set(&bufferObj->as<ArrayBufferObject>());
 
   // Do not assume the buffer's length fits within the wasm heap limit, so do
   // not call ByteLength32().
@@ -6774,14 +6783,8 @@ static bool CheckBuffer(JSContext* cx, const AsmJSMetadata& metadata,
     return LinkFail(cx, msg.get());
   }
 
-  if (buffer->is<ArrayBufferObject>()) {
-    Rooted<ArrayBufferObject*> arrayBuffer(cx,
-                                           &buffer->as<ArrayBufferObject>());
-    if (!arrayBuffer->prepareForAsmJS()) {
-      return LinkFail(cx, "Unable to prepare ArrayBuffer for asm.js use");
-    }
-  } else {
-    return LinkFail(cx, "Unable to prepare SharedArrayBuffer for asm.js use");
+  if (!buffer->prepareForAsmJS()) {
+    return LinkFail(cx, "Unable to prepare ArrayBuffer for asm.js use");
   }
 
   MOZ_ASSERT(buffer->isPreparedForAsmJS());
@@ -6858,7 +6861,7 @@ static bool TryInstantiate(JSContext* cx, CallArgs args, const Module& module,
   Rooted<ImportValues> imports(cx);
 
   if (module.metadata().usesMemory()) {
-    RootedArrayBufferObjectMaybeShared buffer(cx);
+    RootedArrayBufferObject buffer(cx);
     if (!CheckBuffer(cx, metadata, bufferVal, &buffer)) {
       return false;
     }

@@ -35,7 +35,8 @@
 #include "vm/PlainObject.h"  // js::PlainObject
 #include "vm/RegExpObject.h"
 #include "vm/StringObject.h"
-#include "vm/ToSource.h"  // js::ValueToSource
+#include "vm/ToSource.h"       // js::ValueToSource
+#include "vm/WellKnownAtom.h"  // js_*_str
 
 #include "vm/JSObject-inl.h"
 #include "vm/NativeObject-inl.h"
@@ -967,7 +968,7 @@ static bool obj_assign(JSContext* cx, unsigned argc, Value* vp) {
 }
 
 /* ES5 15.2.4.6. */
-static bool obj_isPrototypeOf(JSContext* cx, unsigned argc, Value* vp) {
+bool js::obj_isPrototypeOf(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
 
   /* Step 1. */

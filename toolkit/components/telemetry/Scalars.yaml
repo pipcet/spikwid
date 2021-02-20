@@ -1235,11 +1235,12 @@ security:
       - 1265472
       - 1558870
       - 1630155
+      - 1689269
     description: >
       Counts of how often Web Authentication was used in this session, keyed
       by authenticator protocol, method and result. Currently: U2FRegisterFinish,
       U2FRegisterAbort, U2FSignFinish, U2FSignAbort.
-    expires: "88"
+    expires: "100"
     kind: uint
     keyed: true
     notification_emails:
@@ -2241,6 +2242,23 @@ media:
     record_in_processes:
       - 'content'
 
+  wmf_process_usage:
+    bug_numbers:
+      - 1690372
+    description: >
+      Record whether the WMF decoder module is used in content or chrome process.
+    expires: "93"
+    kind: boolean
+    notification_emails:
+      - alwu@mozilla.com
+      - bvandyk@mozilla.com
+    release_channel_collection: opt-out
+    products:
+      - 'firefox'
+    record_in_processes:
+      - 'main'
+      - 'content'
+
 # The following section contains content process base counters.
 dom.contentprocess:
   buildID_mismatch:
@@ -2309,6 +2327,50 @@ dom.contentprocess:
     products:
       - 'firefox'
       - 'fennec'
+    record_in_processes:
+      - 'main'
+  crash_tab_ui_presented:
+    bug_numbers:
+      - 1676943
+    description: >
+      The number of times the tab crashed page has been shown.
+    expires: "98"
+    kind: uint
+    notification_emails:
+      - nlayzell@mozilla.com
+    release_channel_collection: opt-out
+    products:
+      - 'firefox'
+    record_in_processes:
+      - 'main'
+  crash_subframe_ui_presented:
+    bug_numbers:
+      - 1676943
+    description: >  
+      The number of times the subframe crash UI is shown to the user. This
+      only triggers when a tab containing the subframe is switched to.
+    expires: "98"
+    kind: uint
+    notification_emails:
+      - nlayzell@mozilla.com
+    release_channel_collection: opt-out
+    products:
+      - 'firefox'
+    record_in_processes:
+      - 'main'
+  # Note that the unsubmitted notification is currently only enabled on Nightly builds
+  unsubmitted_ui_presented:
+    bug_numbers:
+      - 1676943
+    description: >
+      The number of times the notification has been shown that indicates
+      that there are unsubmitted crash reports.
+    expires: "98"
+    kind: uint
+    notification_emails:
+      - nlayzell@mozilla.com
+    products:
+      - 'firefox'
     record_in_processes:
       - 'main'
 
@@ -5396,7 +5458,7 @@ script.preloader:
     description:
       How many times we ended up recompiling a script from the script preloader
       on the main thread.
-    expires: "88"
+    expires: "100"
     keyed: false
     kind: uint
     notification_emails:
@@ -5633,11 +5695,12 @@ blocklist:
       - 1572711
       - 1607744
       - 1649960
+      - 1689274
     description: >
       Keep track of the last time the "addons" remotesetting blocklist has been successfully
       updated (as a datetime string in UTC format), set to "Missing Date" when the timestamp
       couldn't be retrieved.
-    expires: "88"
+    expires: "95"
     kind: string
     release_channel_collection: opt-out
     notification_emails:
@@ -5656,11 +5719,12 @@ blocklist:
     bug_numbers:
       - 1633466
       - 1649960
+      - 1689274
     description: >
       Keep track of the last time the "addons-bloomfilters" remotesetting blocklist has been successfully
       updated (as a datetime string in UTC format), set to "Missing Date" when the timestamp
       couldn't be retrieved.
-    expires: "88"
+    expires: "95"
     kind: string
     release_channel_collection: opt-out
     notification_emails:
@@ -5678,11 +5742,12 @@ blocklist:
       - 1572711
       - 1607744
       - 1649960
+      - 1689274
     description: >
       Keep track of the last time the "plugins" remotesetting blocklist has been successfully
       updated (as a datetime string in UTC format), set to "Missing Date" when the timestamp
       couldn't be retrieved.
-    expires: "88"
+    expires: "95"
     kind: string
     release_channel_collection: opt-out
     notification_emails:
@@ -5700,10 +5765,11 @@ blocklist:
     bug_numbers:
       - 1633466
       - 1649960
+      - 1689274
     description: >
       Keep track of whether the addons blocklist engine uses bloom filters (blocklist v3).
       If false, the blocklist v2 is used instead.
-    expires: "88"
+    expires: "95"
     kind: boolean
     release_channel_collection: opt-out
     notification_emails:
@@ -5720,12 +5786,13 @@ blocklist:
     bug_numbers:
       - 1633466
       - 1649960
+      - 1689274
     description: >
       Keep track of whether the bloomfilter-based blocklist engine uses stashes from the
       addons-bloomfilters collection, together with an infrequently updated base bloomfilter.
       If false, the latest (full) bloom filter is downloaded on every update of the addon blocklist.
       This metric is only meaningful if mlbf_enabled is true.
-    expires: "88"
+    expires: "95"
     kind: boolean
     release_channel_collection: opt-out
     notification_emails:
@@ -5742,12 +5809,13 @@ blocklist:
     bug_numbers:
       - 1633466
       - 1649960
+      - 1689274
     description: >
       Keep track of the generation time of the addon blocklist's bloom filter. This marks the
       point in time until which signed add-ons are recognized by the selected bloom filter from the
       addons-bloomfilters collection.
       The value is a datetime string in UTC format, or  "Missing Date" when unavailable.
-    expires: "88"
+    expires: "95"
     kind: string
     release_channel_collection: opt-out
     notification_emails:
@@ -5764,11 +5832,12 @@ blocklist:
     bug_numbers:
       - 1633466
       - 1649960
+      - 1689274
     description: >
       Keep track of the timestamp of the oldest stash of the addons blocklist.
       Only meaningful when mlbf_enabled and mlbf_stashes are true.
       The value is a datetime string in UTC format, or "Missing Date" when unavailable.
-    expires: "88"
+    expires: "95"
     kind: string
     release_channel_collection: opt-out
     notification_emails:
@@ -5785,11 +5854,12 @@ blocklist:
     bug_numbers:
       - 1633466
       - 1649960
+      - 1689274
     description: >
       Keep track of the timestamp of the most recent stash of the addons blocklist.
       Only meaningful when mlbf_enabled and mlbf_stashes are true.
       The value is a datetime string in UTC format, or "Missing Date" when unavailable.
-    expires: "88"
+    expires: "95"
     kind: string
     release_channel_collection: opt-out
     notification_emails:

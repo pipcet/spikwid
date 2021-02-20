@@ -155,6 +155,7 @@ WINDOWS_WORKER_TYPES = {
 MACOSX_WORKER_TYPES = {
     "macosx1014-64": "t-osx-1014",
     "macosx1014-64-power": "t-osx-1014-power",
+    "macosx1015-64": "t-osx-1015-r8-qa",
 }
 
 
@@ -319,6 +320,18 @@ TEST_VARIANTS = {
                 },
             },
         },
+        "merge": {
+            "mozharness": {
+                "extra-options": [
+                    "--setpref=webgl.out-of-process=true",
+                ],
+            },
+        },
+    },
+    "webgl-ipc-profiling": {
+        # TODO: After 2021-02-01, verify this variant is still needed.
+        "description": "{description} with WebGL IPC process enabled",
+        "suffix": "gli",
         "merge": {
             "mozharness": {
                 "extra-options": [
@@ -1796,6 +1809,16 @@ def set_worker_type(config, tasks):
                 "build-platform"
             ].startswith("linux64-ccov"):
                 task["worker-type"] = "t-linux-talos"
+                # TODO: duplicate tasks for linux-1804 (remove March 1st)
+                task1804 = copy.deepcopy(task)
+                task1804["test-platform"] = test_platform.replace(
+                    "linux64", "linux1804-64"
+                )
+                task1804["treeherder-machine-platform"] = task1804[
+                    "treeherder-machine-platform"
+                ].replace("linux64", "linux1804-64")
+                task1804["worker-type"] = "t-linux-talos-1804"
+                yield task1804
             else:
                 task["worker-type"] = LINUX_WORKER_TYPES[task["instance-size"]]
         else:

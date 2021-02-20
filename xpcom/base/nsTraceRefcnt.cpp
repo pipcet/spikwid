@@ -307,8 +307,10 @@ static BloatEntry* GetBloatEntry(const char* aTypeName,
   EnsureBloatView();
   BloatEntry* entry = gBloatView->Get(aTypeName);
   if (!entry && aInstanceSize > 0) {
-    entry = new BloatEntry(aTypeName, aInstanceSize);
-    gBloatView->Put(aTypeName, entry);
+    entry =
+        gBloatView
+            ->Put(aTypeName, MakeUnique<BloatEntry>(aTypeName, aInstanceSize))
+            .get();
   } else {
     MOZ_ASSERT(
         aInstanceSize == 0 || entry->GetClassSize() == aInstanceSize,
@@ -463,7 +465,7 @@ static intptr_t GetSerialNumber(void* aPtr, bool aCreate) {
           "it.");
     }
 
-    auto& record = entry.Insert(new SerialNumberRecord());
+    auto& record = entry.Insert(MakeUnique<SerialNumberRecord>());
     WalkTheStackSavingLocations(record->allocationStack);
     if (gLogJSStacks) {
       record->SaveJSStack();

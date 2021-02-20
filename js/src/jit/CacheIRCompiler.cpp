@@ -3166,12 +3166,28 @@ bool CacheIRCompiler::emitLoadArrayBufferByteLengthInt32Result(
     return false;
   }
 
-  masm.loadArrayBufferByteLengthInt32(obj, scratch, failure->label());
+  masm.loadArrayBufferByteLengthIntPtr(obj, scratch);
+  masm.guardNonNegativeIntPtrToInt32(scratch, failure->label());
   masm.tagValue(JSVAL_TYPE_INT32, scratch, output.valueReg());
   return true;
 }
 
-bool CacheIRCompiler::emitLoadTypedArrayLengthInt32Result(ObjOperandId objId) {
+bool CacheIRCompiler::emitLoadArrayBufferByteLengthDoubleResult(
+    ObjOperandId objId) {
+  JitSpew(JitSpew_Codegen, "%s", __FUNCTION__);
+  AutoOutputRegister output(*this);
+  Register obj = allocator.useRegister(masm, objId);
+  AutoScratchRegisterMaybeOutput scratch(allocator, masm, output);
+
+  ScratchDoubleScope fpscratch(masm);
+  masm.loadArrayBufferByteLengthIntPtr(obj, scratch);
+  masm.convertIntPtrToDouble(scratch, fpscratch);
+  masm.boxDouble(fpscratch, output.valueReg(), fpscratch);
+  return true;
+}
+
+bool CacheIRCompiler::emitLoadArrayBufferViewLengthInt32Result(
+    ObjOperandId objId) {
   JitSpew(JitSpew_Codegen, "%s", __FUNCTION__);
   AutoOutputRegister output(*this);
   Register obj = allocator.useRegister(masm, objId);
@@ -3182,8 +3198,23 @@ bool CacheIRCompiler::emitLoadTypedArrayLengthInt32Result(ObjOperandId objId) {
     return false;
   }
 
-  masm.loadArrayBufferViewLengthInt32(obj, scratch, failure->label());
+  masm.loadArrayBufferViewLengthIntPtr(obj, scratch);
+  masm.guardNonNegativeIntPtrToInt32(scratch, failure->label());
   masm.tagValue(JSVAL_TYPE_INT32, scratch, output.valueReg());
+  return true;
+}
+
+bool CacheIRCompiler::emitLoadArrayBufferViewLengthDoubleResult(
+    ObjOperandId objId) {
+  JitSpew(JitSpew_Codegen, "%s", __FUNCTION__);
+  AutoOutputRegister output(*this);
+  Register obj = allocator.useRegister(masm, objId);
+  AutoScratchRegisterMaybeOutput scratch(allocator, masm, output);
+
+  ScratchDoubleScope fpscratch(masm);
+  masm.loadArrayBufferViewLengthIntPtr(obj, scratch);
+  masm.convertIntPtrToDouble(scratch, fpscratch);
+  masm.boxDouble(fpscratch, output.valueReg(), fpscratch);
   return true;
 }
 
@@ -3651,8 +3682,8 @@ bool CacheIRCompiler::emitGuardArrayIsPacked(ObjOperandId arrayId) {
   return true;
 }
 
-bool CacheIRCompiler::emitGuardArgumentsObjectNotOverriddenIterator(
-    ObjOperandId objId) {
+bool CacheIRCompiler::emitGuardArgumentsObjectFlags(ObjOperandId objId,
+                                                    uint8_t flags) {
   JitSpew(JitSpew_Codegen, "%s", __FUNCTION__);
   Register obj = allocator.useRegister(masm, objId);
   AutoScratchRegister scratch(allocator, masm);
@@ -3662,8 +3693,8 @@ bool CacheIRCompiler::emitGuardArgumentsObjectNotOverriddenIterator(
     return false;
   }
 
-  masm.branchArgumentsObjectHasOverridenIterator(obj, scratch,
-                                                 failure->label());
+  masm.branchTestArgumentsObjectFlags(obj, scratch, flags, Assembler::NonZero,
+                                      failure->label());
   return true;
 }
 
@@ -3716,7 +3747,7 @@ bool CacheIRCompiler::emitLoadTypedArrayElementExistsResult(
   Label outOfBounds, done;
 
   // Bounds check.
-  masm.loadArrayBufferViewLengthPtr(obj, scratch);
+  masm.loadArrayBufferViewLengthIntPtr(obj, scratch);
   masm.branchPtr(Assembler::BelowOrEqual, scratch, index, &outOfBounds);
   EmitStoreBoolean(masm, true, output);
   masm.jump(&done);
@@ -3951,7 +3982,8 @@ bool CacheIRCompiler::emitIsCrossRealmArrayConstructorResult(
   return true;
 }
 
-bool CacheIRCompiler::emitTypedArrayByteOffsetInt32Result(ObjOperandId objId) {
+bool CacheIRCompiler::emitArrayBufferViewByteOffsetInt32Result(
+    ObjOperandId objId) {
   JitSpew(JitSpew_Codegen, "%s", __FUNCTION__);
 
   AutoOutputRegister output(*this);
@@ -3963,20 +3995,93 @@ bool CacheIRCompiler::emitTypedArrayByteOffsetInt32Result(ObjOperandId objId) {
     return false;
   }
 
-  masm.loadArrayBufferViewByteOffsetInt32(obj, scratch, failure->label());
+  masm.loadArrayBufferViewByteOffsetIntPtr(obj, scratch);
+  masm.guardNonNegativeIntPtrToInt32(scratch, failure->label());
   masm.tagValue(JSVAL_TYPE_INT32, scratch, output.valueReg());
   return true;
 }
 
-bool CacheIRCompiler::emitTypedArrayElementShiftResult(ObjOperandId objId) {
+bool CacheIRCompiler::emitArrayBufferViewByteOffsetDoubleResult(
+    ObjOperandId objId) {
+  JitSpew(JitSpew_Codegen, "%s", __FUNCTION__);
+
+  AutoOutputRegister output(*this);
+  Register obj = allocator.useRegister(masm, objId);
+  AutoScratchRegisterMaybeOutput scratch(allocator, masm, output);
+
+  ScratchDoubleScope fpscratch(masm);
+  masm.loadArrayBufferViewByteOffsetIntPtr(obj, scratch);
+  masm.convertIntPtrToDouble(scratch, fpscratch);
+  masm.boxDouble(fpscratch, output.valueReg(), fpscratch);
+  return true;
+}
+
+bool CacheIRCompiler::emitTypedArrayByteLengthInt32Result(ObjOperandId objId) {
+  JitSpew(JitSpew_Codegen, "%s", __FUNCTION__);
+
+  AutoOutputRegister output(*this);
+  AutoScratchRegisterMaybeOutput scratch1(allocator, masm, output);
+  AutoScratchRegister scratch2(allocator, masm);
+  Register obj = allocator.useRegister(masm, objId);
+
+  FailurePath* failure;
+  if (!addFailurePath(&failure)) {
+    return false;
+  }
+
+  masm.loadArrayBufferViewLengthIntPtr(obj, scratch1);
+  masm.guardNonNegativeIntPtrToInt32(scratch1, failure->label());
+  masm.typedArrayElementSize(obj, scratch2);
+
+  masm.branchMul32(Assembler::Overflow, scratch2.get(), scratch1,
+                   failure->label());
+
+  masm.tagValue(JSVAL_TYPE_INT32, scratch1, output.valueReg());
+  return true;
+}
+
+bool CacheIRCompiler::emitTypedArrayByteLengthDoubleResult(ObjOperandId objId) {
+  JitSpew(JitSpew_Codegen, "%s", __FUNCTION__);
+
+  AutoOutputRegister output(*this);
+  AutoScratchRegisterMaybeOutput scratch1(allocator, masm, output);
+  AutoScratchRegister scratch2(allocator, masm);
+  Register obj = allocator.useRegister(masm, objId);
+
+  masm.loadArrayBufferViewLengthIntPtr(obj, scratch1);
+  masm.typedArrayElementSize(obj, scratch2);
+  masm.mulPtr(scratch2, scratch1);
+
+  ScratchDoubleScope fpscratch(masm);
+  masm.convertIntPtrToDouble(scratch1, fpscratch);
+  masm.boxDouble(fpscratch, output.valueReg(), fpscratch);
+  return true;
+}
+
+bool CacheIRCompiler::emitTypedArrayElementSizeResult(ObjOperandId objId) {
   JitSpew(JitSpew_Codegen, "%s", __FUNCTION__);
 
   AutoOutputRegister output(*this);
   AutoScratchRegisterMaybeOutput scratch(allocator, masm, output);
   Register obj = allocator.useRegister(masm, objId);
 
-  masm.typedArrayElementShift(obj, scratch);
+  masm.typedArrayElementSize(obj, scratch);
   masm.tagValue(JSVAL_TYPE_INT32, scratch, output.valueReg());
+  return true;
+}
+
+bool CacheIRCompiler::emitGuardHasAttachedArrayBuffer(ObjOperandId objId) {
+  JitSpew(JitSpew_Codegen, "%s", __FUNCTION__);
+
+  AutoScratchRegister scratch(allocator, masm);
+  Register obj = allocator.useRegister(masm, objId);
+
+  FailurePath* failure;
+  if (!addFailurePath(&failure)) {
+    return false;
+  }
+
+  masm.branchIfHasDetachedArrayBuffer(obj, scratch, failure->label());
   return true;
 }
 
@@ -5042,7 +5147,7 @@ bool CacheIRCompiler::emitStoreTypedArrayElement(ObjOperandId objId,
   // Bounds check.
   Label done;
   Register spectreTemp = scratch2 ? scratch2->get() : spectreScratch->get();
-  masm.loadArrayBufferViewLengthPtr(obj, scratch1);
+  masm.loadArrayBufferViewLengthIntPtr(obj, scratch1);
   masm.spectreBoundsCheckPtr(index, scratch1, spectreTemp,
                              handleOOB ? &done : failure->label());
 
@@ -5135,7 +5240,7 @@ bool CacheIRCompiler::emitLoadTypedArrayElementResult(
 
   // Bounds check.
   Label outOfBounds;
-  masm.loadArrayBufferViewLengthPtr(obj, scratch1);
+  masm.loadArrayBufferViewLengthIntPtr(obj, scratch1);
   masm.spectreBoundsCheckPtr(index, scratch1, scratch2,
                              handleOOB ? &outOfBounds : failure->label());
 
@@ -5201,7 +5306,7 @@ static void EmitDataViewBoundsCheck(MacroAssembler& masm, size_t byteSize,
                                     Register obj, Register offset,
                                     Register scratch, Label* fail) {
   // Ensure both offset < length and offset + (byteSize - 1) < length.
-  masm.loadArrayBufferViewLengthPtr(obj, scratch);
+  masm.loadArrayBufferViewLengthIntPtr(obj, scratch);
   if (byteSize == 1) {
     masm.spectreBoundsCheckPtr(offset, scratch, InvalidReg, fail);
   } else {
@@ -7339,6 +7444,30 @@ bool CacheIRCompiler::emitCallRegExpTesterResult(ObjOperandId regexpId,
   return true;
 }
 
+bool CacheIRCompiler::emitRegExpFlagResult(ObjOperandId regexpId,
+                                           int32_t flagsMask) {
+  JitSpew(JitSpew_Codegen, "%s", __FUNCTION__);
+
+  AutoOutputRegister output(*this);
+  Register regexp = allocator.useRegister(masm, regexpId);
+  AutoScratchRegisterMaybeOutput scratch(allocator, masm, output);
+
+  Address flagsAddr(
+      regexp, NativeObject::getFixedSlotOffset(RegExpObject::flagsSlot()));
+  masm.unboxInt32(flagsAddr, scratch);
+
+  Label ifFalse, done;
+  masm.branchTest32(Assembler::Zero, scratch, Imm32(flagsMask), &ifFalse);
+  masm.moveValue(BooleanValue(true), output.valueReg());
+  masm.jump(&done);
+
+  masm.bind(&ifFalse);
+  masm.moveValue(BooleanValue(false), output.valueReg());
+
+  masm.bind(&done);
+  return true;
+}
+
 bool CacheIRCompiler::emitCallSubstringKernelResult(StringOperandId strId,
                                                     Int32OperandId beginId,
                                                     Int32OperandId lengthId) {
@@ -7542,7 +7671,7 @@ bool CacheIRCompiler::emitAtomicsCompareExchangeResult(
   MOZ_ASSERT(isBaseline(), "Can't use FailurePath with AutoCallVM in Ion ICs");
 
   // Bounds check.
-  masm.loadArrayBufferViewLengthPtr(obj, scratch);
+  masm.loadArrayBufferViewLengthIntPtr(obj, scratch);
   masm.spectreBoundsCheckPtr(index, scratch, spectreTemp, failure->label());
 
   // Atomic operations are highly platform-dependent, for example x86/x64 has
@@ -7612,7 +7741,7 @@ bool CacheIRCompiler::emitAtomicsReadModifyWriteResult(
   }
 
   // Bounds check.
-  masm.loadArrayBufferViewLengthPtr(obj, scratch);
+  masm.loadArrayBufferViewLengthIntPtr(obj, scratch);
   masm.spectreBoundsCheckPtr(index, scratch, spectreTemp, failure->label());
 
   // See comment in emitAtomicsCompareExchange for why we use an ABI call.
@@ -7667,7 +7796,7 @@ bool CacheIRCompiler::emitAtomicsReadModifyWriteResult64(
   MOZ_ASSERT(isBaseline(), "Can't use FailurePath with AutoCallVM in Ion ICs");
 
   // Bounds check.
-  masm.loadArrayBufferViewLengthPtr(obj, scratch);
+  masm.loadArrayBufferViewLengthIntPtr(obj, scratch);
   masm.spectreBoundsCheckPtr(index, scratch, spectreTemp, failure->label());
 
   // See comment in emitAtomicsCompareExchange for why we use a VM call.
@@ -7801,7 +7930,7 @@ bool CacheIRCompiler::emitAtomicsLoadResult(ObjOperandId objId,
   MOZ_ASSERT(isBaseline(), "Can't use FailurePath with AutoCallVM in Ion ICs");
 
   // Bounds check.
-  masm.loadArrayBufferViewLengthPtr(obj, scratch);
+  masm.loadArrayBufferViewLengthIntPtr(obj, scratch);
   masm.spectreBoundsCheckPtr(index, scratch, spectreTemp, failure->label());
 
   // Atomic operations are highly platform-dependent, for example x86/arm32 has
@@ -7873,7 +8002,7 @@ bool CacheIRCompiler::emitAtomicsStoreResult(ObjOperandId objId,
   }
 
   // Bounds check.
-  masm.loadArrayBufferViewLengthPtr(obj, scratch);
+  masm.loadArrayBufferViewLengthIntPtr(obj, scratch);
   masm.spectreBoundsCheckPtr(index, scratch, spectreTemp, failure->label());
 
   if (!Scalar::isBigIntType(elementType)) {

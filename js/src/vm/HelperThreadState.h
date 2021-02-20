@@ -188,7 +188,7 @@ class GlobalHelperThreadState {
   void finish();
   void finishThreads();
 
-  MOZ_MUST_USE bool ensureContextList(size_t count);
+  [[nodiscard]] bool ensureContextList(size_t count);
   JSContext* getFirstUnusedContext(AutoLockHelperThreadState& locked);
   void destroyHelperContexts(AutoLockHelperThreadState& lock);
 
@@ -447,7 +447,7 @@ class HelperThread {
 
  public:
   HelperThread();
-  MOZ_MUST_USE bool init();
+  [[nodiscard]] bool init();
 
   ThreadId threadId() { return thread.get_id(); }
 
@@ -521,10 +521,10 @@ struct ParseTask : public mozilla::LinkedListElement<ParseTask>,
 
   // Holds the CompilationStencil generated for the script compilation or
   // decoding task.
+  UniquePtr<frontend::CompilationInput> stencilInput_;
   UniquePtr<frontend::CompilationStencil> stencil_;
 
   frontend::CompilationGCOutput gcOutput_;
-
   frontend::CompilationGCOutput gcOutputForDelazification_;
 
   // Any errors or warnings produced during compilation. These are reported

@@ -20,7 +20,8 @@
 #include "nsUnicodeProperties.h"
 
 #include "mozilla/Preferences.h"
-#include "mozilla/Services.h"
+#include "mozilla/ProfilerLabels.h"
+#include "mozilla/Components.h"
 #include "mozilla/Sprintf.h"
 #include "mozilla/WindowsVersion.h"
 #include "nsIGfxInfo.h"
@@ -28,7 +29,6 @@
 #include "nsTArray.h"
 #include "nsThreadUtils.h"
 #include "mozilla/Telemetry.h"
-#include "GeckoProfiler.h"
 
 #include "plbase64.h"
 #include "nsIXULRuntime.h"
@@ -1319,7 +1319,7 @@ void gfxWindowsPlatform::InitializeD3D11Config() {
   if (!IsWin8OrLater() &&
       !DeviceManagerDx::Get()->CheckRemotePresentSupport()) {
     nsCOMPtr<nsIGfxInfo> gfxInfo;
-    gfxInfo = services::GetGfxInfo();
+    gfxInfo = components::GfxInfo::Service();
     nsAutoString adaptorId;
     gfxInfo->GetAdapterDeviceID(adaptorId);
     // Blocklist Intel HD Graphics 510/520/530 on Windows 7 without platform

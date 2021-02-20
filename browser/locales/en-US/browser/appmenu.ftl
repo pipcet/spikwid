@@ -120,6 +120,7 @@ appmenu-reopen-all-tabs = Reopen All Tabs
 appmenu-reopen-all-windows = Reopen All Windows
 
 ## Help panel
+
 appmenu-help-header =
     .title = { -brand-shorter-name } Help
 appmenu-about =
@@ -136,6 +137,16 @@ appmenu-help-taskmanager =
 appmenu-help-feedback-page =
     .label = Submit Feedback…
     .accesskey = S
+
+## appmenu-help-safe-mode-without-addons and appmenu-help-safe-mode-without-addons
+## are mutually exclusive, so it's possible to use the same accesskey for both.
+
+appmenu-help-safe-mode-without-addons =
+    .label = Restart With Add-ons Disabled…
+    .accesskey = R
+appmenu-help-safe-mode-with-addons =
+    .label = Restart With Add-ons Enabled
+    .accesskey = R
 
 ## appmenu-help-report-deceptive-site and appmenu-help-not-deceptive
 ## are mutually exclusive, so it's possible to use the same accesskey for both.

@@ -67,13 +67,11 @@ static LayoutDeviceIntCoord SnapBorderWidth(
   return aLuminance >= 0.18f ? aLuminance * aFactor : aLuminance / aFactor;
 }
 
-static nscolor ThemedAccentColor(bool aDarker) {
+static nscolor ThemedAccentColor(bool aBackground) {
   MOZ_ASSERT(StaticPrefs::widget_non_native_use_theme_accent());
-  nscolor a = LookAndFeel::GetColor(LookAndFeel::ColorID::Highlight);
-  nscolor b = LookAndFeel::GetColor(LookAndFeel::ColorID::Highlighttext);
-  const bool darker =
-      RelativeLuminanceUtils::Compute(b) > RelativeLuminanceUtils::Compute(a);
-  nscolor color = darker == aDarker ? a : b;
+  nscolor color = LookAndFeel::GetColor(
+      aBackground ? LookAndFeel::ColorID::MozAccentColor
+                  : LookAndFeel::ColorID::MozAccentColorForeground);
   if (NS_GET_A(color) != 0xff) {
     // Blend with white, ensuring the color is opaque to avoid surprises if we
     // overdraw.
@@ -657,9 +655,12 @@ void nsNativeBasicTheme::PaintCheckboxControl(DrawTarget* aDrawTarget,
   }
 }
 
-// Returns the right scale to cover aRect in the smaller dimension.
-static float ScaleToWidgetRect(const LayoutDeviceRect& aRect) {
-  return std::min(aRect.width, aRect.height) / kMinimumWidgetSize;
+
+// Returns the right scale for points in a 14x14 unit box centered at 0x0 to
+// fill aRect in the smaller dimension.
+static float ScaleToFillRect(const LayoutDeviceRect& aRect) {
+  static constexpr float kPathPointsScale = 14.0f;
+  return std::min(aRect.width, aRect.height) / kPathPointsScale;
 }
 
 void nsNativeBasicTheme::PaintCheckMark(DrawTarget* aDrawTarget,
@@ -671,7 +672,7 @@ void nsNativeBasicTheme::PaintCheckMark(DrawTarget* aDrawTarget,
   const float checkPolygonY[] = {0.5f,  4.0f, 4.0f,  -2.5f, -4.0f,
                                  -4.0f, 1.0f, 1.25f, -1.0f};
   const int32_t checkNumPoints = sizeof(checkPolygonX) / sizeof(float);
-  const float scale = ScaleToWidgetRect(aRect);
+  const float scale = ScaleToFillRect(aRect);
   auto center = aRect.Center().ToUnknownPoint();
 
   RefPtr<PathBuilder> builder = aDrawTarget->CreatePathBuilder();
@@ -691,7 +692,7 @@ void nsNativeBasicTheme::PaintIndeterminateMark(DrawTarget* aDrawTarget,
                                                 const LayoutDeviceRect& aRect,
                                                 const EventStates& aState) {
   const CSSCoord borderWidth = 2.0f;
-  const float scale = ScaleToWidgetRect(aRect);
+  const float scale = ScaleToFillRect(aRect);
 
   Rect rect = aRect.ToUnknownRect();
   rect.y += (rect.height / 2) - (borderWidth * scale / 2);
@@ -790,7 +791,7 @@ void nsNativeBasicTheme::PaintRadioCheckmark(DrawTarget* aDrawTarget,
                                              const EventStates& aState,
                                              DPIRatio aDpiRatio) {
   const CSSCoord borderWidth = 2.0f;
-  const float scale = ScaleToWidgetRect(aRect);
+  const float scale = ScaleToFillRect(aRect);
   auto [backgroundColor, checkColor] = ComputeRadioCheckmarkColors(aState);
 
   LayoutDeviceRect rect(aRect);
@@ -855,7 +856,7 @@ void nsNativeBasicTheme::PaintArrow(DrawTarget* aDrawTarget,
                                     const float aArrowPolygonY[],
                                     const int32_t aArrowNumPoints,
                                     const sRGBColor aFillColor) {
-  const float scale = ScaleToWidgetRect(aRect);
+  const float scale = ScaleToFillRect(aRect);
 
   auto center = aRect.Center().ToUnknownPoint();
 
@@ -902,7 +903,7 @@ void nsNativeBasicTheme::PaintSpinnerButton(nsIFrame* aFrame,
   const float arrowPolygonY[] = {-1.875f, 2.625f, 2.625f, -1.875f, -4.125f,
                                  -4.125f, 0.375f, 0.375f, -4.125f, -4.125f};
   const int32_t arrowNumPoints = ArrayLength(arrowPolygonX);
-  const float scaleX = ScaleToWidgetRect(aRect);
+  const float scaleX = ScaleToFillRect(aRect);
   const float scaleY =
       aAppearance == StyleAppearance::SpinnerDownbutton ? scaleX : -scaleX;
 
@@ -1016,7 +1017,6 @@ void nsNativeBasicTheme::PaintRange(nsIFrame* aFrame, DrawTarget* aDrawTarget,
   }
 }
 
-// TODO: Vertical.
 // TODO: Indeterminate state.
 void nsNativeBasicTheme::PaintProgress(
     nsIFrame* aFrame, DrawTarget* aDrawTarget, const LayoutDeviceRect& aRect,
@@ -1031,12 +1031,20 @@ void nsNativeBasicTheme::PaintProgress(
   const CSSCoord borderWidth = 1.0f;
   const CSSCoord radius = aIsMeter ? 5.0f : 2.0f;
 
-  // Center it vertically.
   LayoutDeviceRect rect(aRect);
-  const LayoutDeviceCoord height =
+  const LayoutDeviceCoord thickness =
       (aIsMeter ? kMeterHeight : kProgressbarHeight) * aDpiRatio;
-  rect.y += (rect.height - height) / 2;
-  rect.height = height;
+
+  const bool isHorizontal = !nsNativeTheme::IsVerticalProgress(aFrame);
+  if (isHorizontal) {
+    // Center it vertically.
+    rect.y += (rect.height - thickness) / 2;
+    rect.height = thickness;
+  } else {
+    // Center it horizontally.
+    rect.x += (rect.width - thickness) / 2;
+    rect.width = thickness;
+  }
 
   // This is the progress chunk, clip it to the right amount.
   if (!aBar) {
@@ -1055,10 +1063,16 @@ void nsNativeBasicTheme::PaintProgress(
       return progress->Value() / progress->Max();
     }();
     LayoutDeviceRect clipRect = rect;
-    double clipWidth = rect.width * position;
-    clipRect.width = clipWidth;
-    if (IsFrameRTL(aFrame)) {
-      clipRect.x += rect.width - clipWidth;
+    if (isHorizontal) {
+      double clipWidth = rect.width * position;
+      clipRect.width = clipWidth;
+      if (IsFrameRTL(aFrame)) {
+        clipRect.x += rect.width - clipWidth;
+      }
+    } else {
+      double clipHeight = rect.height * position;
+      clipRect.height = clipHeight;
+      clipRect.y += rect.height - clipHeight;
     }
     aDrawTarget->PushClipRect(clipRect.ToUnknownRect());
   }
@@ -1397,13 +1411,19 @@ void nsNativeBasicTheme::PaintAutoStyleOutline(nsIFrame* aFrame,
                            StrokeOptions(width));
   }
 
+  nsPresContext* pc = aFrame->PresContext();
+  const nscoord offset = aFrame->StyleOutline()->mOutlineOffset.ToAppUnits();
+  const Float devPixelOffset = pc->AppUnitsToFloatDevPixels(offset);
+
   RectCornerRadii innerRadii;
-  nsCSSRendering::ComputePixelRadii(
-      cssRadii, aFrame->PresContext()->AppUnitsPerDevPixel(), &innerRadii);
+  nsCSSRendering::ComputePixelRadii(cssRadii, pc->AppUnitsPerDevPixel(),
+                                    &innerRadii);
 
   RectCornerRadii outerRadii;
-  Float borderSizes[4] = {halfWidth, halfWidth, halfWidth, halfWidth};
-  nsCSSBorderRenderer::ComputeOuterRadii(innerRadii, borderSizes, &outerRadii);
+  const Float widths[4] = {
+      halfWidth + devPixelOffset, halfWidth + devPixelOffset,
+      halfWidth + devPixelOffset, halfWidth + devPixelOffset};
+  nsCSSBorderRenderer::ComputeOuterRadii(innerRadii, widths, &outerRadii);
   RefPtr<Path> path =
       MakePathForRoundedRect(*aDt, rect.ToUnknownRect(), outerRadii);
   aDt->Stroke(path, ColorPattern(ToDeviceColor(innerColor)),
@@ -1529,6 +1549,10 @@ auto nsNativeBasicTheme::GetScrollbarSizes(nsPresContext* aPresContext,
   return {s, s};
 }
 
+nscoord nsNativeBasicTheme::GetCheckboxRadioPrefSize() {
+  return CSSPixel::ToAppUnits(10);
+}
+
 NS_IMETHODIMP
 nsNativeBasicTheme::GetMinimumWidgetSize(nsPresContext* aPresContext,
                                          nsIFrame* aFrame,
@@ -1537,7 +1561,8 @@ nsNativeBasicTheme::GetMinimumWidgetSize(nsPresContext* aPresContext,
                                          bool* aIsOverridable) {
   DPIRatio dpiRatio = GetDPIRatio(aFrame, aAppearance);
 
-  aResult->width = aResult->height = (kMinimumWidgetSize * dpiRatio).Rounded();
+  aResult->width = aResult->height = 0;
+  *aIsOverridable = true;
 
   switch (aAppearance) {
     case StyleAppearance::Button:
@@ -1604,7 +1629,6 @@ nsNativeBasicTheme::GetMinimumWidgetSize(nsPresContext* aPresContext,
       break;
   }
 
-  *aIsOverridable = true;
   return NS_OK;
 }
 
@@ -1683,9 +1707,6 @@ bool nsNativeBasicTheme::ThemeSupportsWidget(nsPresContext* aPresContext,
     case StyleAppearance::Button:
     case StyleAppearance::Listbox:
     case StyleAppearance::Menulist:
-    case StyleAppearance::Menuitem:
-    case StyleAppearance::Menuitemtext:
-    case StyleAppearance::MenulistText:
     case StyleAppearance::MenulistButton:
     case StyleAppearance::NumberInput:
     case StyleAppearance::MozMenulistArrowButton:

@@ -214,6 +214,7 @@ struct ExpandoAndGeneration;
 namespace js {
 
 class TypedArrayObject;
+class TypeDescr;
 
 namespace wasm {
 class CalleeDesc;
@@ -996,7 +997,7 @@ class MacroAssembler : public MacroAssemblerSpecific {
   inline void mul32(Register src1, Register src2, Register dest, Label* onOver)
       DEFINED_ON(arm64);
 
-  inline void mulPtr(Register rhs, Register srcDest) DEFINED_ON(x86, x64);
+  inline void mulPtr(Register rhs, Register srcDest) PER_ARCH;
 
   inline void mul64(const Operand& src, const Register64& dest) DEFINED_ON(x64);
   inline void mul64(const Operand& src, const Register64& dest,
@@ -1596,6 +1597,13 @@ class MacroAssembler : public MacroAssemblerSpecific {
                                        Register shape, Label* label);
   inline void branchTestObjGroupUnsafe(Condition cond, Register obj,
                                        const ObjectGroup* group, Label* label);
+
+  void branchTestObjTypeDescr(Condition cond, Register obj, Register descr,
+                              Register scratch, Register spectreRegToZero,
+                              Label* label);
+  void branchTestObjTypeDescr(Condition cond, Register obj, TypeDescr* descr,
+                              Register scratch, Register spectreRegToZero,
+                              Label* label);
 
   void branchTestObjCompartment(Condition cond, Register obj,
                                 const Address& compartment, Register scratch,
@@ -2625,6 +2633,9 @@ class MacroAssembler : public MacroAssemblerSpecific {
   inline void allTrueInt32x4(FloatRegister src, Register dest)
       DEFINED_ON(x86_shared, arm64);
 
+  inline void allTrueInt64x2(FloatRegister src, Register dest)
+      DEFINED_ON(x86_shared, arm64);
+
   // Bitmask, ie extract and compress high bits of all lanes
 
   inline void bitmaskInt8x16(FloatRegister src, Register dest)
@@ -2691,6 +2702,11 @@ class MacroAssembler : public MacroAssemblerSpecific {
                                      FloatRegister rhs, FloatRegister lhsDest,
                                      FloatRegister temp1, FloatRegister temp2)
       DEFINED_ON(x86_shared);
+
+  // On x86_shared, limited to !=, ==
+  inline void compareInt64x2(Assembler::Condition cond, FloatRegister rhs,
+                             FloatRegister lhsDest)
+      DEFINED_ON(x86_shared, arm64);
 
   inline void compareFloat32x4(Assembler::Condition cond, FloatRegister rhs,
                                FloatRegister lhsDest)
@@ -3043,6 +3059,8 @@ class MacroAssembler : public MacroAssemblerSpecific {
                              Register temp) PER_ARCH;
 
   void convertInt64ToDouble(Register64 src, FloatRegister dest) PER_ARCH;
+
+  void convertIntPtrToDouble(Register src, FloatRegister dest) PER_ARCH;
 
  public:
   // ========================================================================
@@ -4198,11 +4216,15 @@ class MacroAssembler : public MacroAssemblerSpecific {
 
   void loadArgumentsObjectLength(Register obj, Register output, Label* fail);
 
-  void branchArgumentsObjectHasOverridenIterator(Register obj, Register temp,
-                                                 Label* label);
+  void branchTestArgumentsObjectFlags(Register obj, Register temp,
+                                      uint32_t flags, Condition cond,
+                                      Label* label);
 
-  void typedArrayElementShift(Register obj, Register output);
+  void typedArrayElementSize(Register obj, Register output);
   void branchIfClassIsNotTypedArray(Register clasp, Label* notTypedArray);
+
+  void branchIfHasDetachedArrayBuffer(Register obj, Register temp,
+                                      Label* label);
 
   void branchIfNativeIteratorNotReusable(Register ni, Label* notReusable);
 
@@ -4321,13 +4343,11 @@ class MacroAssembler : public MacroAssemblerSpecific {
       JS::ExpandoAndGeneration* expandoAndGeneration, uint64_t generation,
       Label* fail);
 
-  void loadArrayBufferByteLengthInt32(Register obj, Register output,
-                                      Label* fail);
-  void loadArrayBufferViewByteOffsetInt32(Register obj, Register output,
-                                          Label* fail);
-  void loadArrayBufferViewLengthInt32(Register obj, Register output,
-                                      Label* fail);
-  void loadArrayBufferViewLengthPtr(Register obj, Register output);
+  void guardNonNegativeIntPtrToInt32(Register reg, Label* fail);
+
+  void loadArrayBufferByteLengthIntPtr(Register obj, Register output);
+  void loadArrayBufferViewByteOffsetIntPtr(Register obj, Register output);
+  void loadArrayBufferViewLengthIntPtr(Register obj, Register output);
 
  private:
   void isCallableOrConstructor(bool isCallable, Register obj, Register output,

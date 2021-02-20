@@ -29,10 +29,15 @@ EXPORTS += [
     "nsCocoaUtils.h",
 ]
 
+EXPORTS.mozilla.widget += [
+    "NativeMenuSupport.h",
+]
+
 UNIFIED_SOURCES += [
     "GfxInfo.mm",
-    "IconLoaderHelperCocoa.mm",
+    "MOZIconHelper.mm",
     "NativeKeyBindings.mm",
+    "NativeMenuSupport.mm",
     "nsAppShell.mm",
     "nsBidiKeyboard.mm",
     "nsCocoaFeatures.mm",

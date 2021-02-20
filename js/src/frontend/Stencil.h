@@ -7,12 +7,12 @@
 #ifndef frontend_Stencil_h
 #define frontend_Stencil_h
 
-#include "mozilla/Assertions.h"  // MOZ_ASSERT
-#include "mozilla/Attributes.h"  // MOZ_MUST_USE
-#include "mozilla/Maybe.h"       // mozilla::{Maybe, Nothing}
-#include "mozilla/Range.h"       // mozilla::Range
-#include "mozilla/Span.h"        // mozilla::Span
-#include "mozilla/Variant.h"     // mozilla::Variant
+#include "mozilla/Assertions.h"       // MOZ_ASSERT
+#include "mozilla/Maybe.h"            // mozilla::{Maybe, Nothing}
+#include "mozilla/MemoryReporting.h"  // mozilla::MallocSizeOf
+#include "mozilla/Range.h"            // mozilla::Range
+#include "mozilla/Span.h"             // mozilla::Span
+#include "mozilla/Variant.h"          // mozilla::Variant
 
 #include <stddef.h>  // size_t
 #include <stdint.h>  // char16_t, uint8_t, uint16_t, uint32_t
@@ -220,8 +220,8 @@ class BigIntStencil {
  public:
   BigIntStencil() = default;
 
-  MOZ_MUST_USE bool init(JSContext* cx, LifoAlloc& alloc,
-                         const Vector<char16_t, 32>& buf);
+  [[nodiscard]] bool init(JSContext* cx, LifoAlloc& alloc,
+                          const Vector<char16_t, 32>& buf);
 
   BigInt* createBigInt(JSContext* cx) const {
     mozilla::Range<const char16_t> source(source_.data(), source_.size());
@@ -411,9 +411,9 @@ class ScopeStencil {
       BaseParserScopeData* baseData) const;
 
   template <typename SpecificEnvironmentType>
-  MOZ_MUST_USE bool createSpecificShape(JSContext* cx, ScopeKind kind,
-                                        BaseScopeData* scopeData,
-                                        MutableHandleShape shape) const;
+  [[nodiscard]] bool createSpecificShape(JSContext* cx, ScopeKind kind,
+                                         BaseScopeData* scopeData,
+                                         MutableHandleShape shape) const;
 
   template <typename SpecificScopeType, typename SpecificEnvironmentType>
   Scope* createSpecificScope(JSContext* cx, CompilationAtomCache& atomCache,
@@ -595,6 +595,16 @@ class StencilModuleMetadata {
 
   bool initModule(JSContext* cx, CompilationAtomCache& atomCache,
                   JS::Handle<ModuleObject*> module) const;
+
+  size_t sizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf) const {
+    return mallocSizeOf(this) +
+           requestedModules.sizeOfExcludingThis(mallocSizeOf) +
+           importEntries.sizeOfExcludingThis(mallocSizeOf) +
+           localExportEntries.sizeOfExcludingThis(mallocSizeOf) +
+           indirectExportEntries.sizeOfExcludingThis(mallocSizeOf) +
+           starExportEntries.sizeOfExcludingThis(mallocSizeOf) +
+           functionDecls.sizeOfExcludingThis(mallocSizeOf);
+  }
 
 #if defined(DEBUG) || defined(JS_JITSPEW)
   void dump() const;

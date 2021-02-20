@@ -214,6 +214,8 @@ class MOZ_RAII WarpCacheIRTranspiler : public WarpBuilderShared {
 
   MInstruction* addBoundsCheck(MDefinition* index, MDefinition* length);
 
+  [[nodiscard]] MInstruction* convertToBoolean(MDefinition* input);
+
   bool emitAddAndStoreSlotShared(MAddAndStoreSlot::Kind kind,
                                  ObjOperandId objId, uint32_t offsetOffset,
                                  ValOperandId rhsId, uint32_t newShapeOffset);
@@ -241,8 +243,10 @@ class MOZ_RAII WarpCacheIRTranspiler : public WarpBuilderShared {
                                       Int32OperandId argcId,
                                       mozilla::Maybe<ObjOperandId> thisObjId,
                                       CallFlags flags, CallKind kind);
-  [[nodiscard]] bool emitFunApplyArgs(WrappedFunction* wrappedTarget,
-                                      CallFlags flags);
+  [[nodiscard]] bool emitFunApplyMagicArgs(WrappedFunction* wrappedTarget,
+                                           CallFlags flags);
+  [[nodiscard]] bool emitFunApplyArgsObj(WrappedFunction* wrappedTarget,
+                                         CallFlags flags);
 
   MDefinition* convertWasmArg(MDefinition* arg, wasm::ValType::Kind kind);
 
@@ -951,11 +955,11 @@ bool WarpCacheIRTranspiler::emitGuardArrayIsPacked(ObjOperandId arrayId) {
   return true;
 }
 
-bool WarpCacheIRTranspiler::emitGuardArgumentsObjectNotOverriddenIterator(
-    ObjOperandId objId) {
+bool WarpCacheIRTranspiler::emitGuardArgumentsObjectFlags(ObjOperandId objId,
+                                                          uint8_t flags) {
   MDefinition* obj = getOperand(objId);
 
-  auto* ins = MGuardArgumentsObjectNotOverriddenIterator::New(alloc(), obj);
+  auto* ins = MGuardArgumentsObjectFlags::New(alloc(), obj, flags);
   add(ins);
 
   setOperand(objId, ins);
@@ -1599,14 +1603,31 @@ bool WarpCacheIRTranspiler::emitLoadArrayBufferByteLengthInt32Result(
     ObjOperandId objId) {
   MDefinition* obj = getOperand(objId);
 
-  auto* length = MArrayBufferByteLengthInt32::New(alloc(), obj);
+  auto* length = MArrayBufferByteLength::New(alloc(), obj);
   add(length);
 
-  pushResult(length);
+  auto* lengthInt32 = MNonNegativeIntPtrToInt32::New(alloc(), length);
+  add(lengthInt32);
+
+  pushResult(lengthInt32);
   return true;
 }
 
-bool WarpCacheIRTranspiler::emitLoadTypedArrayLengthInt32Result(
+bool WarpCacheIRTranspiler::emitLoadArrayBufferByteLengthDoubleResult(
+    ObjOperandId objId) {
+  MDefinition* obj = getOperand(objId);
+
+  auto* length = MArrayBufferByteLength::New(alloc(), obj);
+  add(length);
+
+  auto* lengthDouble = MIntPtrToDouble::New(alloc(), length);
+  add(lengthDouble);
+
+  pushResult(lengthDouble);
+  return true;
+}
+
+bool WarpCacheIRTranspiler::emitLoadArrayBufferViewLengthInt32Result(
     ObjOperandId objId) {
   MDefinition* obj = getOperand(objId);
 
@@ -1621,6 +1642,20 @@ bool WarpCacheIRTranspiler::emitLoadTypedArrayLengthInt32Result(
   add(lengthInt32);
 
   pushResult(lengthInt32);
+  return true;
+}
+
+bool WarpCacheIRTranspiler::emitLoadArrayBufferViewLengthDoubleResult(
+    ObjOperandId objId) {
+  MDefinition* obj = getOperand(objId);
+
+  auto* length = MArrayBufferViewLength::New(alloc(), obj);
+  add(length);
+
+  auto* lengthDouble = MIntPtrToDouble::New(alloc(), length);
+  add(lengthDouble);
+
+  pushResult(lengthDouble);
   return true;
 }
 
@@ -3146,6 +3181,36 @@ bool WarpCacheIRTranspiler::emitCallRegExpTesterResult(
   return resumeAfter(tester);
 }
 
+MInstruction* WarpCacheIRTranspiler::convertToBoolean(MDefinition* input) {
+  // Convert to bool with the '!!' idiom.
+  auto* resultInverted = MNot::New(alloc(), input);
+  add(resultInverted);
+  auto* result = MNot::New(alloc(), resultInverted);
+  add(result);
+
+  return result;
+}
+
+bool WarpCacheIRTranspiler::emitRegExpFlagResult(ObjOperandId regexpId,
+                                                 int32_t flagsMask) {
+  MDefinition* regexp = getOperand(regexpId);
+
+  auto* flags = MLoadFixedSlot::New(alloc(), regexp, RegExpObject::flagsSlot());
+  flags->setResultType(MIRType::Int32);
+  add(flags);
+
+  auto* mask = MConstant::New(alloc(), Int32Value(flagsMask));
+  add(mask);
+
+  auto* maskedFlag = MBitAnd::New(alloc(), flags, mask, MIRType::Int32);
+  add(maskedFlag);
+
+  auto* result = convertToBoolean(maskedFlag);
+
+  pushResult(result);
+  return true;
+}
+
 bool WarpCacheIRTranspiler::emitCallSubstringKernelResult(
     StringOperandId strId, Int32OperandId beginId, Int32OperandId lengthId) {
   MDefinition* str = getOperand(strId);
@@ -3306,25 +3371,95 @@ bool WarpCacheIRTranspiler::emitIsTypedArrayResult(ObjOperandId objId,
   return true;
 }
 
-bool WarpCacheIRTranspiler::emitTypedArrayByteOffsetInt32Result(
+bool WarpCacheIRTranspiler::emitArrayBufferViewByteOffsetInt32Result(
     ObjOperandId objId) {
   MDefinition* obj = getOperand(objId);
 
-  auto* ins = MArrayBufferViewByteOffset::New(alloc(), obj);
+  auto* byteOffset = MArrayBufferViewByteOffset::New(alloc(), obj);
+  add(byteOffset);
+
+  auto* byteOffsetInt32 = MNonNegativeIntPtrToInt32::New(alloc(), byteOffset);
+  add(byteOffsetInt32);
+
+  pushResult(byteOffsetInt32);
+  return true;
+}
+
+bool WarpCacheIRTranspiler::emitArrayBufferViewByteOffsetDoubleResult(
+    ObjOperandId objId) {
+  MDefinition* obj = getOperand(objId);
+
+  auto* byteOffset = MArrayBufferViewByteOffset::New(alloc(), obj);
+  add(byteOffset);
+
+  auto* byteOffsetDouble = MIntPtrToDouble::New(alloc(), byteOffset);
+  add(byteOffsetDouble);
+
+  pushResult(byteOffsetDouble);
+  return true;
+}
+
+bool WarpCacheIRTranspiler::emitTypedArrayByteLengthInt32Result(
+    ObjOperandId objId) {
+  MDefinition* obj = getOperand(objId);
+
+  auto* length = MArrayBufferViewLength::New(alloc(), obj);
+  add(length);
+
+  auto* lengthInt32 = MNonNegativeIntPtrToInt32::New(alloc(), length);
+  add(lengthInt32);
+
+  auto* size = MTypedArrayElementSize::New(alloc(), obj);
+  add(size);
+
+  auto* mul = MMul::New(alloc(), lengthInt32, size, MIRType::Int32);
+  mul->setCanBeNegativeZero(false);
+  add(mul);
+
+  pushResult(mul);
+  return true;
+}
+
+bool WarpCacheIRTranspiler::emitTypedArrayByteLengthDoubleResult(
+    ObjOperandId objId) {
+  MDefinition* obj = getOperand(objId);
+
+  auto* length = MArrayBufferViewLength::New(alloc(), obj);
+  add(length);
+
+  auto* lengthDouble = MIntPtrToDouble::New(alloc(), length);
+  add(lengthDouble);
+
+  auto* size = MTypedArrayElementSize::New(alloc(), obj);
+  add(size);
+
+  auto* mul = MMul::New(alloc(), lengthDouble, size, MIRType::Double);
+  mul->setCanBeNegativeZero(false);
+  add(mul);
+
+  pushResult(mul);
+  return true;
+}
+
+bool WarpCacheIRTranspiler::emitTypedArrayElementSizeResult(
+    ObjOperandId objId) {
+  MDefinition* obj = getOperand(objId);
+
+  auto* ins = MTypedArrayElementSize::New(alloc(), obj);
   add(ins);
 
   pushResult(ins);
   return true;
 }
 
-bool WarpCacheIRTranspiler::emitTypedArrayElementShiftResult(
+bool WarpCacheIRTranspiler::emitGuardHasAttachedArrayBuffer(
     ObjOperandId objId) {
   MDefinition* obj = getOperand(objId);
 
-  auto* ins = MTypedArrayElementShift::New(alloc(), obj);
+  auto* ins = MGuardHasAttachedArrayBuffer::New(alloc(), obj);
   add(ins);
 
-  pushResult(ins);
+  setOperand(objId, ins);
   return true;
 }
 
@@ -3750,11 +3885,7 @@ bool WarpCacheIRTranspiler::emitBigIntAsUintNResult(Int32OperandId bitsId,
 bool WarpCacheIRTranspiler::emitLoadValueTruthyResult(ValOperandId inputId) {
   MDefinition* input = getOperand(inputId);
 
-  // Convert to bool with the '!!' idiom.
-  auto* resultInverted = MNot::New(alloc(), input);
-  add(resultInverted);
-  auto* result = MNot::New(alloc(), resultInverted);
-  add(result);
+  auto* result = convertToBoolean(input);
 
   pushResult(result);
   return true;
@@ -3970,7 +4101,13 @@ bool WarpCacheIRTranspiler::updateCallInfo(MDefinition* callee,
         callInfo_->removeArg(0);
       }
       break;
-    case CallFlags::FunApplyArgs:
+    case CallFlags::FunApplyArgsObj:
+      MOZ_ASSERT(!callInfo_->constructing());
+      MOZ_ASSERT(callInfo_->argFormat() == CallInfo::ArgFormat::Standard);
+
+      callInfo_->setArgFormat(CallInfo::ArgFormat::FunApplyArgsObj);
+      break;
+    case CallFlags::FunApplyMagicArgs:
       MOZ_ASSERT(!callInfo_->constructing());
       MOZ_ASSERT(callInfo_->argFormat() == CallInfo::ArgFormat::Standard);
 
@@ -3986,7 +4123,7 @@ bool WarpCacheIRTranspiler::updateCallInfo(MDefinition* callee,
         callInfo_->setCallee(argFunc);
         callInfo_->setThis(argThis);
       } else {
-        callInfo_->setArgFormat(CallInfo::ArgFormat::FunApplyArgs);
+        callInfo_->setArgFormat(CallInfo::ArgFormat::FunApplyMagicArgs);
       }
       break;
     case CallFlags::FunApplyArray: {
@@ -4111,15 +4248,18 @@ bool WarpCacheIRTranspiler::emitCallFunction(
 
       return resumeAfter(call);
     }
-    case CallInfo::ArgFormat::FunApplyArgs: {
-      return emitFunApplyArgs(wrappedTarget, flags);
+    case CallInfo::ArgFormat::FunApplyMagicArgs: {
+      return emitFunApplyMagicArgs(wrappedTarget, flags);
+    }
+    case CallInfo::ArgFormat::FunApplyArgsObj: {
+      return emitFunApplyArgsObj(wrappedTarget, flags);
     }
   }
   MOZ_CRASH("unreachable");
 }
 
-bool WarpCacheIRTranspiler::emitFunApplyArgs(WrappedFunction* wrappedTarget,
-                                             CallFlags flags) {
+bool WarpCacheIRTranspiler::emitFunApplyMagicArgs(
+    WrappedFunction* wrappedTarget, CallFlags flags) {
   MOZ_ASSERT(!callInfo_->constructing());
   MOZ_ASSERT(!builder_->inlineCallInfo());
 
@@ -4131,6 +4271,30 @@ bool WarpCacheIRTranspiler::emitFunApplyArgs(WrappedFunction* wrappedTarget,
 
   MApplyArgs* apply =
       MApplyArgs::New(alloc(), wrappedTarget, argFunc, numArgs, argThis);
+
+  if (flags.isSameRealm()) {
+    apply->setNotCrossRealm();
+  }
+  if (callInfo_->ignoresReturnValue()) {
+    apply->setIgnoresReturnValue();
+  }
+
+  addEffectful(apply);
+  pushResult(apply);
+
+  return resumeAfter(apply);
+}
+
+bool WarpCacheIRTranspiler::emitFunApplyArgsObj(WrappedFunction* wrappedTarget,
+                                                CallFlags flags) {
+  MOZ_ASSERT(!callInfo_->constructing());
+
+  MDefinition* callee = callInfo_->thisArg();
+  MDefinition* thisArg = callInfo_->getArg(0);
+  MDefinition* argsObj = callInfo_->getArg(1);
+
+  MApplyArgsObj* apply =
+      MApplyArgsObj::New(alloc(), wrappedTarget, callee, argsObj, thisArg);
 
   if (flags.isSameRealm()) {
     apply->setNotCrossRealm();

@@ -600,25 +600,19 @@ nsresult GfxInfo::GetFeatureStatusImpl(
       NS_LossyConvertUTF16toASCII model(mModel);
 
 #ifdef NIGHTLY_BUILD
-      // On Nightly enable Webrender on all Adreno 5xx GPUs
-      isUnblocked |= gpu.Find("Adreno (TM) 5", /*ignoreCase*/ true) >= 0;
-
-      // On Nightly enable Webrender on all Mali-Txxx GPUs
-      isUnblocked |= gpu.Find("Mali-T", /*ignoreCase*/ true) >= 0;
+      // On Nightly enable Webrender on all Adreno 4xx GPUs
+      isUnblocked |= gpu.Find("Adreno (TM) 4", /*ignoreCase*/ true) >= 0;
 #endif
-      // Enable Webrender on all Adreno 5xx GPUs, excluding 505 and 506.
-      isUnblocked |=
-          gpu.Find("Adreno (TM) 5", /*ignoreCase*/ true) >= 0 &&
-          gpu.Find("Adreno (TM) 505", /*ignoreCase*/ true) == kNotFound &&
-          gpu.Find("Adreno (TM) 506", /*ignoreCase*/ true) == kNotFound;
+      // Enable Webrender on all Adreno 5xx and 6xx GPUs
+      isUnblocked |= gpu.Find("Adreno (TM) 5", /*ignoreCase*/ true) >= 0 ||
+                     gpu.Find("Adreno (TM) 6", /*ignoreCase*/ true) >= 0;
 
-      // Enable Webrender on all Adreno 6xx devices
-      isUnblocked |= gpu.Find("Adreno (TM) 6", /*ignoreCase*/ true) >= 0;
+      // Enable Webrender on all Mali-Txxx GPUs
+      isUnblocked |= gpu.Find("Mali-T", /*ignoreCase*/ true) >= 0;
 
-      // Enable Webrender on all Mali-Gxx GPUs, excluding G76 due to bug
-      // 1688017, and G31 due to bug 1689947.
+      // Enable Webrender on all Mali-Gxx GPUs...
       isUnblocked |= gpu.Find("Mali-G", /*ignoreCase*/ true) >= 0 &&
-                     gpu.Find("Mali-G76", /*ignoreCase*/ true) == kNotFound &&
+                     // Excluding G31 due to bug 1689947.
                      gpu.Find("Mali-G31", /*ignoreCase*/ true) == kNotFound;
 
       // Webrender requires the extension GL_OES_EGL_image_external_essl3
@@ -648,6 +642,22 @@ nsresult GfxInfo::GetFeatureStatusImpl(
       if (isEmulatorSwiftShader) {
         *aStatus = nsIGfxInfo::FEATURE_BLOCKED_DEVICE;
         aFailureId = "FEATURE_FAILURE_BUG_1603515";
+      } else {
+        *aStatus = nsIGfxInfo::FEATURE_STATUS_OK;
+      }
+      return NS_OK;
+    }
+
+    if (aFeature == FEATURE_WEBRENDER_OPTIMIZED_SHADERS) {
+      // Optimized shaders result in completely broken rendering in at least one
+      // Mali-T6xx device. Disable on all T6xx as a precaution until we know
+      // more specifically which devices are affected. See bug 1689064 for
+      // details.
+      const bool isMaliT6xx =
+          mGLStrings->Renderer().Find("Mali-T6", /*ignoreCase*/ true) >= 0;
+      if (isMaliT6xx) {
+        *aStatus = nsIGfxInfo::FEATURE_BLOCKED_DEVICE;
+        aFailureId = "FEATURE_FAILURE_BUG_1689064";
       } else {
         *aStatus = nsIGfxInfo::FEATURE_STATUS_OK;
       }

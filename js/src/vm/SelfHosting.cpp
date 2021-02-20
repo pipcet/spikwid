@@ -1236,17 +1236,17 @@ static bool intrinsic_TypedArrayByteOffset(JSContext* cx, unsigned argc,
   return true;
 }
 
-static bool intrinsic_TypedArrayElementShift(JSContext* cx, unsigned argc,
-                                             Value* vp) {
+static bool intrinsic_TypedArrayElementSize(JSContext* cx, unsigned argc,
+                                            Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
   MOZ_ASSERT(args.length() == 1);
   MOZ_ASSERT(TypedArrayObject::is(args[0]));
 
-  unsigned shift =
-      TypedArrayShift(args[0].toObject().as<TypedArrayObject>().type());
-  MOZ_ASSERT(shift == 0 || shift == 1 || shift == 2 || shift == 3);
+  unsigned size =
+      TypedArrayElemSize(args[0].toObject().as<TypedArrayObject>().type());
+  MOZ_ASSERT(size == 1 || size == 2 || size == 4 || size == 8);
 
-  args.rval().setInt32(mozilla::AssertedCast<int32_t>(shift));
+  args.rval().setInt32(mozilla::AssertedCast<int32_t>(size));
   return true;
 }
 
@@ -2206,6 +2206,8 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_FN("std_Map_entries", MapObject::entries, 0, 0),
 
     JS_INLINABLE_FN("std_Object_create", obj_create, 2, 0, ObjectCreate),
+    JS_INLINABLE_FN("std_Object_isPrototypeOf", obj_isPrototypeOf, 1, 0,
+                    ObjectIsPrototypeOf),
     JS_FN("std_Object_propertyIsEnumerable", obj_propertyIsEnumerable, 1, 0),
     JS_FN("std_Object_toString", obj_toString, 0, 0),
     JS_FN("std_Object_setProto", obj_setProto, 1, 0),
@@ -2416,8 +2418,8 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_FN("TypedArrayBuffer", intrinsic_TypedArrayBuffer, 1, 0),
     JS_INLINABLE_FN("TypedArrayByteOffset", intrinsic_TypedArrayByteOffset, 1,
                     0, IntrinsicTypedArrayByteOffset),
-    JS_INLINABLE_FN("TypedArrayElementShift", intrinsic_TypedArrayElementShift,
-                    1, 0, IntrinsicTypedArrayElementShift),
+    JS_INLINABLE_FN("TypedArrayElementSize", intrinsic_TypedArrayElementSize, 1,
+                    0, IntrinsicTypedArrayElementSize),
 
     JS_INLINABLE_FN("TypedArrayLength", intrinsic_TypedArrayLength, 1, 0,
                     IntrinsicTypedArrayLength),
@@ -2800,20 +2802,24 @@ bool JSRuntime::initSelfHosting(JSContext* cx) {
   CompileOptions options(cx);
   FillSelfHostingCompileOptions(options);
 
-  Rooted<UniquePtr<frontend::CompilationStencil>> stencil(
-      cx, MakeUnique<frontend::CompilationStencil>(cx, options));
-  if (!stencil.get()) {
-    return false;
-  }
-
-  if (!stencil->input.initForSelfHostingGlobal(cx)) {
-    return false;
-  }
+  Rooted<frontend::CompilationInput> input(cx,
+                                           frontend::CompilationInput(options));
+  UniquePtr<frontend::CompilationStencil> stencil;
 
   // Try initializing from Stencil XDR.
   bool decodeOk = false;
   if (selfHostedXDR.length() > 0) {
-    if (!stencil->deserializeStencils(cx, selfHostedXDR, &decodeOk)) {
+    if (!input.get().initForSelfHostingGlobal(cx)) {
+      return false;
+    }
+
+    stencil = cx->make_unique<frontend::CompilationStencil>(input.get());
+    if (!stencil) {
+      return false;
+    }
+
+    if (!stencil->deserializeStencils(cx, input.get(), selfHostedXDR,
+                                      &decodeOk)) {
       return false;
     }
   }
@@ -2839,15 +2845,16 @@ bool JSRuntime::initSelfHosting(JSContext* cx) {
       return false;
     }
 
-    if (!frontend::CompileGlobalScriptToStencil(cx, *stencil, srcBuf,
-                                                ScopeKind::Global)) {
+    stencil = frontend::CompileGlobalScriptToStencil(cx, input.get(), srcBuf,
+                                                     ScopeKind::Global);
+    if (!stencil) {
       return false;
     }
 
     // Serialize the stencil to XDR.
     if (selfHostedXDRWriter) {
       JS::TranscodeBuffer xdrBuffer;
-      if (!stencil->serializeStencils(cx, xdrBuffer)) {
+      if (!stencil->serializeStencils(cx, input.get(), xdrBuffer)) {
         return false;
       }
 
@@ -2862,8 +2869,8 @@ bool JSRuntime::initSelfHosting(JSContext* cx) {
   //       below.
   {
     Rooted<frontend::CompilationGCOutput> output(cx);
-    if (!frontend::CompilationStencil::instantiateStencils(cx, *stencil,
-                                                           output.get())) {
+    if (!frontend::CompilationStencil::instantiateStencils(
+            cx, input.get(), *stencil, output.get())) {
       return false;
     }
 

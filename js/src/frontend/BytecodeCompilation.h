@@ -7,10 +7,8 @@
 #ifndef frontend_BytecodeCompilation_h
 #define frontend_BytecodeCompilation_h
 
-#include "mozilla/Assertions.h"  // MOZ_ASSERT
-#include "mozilla/Attributes.h"  // MOZ_MUST_USE, MOZ_STACK_CLASS
-#include "mozilla/Maybe.h"       // mozilla::Maybe, mozilla::Nothing
-#include "mozilla/Utf8.h"        // mozilla::Utf8Unit
+#include "mozilla/Maybe.h"  // mozilla::Maybe, mozilla::Nothing
+#include "mozilla/Utf8.h"   // mozilla::Utf8Unit
 
 #include <stddef.h>  // size_t
 #include <stdint.h>  // uint32_t
@@ -50,21 +48,12 @@ class ModuleCompiler;
 template <typename Unit>
 class StandaloneFunctionCompiler;
 
-extern bool CompileGlobalScriptToStencil(JSContext* cx,
-                                         CompilationStencil& stencil,
-                                         JS::SourceText<char16_t>& srcBuf,
-                                         ScopeKind scopeKind);
-
-extern bool CompileGlobalScriptToStencil(
-    JSContext* cx, CompilationStencil& stencil,
-    JS::SourceText<mozilla::Utf8Unit>& srcBuf, ScopeKind scopeKind);
+extern UniquePtr<CompilationStencil> CompileGlobalScriptToStencil(
+    JSContext* cx, CompilationInput& input, JS::SourceText<char16_t>& srcBuf,
+    ScopeKind scopeKind);
 
 extern UniquePtr<CompilationStencil> CompileGlobalScriptToStencil(
-    JSContext* cx, const JS::ReadOnlyCompileOptions& options,
-    JS::SourceText<char16_t>& srcBuf, ScopeKind scopeKind);
-
-extern UniquePtr<CompilationStencil> CompileGlobalScriptToStencil(
-    JSContext* cx, const JS::ReadOnlyCompileOptions& options,
+    JSContext* cx, CompilationInput& input,
     JS::SourceText<mozilla::Utf8Unit>& srcBuf, ScopeKind scopeKind);
 
 // Perform some operation to reduce the time taken by instantiation.
@@ -73,11 +62,13 @@ extern UniquePtr<CompilationStencil> CompileGlobalScriptToStencil(
 // PrepareForInstantiate is GC-free operation that can be performed
 // off-main-thread without parse global.
 extern bool PrepareForInstantiate(
-    JSContext* cx, CompilationStencil& stencil, CompilationGCOutput& gcOutput,
+    JSContext* cx, CompilationInput& input, CompilationStencil& stencil,
+    CompilationGCOutput& gcOutput,
     CompilationGCOutput* gcOutputForDelazification = nullptr);
 
 extern bool InstantiateStencils(
-    JSContext* cx, CompilationStencil& stencil, CompilationGCOutput& gcOutput,
+    JSContext* cx, CompilationInput& input, CompilationStencil& stencil,
+    CompilationGCOutput& gcOutput,
     CompilationGCOutput* gcOutputForDelazification = nullptr);
 
 extern JSScript* CompileGlobalScript(JSContext* cx,
@@ -99,15 +90,16 @@ extern JSScript* CompileEvalScript(JSContext* cx,
 extern void FillCompileOptionsForLazyFunction(JS::CompileOptions& options,
                                               Handle<BaseScript*> lazy);
 
-extern MOZ_MUST_USE bool CompileLazyFunctionToStencil(
-    JSContext* cx, CompilationStencil& stencil, JS::Handle<BaseScript*> lazy,
+[[nodiscard]] extern bool CompileLazyFunctionToStencil(
+    JSContext* cx, CompilationInput& input, CompilationStencil& stencil,
     const char16_t* units, size_t length);
 
-extern MOZ_MUST_USE bool CompileLazyFunctionToStencil(
-    JSContext* cx, CompilationStencil& stencil, JS::Handle<BaseScript*> lazy,
+[[nodiscard]] extern bool CompileLazyFunctionToStencil(
+    JSContext* cx, CompilationInput& input, CompilationStencil& stencil,
     const mozilla::Utf8Unit* units, size_t length);
 
 extern bool InstantiateStencilsForDelazify(JSContext* cx,
+                                           CompilationInput& input,
                                            CompilationStencil& stencil);
 
 // Certain compile options will disable the syntax parser entirely.

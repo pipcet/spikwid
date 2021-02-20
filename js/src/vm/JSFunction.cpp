@@ -63,6 +63,7 @@
 #include "vm/Shape.h"
 #include "vm/SharedImmutableStringsCache.h"
 #include "vm/StringObject.h"
+#include "vm/WellKnownAtom.h"  // js_*_str
 #include "vm/WrapperObject.h"
 #include "vm/Xdr.h"
 #include "wasm/AsmJS.h"
@@ -573,7 +574,7 @@ XDRResult js::XDRInterpretedFunction(XDRState<mode>* xdr,
   if (mode == XDR_ENCODE) {
     fun = objp;
     if (!fun->isInterpreted() || fun->isBoundFunction()) {
-      return xdr->fail(JS::TranscodeResult_Failure_NotInterpretedFun);
+      return xdr->fail(JS::TranscodeResult::Failure_NotInterpretedFun);
     }
 
     if (fun->isGenerator()) {
@@ -621,7 +622,7 @@ XDRResult js::XDRInterpretedFunction(XDRState<mode>* xdr,
 
     RootedObject proto(cx);
     if (!GetFunctionPrototype(cx, generatorKind, asyncKind, &proto)) {
-      return xdr->fail(JS::TranscodeResult_Throw);
+      return xdr->fail(JS::TranscodeResult::Throw);
     }
 
     gc::AllocKind allocKind = gc::AllocKind::FUNCTION;
@@ -635,13 +636,13 @@ XDRResult js::XDRInterpretedFunction(XDRState<mode>* xdr,
         FunctionFlags::MUTABLE_FLAGS | FunctionFlags::SELFHOSTLAZY |
         FunctionFlags::BOUND_FUN | FunctionFlags::WASM_JIT_ENTRY;
     if ((flags & UnsupportedFlags) != 0) {
-      return xdr->fail(JS::TranscodeResult_Failure_BadDecode);
+      return xdr->fail(JS::TranscodeResult::Failure_BadDecode);
     }
 
     fun = NewFunctionWithProto(cx, nullptr, nargs, FunctionFlags(flags),
                                nullptr, atom, proto, allocKind, TenuredObject);
     if (!fun) {
-      return xdr->fail(JS::TranscodeResult_Throw);
+      return xdr->fail(JS::TranscodeResult::Throw);
     }
     objp.set(fun);
   }
@@ -1542,12 +1543,13 @@ bool DelazifyCanonicalScriptedFunctionImpl(JSContext* cx, HandleFunction fun,
     JS::CompileOptions options(cx);
     frontend::FillCompileOptionsForLazyFunction(options, lazy);
 
-    Rooted<frontend::CompilationStencil> stencil(
-        cx, frontend::CompilationStencil(cx, options));
-    stencil.get().setFunctionKey(lazy);
-    stencil.get().input.initFromLazy(lazy);
+    Rooted<frontend::CompilationInput> input(
+        cx, frontend::CompilationInput(options));
+    frontend::CompilationStencil stencil(input.get());
+    stencil.setFunctionKey(lazy);
+    input.get().initFromLazy(lazy);
 
-    if (!frontend::CompileLazyFunctionToStencil(cx, stencil.get(), lazy,
+    if (!frontend::CompileLazyFunctionToStencil(cx, input.get(), stencil,
                                                 units.get(), sourceLength)) {
       // The frontend shouldn't fail after linking the function and the
       // non-lazy script together.
@@ -1556,7 +1558,7 @@ bool DelazifyCanonicalScriptedFunctionImpl(JSContext* cx, HandleFunction fun,
       return false;
     }
 
-    if (!frontend::InstantiateStencilsForDelazify(cx, stencil.get())) {
+    if (!frontend::InstantiateStencilsForDelazify(cx, input.get(), stencil)) {
       // The frontend shouldn't fail after linking the function and the
       // non-lazy script together.
       MOZ_ASSERT(fun->baseScript() == lazy);
@@ -1566,7 +1568,7 @@ bool DelazifyCanonicalScriptedFunctionImpl(JSContext* cx, HandleFunction fun,
 
     if (ss->hasEncoder()) {
       MOZ_ASSERT(!js::UseOffThreadParseGlobal());
-      if (!ss->xdrEncodeFunctionStencil(cx, stencil.get())) {
+      if (!ss->xdrEncodeFunctionStencil(cx, stencil)) {
         return false;
       }
     }

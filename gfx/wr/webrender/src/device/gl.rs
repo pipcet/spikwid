@@ -988,6 +988,9 @@ pub struct Capabilities {
     /// Whether clip-masking is supported natively by the GL implementation
     /// rather than emulated in shaders.
     pub uses_native_clip_mask: bool,
+    /// Whether anti-aliasing is supported natively by the GL implementation
+    /// rather than emulated in shaders.
+    pub uses_native_antialiasing: bool,
     /// The name of the renderer, as reported by GL
     pub renderer_name: String,
 }
@@ -1632,12 +1635,12 @@ impl Device {
         // from a non-zero offset within a PBO to fail. See bug 1603783.
         let supports_nonzero_pbo_offsets = !is_macos;
 
-        let is_mali_g = renderer_name.starts_with("Mali-G");
+        let is_mali = renderer_name.starts_with("Mali");
 
-        // On Mali-Gxx there is a driver bug when rendering partial updates to
+        // On Mali-Gxx and Txxx there is a driver bug when rendering partial updates to
         // offscreen render targets, so we must ensure we render to the entire target.
         // See bug 1663355.
-        let supports_render_target_partial_update = !is_mali_g;
+        let supports_render_target_partial_update = !is_mali;
 
         let supports_shader_storage_object = match gl.get_type() {
             // see https://www.g-truc.net/post-0734.html
@@ -1650,6 +1653,12 @@ impl Device {
         // pass variants if they know the alpha-pass was only required to deal with
         // clip-masking.
         let uses_native_clip_mask = is_software_webrender;
+
+        // SWGL uses swgl_antiAlias() instead of implementing anti-aliasing in shaders.
+        // As above, this allows bypassing certain alpha-pass variants.
+        let uses_native_antialiasing = is_software_webrender;
+
+        let is_mali_g = renderer_name.starts_with("Mali-G");
 
         let mut requires_batched_texture_uploads = None;
         if is_software_webrender {
@@ -1701,6 +1710,7 @@ impl Device {
                 requires_batched_texture_uploads,
                 supports_r8_texture_upload,
                 uses_native_clip_mask,
+                uses_native_antialiasing,
                 renderer_name,
             },
 

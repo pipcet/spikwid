@@ -18,8 +18,10 @@
 #include "nsIFileURL.h"
 
 #include "mozilla/BasePrincipal.h"
+#include "mozilla/ErrorNames.h"
 #include "mozilla/IntegerPrintfMacros.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/ScopeExit.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/TelemetryComms.h"
 #include "private/pprio.h"
@@ -819,7 +821,8 @@ nsJARChannel::SetContentLength(int64_t aContentLength) {
   return NS_OK;
 }
 
-static void RecordZeroLengthEvent(const nsCString& aSpec) {
+static void RecordZeroLengthEvent(bool aIsSync, const nsCString& aSpec,
+                                  nsresult aStatus) {
   // The event can only hold 80 characters.
   // We only save the file name and path inside the jar.
   auto findFilenameStart = [](const nsCString& aSpec) -> uint32_t {
@@ -844,16 +847,32 @@ static void RecordZeroLengthEvent(const nsCString& aSpec) {
   uint32_t from = findFilenameStart(aSpec);
   nsAutoCString fileName(Substring(aSpec, from));
 
+  // To test this telemetry we use a zip file and we want to make
+  // sure don't filter it out.
+  bool isTest = fileName.Find("test_empty_file.zip!") != -1;
+
   Telemetry::SetEventRecordingEnabled("zero_byte_load"_ns, true);
   Telemetry::EventID eventType = Telemetry::EventID::Zero_byte_load_Load_Others;
   if (StringEndsWith(fileName, ".ftl"_ns)) {
     eventType = Telemetry::EventID::Zero_byte_load_Load_Ftl;
   } else if (StringEndsWith(fileName, ".dtd"_ns)) {
+    // We're going to skip reporting telemetry on res DTDs.
+    // See Bug 1693711 for investigation into those empty loads.
+    if (!isTest && StringBeginsWith(fileName, "omni.ja!/res/dtd"_ns)) {
+      return;
+    }
+
     eventType = Telemetry::EventID::Zero_byte_load_Load_Dtd;
   } else if (StringEndsWith(fileName, ".properties"_ns)) {
     eventType = Telemetry::EventID::Zero_byte_load_Load_Properties;
   } else if (StringEndsWith(fileName, ".js"_ns) ||
              StringEndsWith(fileName, ".jsm"_ns)) {
+    // We're going to skip reporting telemetry on JS loads
+    // coming not from omni.ja.
+    // See Bug 1693711 for investigation into those empty loads.
+    if (!isTest && !StringBeginsWith(fileName, "omni.ja!"_ns)) {
+      return;
+    }
     eventType = Telemetry::EventID::Zero_byte_load_Load_Js;
   } else if (StringEndsWith(fileName, ".xml"_ns)) {
     eventType = Telemetry::EventID::Zero_byte_load_Load_Xml;
@@ -861,10 +880,31 @@ static void RecordZeroLengthEvent(const nsCString& aSpec) {
     eventType = Telemetry::EventID::Zero_byte_load_Load_Xhtml;
   }
 
+  // We're going to skip reporting telemetry on other types of files.
+  // See Bug 1693711 for investigation into those empty loads.
+  if (!isTest && eventType == Telemetry::EventID::Zero_byte_load_Load_Others) {
+    return;
+  }
+
+  nsAutoCString errorCString;
+  mozilla::GetErrorName(aStatus, errorCString);
+
+  // FTL uses I/O to test for file presence, so we get
+  // a high volume of events from it, but it is not erronous.
+  // Also, Fluent is resilient to empty loads, so even if any
+  // of the errors are real errors, they don't cause YSOD.
+  // We can investigate them separately.
+  if (!isTest && eventType == Telemetry::EventID::Zero_byte_load_Load_Ftl &&
+      errorCString.EqualsLiteral("NS_ERROR_FILE_NOT_FOUND")) {
+    return;
+  }
+
   auto res = CopyableTArray<Telemetry::EventExtraEntry>{};
-  res.SetCapacity(2);
-  res.AppendElement(Telemetry::EventExtraEntry{"sync"_ns, "true"_ns});
+  res.SetCapacity(3);
+  res.AppendElement(
+      Telemetry::EventExtraEntry{"sync"_ns, aIsSync ? "true"_ns : "false"_ns});
   res.AppendElement(Telemetry::EventExtraEntry{"file_name"_ns, fileName});
+  res.AppendElement(Telemetry::EventExtraEntry{"status"_ns, errorCString});
   Telemetry::RecordEvent(eventType, Nothing{}, Some(res));
 }
 
@@ -875,6 +915,12 @@ nsJARChannel::Open(nsIInputStream** aStream) {
   nsresult rv =
       nsContentSecurityManager::doContentSecurityCheck(this, listener);
   NS_ENSURE_SUCCESS(rv, rv);
+
+  auto recordEvent = MakeScopeExit([&] {
+    if (mContentLength <= 0 || NS_FAILED(rv)) {
+      RecordZeroLengthEvent(true, mSpec, rv);
+    }
+  });
 
   LOG(("nsJARChannel::Open [this=%p]\n", this));
 
@@ -899,9 +945,6 @@ nsJARChannel::Open(nsIInputStream** aStream) {
   input.forget(aStream);
   mOpened = true;
 
-  if (mContentLength <= 0) {
-    RecordZeroLengthEvent(mSpec);
-  }
   return NS_OK;
 }
 
@@ -1079,39 +1122,6 @@ nsJARChannel::OnStartRequest(nsIRequest* req) {
   return rv;
 }
 
-static void RecordEmptyFileEvent(const nsCString& aFileName) {
-  // Send Telemetry
-
-  // The event can only hold 80 characters.
-  // We only save the file name and path inside the jar.
-  auto findFilenameStart = [](const nsCString& aFileName) -> uint32_t {
-    int32_t pos = aFileName.Find("!/");
-    if (pos == kNotFound) {
-      MOZ_ASSERT(false, "This should not happen");
-      return 0;
-    }
-    int32_t from = aFileName.RFindChar('/', pos);
-    if (from == kNotFound) {
-      MOZ_ASSERT(false, "This should not happen");
-      return 0;
-    }
-    // Skip over the slash
-    from++;
-    return from;
-  };
-
-  // If for some reason we are unable to extract the filename we report the
-  // entire string, or 80 characters of it, to make sure we don't miss any
-  // events.
-  uint32_t from = findFilenameStart(aFileName);
-
-  Telemetry::SetEventRecordingEnabled("network.jar.channel"_ns, true);
-  Telemetry::EventID eventType =
-      Telemetry::EventID::NetworkJarChannel_Nodata_Onstop;
-  Telemetry::RecordEvent(eventType, mozilla::Some(Substring(aFileName, from)),
-                         Nothing{});
-}
-
 NS_IMETHODIMP
 nsJARChannel::OnStopRequest(nsIRequest* req, nsresult status) {
   LOG(("nsJARChannel::OnStopRequest [this=%p %s status=%" PRIx32 "]\n", this,
@@ -1120,8 +1130,8 @@ nsJARChannel::OnStopRequest(nsIRequest* req, nsresult status) {
   if (NS_SUCCEEDED(mStatus)) mStatus = status;
 
   if (mListener) {
-    if (NS_SUCCEEDED(status) && !mOnDataCalled) {
-      RecordEmptyFileEvent(mSpec);
+    if (!mOnDataCalled || NS_FAILED(status)) {
+      RecordZeroLengthEvent(false, mSpec, status);
     }
 
     mListener->OnStopRequest(this, status);

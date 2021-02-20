@@ -103,6 +103,7 @@ typedef struct _nsCocoaWindowList {
 - (NSRect)getAndResetNativeDirtyRect;
 
 - (void)setUseMenuStyle:(BOOL)aValue;
+@property(nonatomic) mozilla::StyleWindowShadow shadowStyle;
 
 - (void)releaseJSObjects;
 
@@ -184,7 +185,6 @@ typedef struct _nsCocoaWindowList {
   CGFloat mUnifiedToolbarHeight;
   CGFloat mSheetAttachmentPosition;
   NSRect mWindowButtonsRect;
-  NSRect mFullScreenButtonRect;
 }
 - (void)setUnifiedToolbarHeight:(CGFloat)aHeight;
 - (CGFloat)unifiedToolbarHeight;
@@ -195,9 +195,7 @@ typedef struct _nsCocoaWindowList {
 - (void)setSheetAttachmentPosition:(CGFloat)aY;
 - (CGFloat)sheetAttachmentPosition;
 - (void)placeWindowButtons:(NSRect)aRect;
-- (void)placeFullScreenButton:(NSRect)aRect;
 - (NSPoint)windowButtonsPositionWithDefaultPosition:(NSPoint)aDefaultPosition;
-- (NSPoint)fullScreenButtonPositionWithDefaultPosition:(NSPoint)aDefaultPosition;
 - (void)windowMainStateChanged;
 @end
 
@@ -351,8 +349,6 @@ class nsCocoaWindow final : public nsBaseWidget, public nsPIWidgetCocoa {
                               bool aRectIsFrameRect);
   nsresult CreatePopupContentView(const LayoutDeviceIntRect& aRect, nsWidgetInitData* aInitData);
   void DestroyNativeWindow();
-  void AdjustWindowShadow();
-  void SetWindowBackgroundBlur();
   void UpdateBounds();
   int32_t GetWorkspaceID();
 

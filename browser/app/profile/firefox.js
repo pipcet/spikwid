@@ -331,6 +331,10 @@ pref("browser.urlbar.suggest.openpage",             true);
 pref("browser.urlbar.suggest.searches",             false);
 pref("browser.urlbar.suggest.topsites",             false);
 pref("browser.urlbar.suggest.engines",              false);
+pref("browser.urlbar.suggest.quicksuggest",         false);
+
+// Whether the QuickSuggest experiment is enabled.
+pref("browser.urlbar.quicksuggest.enabled", false);
 
 // Whether to show search suggestions before general results like history and
 // bookmarks.
@@ -1350,11 +1354,7 @@ pref("browser.menu.showCharacterEncoding", "chrome://browser/locale/browser.prop
 // This is a fallback value for when prompt callers do not specify a modalType.
 pref("prompts.defaultModalType", 3);
 
-#ifdef NIGHTLY_BUILD
-  pref("browser.topsites.useRemoteSetting", true);
-#else
-  pref("browser.topsites.useRemoteSetting", false);
-#endif
+pref("browser.topsites.useRemoteSetting", true);
 
 // The base URL for the Quick Suggest anonymizing proxy. To make a request to
 // the proxy, include a campaign ID in the path.
@@ -1374,11 +1374,17 @@ pref("prompts.tabChromePromptSubDialog", true);
   pref("prompts.contentPromptSubDialog", false);
 #endif
 
+// Whether to show window-modal dialogs opened for browser windows
+// in a SubDialog inside their parent, instead of an OS level window.
+#ifdef NIGHTLY_BUILD
+  pref("prompts.windowPromptSubDialog", true);
+#else
+  pref("prompts.windowPromptSubDialog", false);
+#endif
+
+
 // Activates preloading of the new tab url.
 pref("browser.newtab.preload", true);
-
-// Experiment Prefs for Nimbus
-pref("browser.newtab.experiments.value", "{\"prefsButtonIcon\": \"icon-settings\"}");
 
 // Preference to enable the entire new newtab experience at once.
 pref("browser.newtabpage.activity-stream.newNewtabExperience.enabled", false);
@@ -1467,6 +1473,7 @@ pref("trailhead.firstrun.newtab.triplets", "");
 pref("browser.aboutwelcome.enabled", true);
 // Used to set multistage welcome UX
 pref("browser.aboutwelcome.overrideContent", "");
+pref("browser.aboutwelcome.skipFocus", false);
 
 // The pref that controls if the What's New panel is enabled.
 pref("browser.messaging-system.whatsNewPanel.enabled", true);
@@ -2167,8 +2174,6 @@ pref("devtools.inspector.imagePreviewTooltipSize", 300);
 pref("devtools.inspector.showUserAgentStyles", false);
 // Show native anonymous content and user agent shadow roots
 pref("devtools.inspector.showAllAnonymousContent", false);
-// Enable the new Rules View
-pref("devtools.inspector.new-rulesview.enabled", false);
 // Enable the inline CSS compatiblity warning in inspector rule view
 pref("devtools.inspector.ruleview.inline-compatibility-warning.enabled", false);
 // Enable the compatibility tool in the inspector.
@@ -2417,8 +2422,12 @@ pref("devtools.browserconsole.input.editorWidth", 0);
 // Display an onboarding UI for the Editor mode.
 pref("devtools.webconsole.input.editorOnboarding", true);
 
-// Disable the new performance recording panel by default
-pref("devtools.performance.new-panel-enabled", false);
+// Enable the new performance recording panel in Nightly builds.
+#if defined(NIGHTLY_BUILD)
+  pref("devtools.performance.new-panel-enabled", true);
+#else
+  pref("devtools.performance.new-panel-enabled", false);
+#endif
 
 // Enable message grouping in the console, true by default
 pref("devtools.webconsole.groupWarningMessages", true);

@@ -143,21 +143,28 @@ class LoginCSVImport {
     try {
       csvString = await OS.File.read(filePath, { encoding: "utf-8" });
     } catch (ex) {
+      TelemetryStopwatch.cancelKeyed(
+        "FX_MIGRATION_LOGINS_IMPORT_MS",
+        LoginCSVImport.MIGRATION_HISTOGRAM_KEY
+      );
       Cu.reportError(ex);
       throw new ImportFailedException(
         ImportFailedErrorType.FILE_PERMISSIONS_ERROR
       );
     }
     let parsedLines;
+    let headerLine;
     if (filePath.endsWith(".csv")) {
+      headerLine = d3.csv.parseRows(csvString)[0];
       parsedLines = d3.csv.parse(csvString);
     } else if (filePath.endsWith(".tsv")) {
+      headerLine = d3.tsv.parseRows(csvString)[0];
       parsedLines = d3.tsv.parse(csvString);
     }
 
     let fieldsInFile = new Set();
-    if (parsedLines && parsedLines[0]) {
-      for (const columnName in parsedLines[0]) {
+    if (parsedLines && headerLine) {
+      for (const columnName of headerLine) {
         const fieldName = csvColumnToFieldMap.get(
           columnName.toLocaleLowerCase()
         );
@@ -177,6 +184,10 @@ class LoginCSVImport {
       }
     }
     if (fieldsInFile.size === 0) {
+      TelemetryStopwatch.cancelKeyed(
+        "FX_MIGRATION_LOGINS_IMPORT_MS",
+        LoginCSVImport.MIGRATION_HISTOGRAM_KEY
+      );
       throw new ImportFailedException(ImportFailedErrorType.FILE_FORMAT_ERROR);
     }
     if (

@@ -41,6 +41,7 @@ function nonBrowserWindowStartup() {
     "charsetMenu",
     "View:PageSource",
     "View:FullScreen",
+    "enterFullScreenItem",
     "viewHistorySidebar",
     "Browser:AddBookmarkAs",
     "Browser:BookmarkAllTabs",
@@ -84,7 +85,7 @@ function nonBrowserWindowStartup() {
 
     // Also hide the window-list separator.
     element = document.getElementById("sep-window-list");
-    element.setAttribute("hidden", "true");
+    element.hidden = true;
 
     // Setup the dock menu.
     let dockMenuElement = document.getElementById("menu_mac_dockmenu");

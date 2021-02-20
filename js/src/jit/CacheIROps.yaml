@@ -240,6 +240,14 @@
     obj: ObjId
     group: GroupField
 
+- name: GuardTypeDescr
+  shared: false
+  transpile: false
+  cost_estimate: 1
+  args:
+    obj: ObjId
+    descr: ObjectField
+
 - name: GuardProto
   shared: false
   transpile: true
@@ -307,6 +315,14 @@
     regexp: ObjId
     input: StringId
     lastIndex: Int32Id
+
+- name: RegExpFlagResult
+  shared: true
+  transpile: true
+  cost_estimate: 2
+  args:
+    regexp: ObjId
+    flagsMask: Int32Imm
 
 - name: CallSubstringKernelResult
   shared: true
@@ -651,12 +667,13 @@
   args:
     array: ObjId
 
-- name: GuardArgumentsObjectNotOverriddenIterator
+- name: GuardArgumentsObjectFlags
   shared: true
   transpile: true
   cost_estimate: 1
   args:
     obj: ObjId
+    flags: ByteImm
 
 - name: LoadObject
   shared: true
@@ -977,14 +994,42 @@
   args:
     obj: ObjId
 
-- name: TypedArrayByteOffsetInt32Result
+- name: ArrayBufferViewByteOffsetInt32Result
   shared: true
   transpile: true
   cost_estimate: 1
   args:
     obj: ObjId
 
-- name: TypedArrayElementShiftResult
+- name: ArrayBufferViewByteOffsetDoubleResult
+  shared: true
+  transpile: true
+  cost_estimate: 1
+  args:
+    obj: ObjId
+
+- name: TypedArrayByteLengthInt32Result
+  shared: true
+  transpile: true
+  cost_estimate: 2
+  args:
+    obj: ObjId
+
+- name: TypedArrayByteLengthDoubleResult
+  shared: true
+  transpile: true
+  cost_estimate: 2
+  args:
+    obj: ObjId
+
+- name: TypedArrayElementSizeResult
+  shared: true
+  transpile: true
+  cost_estimate: 2
+  args:
+    obj: ObjId
+
+- name: GuardHasAttachedArrayBuffer
   shared: true
   transpile: true
   cost_estimate: 2
@@ -1782,7 +1827,21 @@
   args:
     obj: ObjId
 
-- name: LoadTypedArrayLengthInt32Result
+- name: LoadArrayBufferByteLengthDoubleResult
+  shared: true
+  transpile: true
+  cost_estimate: 1
+  args:
+    obj: ObjId
+
+- name: LoadArrayBufferViewLengthInt32Result
+  shared: true
+  transpile: true
+  cost_estimate: 1
+  args:
+    obj: ObjId
+
+- name: LoadArrayBufferViewLengthDoubleResult
   shared: true
   transpile: true
   cost_estimate: 1

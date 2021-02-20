@@ -46,6 +46,8 @@
 #include "nsIMutableArray.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/FileUtils.h"
+#include "mozilla/ProfilerLabels.h"
+#include "mozilla/ProfilerMarkers.h"
 #include "mozilla/ScopeExit.h"
 #include "mozilla/URLPreloader.h"
 #include "mozilla/UniquePtr.h"
@@ -724,13 +726,10 @@ void nsComponentManagerImpl::ManifestComponent(ManifestProcessingContext& aCx,
     return;
   }
 
-  KnownModule* km;
-
-  km = mKnownModules.Get(hash);
-  if (!km) {
-    km = new KnownModule(fl);
-    mKnownModules.Put(hash, km);
-  }
+  KnownModule* const km =
+      mKnownModules
+          .GetOrInsertWith(hash, [&] { return MakeUnique<KnownModule>(fl); })
+          .get();
 
   void* place = mArena.Allocate(sizeof(nsCID));
   nsID* permanentCID = static_cast<nsID*>(place);

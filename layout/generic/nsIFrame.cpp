@@ -5947,10 +5947,11 @@ AspectRatio nsIFrame::GetAspectRatio() const {
   // Per spec, 'aspect-ratio' property applies to all elements except inline
   // boxes and internal ruby or table boxes.
   // https://drafts.csswg.org/css-sizing-4/#aspect-ratio
-  //
-  // Bug 1667501: If any caller is used for the elements supporting and not
-  // supporting 'aspect-ratio', we may need to add explicit exclusion to early
-  // return here.
+  // For those frame types that don't support aspect-ratio, they must not have
+  // the natural ratio, so this early return is fine.
+  if (!IsFrameOfType(eSupportsAspectRatio)) {
+    return AspectRatio();
+  }
 
   const StyleAspectRatio& aspectRatio = StylePosition()->mAspectRatio;
   // If aspect-ratio is zero or infinite, it's a degenerate ratio and behaves
@@ -6098,8 +6099,7 @@ nsIFrame::SizeComputationResult nsIFrame::ComputeSize(
 
   const auto aspectRatio = GetAspectRatio();
   const bool isOrthogonal = aWM.IsOrthogonalTo(alignCB->GetWritingMode());
-  const bool isAutoISize =
-      styleISize.IsAuto() || aFlags.contains(ComputeSizeFlag::UseAutoISize);
+  const bool isAutoISize = styleISize.IsAuto();
   // Compute inline-axis size
   if (!isAutoISize) {
     auto iSizeResult =
@@ -6351,7 +6351,7 @@ LogicalSize nsIFrame::ComputeAutoSize(
   const auto& styleISize = aSizeOverrides.mStyleISize
                                ? *aSizeOverrides.mStyleISize
                                : StylePosition()->ISize(aWM);
-  if (styleISize.IsAuto() || aFlags.contains(ComputeSizeFlag::UseAutoISize)) {
+  if (styleISize.IsAuto()) {
     nscoord availBased =
         aAvailableISize - aMargin.ISize(aWM) - aBorderPadding.ISize(aWM);
     result.ISize(aWM) = ShrinkWidthToFit(aRenderingContext, availBased, aFlags);
@@ -6385,9 +6385,10 @@ nscoord nsIFrame::ShrinkWidthToFit(gfxContext* aRenderingContext,
 Maybe<nscoord> nsIFrame::ComputeInlineSizeFromAspectRatio(
     WritingMode aWM, const LogicalSize& aCBSize,
     const LogicalSize& aContentEdgeToBoxSizing, ComputeSizeFlags aFlags) const {
-  // FIXME: Bug 1670151: Use GetAspectRatio() to cover replaced elements.
+  // FIXME: Bug 1670151: Use GetAspectRatio() to cover replaced elements (and
+  // then we can drop the check of eSupportsAspectRatio).
   const AspectRatio aspectRatio = StylePosition()->mAspectRatio.ToLayoutRatio();
-  if (aFlags.contains(ComputeSizeFlag::SkipAspectRatio) || !aspectRatio) {
+  if (!IsFrameOfType(eSupportsAspectRatio) || !aspectRatio) {
     return Nothing();
   }
 

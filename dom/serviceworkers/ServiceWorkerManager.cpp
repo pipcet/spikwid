@@ -548,7 +548,8 @@ RefPtr<GenericErrorResultPromise> ServiceWorkerManager::StartControllingClient(
 
         aRegistrationInfo->StartControllingClient();
 
-        entry.Insert(new ControlledClientData(clientHandle, aRegistrationInfo));
+        entry.Insert(
+            MakeUnique<ControlledClientData>(clientHandle, aRegistrationInfo));
 
         clientHandle->OnDetach()->Then(
             GetMainThreadSerialEventTarget(), __func__,
@@ -1588,8 +1589,9 @@ ServiceWorkerManager::GetOrCreateJobQueue(const nsACString& aKey,
   // XXX we could use WithEntryHandle here to avoid a hashtable lookup, except
   // that leads to a false positive assertion, see bug 1370674 comment 7.
   if (!mRegistrationInfos.Get(aKey, &data)) {
-    data = new RegistrationDataPerPrincipal();
-    mRegistrationInfos.Put(aKey, data);
+    data =
+        mRegistrationInfos.Put(aKey, MakeUnique<RegistrationDataPerPrincipal>())
+            .get();
   }
 
   return data->mJobQueues
@@ -1911,7 +1913,8 @@ void ServiceWorkerManager::AddScopeAndRegistration(
   auto* const data =
       swm->mRegistrationInfos.WithEntryHandle(scopeKey, [](auto&& entry) {
         return entry
-            .OrInsertWith([] { return new RegistrationDataPerPrincipal(); })
+            .OrInsertWith(
+                [] { return MakeUnique<RegistrationDataPerPrincipal>(); })
             .get();
       });
 
@@ -3291,27 +3294,33 @@ void ServiceWorkerManager::ScheduleUpdateTimer(nsIPrincipal* aPrincipal,
     return;
   }
 
-  nsCOMPtr<nsITimer>& timer = data->mUpdateTimers.GetOrInsert(aScope);
-  if (timer) {
-    // There is already a timer scheduled.  In this case just use the original
-    // schedule time.  We don't want to push it out to a later time since that
-    // could allow updates to be starved forever if events are continuously
-    // fired.
-    return;
-  }
+  data->mUpdateTimers.WithEntryHandle(
+      aScope, [&aPrincipal, &aScope](auto&& entry) {
+        if (entry) {
+          // In case there is already a timer scheduled, just use the original
+          // schedule time.  We don't want to push it out to a later time since
+          // that could allow updates to be starved forever if events are
+          // continuously fired.
+          return;
+        }
 
-  nsCOMPtr<nsITimerCallback> callback =
-      new UpdateTimerCallback(aPrincipal, aScope);
+        nsCOMPtr<nsITimerCallback> callback =
+            new UpdateTimerCallback(aPrincipal, aScope);
 
-  const uint32_t UPDATE_DELAY_MS = 1000;
+        const uint32_t UPDATE_DELAY_MS = 1000;
 
-  rv = NS_NewTimerWithCallback(getter_AddRefs(timer), callback, UPDATE_DELAY_MS,
-                               nsITimer::TYPE_ONE_SHOT);
+        nsCOMPtr<nsITimer> timer;
 
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    data->mUpdateTimers.Remove(aScope);  // another lookup, but very rare
-    return;
-  }
+        const nsresult rv =
+            NS_NewTimerWithCallback(getter_AddRefs(timer), callback,
+                                    UPDATE_DELAY_MS, nsITimer::TYPE_ONE_SHOT);
+
+        if (NS_WARN_IF(NS_FAILED(rv))) {
+          return;
+        }
+
+        entry.Insert(std::move(timer));
+      });
 }
 
 void ServiceWorkerManager::UpdateTimerFired(nsIPrincipal* aPrincipal,

@@ -1331,6 +1331,28 @@ void LIRGenerator::visitWasmUnarySimd128(MWasmUnarySimd128* ins) {
   }
 }
 
+void LIRGenerator::visitWasmLoadLaneSimd128(MWasmLoadLaneSimd128* ins) {
+  LUse base = useRegisterAtStart(ins->base());
+  LUse inputUse = useRegisterAtStart(ins->value());
+  LAllocation memoryBase = ins->hasMemoryBase()
+                               ? useRegisterAtStart(ins->memoryBase())
+                               : LAllocation();
+  LWasmLoadLaneSimd128* lir =
+      new (alloc()) LWasmLoadLaneSimd128(base, inputUse, memoryBase);
+  defineReuseInput(lir, ins, LWasmLoadLaneSimd128::Src);
+}
+
+void LIRGenerator::visitWasmStoreLaneSimd128(MWasmStoreLaneSimd128* ins) {
+  LUse base = useRegisterAtStart(ins->base());
+  LUse input = useRegisterAtStart(ins->value());
+  LAllocation memoryBase = ins->hasMemoryBase()
+                               ? useRegisterAtStart(ins->memoryBase())
+                               : LAllocation();
+  LWasmStoreLaneSimd128* lir =
+      new (alloc()) LWasmStoreLaneSimd128(base, input, memoryBase);
+  add(lir, ins);
+}
+
 bool LIRGeneratorX86Shared::canFoldReduceSimd128AndBranch(wasm::SimdOp op) {
   switch (op) {
     case wasm::SimdOp::V128AnyTrue:
@@ -1339,6 +1361,7 @@ bool LIRGeneratorX86Shared::canFoldReduceSimd128AndBranch(wasm::SimdOp op) {
     case wasm::SimdOp::I8x16AllTrue:
     case wasm::SimdOp::I16x8AllTrue:
     case wasm::SimdOp::I32x4AllTrue:
+    case wasm::SimdOp::I64x2AllTrue:
     case wasm::SimdOp::I16x8Bitmask:
       return true;
     default:

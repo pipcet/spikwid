@@ -206,13 +206,11 @@
                 <menuitem id="enterFullScreenItem"
                           key="key_fullScreen" data-l10n-id="menu-view-enter-full-screen">
                   <observes element="View:FullScreen" attribute="oncommand"/>
-                  <observes element="View:FullScreen" attribute="disabled"/>
                 </menuitem>
                 <menuitem id="exitFullScreenItem"
                           key="key_fullScreen"
                           hidden="true" data-l10n-id="menu-view-exit-full-screen">
                   <observes element="View:FullScreen" attribute="oncommand"/>
-                  <observes element="View:FullScreen" attribute="disabled"/>
                 </menuitem>
 #else
                 <menuitem id="fullScreenItem"
@@ -477,6 +475,10 @@
                           onclick="checkForMiddleClick(this, event);"
                           data-l10n-id="menu-help-troubleshooting-info"
                           appmenu-data-l10n-id="appmenu-help-troubleshooting-info"/>
+                <menuitem id="helpSafeMode"
+                          oncommand="safeModeRestart();"
+                          data-l10n-id="menu-help-safe-mode-without-addons"
+                          appmenu-data-l10n-id="appmenu-help-safe-mode-without-addons"/>
                 <menuitem id="help_taskManager"
                           oncommand="switchToTabHavingURI('about:performance', true)"
                           onclick="checkForMiddleClick(this, event);"

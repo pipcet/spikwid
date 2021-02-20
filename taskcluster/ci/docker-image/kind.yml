@@ -61,6 +61,7 @@ jobs:
             - deb8-mercurial
             - deb8-python3.6
             - deb8-python3-defaults
+            - deb8-python-cffi
             - deb8-python-psutil
             - deb8-python-zstandard
             - deb8-xz-utils
@@ -140,12 +141,6 @@ jobs:
         definition: debian-build
         args:
             ARCH: amd64
-    debian10-arm64-build:
-        symbol: I(deb10-arm64)
-        parent: debian10-base
-        definition: debian-build
-        args:
-            ARCH: arm64
     debian10-test-iris:
         symbol: I(deb10-ti)
         parent: debian10-test

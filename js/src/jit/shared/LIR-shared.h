@@ -838,14 +838,13 @@ class LArgumentsObjectLength : public LInstructionHelper<1, 1, 0> {
   const LAllocation* getArgsObject() { return getOperand(0); }
 };
 
-// Guard that the arguments object has no overridden iterator.
-class LGuardArgumentsObjectNotOverriddenIterator
-    : public LInstructionHelper<0, 1, 1> {
+// Guard that the given flags are not set on the arguments object.
+class LGuardArgumentsObjectFlags : public LInstructionHelper<0, 1, 1> {
  public:
-  LIR_HEADER(GuardArgumentsObjectNotOverriddenIterator)
+  LIR_HEADER(GuardArgumentsObjectFlags)
 
-  explicit LGuardArgumentsObjectNotOverriddenIterator(
-      const LAllocation& argsObj, const LDefinition& temp)
+  explicit LGuardArgumentsObjectFlags(const LAllocation& argsObj,
+                                      const LDefinition& temp)
       : LInstructionHelper(classOpcode) {
     setOperand(0, argsObj);
     setTemp(0, temp);
@@ -853,6 +852,10 @@ class LGuardArgumentsObjectNotOverriddenIterator
 
   const LAllocation* getArgsObject() { return getOperand(0); }
   const LDefinition* temp() { return this->getTemp(0); }
+
+  MGuardArgumentsObjectFlags* mir() const {
+    return mir_->toGuardArgumentsObjectFlags();
+  }
 };
 
 // If the Value is an Object, return unbox(Value).
@@ -1242,6 +1245,38 @@ class LApplyArgsGeneric
   WrappedFunction* getSingleTarget() const { return mir()->getSingleTarget(); }
 
   const LAllocation* getFunction() { return getOperand(0); }
+  const LAllocation* getArgc() { return getOperand(1); }
+  static const size_t ThisIndex = 2;
+
+  const LDefinition* getTempObject() { return getTemp(0); }
+  const LDefinition* getTempStackCounter() { return getTemp(1); }
+};
+
+class LApplyArgsObj
+    : public LCallInstructionHelper<BOX_PIECES, BOX_PIECES + 2, 2> {
+ public:
+  LIR_HEADER(ApplyArgsObj)
+
+  LApplyArgsObj(const LAllocation& func, const LAllocation& argsObj,
+                const LBoxAllocation& thisv, const LDefinition& tmpObjReg,
+                const LDefinition& tmpCopy)
+      : LCallInstructionHelper(classOpcode) {
+    setOperand(0, func);
+    setOperand(1, argsObj);
+    setBoxOperand(ThisIndex, thisv);
+    setTemp(0, tmpObjReg);
+    setTemp(1, tmpCopy);
+  }
+
+  MApplyArgsObj* mir() const { return mir_->toApplyArgsObj(); }
+
+  bool hasSingleTarget() const { return getSingleTarget() != nullptr; }
+  WrappedFunction* getSingleTarget() const { return mir()->getSingleTarget(); }
+
+  const LAllocation* getFunction() { return getOperand(0); }
+  const LAllocation* getArgsObj() { return getOperand(1); }
+  // All registers are calltemps. argc is mapped to the same register as
+  // ArgsObj. argc becomes live as ArgsObj is dying.
   const LAllocation* getArgc() { return getOperand(1); }
   static const size_t ThisIndex = 2;
 
@@ -4014,11 +4049,11 @@ class LGetNextEntryForIterator : public LInstructionHelper<1, 2, 3> {
   const LDefinition* temp2() { return getTemp(2); }
 };
 
-class LArrayBufferByteLengthInt32 : public LInstructionHelper<1, 1, 0> {
+class LArrayBufferByteLength : public LInstructionHelper<1, 1, 0> {
  public:
-  LIR_HEADER(ArrayBufferByteLengthInt32)
+  LIR_HEADER(ArrayBufferByteLength)
 
-  explicit LArrayBufferByteLengthInt32(const LAllocation& obj)
+  explicit LArrayBufferByteLength(const LAllocation& obj)
       : LInstructionHelper(classOpcode) {
     setOperand(0, obj);
   }
@@ -4068,17 +4103,31 @@ class LArrayBufferViewElements : public LInstructionHelper<1, 1, 0> {
   const LAllocation* object() { return getOperand(0); }
 };
 
-// Return the element shift of a typed array.
-class LTypedArrayElementShift : public LInstructionHelper<1, 1, 0> {
+// Return the element size of a typed array.
+class LTypedArrayElementSize : public LInstructionHelper<1, 1, 0> {
  public:
-  LIR_HEADER(TypedArrayElementShift)
+  LIR_HEADER(TypedArrayElementSize)
 
-  explicit LTypedArrayElementShift(const LAllocation& obj)
+  explicit LTypedArrayElementSize(const LAllocation& obj)
       : LInstructionHelper(classOpcode) {
     setOperand(0, obj);
   }
 
   const LAllocation* object() { return getOperand(0); }
+};
+
+class LGuardHasAttachedArrayBuffer : public LInstructionHelper<0, 1, 1> {
+ public:
+  LIR_HEADER(GuardHasAttachedArrayBuffer)
+
+  LGuardHasAttachedArrayBuffer(const LAllocation& obj, const LDefinition& temp)
+      : LInstructionHelper(classOpcode) {
+    setOperand(0, obj);
+    setTemp(0, temp);
+  }
+
+  const LAllocation* object() { return getOperand(0); }
+  const LDefinition* temp() { return getTemp(0); }
 };
 
 // Double to IntPtr, eligible for accessing into a TypedArray or DataView. If
@@ -5939,6 +5988,16 @@ class LNonNegativeIntPtrToInt32 : public LInstructionHelper<1, 1, 0> {
   LIR_HEADER(NonNegativeIntPtrToInt32)
 
   explicit LNonNegativeIntPtrToInt32(const LAllocation& input)
+      : LInstructionHelper(classOpcode) {
+    setOperand(0, input);
+  }
+};
+
+class LIntPtrToDouble : public LInstructionHelper<1, 1, 0> {
+ public:
+  LIR_HEADER(IntPtrToDouble)
+
+  explicit LIntPtrToDouble(const LAllocation& input)
       : LInstructionHelper(classOpcode) {
     setOperand(0, input);
   }
@@ -9265,6 +9324,58 @@ class LWasmReduceSimd128ToInt64
   const LAllocation* src() { return getOperand(Src); }
   uint32_t imm() const { return mir_->toWasmReduceSimd128()->imm(); }
   wasm::SimdOp simdOp() const { return mir_->toWasmReduceSimd128()->simdOp(); }
+};
+
+class LWasmLoadLaneSimd128 : public LInstructionHelper<1, 3, 0> {
+ public:
+  LIR_HEADER(WasmLoadLaneSimd128);
+
+  static constexpr uint32_t Src = 2;
+
+  explicit LWasmLoadLaneSimd128(const LAllocation& ptr, const LAllocation& src,
+                                const LAllocation& memoryBase = LAllocation())
+      : LInstructionHelper(classOpcode) {
+    setOperand(0, ptr);
+    setOperand(1, memoryBase);
+    setOperand(Src, src);
+  }
+
+  const LAllocation* ptr() { return getOperand(0); }
+  const LAllocation* memoryBase() { return getOperand(1); }
+  const LAllocation* src() { return getOperand(Src); }
+  MWasmLoadLaneSimd128* mir() const { return mir_->toWasmLoadLaneSimd128(); }
+  uint32_t laneSize() const {
+    return mir_->toWasmLoadLaneSimd128()->laneSize();
+  }
+  uint32_t laneIndex() const {
+    return mir_->toWasmLoadLaneSimd128()->laneIndex();
+  }
+};
+
+class LWasmStoreLaneSimd128 : public LInstructionHelper<1, 3, 0> {
+ public:
+  LIR_HEADER(WasmStoreLaneSimd128);
+
+  static constexpr uint32_t Src = 2;
+
+  explicit LWasmStoreLaneSimd128(const LAllocation& ptr, const LAllocation& src,
+                                 const LAllocation& memoryBase = LAllocation())
+      : LInstructionHelper(classOpcode) {
+    setOperand(0, ptr);
+    setOperand(1, memoryBase);
+    setOperand(Src, src);
+  }
+
+  const LAllocation* ptr() { return getOperand(0); }
+  const LAllocation* memoryBase() { return getOperand(1); }
+  const LAllocation* src() { return getOperand(Src); }
+  MWasmStoreLaneSimd128* mir() const { return mir_->toWasmStoreLaneSimd128(); }
+  uint32_t laneSize() const {
+    return mir_->toWasmStoreLaneSimd128()->laneSize();
+  }
+  uint32_t laneIndex() const {
+    return mir_->toWasmStoreLaneSimd128()->laneIndex();
+  }
 };
 
 // End Wasm SIMD

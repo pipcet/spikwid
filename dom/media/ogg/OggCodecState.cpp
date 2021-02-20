@@ -31,9 +31,9 @@ extern LazyLogModule gMediaDecoderLog;
 using media::TimeUnit;
 
 /** Decoder base class for Ogg-encapsulated streams. */
-OggCodecState* OggCodecState::Create(rlbox_sandbox_ogg* aSandbox,
-                                     tainted_opaque_ogg<ogg_page*> aPage,
-                                     uint32_t aSerial) {
+UniquePtr<OggCodecState> OggCodecState::Create(
+    rlbox_sandbox_ogg* aSandbox, tainted_opaque_ogg<ogg_page*> aPage,
+    uint32_t aSerial) {
   NS_ASSERTION(sandbox_invoke(*aSandbox, ogg_page_bos, aPage)
                    .unverified_safe_because(RLBOX_SAFE_DEBUG_ASSERTION),
                "Only call on BOS page!");
@@ -69,8 +69,12 @@ OggCodecState* OggCodecState::Create(rlbox_sandbox_ogg* aSandbox,
     // Can't use MakeUnique here, OggCodecState is protected.
     codecState.reset(new OggCodecState(aSandbox, aPage, aSerial, false));
   }
-  return codecState->OggCodecState::InternalInit() ? codecState.release()
-                                                   : nullptr;
+
+  if (!codecState->OggCodecState::InternalInit()) {
+    codecState.reset();
+  }
+
+  return codecState;
 }
 
 OggCodecState::OggCodecState(rlbox_sandbox_ogg* aSandbox,
@@ -1559,7 +1563,7 @@ bool SkeletonState::DecodeIndex(ogg_packet* aPacket) {
 
   int32_t keyPointsRead = keyPoints->Length();
   if (keyPointsRead > 0) {
-    mIndex.Put(serialno, keyPoints.release());
+    mIndex.Put(serialno, std::move(keyPoints));
   }
 
   LOG(LogLevel::Debug, ("Loaded %d keypoints for Skeleton on stream %u",
@@ -1712,8 +1716,8 @@ bool SkeletonState::DecodeFisbone(ogg_packet* aPacket) {
               entry.OrInsertWith([i, msgHead, msgProbe]() {
                 uint32_t nameLen =
                     strlen(kFieldTypeMaps[i].mPatternToRecognize);
-                return new nsCString(msgHead + nameLen,
-                                     msgProbe - msgHead - nameLen);
+                return MakeUnique<nsCString>(msgHead + nameLen,
+                                             msgProbe - msgHead - nameLen);
               });
             });
             isContentTypeParsed = i == 0 ? true : isContentTypeParsed;
@@ -1735,7 +1739,7 @@ bool SkeletonState::DecodeFisbone(ogg_packet* aPacket) {
       // mMsgFieldStore has an entry for serialno already.
       return false;
     }
-    entry.Insert(field.release());
+    entry.Insert(std::move(field));
     return true;
   });
 }

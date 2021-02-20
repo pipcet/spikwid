@@ -62,6 +62,7 @@
 #include "vm/RegExpObject.h"
 #include "vm/SelfHosting.h"
 #include "vm/StringType.h"
+#include "vm/WellKnownAtom.h"  // js_*_str
 #include "wasm/AsmJS.h"
 
 #include "frontend/ParseContext-inl.h"
@@ -200,9 +201,10 @@ PerHandlerParser<ParseHandler>::PerHandlerParser(
     CompilationStencil& stencil, CompilationState& compilationState,
     void* internalSyntaxParser)
     : ParserBase(cx, options, foldConstants, stencil, compilationState),
-      handler_(cx, compilationState.allocScope.alloc(), stencil.input.lazy),
+      handler_(cx, compilationState.allocScope.alloc(),
+               compilationState.input.lazy),
       internalSyntaxParser_(internalSyntaxParser) {
-  MOZ_ASSERT(stencil.isInitialStencil() == !stencil.input.lazy);
+  MOZ_ASSERT(stencil.isInitialStencil() == !compilationState.input.lazy);
 }
 
 template <class ParseHandler, typename Unit>
@@ -272,7 +274,9 @@ FunctionBox* PerHandlerParser<ParseHandler>::newFunctionBox(
     return nullptr;
   }
 
-  if (this->stencil_.isInitialStencil()) {
+  bool isInitialStencil = this->stencil_.isInitialStencil();
+
+  if (isInitialStencil) {
     if (!compilationState_.scriptExtra.emplaceBack()) {
       js::ReportOutOfMemory(cx_);
       return nullptr;
@@ -291,8 +295,8 @@ FunctionBox* PerHandlerParser<ParseHandler>::newFunctionBox(
    * function.
    */
   FunctionBox* funbox = alloc_.new_<FunctionBox>(
-      cx_, extent, stencil_, compilationState_, inheritedDirectives,
-      generatorKind, asyncKind, explicitName, flags, index);
+      cx_, extent, compilationState_, inheritedDirectives, generatorKind,
+      asyncKind, isInitialStencil, explicitName, flags, index);
   if (!funbox) {
     ReportOutOfMemory(cx_);
     return nullptr;
@@ -360,8 +364,8 @@ typename ParseHandler::ListNodeType GeneralParser<ParseHandler, Unit>::parse() {
   SourceExtent extent = SourceExtent::makeGlobalExtent(
       /* len = */ 0, options().lineno, options().column);
   Directives directives(options().forceStrictMode());
-  GlobalSharedContext globalsc(cx_, ScopeKind::Global, this->stencil_,
-                               directives, extent);
+  GlobalSharedContext globalsc(cx_, ScopeKind::Global, options(), directives,
+                               extent);
   SourceParseContext globalpc(this, &globalsc, /* newDirectives = */ nullptr);
   if (!globalpc.init()) {
     return null();
@@ -856,7 +860,7 @@ bool PerHandlerParser<ParseHandler>::
       //   After closed-over-bindings are snapshotted in the handler,
       //   remove this.
       auto parserAtom = this->parserAtoms().internJSAtom(
-          cx_, this->getCompilationStencil().input.atomCache, name);
+          cx_, this->getCompilationState().input.atomCache, name);
       if (!parserAtom) {
         return false;
       }
@@ -1485,7 +1489,7 @@ bool PerHandlerParser<ParseHandler>::checkForUndefinedPrivateFields(
     return true;
   }
 
-  if (!this->stencil_.input.options.privateClassFields) {
+  if (!this->compilationState_.input.options.privateClassFields) {
     return true;
   }
 
@@ -1580,7 +1584,7 @@ LexicalScopeNode* Parser<FullParseHandler, Unit>::evalBody(
 
 #ifdef DEBUG
   if (evalpc.superScopeNeedsHomeObject() &&
-      this->stencil_.input.enclosingScope) {
+      this->compilationState_.input.enclosingScope) {
     // If superScopeNeedsHomeObject_ is set and we are an entry-point
     // ParseContext, then we must be emitting an eval script, and the
     // outer function must already be marked as needing a home object
@@ -2756,7 +2760,7 @@ bool Parser<FullParseHandler, Unit>::skipLazyInnerFunction(
   TaggedParserAtomIndex displayAtom;
   if (fun->displayAtom()) {
     displayAtom = this->parserAtoms().internJSAtom(
-        cx_, this->stencil_.input.atomCache, fun->displayAtom());
+        cx_, this->compilationState_.input.atomCache, fun->displayAtom());
     if (!displayAtom) {
       return false;
     }
@@ -2941,8 +2945,8 @@ GeneralParser<ParseHandler, Unit>::functionDefinition(
   Directives newDirectives = directives;
 
   Position start(tokenStream);
-  CompilationStencil::RewindToken startObj =
-      this->stencil_.getRewindToken(this->compilationState_);
+  CompilationState::RewindToken startObj =
+      this->compilationState_.getRewindToken();
 
   // Parse the inner function. The following is a loop as we may attempt to
   // reparse a function due to failed syntax parsing and encountering new
@@ -2968,7 +2972,7 @@ GeneralParser<ParseHandler, Unit>::functionDefinition(
 
     // Rewind to retry parsing with new directives applied.
     tokenStream.rewind(start);
-    this->stencil_.rewind(this->compilationState_, startObj);
+    this->compilationState_.rewind(startObj);
 
     // functionFormalParametersAndBody may have already set body before
     // failing.
@@ -3019,8 +3023,8 @@ bool Parser<FullParseHandler, Unit>::trySyntaxParseInnerFunction(
     }
 
     UsedNameTracker::RewindToken token = usedNames_.getRewindToken();
-    CompilationStencil::RewindToken startObj =
-        this->stencil_.getRewindToken(this->compilationState_);
+    CompilationState::RewindToken startObj =
+        this->compilationState_.getRewindToken();
 
     // Move the syntax parser to the current position in the stream.  In the
     // common case this seeks forward, but it'll also seek backward *at least*
@@ -3058,7 +3062,7 @@ bool Parser<FullParseHandler, Unit>::trySyntaxParseInnerFunction(
         // correctness.
         syntaxParser->clearAbortedSyntaxParse();
         usedNames_.rewind(token);
-        this->stencil_.rewind(this->compilationState_, startObj);
+        this->compilationState_.rewind(startObj);
         MOZ_ASSERT_IF(!syntaxParser->cx_->isHelperThreadContext(),
                       !syntaxParser->cx_->isExceptionPending());
         break;
@@ -3257,7 +3261,7 @@ FunctionNode* Parser<FullParseHandler, Unit>::standaloneLazyFunction(
   TaggedParserAtomIndex displayAtom;
   if (fun->displayAtom()) {
     displayAtom = this->parserAtoms().internJSAtom(
-        cx_, this->stencil_.input.atomCache, fun->displayAtom());
+        cx_, this->compilationState_.input.atomCache, fun->displayAtom());
     if (!displayAtom) {
       return null();
     }

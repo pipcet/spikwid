@@ -166,6 +166,7 @@ raptor-fetch-chromium:
 
 browsertime:
     - browsertime-tp6
+    - browsertime-tp6-live
     - browsertime-benchmark
     - browsertime-tp6-profiling
 
@@ -191,9 +192,6 @@ mochitest-headless:
 
 mochitest-valgrind:
     - mochitest-valgrind
-
-marionette-framescript:
-    - marionette-framescript
 
 marionette-headless:
     - marionette-headless
@@ -391,6 +389,11 @@ windows-talos:
     # - talos-h1 Bug 1487031 - Disabled for not finding actionable regressions
 
 # macOS
+
+macosx1100-64-qr-failures-tests:
+    - xpcshell-apple-silicon
+    - mochitest-media-apple-silicon
+    - mochitest-browser-chrome-apple-silicon
 
 macosx1014-64-tests:
     - crashtest
