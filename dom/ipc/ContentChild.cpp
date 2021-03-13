@@ -4,11 +4,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifdef MOZ_WIDGET_GTK
-#  include <gdk/gdkx.h>
-#  include <gtk/gtk.h>
-#endif
-
 #include "BrowserChild.h"
 #include "ContentChild.h"
 #include "GeckoProfiler.h"
@@ -18,9 +13,7 @@
 #include "mozilla/BackgroundHangMonitor.h"
 #include "mozilla/BenchmarkStorageChild.h"
 #include "mozilla/ContentBlocking.h"
-#ifdef MOZ_GLEAN
-#  include "mozilla/FOGIPC.h"
-#endif
+#include "mozilla/FOGIPC.h"
 #include "GMPServiceChild.h"
 #include "Geolocation.h"
 #include "imgLoader.h"
@@ -28,6 +21,7 @@
 #include "mozilla/Components.h"
 #include "mozilla/HangDetails.h"
 #include "mozilla/LoadInfo.h"
+#include "mozilla/Logging.h"
 #include "mozilla/LookAndFeel.h"
 #include "mozilla/MemoryTelemetry.h"
 #include "mozilla/NullPrincipal.h"
@@ -41,6 +35,7 @@
 #include "mozilla/SchedulerGroup.h"
 #include "mozilla/ScopeExit.h"
 #include "mozilla/SharedStyleSheetCache.h"
+#include "mozilla/SimpleEnumerator.h"
 #include "mozilla/SpinEventLoopUntil.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_fission.h"
@@ -108,6 +103,7 @@
 #include "mozilla/media/MediaChild.h"
 #include "mozilla/net/CaptivePortalService.h"
 #include "mozilla/net/CookieServiceChild.h"
+#include "mozilla/net/DocumentChannelChild.h"
 #include "mozilla/net/HttpChannelChild.h"
 #include "mozilla/net/NeckoChild.h"
 #include "mozilla/plugins/PluginInstanceParent.h"
@@ -120,7 +116,9 @@
 #include "nsFocusManager.h"
 #include "nsIConsoleService.h"
 #include "nsIInputStreamChannel.h"
+#include "nsILoadGroup.h"
 #include "nsIOpenWindowInfo.h"
+#include "nsISimpleEnumerator.h"
 #include "nsIStringBundle.h"
 #include "nsIURIMutator.h"
 #include "nsQueryObject.h"
@@ -283,12 +281,16 @@
 #include "private/pprio.h"
 
 #ifdef MOZ_WIDGET_GTK
+#  include "mozilla/WidgetUtilsGtk.h"
 #  include "nsAppRunner.h"
+#  include <gtk/gtk.h>
 #endif
 
 #ifdef MOZ_CODE_COVERAGE
 #  include "mozilla/CodeCoverageHandler.h"
 #endif
+
+extern mozilla::LazyLogModule gSHIPBFCacheLog;
 
 using namespace mozilla;
 using namespace mozilla::docshell;
@@ -575,7 +577,7 @@ ContentChild::ContentChild()
   // happens without requiring the observer service at this time.
   if (!sShutdownCanary) {
     sShutdownCanary = new ShutdownCanary();
-    ClearOnShutdown(&sShutdownCanary, ShutdownPhase::Shutdown);
+    ClearOnShutdown(&sShutdownCanary, ShutdownPhase::XPCOMShutdown);
   }
 }
 
@@ -654,11 +656,11 @@ bool ContentChild::Init(MessageLoop* aIOLoop, base::ProcessId aParentPid,
   if (!gfxPlatform::IsHeadless()) {
     const char* display_name = PR_GetEnv("MOZ_GDK_DISPLAY");
     if (!display_name) {
-      bool waylandDisabled = true;
+      bool waylandEnabled = false;
 #  ifdef MOZ_WAYLAND
-      waylandDisabled = IsWaylandDisabled();
+      waylandEnabled = IsWaylandEnabled();
 #  endif
-      if (waylandDisabled) {
+      if (!waylandEnabled) {
         display_name = PR_GetEnv("DISPLAY");
       }
     }
@@ -722,8 +724,7 @@ bool ContentChild::Init(MessageLoop* aIOLoop, base::ProcessId aParentPid,
 
 #ifdef MOZ_X11
 #  ifdef MOZ_WIDGET_GTK
-  if (GDK_IS_X11_DISPLAY(gdk_display_get_default()) &&
-      !gfxPlatform::IsHeadless()) {
+  if (GdkIsX11Display() && !gfxPlatform::IsHeadless()) {
     // Send the parent our X socket to act as a proxy reference for our X
     // resources.
     int xSocketFd = ConnectionNumber(DefaultXDisplay());
@@ -3184,17 +3185,17 @@ void ContentChild::CreateGetFilesRequest(const nsAString& aDirectoryPath,
                                          bool aRecursiveFlag, nsID& aUUID,
                                          GetFilesHelperChild* aChild) {
   MOZ_ASSERT(aChild);
-  MOZ_ASSERT(!mGetFilesPendingRequests.GetWeak(aUUID));
+  MOZ_ASSERT(!mGetFilesPendingRequests.Contains(aUUID));
 
   Unused << SendGetFilesRequest(aUUID, nsString(aDirectoryPath),
                                 aRecursiveFlag);
-  mGetFilesPendingRequests.Put(aUUID, RefPtr{aChild});
+  mGetFilesPendingRequests.InsertOrUpdate(aUUID, RefPtr{aChild});
 }
 
 void ContentChild::DeleteGetFilesRequest(nsID& aUUID,
                                          GetFilesHelperChild* aChild) {
   MOZ_ASSERT(aChild);
-  MOZ_ASSERT(mGetFilesPendingRequests.GetWeak(aUUID));
+  MOZ_ASSERT(mGetFilesPendingRequests.Contains(aUUID));
 
   Unused << SendDeleteGetFilesRequest(aUUID);
   mGetFilesPendingRequests.Remove(aUUID);
@@ -3326,7 +3327,7 @@ nsresult ContentChild::AsyncOpenAnonymousTemporaryFile(
 
   // Remember the association with the callback.
   MOZ_ASSERT(!mPendingAnonymousTemporaryFiles.Get(newID));
-  mPendingAnonymousTemporaryFiles.LookupOrAdd(newID, aCallback);
+  mPendingAnonymousTemporaryFiles.GetOrInsertNew(newID, aCallback);
   return NS_OK;
 }
 
@@ -3778,8 +3779,8 @@ mozilla::ipc::IPCResult ContentChild::RecvRaiseWindow(
 }
 
 mozilla::ipc::IPCResult ContentChild::RecvAdjustWindowFocus(
-    const MaybeDiscarded<BrowsingContext>& aContext, bool aCheckPermission,
-    bool aIsVisible) {
+    const MaybeDiscarded<BrowsingContext>& aContext, bool aIsVisible,
+    uint64_t aActionId) {
   if (aContext.IsNullOrDiscarded()) {
     MOZ_LOG(BrowsingContext::GetLog(), LogLevel::Debug,
             ("ChildIPC: Trying to send a message to dead or detached context"));
@@ -3788,7 +3789,8 @@ mozilla::ipc::IPCResult ContentChild::RecvAdjustWindowFocus(
 
   nsFocusManager* fm = nsFocusManager::GetFocusManager();
   if (fm) {
-    fm->AdjustWindowFocus(aContext.get(), aCheckPermission, aIsVisible);
+    fm->AdjustInProcessWindowFocus(aContext.get(), false, aIsVisible,
+                                   aActionId);
   }
   return IPC_OK();
 }
@@ -3841,7 +3843,7 @@ mozilla::ipc::IPCResult ContentChild::RecvSetActiveBrowsingContext(
 
   nsFocusManager* fm = nsFocusManager::GetFocusManager();
   if (fm) {
-    fm->SetActiveBrowsingContextFromOtherProcess(aContext.get());
+    fm->SetActiveBrowsingContextFromOtherProcess(aContext.get(), aActionId);
   }
   return IPC_OK();
 }
@@ -3868,7 +3870,7 @@ mozilla::ipc::IPCResult ContentChild::RecvUnsetActiveBrowsingContext(
 
   nsFocusManager* fm = nsFocusManager::GetFocusManager();
   if (fm) {
-    fm->UnsetActiveBrowsingContextFromOtherProcess(aContext.get());
+    fm->UnsetActiveBrowsingContextFromOtherProcess(aContext.get(), aActionId);
   }
   return IPC_OK();
 }
@@ -3937,12 +3939,13 @@ mozilla::ipc::IPCResult ContentChild::RecvBlurToChild(
 
 mozilla::ipc::IPCResult ContentChild::RecvSetupFocusedAndActive(
     const MaybeDiscarded<BrowsingContext>& aFocusedBrowsingContext,
-    const MaybeDiscarded<BrowsingContext>& aActiveBrowsingContext) {
+    const MaybeDiscarded<BrowsingContext>& aActiveBrowsingContext,
+    uint64_t aActionId) {
   nsFocusManager* fm = nsFocusManager::GetFocusManager();
   if (fm) {
     if (!aActiveBrowsingContext.IsNullOrDiscarded()) {
-      fm->SetActiveBrowsingContextFromOtherProcess(
-          aActiveBrowsingContext.get());
+      fm->SetActiveBrowsingContextFromOtherProcess(aActiveBrowsingContext.get(),
+                                                   aActionId);
     }
     if (!aFocusedBrowsingContext.IsNullOrDiscarded()) {
       fm->SetFocusedBrowsingContextFromOtherProcess(
@@ -3953,11 +3956,13 @@ mozilla::ipc::IPCResult ContentChild::RecvSetupFocusedAndActive(
 }
 
 mozilla::ipc::IPCResult ContentChild::RecvReviseActiveBrowsingContext(
+    uint64_t aOldActionId,
     const MaybeDiscarded<BrowsingContext>& aActiveBrowsingContext,
-    uint64_t aActionId) {
+    uint64_t aNewActionId) {
   nsFocusManager* fm = nsFocusManager::GetFocusManager();
   if (fm && !aActiveBrowsingContext.IsNullOrDiscarded()) {
-    fm->ReviseActiveBrowsingContext(aActiveBrowsingContext.get(), aActionId);
+    fm->ReviseActiveBrowsingContext(aOldActionId, aActiveBrowsingContext.get(),
+                                    aNewActionId);
   }
   return IPC_OK();
 }
@@ -4242,6 +4247,65 @@ mozilla::ipc::IPCResult ContentChild::RecvDispatchBeforeUnloadToSubtree(
   return IPC_OK();
 }
 
+mozilla::ipc::IPCResult ContentChild::RecvCanSavePresentation(
+    const MaybeDiscarded<BrowsingContext>& aTopLevelContext,
+    Maybe<uint64_t> aDocumentChannelId,
+    CanSavePresentationResolver&& aResolver) {
+  if (aTopLevelContext.IsNullOrDiscarded()) {
+    aResolver(false);
+    return IPC_OK();
+  }
+
+  bool canSave = true;
+  // XXXBFCache pass the flags to telemetry.
+  uint16_t flags = 0;
+  BrowsingContext* browsingContext = aTopLevelContext.get();
+  browsingContext->PreOrderWalk([&](BrowsingContext* aContext) {
+    Document* doc = aContext->GetDocument();
+    if (doc) {
+      nsIRequest* request = nullptr;
+      if (aDocumentChannelId.isSome() && aContext->IsTop()) {
+        nsCOMPtr<nsILoadGroup> loadGroup = doc->GetDocumentLoadGroup();
+        if (loadGroup) {
+          nsCOMPtr<nsISimpleEnumerator> requests;
+          loadGroup->GetRequests(getter_AddRefs(requests));
+          bool hasMore = false;
+          if (NS_SUCCEEDED(requests->HasMoreElements(&hasMore)) && hasMore) {
+            // If there are any requests, the only one we allow with bfcache
+            // is the DocumentChannel request.
+            nsCOMPtr<nsISupports> elem;
+            requests->GetNext(getter_AddRefs(elem));
+            nsCOMPtr<nsIIdentChannel> identChannel = do_QueryInterface(elem);
+            if (identChannel &&
+                identChannel->ChannelId() == aDocumentChannelId.value()) {
+              request = identChannel;
+            }
+          }
+        }
+      }
+      // Go through also the subdocuments so that flags are collected.
+      bool canSaveDoc = doc->CanSavePresentation(request, flags, false);
+      canSave = canSaveDoc && canSave;
+
+      if (MOZ_LOG_TEST(gSHIPBFCacheLog, LogLevel::Debug)) {
+        nsAutoCString uri;
+        if (doc->GetDocumentURI()) {
+          uri = doc->GetDocumentURI()->GetSpecOrDefault();
+        }
+
+        MOZ_LOG(gSHIPBFCacheLog, LogLevel::Debug,
+                ("ContentChild::RecvCanSavePresentation can save presentation "
+                 "[%i] for [%s]",
+                 canSaveDoc, uri.get()));
+      }
+    }
+  });
+
+  aResolver(canSave);
+
+  return IPC_OK();
+}
+
 /* static */ void ContentChild::DispatchBeforeUnloadToSubtree(
     BrowsingContext* aStartingAt,
     const DispatchBeforeUnloadToSubtreeResolver& aResolver) {
@@ -4439,9 +4503,7 @@ ContentChild* ContentChild::AsContentChild() { return this; }
 JSActorManager* ContentChild::AsJSActorManager() { return this; }
 
 IPCResult ContentChild::RecvFlushFOGData(FlushFOGDataResolver&& aResolver) {
-#ifdef MOZ_GLEAN
   glean::FlushFOGData(std::move(aResolver));
-#endif
   return IPC_OK();
 }
 

@@ -42,13 +42,7 @@ add_task(async function test_page_contextmenu() {
     false,
     "Send tab to device is enabled"
   );
-  checkPopup([
-    { label: "Bar" },
-    { label: "Foo" },
-    "----",
-    { label: "Send to All Devices" },
-    { label: "Manage Devices..." },
-  ]);
+  checkPopup([{ label: "Bar" }, { label: "Foo" }]);
   await hideContentContextMenu();
 
   sandbox.restore();
@@ -326,11 +320,6 @@ add_task(async function test_page_contextmenu_fxa_disabled() {
     document.getElementById("context-sendpagetodevice").hidden,
     true,
     "Send tab to device is hidden"
-  );
-  is(
-    document.getElementById("context-sep-sendpagetodevice").hidden,
-    true,
-    "Separator is also hidden"
   );
   await hideContentContextMenu();
   getter.restore();

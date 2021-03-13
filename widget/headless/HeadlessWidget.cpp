@@ -432,30 +432,31 @@ nsresult HeadlessWidget::DispatchEvent(WidgetGUIEvent* aEvent,
   return NS_OK;
 }
 
-nsresult HeadlessWidget::SynthesizeNativeMouseEvent(LayoutDeviceIntPoint aPoint,
-                                                    uint32_t aNativeMessage,
-                                                    uint32_t aModifierFlags,
-                                                    nsIObserver* aObserver) {
+nsresult HeadlessWidget::SynthesizeNativeMouseEvent(
+    LayoutDeviceIntPoint aPoint, NativeMouseMessage aNativeMessage,
+    MouseButton aButton, nsIWidget::Modifiers aModifierFlags,
+    nsIObserver* aObserver) {
   AutoObserverNotifier notifier(aObserver, "mouseevent");
   EventMessage msg;
   switch (aNativeMessage) {
-    case MOZ_HEADLESS_MOUSE_MOVE:
+    case NativeMouseMessage::Move:
       msg = eMouseMove;
       break;
-    case MOZ_HEADLESS_MOUSE_DOWN:
+    case NativeMouseMessage::ButtonDown:
       msg = eMouseDown;
       break;
-    case MOZ_HEADLESS_MOUSE_UP:
+    case NativeMouseMessage::ButtonUp:
       msg = eMouseUp;
       break;
-    default:
+    case NativeMouseMessage::EnterWindow:
+    case NativeMouseMessage::LeaveWindow:
       MOZ_ASSERT_UNREACHABLE("Unsupported synthesized mouse event");
       return NS_ERROR_UNEXPECTED;
   }
   WidgetMouseEvent event(true, msg, this, WidgetMouseEvent::eReal);
   event.mRefPoint = aPoint - WidgetToScreenOffset();
   if (msg == eMouseDown || msg == eMouseUp) {
-    event.mButton = MouseButton::ePrimary;
+    event.mButton = aButton;
   }
   if (msg == eMouseDown) {
     event.mClickCount = 1;
@@ -551,7 +552,9 @@ nsresult HeadlessWidget::SynthesizeNativeTouchPadPinch(
   PinchGestureInput inputToDispatch(
       pinchGestureType, PinchGestureInput::TRACKPAD, PR_IntervalNow(),
       TimeStamp::Now(), ExternalPoint(0, 0),
-      ScreenPoint(touchpadPoint.x, touchpadPoint.y), CurrentSpan, PreviousSpan,
+      ScreenPoint(touchpadPoint.x, touchpadPoint.y),
+      100.0 * ((aEventPhase == PHASE_END) ? ScreenCoord(1.f) : CurrentSpan),
+      100.0 * ((aEventPhase == PHASE_END) ? ScreenCoord(1.f) : PreviousSpan),
       0);
   DispatchPinchGestureInput(inputToDispatch);
   return NS_OK;

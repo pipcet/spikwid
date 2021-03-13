@@ -8,13 +8,19 @@
            noautofocus="true"
            role="alert"/>
 
-    <popupnotification id="webRTC-shareDevices-notification" hidden="true">
+    <popupnotification id="webRTC-shareDevices-notification" hidden="true" 
+                       descriptionid="webRTC-shareDevices-notification-description">
       <popupnotificationcontent id="webRTC-selectCamera" orient="vertical">
-        <label data-l10n-id="popup-select-camera"
+        <label id="webRTC-selectCamera-label"
+               data-l10n-id="popup-select-camera-device"
                control="webRTC-selectCamera-menulist"/>
-        <menulist id="webRTC-selectCamera-menulist">
-          <menupopup id="webRTC-selectCamera-menupopup"/>
-        </menulist>
+        <html:div class="webRTC-selectDevice-selector-container">
+          <xul:image id="webRTC-selectCamera-icon" class="webRTC-selectDevice-icon" data-l10n-id="popup-select-camera-icon"/>
+          <menulist id="webRTC-selectCamera-menulist" aria-labelledby="webRTC-selectCamera-icon">
+            <menupopup id="webRTC-selectCamera-menupopup"/>
+          </menulist>
+          <label id="webRTC-selectCamera-single-device-label" class="webRTC-selectDevice-label"></label>
+        </html:div>
       </popupnotificationcontent>
 
       <popupnotificationcontent id="webRTC-selectWindowOrScreen" orient="vertical">
@@ -30,17 +36,22 @@
       <popupnotificationcontent id="webRTC-preview" hidden="true">
         <html:video id="webRTC-previewVideo" tabindex="-1"/>
         <vbox id="webRTC-previewWarningBox">
-          <spacer flex="1"/>
           <description id="webRTC-previewWarning"/>
+          <label id="webRTC-previewWarning-learnMore" is="text-link" class="popup-notification-learnmore-link"/>
         </vbox>
       </popupnotificationcontent>
 
       <popupnotificationcontent id="webRTC-selectMicrophone" orient="vertical">
-        <label data-l10n-id="popup-select-microphone"
+        <label id="webRTC-selectMicrophone-label"
+               data-l10n-id="popup-select-microphone-device"
                control="webRTC-selectMicrophone-menulist"/>
-        <menulist id="webRTC-selectMicrophone-menulist">
-          <menupopup id="webRTC-selectMicrophone-menupopup"/>
-        </menulist>
+        <html:div class="webRTC-selectDevice-selector-container">
+          <xul:image id="webRTC-selectMicrophone-icon" data-l10n-id="popup-select-microphone-icon" class="webRTC-selectDevice-icon"/>
+          <menulist id="webRTC-selectMicrophone-menulist" aria-labelledby="webRTC-selectMicrophone-icon">
+            <menupopup id="webRTC-selectMicrophone-menupopup"/>
+          </menulist>
+          <label id="webRTC-selectMicrophone-single-device-label" class="webRTC-selectDevice-label"></label>
+        </html:div>
       </popupnotificationcontent>
     </popupnotification>
 
@@ -52,6 +63,7 @@
 
     <popupnotification id="password-notification" hidden="true">
       <popupnotificationcontent orient="vertical">
+        <label data-l10n-id="panel-save-update-username" control="password-notification-username"></label>
         <stack>
           <html:input id="password-notification-username" 
                       class="ac-has-end-icon"
@@ -63,6 +75,7 @@
           <dropmarker id="password-notification-username-dropmarker"
                       class="ac-dropmarker"/>
         </stack>
+        <label data-l10n-id="panel-save-update-password" control="password-notification-password"></label>
         <stack>
           <html:input id="password-notification-password" type="password"/>
           <dropmarker id="password-notification-password-dropmarker"
@@ -101,6 +114,13 @@
         <hbox>
           <label id="addon-install-blocked-info" class="popup-notification-learnmore-link" is="text-link"/>
         </hbox>
+      </popupnotificationcontent>
+    </popupnotification>
+
+    <popupnotification id="canvas-permissions-prompt-notification" hidden="true">
+      <popupnotificationcontent orient="vertical">
+        <description class="popup-notification-description"/>
+        <label id="canvas-permissions-prompt-warning"/>
       </popupnotificationcontent>
     </popupnotification>
 

@@ -13,6 +13,38 @@ exclude: true
 
 ⚠️  breaking change and deprecation notices
 
+## v88
+- Added [`WebExtension.Download#update`][88.1] that can be used to
+  implement the WebExtension `downloads` API. This method is used to communicate
+  updates in the download status to the Web Extension
+- Added [`PanZoomController.onTouchEventForDetailResult`][88.2] and
+  [`GeckoView.onTouchEventForDetailResult`][88.3] to tell information
+  that the website doesn't expect browser apps to react the event,
+  also and deprecated [`PanZoomController.onTouchEventForResult`][88.4]
+  and [`GeckoView.onTouchEventForResult`][88.5]. With these new methods
+  browser apps can differentiate cases where the browser can do something
+  the browser's specific behavior in response to the event (e.g.
+  pull-to-refresh) and cases where the browser should not react to the event
+  because the event was consumed in the web site (e.g. in canvas like
+  web apps).
+  ([bug 1678505]({{bugzilla}}1678505)).
+- ⚠️ Deprecate the [`MediaElement`][65.11] API to be removed in v91.
+  Please use [`MediaSession`][81.6] for media events and control.
+  ([bug 1693584]({{bugzilla}}1693584)).
+- ⚠️ Deprecate [`GeckoResult.ALLOW`][89.6] and [`GeckoResult.DENY`][89.7] in
+  favor of [`GeckoResult.allow`][89.8] and [`GeckoResult.deny`][89.9].
+  ([bug 1697270]({{bugzilla}}1697270)).
+
+[88.1]: {{javadoc_uri}}/WebExtension.Download.html#update-org.mozilla.geckoview.WebExtension.Download.Info-
+[88.2]: {{javadoc_uri}}/PanZoomController.html#onTouchEventForDetailResult
+[88.3]: {{javadoc_uri}}/GeckoView.html#onTouchEventForDetailResult
+[88.4]: {{javadoc_uri}}/PanZoomController.html#onTouchEventForResult
+[88.5]: {{javadoc_uri}}/GeckoView.html#onTouchEventForResult
+[88.6]: {{javadoc_uri}}/GeckoResult.html#ALLOW
+[88.7]: {{javadoc_uri}}/GeckoResult.html#DENY
+[88.8]: {{javadoc_uri}}/GeckoResult.html#allow--
+[88.9]: {{javadoc_uri}}/GeckoResult.html#deny--
+
 ## v87
 - ⚠ Added [`WebExtension.DownloadInitData`][87.1] class that can be used to
   implement the WebExtension `downloads` API. This class represents initial state of a download.
@@ -896,4 +928,4 @@ to allow adding gecko profiler markers.
 [65.24]: {{javadoc_uri}}/CrashReporter.html#sendCrashReport-android.content.Context-android.os.Bundle-java.lang.String-
 [65.25]: {{javadoc_uri}}/GeckoResult.html
 
-[api-version]: d9171ae05286c279c35515eb3ac3e42258cec583
+[api-version]: 2e897390b591268984d7af478badd5ee80a34ee4

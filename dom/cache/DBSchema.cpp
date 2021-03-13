@@ -457,6 +457,8 @@ nsresult CreateOrMigrateSchema(mozIStorageConnection& aConn) {
   mozStorageTransaction trans(&aConn, false,
                               mozIStorageConnection::TRANSACTION_IMMEDIATE);
 
+  CACHE_TRY(trans.Start());
+
   const bool migrating = schemaVersion != 0;
 
   if (migrating) {
@@ -806,7 +808,7 @@ Result<Maybe<SavedResponse>, nsresult> StorageMatch(
 
   // If we are given a cache to check, then simply find its cache ID
   // and perform the match.
-  if (!aParams.cacheName().EqualsLiteral("")) {
+  if (aParams.cacheNameSet()) {
     CACHE_TRY_INSPECT(
         const auto& maybeCacheId,
         StorageGetCacheId(aConn, aNamespace, aParams.cacheName()));

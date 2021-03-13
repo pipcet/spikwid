@@ -17,14 +17,14 @@
 #include "UntrustedModulesDataSerializer.h"
 
 class ModuleLoadCounter final {
-  nsDataHashtable<nsStringCaseInsensitiveHashKey, int> mCounters;
+  nsTHashMap<nsStringCaseInsensitiveHashKey, int> mCounters;
 
  public:
   template <int N>
   ModuleLoadCounter(const nsString (&aNames)[N], const int (&aCounts)[N])
       : mCounters(N) {
     for (int i = 0; i < N; ++i) {
-      mCounters.Put(aNames[i], aCounts[i]);
+      mCounters.InsertOrUpdate(aNames[i], aCounts[i]);
     }
   }
 
@@ -37,7 +37,7 @@ class ModuleLoadCounter final {
 
     bool result = true;
     for (int i = 0; i < N; ++i) {
-      int* entry = mCounters.GetValue(aNames[i]);
+      auto entry = mCounters.Lookup(aNames[i]);
       if (!entry) {
         wprintf(L"%s is not registered.\n", aNames[i].get());
         result = false;
@@ -69,7 +69,7 @@ class ModuleLoadCounter final {
   }
 
   void Decrement(const nsString& aName) {
-    if (int* entry = mCounters.GetValue(aName)) {
+    if (auto entry = mCounters.Lookup(aName)) {
       --(*entry);
     }
   }

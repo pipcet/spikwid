@@ -679,10 +679,10 @@ class DevToolsExtensionPageContextParent extends ExtensionPageContextParent {
     if (!this._currentDevToolsTarget) {
       if (!this._pendingWatchTargetsPromise) {
         // When _onTargetAvailable is called, it will create a new target,
-        // via DevToolsShim.createDescriptorForTab. If this function is called multiple times
-        // before this._currentDevToolsTarget is populated, we don't want to create X
-        // new, duplicated targets, so we store the Promise returned by watchTargets, in
-        // order to properly wait on subsequent calls.
+        // via DevToolsShim.createDescriptorForTabForWebExtension. If this function
+        // is called multiple times before this._currentDevToolsTarget is populated,
+        // we don't want to create X new, duplicated targets, so we store the Promise
+        // returned by watchTargets, in order to properly wait on subsequent calls.
         this._pendingWatchTargetsPromise = this.devToolsToolbox.targetList.watchTargets(
           [this.devToolsToolbox.targetList.TYPES.FRAME],
           this._onTargetAvailable
@@ -733,7 +733,7 @@ class DevToolsExtensionPageContextParent extends ExtensionPageContextParent {
       return;
     }
 
-    const descriptorFront = await DevToolsShim.createDescriptorForTab(
+    const descriptorFront = await DevToolsShim.createDescriptorForTabForWebExtension(
       targetFront.localTab
     );
 
@@ -1555,7 +1555,7 @@ function watchExtensionProxyContextLoad(
 // Manages icon details for toolbar buttons in the |pageAction| and
 // |browserAction| APIs.
 let IconDetails = {
-  DEFAULT_ICON: "chrome://browser/content/extension.svg",
+  DEFAULT_ICON: "chrome://mozapps/skin/extensions/extensionGeneric.svg",
 
   // WeakMap<Extension -> Map<url-string -> Map<iconType-string -> object>>>
   iconCache: new DefaultWeakMap(() => {
@@ -1675,7 +1675,7 @@ let IconDetails = {
   // Returns the appropriate icon URL for the given icons object and the
   // screen resolution of the given window.
   getPreferredIcon(icons, extension = null, size = 16) {
-    const DEFAULT = "chrome://browser/content/extension.svg";
+    const DEFAULT = "chrome://mozapps/skin/extensions/extensionGeneric.svg";
 
     let bestSize = null;
     if (icons[size]) {

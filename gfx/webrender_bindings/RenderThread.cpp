@@ -41,7 +41,7 @@
 #endif
 
 #ifdef MOZ_WIDGET_GTK
-#  include <gdk/gdkx.h>
+#  include "mozilla/WidgetUtilsGtk.h"
 #endif
 
 #ifdef MOZ_WAYLAND
@@ -454,6 +454,7 @@ void RenderThread::UpdateAndRender(
     const Maybe<wr::ImageFormat>& aReadbackFormat,
     const Maybe<Range<uint8_t>>& aReadbackBuffer, bool* aNeedsYFlip) {
   AUTO_PROFILER_TRACING_MARKER("Paint", "Composite", GRAPHICS);
+  AUTO_PROFILER_LABEL("RenderThread::UpdateAndRender", GRAPHICS);
   MOZ_ASSERT(IsInRenderThread());
   MOZ_ASSERT(aRender || aReadbackBuffer.isNothing());
 
@@ -801,9 +802,7 @@ static DeviceResetReason GLenumToResetReason(GLenum aReason) {
 }
 #endif
 
-void RenderThread::HandleDeviceReset(const char* aWhere,
-                                     layers::CompositorBridgeParent* aBridge,
-                                     GLenum aReason) {
+void RenderThread::HandleDeviceReset(const char* aWhere, GLenum aReason) {
   MOZ_ASSERT(IsInRenderThread());
 
   if (mHandlingDeviceReset) {
@@ -860,7 +859,7 @@ void RenderThread::SimulateDeviceReset() {
     // When this function is called GPUProcessManager::SimulateDeviceReset()
     // already triggers destroying all CompositorSessions before re-creating
     // them.
-    HandleDeviceReset("SimulateDeviceReset", nullptr, LOCAL_GL_NO_ERROR);
+    HandleDeviceReset("SimulateDeviceReset", LOCAL_GL_NO_ERROR);
   }
 }
 
@@ -1126,8 +1125,7 @@ static already_AddRefed<gl::GLContext> CreateGLContext(nsACString& aError) {
 #elif defined(MOZ_WIDGET_ANDROID)
   gl = CreateGLContextEGL();
 #elif defined(MOZ_WAYLAND)
-  if (gdk_display_get_default() &&
-      !GDK_IS_X11_DISPLAY(gdk_display_get_default())) {
+  if (mozilla::widget::GdkIsWaylandDisplay()) {
     gl = CreateGLContextEGL();
   }
 #elif XP_MACOSX

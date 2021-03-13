@@ -109,7 +109,7 @@ SandboxBroker::Policy::~Policy() = default;
 
 SandboxBroker::Policy::Policy(const Policy& aOther) {
   for (auto iter = aOther.mMap.ConstIter(); !iter.Done(); iter.Next()) {
-    mMap.Put(iter.Key(), iter.Data());
+    mMap.InsertOrUpdate(iter.Key(), iter.Data());
   }
 }
 
@@ -147,23 +147,19 @@ void SandboxBroker::Policy::AddPath(int aPerms, const char* aPath,
                                     AddCondition aCond) {
   nsDependentCString path(aPath);
   MOZ_ASSERT(path.Length() <= kMaxPathLen);
-  int perms;
   if (aCond == AddIfExistsNow) {
     struct stat statBuf;
     if (lstat(aPath, &statBuf) != 0) {
       return;
     }
   }
-  if (!mMap.Get(path, &perms)) {
-    perms = MAY_ACCESS;
-  } else {
-    MOZ_ASSERT(perms & MAY_ACCESS);
-  }
+  auto& perms = mMap.LookupOrInsert(path, MAY_ACCESS);
+  MOZ_ASSERT(perms & MAY_ACCESS);
+
   if (SandboxInfo::Get().Test(SandboxInfo::kVerbose)) {
     SANDBOX_LOG_ERROR("policy for %s: %d -> %d", aPath, perms, perms | aPerms);
   }
   perms |= aPerms;
-  mMap.Put(path, perms);
 }
 
 void SandboxBroker::Policy::AddTree(int aPerms, const char* aPath) {
@@ -229,18 +225,15 @@ void SandboxBroker::Policy::AddPrefix(int aPerms, const char* aPath) {
 
 void SandboxBroker::Policy::AddPrefixInternal(int aPerms,
                                               const nsACString& aPath) {
-  int origPerms;
-  if (!mMap.Get(aPath, &origPerms)) {
-    origPerms = MAY_ACCESS;
-  } else {
-    MOZ_ASSERT(origPerms & MAY_ACCESS);
-  }
-  int newPerms = origPerms | aPerms | RECURSIVE;
+  auto& perms = mMap.LookupOrInsert(aPath, MAY_ACCESS);
+  MOZ_ASSERT(perms & MAY_ACCESS);
+
+  int newPerms = perms | aPerms | RECURSIVE;
   if (SandboxInfo::Get().Test(SandboxInfo::kVerbose)) {
     SANDBOX_LOG_ERROR("policy for %s: %d -> %d",
-                      PromiseFlatCString(aPath).get(), origPerms, newPerms);
+                      PromiseFlatCString(aPath).get(), perms, newPerms);
   }
-  mMap.Put(aPath, newPerms);
+  perms = newPerms;
 }
 
 void SandboxBroker::Policy::AddFilePrefix(int aPerms, const char* aDir,
@@ -345,7 +338,7 @@ void SandboxBroker::Policy::FixRecursivePermissions() {
       SANDBOX_LOG_ERROR("new policy for %s: %d -> %d",
                         PromiseFlatCString(path).get(), localPerms, newPerms);
     }
-    mMap.Put(path, newPerms);
+    mMap.InsertOrUpdate(path, newPerms);
   }
 }
 
@@ -945,7 +938,7 @@ void SandboxBroker::ThreadMain(void) {
                     SANDBOX_LOG_ERROR("Recording mapping %s -> %s", xlat.get(),
                                       orig.get());
                   }
-                  mSymlinkMap.Put(xlat, orig);
+                  mSymlinkMap.InsertOrUpdate(xlat, orig);
                 }
                 // Make sure we can invert a fully resolved mapping too. If our
                 // caller is realpath, and there's a relative path involved, the
@@ -959,7 +952,7 @@ void SandboxBroker::ThreadMain(void) {
                       SANDBOX_LOG_ERROR("Recording mapping %s -> %s",
                                         resolvedXlat.get(), orig.get());
                     }
-                    mSymlinkMap.Put(resolvedXlat, orig);
+                    mSymlinkMap.InsertOrUpdate(resolvedXlat, orig);
                   }
                   free(resolvedBuf);
                 }

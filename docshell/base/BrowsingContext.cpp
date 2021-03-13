@@ -132,8 +132,9 @@ extern mozilla::LazyLogModule gUserInteractionPRLog;
   MOZ_LOG(gUserInteractionPRLog, LogLevel::Debug, (msg, ##__VA_ARGS__))
 
 static LazyLogModule gBrowsingContextLog("BrowsingContext");
+static LazyLogModule gBrowsingContextSyncLog("BrowsingContextSync");
 
-typedef nsDataHashtable<nsUint64HashKey, BrowsingContext*> BrowsingContextMap;
+typedef nsTHashMap<nsUint64HashKey, BrowsingContext*> BrowsingContextMap;
 
 // All BrowsingContexts indexed by Id
 static StaticAutoPtr<BrowsingContextMap> sBrowsingContexts;
@@ -154,10 +155,10 @@ static void UnregisterBrowserId(BrowsingContext* aBrowsingContext) {
 }
 
 static void Register(BrowsingContext* aBrowsingContext) {
-  sBrowsingContexts->Put(aBrowsingContext->Id(), aBrowsingContext);
+  sBrowsingContexts->InsertOrUpdate(aBrowsingContext->Id(), aBrowsingContext);
   if (aBrowsingContext->IsTopContent()) {
-    sCurrentTopByBrowserId->Put(aBrowsingContext->BrowserId(),
-                                aBrowsingContext);
+    sCurrentTopByBrowserId->InsertOrUpdate(aBrowsingContext->BrowserId(),
+                                           aBrowsingContext);
   }
 
   aBrowsingContext->Group()->Register(aBrowsingContext);
@@ -223,6 +224,9 @@ void BrowsingContext::Init() {
 
 /* static */
 LogModule* BrowsingContext::GetLog() { return gBrowsingContextLog; }
+
+/* static */
+LogModule* BrowsingContext::GetSyncLog() { return gBrowsingContextSyncLog; }
 
 /* static */
 already_AddRefed<BrowsingContext> BrowsingContext::Get(uint64_t aId) {
@@ -2617,6 +2621,25 @@ void BrowsingContext::DidSet(FieldIndex<IDX_UserAgentOverride>) {
   });
 }
 
+bool BrowsingContext::CanSet(FieldIndex<IDX_IsInBFCache>, bool,
+                             ContentParent* aSource) {
+  return IsTop() && !aSource && mozilla::BFCacheInParent();
+}
+
+void BrowsingContext::DidSet(FieldIndex<IDX_IsInBFCache>) {
+  MOZ_RELEASE_ASSERT(mozilla::BFCacheInParent());
+  MOZ_DIAGNOSTIC_ASSERT(IsTop());
+
+  const bool isInBFCache = GetIsInBFCache();
+  PreOrderWalk([&](BrowsingContext* aContext) {
+    nsCOMPtr<nsIDocShell> shell = aContext->GetDocShell();
+    if (shell) {
+      static_cast<nsDocShell*>(shell.get())
+          ->FirePageHideShowNonRecursive(!isInBFCache);
+    }
+  });
+}
+
 void BrowsingContext::SetCustomPlatform(const nsAString& aPlatform,
                                         ErrorResult& aRv) {
   Top()->SetPlatformOverride(aPlatform, aRv);
@@ -2831,37 +2854,32 @@ bool BrowsingContext::CanSet(FieldIndex<IDX_EmbedderElementType>,
   return CheckOnlyEmbedderCanSet(aSource);
 }
 
-bool BrowsingContext::CanSet(FieldIndex<IDX_CurrentInnerWindowId>,
-                             const uint64_t& aValue, ContentParent* aSource) {
+auto BrowsingContext::CanSet(FieldIndex<IDX_CurrentInnerWindowId>,
+                             const uint64_t& aValue, ContentParent* aSource)
+    -> CanSetResult {
   // Generally allow clearing this. We may want to be more precise about this
   // check in the future.
   if (aValue == 0) {
-    return true;
-  }
-
-  if (aSource) {
-    MOZ_ASSERT(XRE_IsParentProcess());
-
-    // If in the parent process, double-check ownership and WindowGlobalParent
-    // as well.
-    RefPtr<WindowGlobalParent> wgp =
-        WindowGlobalParent::GetByInnerWindowId(aValue);
-    if (NS_WARN_IF(!wgp) || NS_WARN_IF(wgp->BrowsingContext() != this)) {
-      return false;
-    }
-
-    // Double-check ownership if we aren't the setter.
-    if (!Canonical()->IsOwnedByProcess(aSource->ChildID()) &&
-        aSource->ChildID() != Canonical()->GetInFlightProcessId()) {
-      return false;
-    }
-  } else if (XRE_IsContentProcess() && !IsOwnedByProcess()) {
-    return false;
+    return CanSetResult::Allow;
   }
 
   // We must have access to the specified context.
   RefPtr<WindowContext> window = WindowContext::GetById(aValue);
-  return window && window->GetBrowsingContext() == this;
+  if (!window || window->GetBrowsingContext() != this) {
+    return CanSetResult::Deny;
+  }
+
+  if (aSource) {
+    // If the sending process is no longer the current owner, revert
+    MOZ_ASSERT(XRE_IsParentProcess());
+    if (!Canonical()->IsOwnedByProcess(aSource->ChildID())) {
+      return CanSetResult::Revert;
+    }
+  } else if (XRE_IsContentProcess() && !IsOwnedByProcess()) {
+    return CanSetResult::Deny;
+  }
+
+  return CanSetResult::Allow;
 }
 
 void BrowsingContext::DidSet(FieldIndex<IDX_CurrentInnerWindowId>) {
@@ -3123,35 +3141,6 @@ bool BrowsingContext::CanSet(FieldIndex<IDX_PendingInitialization>,
   // Can only be cleared from `true` to `false`, and should only ever be set on
   // the toplevel BrowsingContext.
   return IsTop() && GetPendingInitialization() && !aNewValue;
-}
-
-void BrowsingContext::SessionHistoryChanged(int32_t aIndexDelta,
-                                            int32_t aLengthDelta) {
-  if (XRE_IsParentProcess() || mozilla::SessionHistoryInParent()) {
-    // This method is used to test index and length for the session history
-    // in child process only.
-    return;
-  }
-
-  if (!IsTop()) {
-    // Some tests have unexpected setup while Fission shistory is being
-    // implemented.
-    return;
-  }
-
-  RefPtr<ChildSHistory> shistory = GetChildSessionHistory();
-  if (!shistory || !shistory->AsyncHistoryLength()) {
-    return;
-  }
-
-  nsID changeID = shistory->AddPendingHistoryChange(aIndexDelta, aLengthDelta);
-  uint32_t index = shistory->Index();
-  uint32_t length = shistory->Count();
-
-  // Do artificial history update through parent process to test asynchronous
-  // history.length handling.
-  ContentChild::GetSingleton()->SendSessionHistoryUpdate(this, index, length,
-                                                         changeID);
 }
 
 bool BrowsingContext::IsPopupAllowed() {

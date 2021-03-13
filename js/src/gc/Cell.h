@@ -54,6 +54,8 @@ enum class AllocKind : uint8_t;
 class StoreBuffer;
 class TenuredCell;
 
+extern void PerformIncrementalBarrier(TenuredCell* cell);
+extern void PerformIncrementalBarrierDuringFlattening(JSString* str);
 extern void UnmarkGrayGCThingRecursively(TenuredCell* cell);
 
 // Like gc::MarkColor but allows the possibility of the cell being unmarked.
@@ -479,10 +481,7 @@ MOZ_ALWAYS_INLINE void ReadBarrierImpl(TenuredCell* thing) {
   if (shadowZone->needsIncrementalBarrier()) {
     // We should only observe barriers being enabled on the main thread.
     MOZ_ASSERT(CurrentThreadCanAccessRuntime(runtime));
-    Cell* tmp = thing;
-    TraceManuallyBarrieredGenericPointerEdge(shadowZone->barrierTracer(), &tmp,
-                                             "read barrier");
-    MOZ_ASSERT(tmp == thing);
+    PerformIncrementalBarrier(thing);
     return;
   }
 
@@ -533,10 +532,7 @@ MOZ_ALWAYS_INLINE void PreWriteBarrierImpl(TenuredCell* thing) {
 
   MOZ_ASSERT(CurrentThreadCanAccessRuntime(runtime));
   MOZ_ASSERT(!RuntimeFromMainThreadIsHeapMajorCollecting(zone));
-  Cell* tmp = thing;
-  TraceManuallyBarrieredGenericPointerEdge(zone->barrierTracer(), &tmp,
-                                           "pre barrier");
-  MOZ_ASSERT(tmp == thing);
+  PerformIncrementalBarrier(thing);
 }
 
 MOZ_ALWAYS_INLINE void PreWriteBarrierImpl(Cell* thing) {

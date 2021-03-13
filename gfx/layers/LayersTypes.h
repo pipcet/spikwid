@@ -188,6 +188,7 @@ enum class WebRenderCompositor : int8_t {
   CORE_ANIMATION,
   SOFTWARE,
   D3D11,
+  OPENGL,
   LAST
 };
 
@@ -386,16 +387,16 @@ class CompositableHandle final {
 };
 
 // clang-format off
-MOZ_DEFINE_ENUM_CLASS_WITH_BASE(ScrollDirection, uint32_t, (
+MOZ_DEFINE_ENUM_CLASS_WITH_BASE(ScrollDirection, uint8_t, (
   eVertical,
   eHorizontal
 ));
 
-typedef EnumSet<ScrollDirection> ScrollDirections;
+using ScrollDirections = EnumSet<ScrollDirection, uint8_t>;
 
 constexpr ScrollDirections EitherScrollDirection(ScrollDirection::eVertical,ScrollDirection::eHorizontal);
 constexpr ScrollDirections HorizontalScrollDirection(ScrollDirection::eHorizontal);
-constexpr ScrollDirections VerticalScollDirection(ScrollDirection::eVertical);
+constexpr ScrollDirections VerticalScrollDirection(ScrollDirection::eVertical);
 
 
 MOZ_DEFINE_ENUM_CLASS_WITH_BASE(CompositionPayloadType, uint8_t, (

@@ -304,8 +304,10 @@ class nsCocoaWindow final : public nsBaseWidget, public nsPIWidgetCocoa {
   virtual nsresult SetNonClientMargins(LayoutDeviceIntMargin& aMargins) override;
   virtual void SetDrawsInTitlebar(bool aState) override;
   virtual void UpdateThemeGeometries(const nsTArray<ThemeGeometry>& aThemeGeometries) override;
-  virtual nsresult SynthesizeNativeMouseEvent(LayoutDeviceIntPoint aPoint, uint32_t aNativeMessage,
-                                              uint32_t aModifierFlags,
+  virtual nsresult SynthesizeNativeMouseEvent(LayoutDeviceIntPoint aPoint,
+                                              NativeMouseMessage aNativeMessage,
+                                              mozilla::MouseButton aButton,
+                                              nsIWidget::Modifiers aModifierFlags,
                                               nsIObserver* aObserver) override;
   virtual nsresult SynthesizeNativeMouseScrollEvent(LayoutDeviceIntPoint aPoint,
                                                     uint32_t aNativeMessage, double aDeltaX,
@@ -325,7 +327,7 @@ class nsCocoaWindow final : public nsBaseWidget, public nsPIWidgetCocoa {
   bool HasModalDescendents() { return mNumModalDescendents > 0; }
   NSWindow* GetCocoaWindow() { return mWindow; }
 
-  void SetMenuBar(nsMenuBarX* aMenuBar);
+  void SetMenuBar(RefPtr<nsMenuBarX>&& aMenuBar);
   nsMenuBarX* GetMenuBar();
 
   virtual void SetInputContext(const InputContext& aContext,

@@ -81,11 +81,7 @@ pref("security.enterprise_roots.enabled", false);
 // background thread. This module allows Firefox to use client certificates
 // stored in OS certificate storage. Currently only available for Windows and
 // macOS.
-#ifdef EARLY_BETA_OR_EARLIER
-  pref("security.osclientcerts.autoload", true);
-#else
-  pref("security.osclientcerts.autoload", false);
-#endif
+pref("security.osclientcerts.autoload", true);
 
 // The supported values of this pref are:
 // 0: do not fetch OCSP
@@ -340,6 +336,13 @@ pref("browser.triple_click_selects_paragraph", true);
 // Enable fillable forms in the PDF viewer.
 pref("pdfjs.renderInteractiveForms", true);
 
+// Enable JavaScript support in the PDF viewer.
+#ifdef NIGHTLY_BUILD
+  pref("pdfjs.enableScripting", true);
+#else
+  pref("pdfjs.enableScripting", false);
+#endif
+
 // Disable support for MathML
 pref("mathml.disabled",    false);
 
@@ -388,9 +391,9 @@ pref("media.gmp.storage.version.expected", 1);
 // Filter what triggers user notifications.
 // See DecoderDoctorDocumentWatcher::ReportAnalysis for details.
 #ifdef NIGHTLY_BUILD
-  pref("media.decoder-doctor.notifications-allowed", "MediaWMFNeeded,MediaWidevineNoWMF,MediaCannotInitializePulseAudio,MediaCannotPlayNoDecoders,MediaUnsupportedLibavcodec,MediaDecodeError");
+  pref("media.decoder-doctor.notifications-allowed", "MediaWMFNeeded,MediaWidevineNoWMF,MediaCannotInitializePulseAudio,MediaCannotPlayNoDecoders,MediaUnsupportedLibavcodec,MediaPlatformDecoderNotFound,MediaDecodeError");
 #else
-  pref("media.decoder-doctor.notifications-allowed", "MediaWMFNeeded,MediaWidevineNoWMF,MediaCannotInitializePulseAudio,MediaCannotPlayNoDecoders,MediaUnsupportedLibavcodec");
+  pref("media.decoder-doctor.notifications-allowed", "MediaWMFNeeded,MediaWidevineNoWMF,MediaCannotInitializePulseAudio,MediaCannotPlayNoDecoders,MediaUnsupportedLibavcodec,MediaPlatformDecoderNotFound");
 #endif
 pref("media.decoder-doctor.decode-errors-allowed", "");
 pref("media.decoder-doctor.decode-warnings-allowed", "");
@@ -1523,11 +1526,7 @@ pref("network.http.accept", "");
 // per Section 4.7 "Low-Latency Data Service Class".
 pref("network.ftp.data.qos", 0);
 pref("network.ftp.control.qos", 0);
-#ifdef NIGHTLY_BUILD
-  pref("network.ftp.enabled", false);
-#else
-  pref("network.ftp.enabled", true);
-#endif
+pref("network.ftp.enabled", false);
 
 // The max time to spend on xpcom events between two polls in ms.
 pref("network.sts.max_time_for_events_between_two_polls", 100);
@@ -2553,7 +2552,7 @@ pref("browser.tabs.remote.autostart", false);
 
 // Whether certain properties from origin attributes should be included as part
 // of remote types. Only in effect when fission is enabled.
-pref("browser.tabs.remote.useOriginAttributesInRemoteType", false);
+pref("browser.tabs.remote.useOriginAttributesInRemoteType", true);
 
 // Pref to control whether we use separate content processes for top-level load
 // of file:// URIs.
@@ -3116,23 +3115,27 @@ pref("font.size.monospace.x-math", 13);
   // enable NSPR logging for module fontInfoLog:5
   // canonical names immediately follow '(fontinit) family:' in the log
 
+  // For some scripts there is no commonly-installed monospace font, so we just use
+  // the same as serif/sans-serif, but we prefix the list with Menlo so that at least
+  // Latin text will be monospaced if it occurs when that lang code is in effect.
+
   pref("font.name-list.emoji", "Apple Color Emoji");
 
   pref("font.name-list.serif.ar", "Al Bayan");
   pref("font.name-list.sans-serif.ar", "Geeza Pro");
-  pref("font.name-list.monospace.ar", "Geeza Pro");
+  pref("font.name-list.monospace.ar", "Menlo, Geeza Pro");
   pref("font.name-list.cursive.ar", "DecoType Naskh");
   pref("font.name-list.fantasy.ar", "KufiStandardGK");
 
   pref("font.name-list.serif.el", "Times, Times New Roman");
   pref("font.name-list.sans-serif.el", "Helvetica, Lucida Grande");
-  pref("font.name-list.monospace.el", "Courier New, Lucida Grande");
+  pref("font.name-list.monospace.el", "Menlo");
   pref("font.name-list.cursive.el", "Lucida Grande, Times");
   pref("font.name-list.fantasy.el", "Lucida Grande, Times");
 
   pref("font.name-list.serif.he", "Times New Roman");
   pref("font.name-list.sans-serif.he", "Arial");
-  pref("font.name-list.monospace.he", "Courier New");
+  pref("font.name-list.monospace.he", "Menlo, Courier New");
   pref("font.name-list.cursive.he", "Times New Roman");
   pref("font.name-list.fantasy.he", "Times New Roman");
 
@@ -3142,39 +3145,39 @@ pref("font.size.monospace.x-math", 13);
 
   pref("font.name-list.serif.ko", "AppleMyungjo");
   pref("font.name-list.sans-serif.ko", "Apple SD Gothic Neo, AppleGothic");
-  pref("font.name-list.monospace.ko", "Apple SD Gothic Neo, AppleGothic");
+  pref("font.name-list.monospace.ko", "Menlo, Apple SD Gothic Neo, AppleGothic");
 
   pref("font.name-list.serif.th", "Thonburi");
   pref("font.name-list.sans-serif.th", "Thonburi");
-  pref("font.name-list.monospace.th", "Ayuthaya");
+  pref("font.name-list.monospace.th", "Menlo, Ayuthaya");
 
   pref("font.name-list.serif.x-armn", "Mshtakan");
   pref("font.name-list.sans-serif.x-armn", "Mshtakan");
-  pref("font.name-list.monospace.x-armn", "Mshtakan");
+  pref("font.name-list.monospace.x-armn", "Menlo, Mshtakan");
 
   // SolaimanLipi, Rupali http://ekushey.org/?page/mac_download
   pref("font.name-list.serif.x-beng", "Bangla MN");
   pref("font.name-list.sans-serif.x-beng", "Bangla Sangam MN");
-  pref("font.name-list.monospace.x-beng", "Bangla Sangam MN");
+  pref("font.name-list.monospace.x-beng", "Menlo, Bangla Sangam MN");
 
   pref("font.name-list.serif.x-cans", "Euphemia UCAS");
   pref("font.name-list.sans-serif.x-cans", "Euphemia UCAS");
-  pref("font.name-list.monospace.x-cans", "Euphemia UCAS");
+  pref("font.name-list.monospace.x-cans", "Menlo, Euphemia UCAS");
 
   pref("font.name-list.serif.x-cyrillic", "Times, Times New Roman");
   pref("font.name-list.sans-serif.x-cyrillic", "Helvetica, Arial");
-  pref("font.name-list.monospace.x-cyrillic", "Monaco, Courier New");
+  pref("font.name-list.monospace.x-cyrillic", "Menlo");
   pref("font.name-list.cursive.x-cyrillic", "Geneva");
   pref("font.name-list.fantasy.x-cyrillic", "Charcoal CY");
 
   pref("font.name-list.serif.x-devanagari", "Devanagari MT");
   pref("font.name-list.sans-serif.x-devanagari", "Devanagari Sangam MN, Devanagari MT");
-  pref("font.name-list.monospace.x-devanagari", "Devanagari Sangam MN, Devanagari MT");
+  pref("font.name-list.monospace.x-devanagari", "Menlo, Devanagari Sangam MN, Devanagari MT");
 
   // Abyssinica SIL http://scripts.sil.org/AbyssinicaSIL_Download
   pref("font.name-list.serif.x-ethi", "Kefa, Abyssinica SIL");
   pref("font.name-list.sans-serif.x-ethi", "Kefa, Abyssinica SIL");
-  pref("font.name-list.monospace.x-ethi", "Kefa, Abyssinica SIL");
+  pref("font.name-list.monospace.x-ethi", "Menlo, Kefa, Abyssinica SIL");
 
   // no suitable fonts for georgian ship with mac os x
   // however some can be freely downloaded
@@ -3182,76 +3185,76 @@ pref("font.size.monospace.x-math", 13);
   // Zuzumbo http://homepage.mac.com/rsiradze/FileSharing91.html
   pref("font.name-list.serif.x-geor", "TITUS Cyberbit Basic");
   pref("font.name-list.sans-serif.x-geor", "Zuzumbo");
-  pref("font.name-list.monospace.x-geor", "Zuzumbo");
+  pref("font.name-list.monospace.x-geor", "Menlo, Zuzumbo");
 
   pref("font.name-list.serif.x-gujr", "Gujarati MT");
   pref("font.name-list.sans-serif.x-gujr", "Gujarati Sangam MN, Gujarati MT");
-  pref("font.name-list.monospace.x-gujr", "Gujarati Sangam MN, Gujarati MT");
+  pref("font.name-list.monospace.x-gujr", "Menlo, Gujarati Sangam MN, Gujarati MT");
 
   pref("font.name-list.serif.x-guru", "Gurmukhi MT");
   pref("font.name-list.sans-serif.x-guru", "Gurmukhi MT");
-  pref("font.name-list.monospace.x-guru", "Gurmukhi MT");
+  pref("font.name-list.monospace.x-guru", "Menlo, Gurmukhi MT");
 
   pref("font.name-list.serif.x-khmr", "Khmer MN");
   pref("font.name-list.sans-serif.x-khmr", "Khmer Sangam MN");
-  pref("font.name-list.monospace.x-khmr", "Khmer Sangam MN");
+  pref("font.name-list.monospace.x-khmr", "Menlo, Khmer Sangam MN");
 
   pref("font.name-list.serif.x-mlym", "Malayalam MN");
   pref("font.name-list.sans-serif.x-mlym", "Malayalam Sangam MN");
-  pref("font.name-list.monospace.x-mlym", "Malayalam Sangam MN");
+  pref("font.name-list.monospace.x-mlym", "Menlo, Malayalam Sangam MN");
 
   pref("font.name-list.serif.x-orya", "Oriya MN");
   pref("font.name-list.sans-serif.x-orya", "Oriya Sangam MN");
-  pref("font.name-list.monospace.x-orya", "Oriya Sangam MN");
+  pref("font.name-list.monospace.x-orya", "Menlo, Oriya Sangam MN");
 
   // Pothana http://web.nickshanks.com/typography/telugu/
   pref("font.name-list.serif.x-telu", "Telugu MN, Pothana");
   pref("font.name-list.sans-serif.x-telu", "Telugu Sangam MN, Pothana");
-  pref("font.name-list.monospace.x-telu", "Telugu Sangam MN, Pothana");
+  pref("font.name-list.monospace.x-telu", "Menlo, Telugu Sangam MN, Pothana");
 
   // Kedage http://web.nickshanks.com/typography/kannada/
   pref("font.name-list.serif.x-knda", "Kannada MN, Kedage");
   pref("font.name-list.sans-serif.x-knda", "Kannada Sangam MN, Kedage");
-  pref("font.name-list.monospace.x-knda", "Kannada Sangam MN, Kedage");
+  pref("font.name-list.monospace.x-knda", "Menlo, Kannada Sangam MN, Kedage");
 
   pref("font.name-list.serif.x-sinh", "Sinhala MN");
   pref("font.name-list.sans-serif.x-sinh", "Sinhala Sangam MN");
-  pref("font.name-list.monospace.x-sinh", "Sinhala Sangam MN");
+  pref("font.name-list.monospace.x-sinh", "Menlo, Sinhala Sangam MN");
 
   pref("font.name-list.serif.x-tamil", "InaiMathi");
   pref("font.name-list.sans-serif.x-tamil", "InaiMathi");
-  pref("font.name-list.monospace.x-tamil", "InaiMathi");
+  pref("font.name-list.monospace.x-tamil", "Menlo, InaiMathi");
 
   // Kailasa ships with mac os x >= 10.5
   pref("font.name-list.serif.x-tibt", "Kailasa");
   pref("font.name-list.sans-serif.x-tibt", "Kailasa");
-  pref("font.name-list.monospace.x-tibt", "Kailasa");
+  pref("font.name-list.monospace.x-tibt", "Menlo, Kailasa");
 
   pref("font.name-list.serif.x-unicode", "Times");
   pref("font.name-list.sans-serif.x-unicode", "Helvetica");
-  pref("font.name-list.monospace.x-unicode", "Courier");
+  pref("font.name-list.monospace.x-unicode", "Menlo");
   pref("font.name-list.cursive.x-unicode", "Apple Chancery");
   pref("font.name-list.fantasy.x-unicode", "Papyrus");
 
   pref("font.name-list.serif.x-western", "Times, Times New Roman");
   pref("font.name-list.sans-serif.x-western", "Helvetica, Arial");
-  pref("font.name-list.monospace.x-western", "Courier, Courier New");
+  pref("font.name-list.monospace.x-western", "Menlo");
   pref("font.name-list.cursive.x-western", "Apple Chancery");
   pref("font.name-list.fantasy.x-western", "Papyrus");
 
   pref("font.name-list.serif.zh-CN", "Times New Roman, Songti SC, STSong, Heiti SC");
   pref("font.name-list.sans-serif.zh-CN", "Arial, PingFang SC, STHeiti, Heiti SC");
-  pref("font.name-list.monospace.zh-CN", "Courier, PingFang SC, STHeiti, Heiti SC");
+  pref("font.name-list.monospace.zh-CN", "Menlo, PingFang SC, STHeiti, Heiti SC");
   pref("font.name-list.cursive.zh-CN", "Kaiti SC");
 
   pref("font.name-list.serif.zh-TW", "Times New Roman, Songti TC, LiSong Pro, Heiti TC");
   pref("font.name-list.sans-serif.zh-TW", "Arial, PingFang TC, Heiti TC, LiHei Pro");
-  pref("font.name-list.monospace.zh-TW", "Courier, PingFang TC, Heiti TC, LiHei Pro");
+  pref("font.name-list.monospace.zh-TW", "Menlo, PingFang TC, Heiti TC, LiHei Pro");
   pref("font.name-list.cursive.zh-TW", "Kaiti TC");
 
   pref("font.name-list.serif.zh-HK", "Times New Roman, Songti TC, LiSong Pro, Heiti TC");
   pref("font.name-list.sans-serif.zh-HK", "Arial, PingFang TC, Heiti TC, LiHei Pro");
-  pref("font.name-list.monospace.zh-HK", "Courier, PingFang TC, Heiti TC, LiHei Pro");
+  pref("font.name-list.monospace.zh-HK", "Menlo, PingFang TC, Heiti TC, LiHei Pro");
   pref("font.name-list.cursive.zh-HK", "Kaiti TC");
 
   // XP_MACOSX changes to default font sizes
@@ -3260,7 +3263,7 @@ pref("font.size.monospace.x-math", 13);
   // Apple's Symbol is Unicode so use it
   pref("font.name-list.serif.x-math", "Latin Modern Math, STIX Two Math, XITS Math, Cambria Math, Libertinus Math, DejaVu Math TeX Gyre, TeX Gyre Bonum Math, TeX Gyre Pagella Math, TeX Gyre Schola, TeX Gyre Termes Math, STIX Math, Asana Math, STIXGeneral, DejaVu Serif, DejaVu Sans, Symbol, Times");
   pref("font.name-list.sans-serif.x-math", "Helvetica");
-  pref("font.name-list.monospace.x-math", "Courier");
+  pref("font.name-list.monospace.x-math", "Menlo");
   pref("font.name-list.cursive.x-math", "Apple Chancery");
   pref("font.name-list.fantasy.x-math", "Papyrus");
 
@@ -4313,11 +4316,7 @@ pref("toolkit.aboutProcesses.showThreads", false);
   pref("toolkit.crashreporter.include_context_heap", true);
 #endif
 
-#if defined(XP_WIN) || defined(XP_MACOSX) || defined(MOZ_WIDGET_GTK)
-  pref("layers.omtp.enabled", true);
-#else
-  pref("layers.omtp.enabled", false);
-#endif
+pref("layers.omtp.enabled", false);
 
 // Support for legacy customizations that rely on checking the
 // user profile directory for these stylesheets:
@@ -4449,9 +4448,6 @@ pref("services.common.log.logger.tokenserverclient", "Debug");
 // Marionette is the remote protocol that lets OOP programs communicate with,
 // instrument, and control Gecko.
 
-// Starts and stops the Marionette server.
-pref("marionette.enabled", false);
-
 // Delay server startup until a modal dialogue has been clicked to allow time
 // for user to set breakpoints in the Browser Toolbox.
 pref("marionette.debugging.clicktostart", false);
@@ -4472,12 +4468,6 @@ pref("marionette.port", 2828);
 
 // Sets recommended automation preferences when Marionette is started.
 pref("marionette.prefs.recommended", true);
-
-// Whether content scripts can be safely reused.
-//
-// Deprecated and scheduled for removal with
-// https://bugzil.la/marionette-window-tracking
-pref("marionette.contentListener", false);
 
 #if defined(ENABLE_REMOTE_AGENT)
   // Indicates whether the remote agent is enabled.

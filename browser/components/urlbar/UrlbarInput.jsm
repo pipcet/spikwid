@@ -14,12 +14,15 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   AppConstants: "resource://gre/modules/AppConstants.jsm",
   BrowserSearchTelemetry: "resource:///modules/BrowserSearchTelemetry.jsm",
   BrowserUIUtils: "resource:///modules/BrowserUIUtils.jsm",
+  CONTEXTUAL_SERVICES_PING_TYPES:
+    "resource:///modules/PartnerLinkAttribution.jsm",
   ExtensionSearchHandler: "resource://gre/modules/ExtensionSearchHandler.jsm",
   ObjectUtils: "resource://gre/modules/ObjectUtils.jsm",
   PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.jsm",
   PromiseUtils: "resource://gre/modules/PromiseUtils.jsm",
   ReaderMode: "resource://gre/modules/ReaderMode.jsm",
   PartnerLinkAttribution: "resource:///modules/PartnerLinkAttribution.jsm",
+  SearchUIUtils: "resource:///modules/SearchUIUtils.jsm",
   SearchUtils: "resource://gre/modules/SearchUtils.jsm",
   Services: "resource://gre/modules/Services.jsm",
   UrlbarController: "resource:///modules/UrlbarController.jsm",
@@ -43,6 +46,9 @@ XPCOMUtils.defineLazyServiceGetter(
 
 const DEFAULT_FORM_HISTORY_NAME = "searchbar-history";
 const SEARCH_BUTTON_ID = "urlbar-search-button";
+
+// The scalar category of TopSites click for Contextual Services
+const SCALAR_CATEGORY_TOPSITES = "contextual.services.topsites.click";
 
 let getBoundsWithoutFlushing = element =>
   element.ownerGlobal.windowUtils.getBoundsWithoutFlushing(element);
@@ -254,6 +260,9 @@ class UrlbarInput {
 
     this._initCopyCutController();
     this._initPasteAndGo();
+    if (UrlbarPrefs.get("browser.proton.urlbar.enabled")) {
+      this.addSearchEngineHelper = new AddSearchEngineHelper(this);
+    }
 
     // Tracks IME composition.
     this._compositionState = UrlbarUtils.COMPOSITION.NONE;
@@ -706,9 +715,19 @@ class UrlbarInput {
       allowInheritPrincipal: false,
     };
 
+    if (
+      urlOverride &&
+      result.type != UrlbarUtils.RESULT_TYPE.TIP &&
+      where == "current"
+    ) {
+      // Open non-tip help links in a new tab unless the user held a modifier.
+      // TODO (bug 1696232): Do this for tip help links, too.
+      where = "tab";
+    }
+
     let selIndex = result.rowIndex;
     if (!result.payload.providesSearchMode) {
-      this.view.close(/* elementPicked */ true);
+      this.view.close({ elementPicked: true });
     }
 
     this.controller.recordSelectedResult(event, result);
@@ -967,6 +986,25 @@ class UrlbarInput {
           "browser.partnerlink.campaign.topsites"
         ),
       });
+      if (!this.isPrivate && result.providerName === "UrlbarProviderTopSites") {
+        // The position is 1-based for telemetry
+        const position = selIndex + 1;
+        Services.telemetry.keyedScalarAdd(
+          SCALAR_CATEGORY_TOPSITES,
+          `urlbar_${position}`,
+          1
+        );
+        PartnerLinkAttribution.sendContextualServicesPing(
+          {
+            position,
+            source: "urlbar",
+            tile_id: result.payload.sponsoredTileId || -1,
+            reporting_url: result.payload.sponsoredClickUrl,
+            advertiser: result.payload.title.toLocaleLowerCase(),
+          },
+          CONTEXTUAL_SERVICES_PING_TYPES.TOPSITES_SELECTION
+        );
+      }
     }
 
     this._loadURL(
@@ -1373,7 +1411,9 @@ class UrlbarInput {
     this._hideFocus = false;
     if (this.focused) {
       this.setAttribute("focused", "true");
-      this.startLayoutExtend();
+      if (!UrlbarPrefs.get("browser.proton.urlbar.enabled")) {
+        this.startLayoutExtend();
+      }
     }
   }
 
@@ -1607,7 +1647,9 @@ class UrlbarInput {
       return;
     }
     await this._updateLayoutBreakoutDimensions();
-    this.startLayoutExtend();
+    if (!UrlbarPrefs.get("browser.proton.urlbar.enabled")) {
+      this.startLayoutExtend();
+    }
   }
 
   startLayoutExtend() {
@@ -1617,6 +1659,9 @@ class UrlbarInput {
       !this.hasAttribute("breakout") ||
       this.hasAttribute("breakout-extend")
     ) {
+      return;
+    }
+    if (UrlbarPrefs.get("browser.proton.urlbar.enabled") && !this.view.isOpen) {
       return;
     }
     // The Urlbar is unfocused or reduce motion is on and the view is closed.
@@ -1660,15 +1705,19 @@ class UrlbarInput {
     // If reduce motion is enabled, we want to collapse the Urlbar here so the
     // user sees only sees two states: not expanded, and expanded with the view
     // open.
+    if (!this.hasAttribute("breakout-extend") || this.view.isOpen) {
+      return;
+    }
+
     if (
-      !this.hasAttribute("breakout-extend") ||
-      this.view.isOpen ||
-      (this.getAttribute("focused") == "true" &&
-        (!this.window.gReduceMotion ||
-          !this.window.matchMedia("(prefers-reduced-motion: reduce)").matches))
+      !UrlbarPrefs.get("browser.proton.urlbar.enabled") &&
+      this.getAttribute("focused") == "true" &&
+      (!this.window.gReduceMotion ||
+        !this.window.matchMedia("(prefers-reduced-motion: reduce)").matches)
     ) {
       return;
     }
+
     this.removeAttribute("breakout-extend");
     this._toolbar.removeAttribute("urlbar-exceeds-toolbar-bounds");
   }
@@ -1953,10 +2002,7 @@ class UrlbarInput {
     // if the caret isn't at the end of the input.
     if (
       !allowAutofill ||
-      this._autofillPlaceholder.length <= value.length ||
-      !this._autofillPlaceholder
-        .toLocaleLowerCase()
-        .startsWith(value.toLocaleLowerCase())
+      !UrlbarUtils.canAutofillURL(this._autofillPlaceholder, value)
     ) {
       this._autofillPlaceholder = "";
     } else if (
@@ -2345,7 +2391,7 @@ class UrlbarInput {
         browser.currentURI &&
         url === browser.currentURI.spec
       ) {
-        this.window.SitePermissions.clearTemporaryPermissions(browser);
+        this.window.SitePermissions.clearTemporaryBlockPermissions(browser);
       }
     }
 
@@ -2393,7 +2439,9 @@ class UrlbarInput {
       }
     }
 
-    this.view.close();
+    // If we show the focus border after closing the view, it would appear to
+    // flash since this._on_blur would remove it immediately after.
+    this.view.close({ showFocusBorder: false });
   }
 
   /**
@@ -2678,7 +2726,9 @@ class UrlbarInput {
     });
 
     this.removeAttribute("focused");
-    this.endLayoutExtend();
+    if (!UrlbarPrefs.get("browser.proton.urlbar.enabled")) {
+      this.endLayoutExtend();
+    }
 
     if (this._autofillPlaceholder && this.window.gBrowser.userTypedValue) {
       // If we were autofilling, remove the autofilled portion, by restoring
@@ -2788,7 +2838,9 @@ class UrlbarInput {
       }
     }
 
-    this.startLayoutExtend();
+    if (!UrlbarPrefs.get("browser.proton.urlbar.enabled")) {
+      this.startLayoutExtend();
+    }
 
     if (this.focusedViaMousedown) {
       this.view.autoOpen({ event });
@@ -2855,7 +2907,13 @@ class UrlbarInput {
           this._preventClickSelectsAll = true;
           this.search(UrlbarTokenizer.RESTRICT.SEARCH);
         } else {
-          this.view.autoOpen({ event });
+          // Do not suppress the focus border if we are already focused. If we
+          // did, we'd hide the focus border briefly then show it again if the
+          // user has Top Sites disabled, creating a flashing effect.
+          this.view.autoOpen({
+            event,
+            suppressFocusBorder: !this.hasAttribute("focused"),
+          });
         }
         break;
       case this.window:
@@ -3037,7 +3095,26 @@ class UrlbarInput {
     }
     let oldEnd = oldValue.substring(this.selectionEnd);
 
-    let pasteData = UrlbarUtils.stripUnsafeProtocolOnPaste(originalPasteData);
+    let isURLAssumed = true;
+    try {
+      const { keywordAsSent } = Services.uriFixup.getFixupURIInfo(
+        originalPasteData,
+        Ci.nsIURIFixup.FIXUP_FLAG_FIX_SCHEME_TYPOS |
+          Ci.nsIURIFixup.FIXUP_FLAG_ALLOW_KEYWORD_LOOKUP
+      );
+      isURLAssumed = !keywordAsSent;
+    } catch (e) {}
+
+    // In some cases, the data pasted will contain newline codes. In order to
+    // achive the behavior expected by user, remove newline codes when URL is
+    // assumed. When keywords are assumed, replace all whitespace characters
+    // including newline with a space.
+    let pasteData = isURLAssumed
+      ? originalPasteData.replace(/[\r\n]/g, "")
+      : originalPasteData.replace(/\s/g, " ");
+
+    pasteData = UrlbarUtils.stripUnsafeProtocolOnPaste(pasteData);
+
     if (originalPasteData != pasteData) {
       // Unfortunately we're not allowed to set the bits being pasted
       // so cancel this event:
@@ -3045,6 +3122,8 @@ class UrlbarInput {
       event.stopImmediatePropagation();
 
       this.inputField.value = oldStart + pasteData + oldEnd;
+      this._untrimmedValue = this.inputField.value;
+
       // Fix up cursor/selection:
       let newCursorPos = oldStart.length + pasteData.length;
       this.selectionStart = newCursorPos;
@@ -3457,4 +3536,133 @@ class CopyCutController {
   }
 
   onEvent() {}
+}
+
+/**
+ * Manages the Add Search Engine contextual menu entries.
+ */
+class AddSearchEngineHelper {
+  constructor(input) {
+    this.document = input.document;
+    let contextMenu = input.querySelector("moz-input-box").menupopup;
+    this.separator = this.document.createXULElement("menuseparator");
+    this.separator.setAttribute("anonid", "add-engine-separator");
+    this.separator.classList.add("menuseparator-add-engine");
+    this.separator.collapsed = true;
+    contextMenu.appendChild(this.separator);
+
+    // Since the contextual menu is not opened often, compared to the urlbar
+    // results panel, we update it just before showing it, instead of spending
+    // time on every page load.
+    contextMenu.addEventListener("popupshowing", event => {
+      // Ignore sub-menus.
+      if (event.target == event.currentTarget) {
+        this._refreshContextMenu();
+      }
+    });
+
+    XPCOMUtils.defineLazyGetter(this, "_bundle", () =>
+      Services.strings.createBundle("chrome://browser/locale/search.properties")
+    );
+
+    // Note: setEnginesFromBrowser must be invoked from the outside when the
+    // page provided engines list changes.
+  }
+
+  /**
+   * If there's more than this number of engines, the context menu offers
+   * them in a submenu.
+   */
+  get maxInlineEngines() {
+    return 3;
+  }
+
+  setEnginesFromBrowser(browser) {
+    this.engines = browser.engines;
+    this.browsingContext = browser.browsingContext;
+  }
+
+  _createMenuitem(engine, index) {
+    let elt = this.document.createXULElement("menuitem");
+    elt.setAttribute("anonid", `add-engine-${index}`);
+    elt.classList.add("menuitem-iconic");
+    elt.classList.add("context-menu-add-engine");
+    elt.setAttribute(
+      "label",
+      this._bundle.formatStringFromName("cmd_addFoundEngine", [engine.title])
+    );
+    elt.setAttribute("uri", engine.uri);
+    if (engine.icon) {
+      elt.setAttribute("image", engine.icon);
+    } else {
+      elt.removeAttribute("image", engine.icon);
+    }
+    elt.addEventListener("command", this._onCommand.bind(this));
+    return elt;
+  }
+
+  _createMenu(engine) {
+    let elt = this.document.createXULElement("menu");
+    elt.setAttribute("anonid", "add-engine-menu");
+    elt.classList.add("menu-iconic");
+    elt.classList.add("context-menu-add-engine");
+    elt.setAttribute(
+      "label",
+      this._bundle.GetStringFromName("cmd_addFoundEngineMenu")
+    );
+    if (engine.icon) {
+      elt.setAttribute("image", engine.icon);
+    }
+    let popup = this.document.createXULElement("menupopup");
+    elt.appendChild(popup);
+    return elt;
+  }
+
+  _refreshContextMenu() {
+    let engines = this.engines || [];
+    this.separator.collapsed = !engines.length;
+    let curElt = this.separator;
+    // Remove the previous items, if any.
+    for (let elt = curElt.nextElementSibling; elt; ) {
+      let nextElementSibling = elt.nextElementSibling;
+      elt.remove();
+      elt = nextElementSibling;
+    }
+
+    // If the page provides too many engines, we only show a single menu entry
+    // with engines in a submenu.
+    if (engines.length > this.maxInlineEngines) {
+      // Set the menu button's image to the image of the first engine.  The
+      // offered engines may have differing images, so there's no perfect
+      // choice here.
+      let elt = this._createMenu(engines[0]);
+      this.separator.insertAdjacentElement("afterend", elt);
+      curElt = elt.lastElementChild;
+    }
+
+    // Insert the engines, either in the contextual menu or the sub menu.
+    for (let i = 0; i < engines.length; ++i) {
+      let elt = this._createMenuitem(engines[i], i);
+      if (curElt.localName == "menupopup") {
+        curElt.appendChild(elt);
+      } else {
+        curElt.insertAdjacentElement("afterend", elt);
+      }
+      curElt = elt;
+    }
+  }
+
+  _onCommand(event) {
+    let uri = event.target.getAttribute("uri");
+    let image = event.target.getAttribute("image");
+    SearchUIUtils.addOpenSearchEngine(uri, image, this.browsingContext)
+      .then(added => {
+        if (added) {
+          // Remove the offered engine from the list. The browser updated the
+          // engines list at this point, so we just have to refresh the menu.)
+          this._refreshContextMenu();
+        }
+      })
+      .catch(console.error);
+  }
 }

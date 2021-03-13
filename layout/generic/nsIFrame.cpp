@@ -566,7 +566,8 @@ static bool IsFontSizeInflationContainer(nsIFrame* aFrame,
   bool isInline =
       (nsStyleDisplay::IsInlineFlow(aFrame->GetDisplay()) ||
        RubyUtils::IsRubyBox(frameType) ||
-       (aFrame->IsFloating() && frameType == LayoutFrameType::Letter) ||
+       (aStyleDisplay->IsFloatingStyle() &&
+        frameType == LayoutFrameType::Letter) ||
        // Given multiple frames for the same node, only the
        // outer one should be considered a container.
        // (Important, e.g., for nsSelectsAreaFrame.)
@@ -990,47 +991,22 @@ static void AddAndRemoveImageAssociations(
 }
 
 void nsIFrame::AddDisplayItem(nsDisplayItemBase* aItem) {
-  DisplayItemArray* items = GetProperty(DisplayItems());
-  if (!items) {
-    items = new DisplayItemArray();
-    AddProperty(DisplayItems(), items);
-  }
-  MOZ_DIAGNOSTIC_ASSERT(!items->Contains(aItem));
-  items->AppendElement(aItem);
+  MOZ_DIAGNOSTIC_ASSERT(!mDisplayItems.Contains(aItem));
+  mDisplayItems.AppendElement(aItem);
 }
 
 bool nsIFrame::RemoveDisplayItem(nsDisplayItemBase* aItem) {
-  DisplayItemArray* items = GetProperty(DisplayItems());
-  if (!items) {
-    return false;
-  }
-  bool result = items->RemoveElement(aItem);
-  if (items->IsEmpty()) {
-    RemoveProperty(DisplayItems());
-  }
-  return result;
+  return mDisplayItems.RemoveElement(aItem);
 }
 
-bool nsIFrame::HasDisplayItems() {
-  DisplayItemArray* items = GetProperty(DisplayItems());
-  return items != nullptr;
-}
+bool nsIFrame::HasDisplayItems() { return !mDisplayItems.IsEmpty(); }
 
 bool nsIFrame::HasDisplayItem(nsDisplayItemBase* aItem) {
-  DisplayItemArray* items = GetProperty(DisplayItems());
-  if (!items) {
-    return false;
-  }
-  return items->Contains(aItem);
+  return mDisplayItems.Contains(aItem);
 }
 
 bool nsIFrame::HasDisplayItem(uint32_t aKey) {
-  DisplayItemArray* items = GetProperty(DisplayItems());
-  if (!items) {
-    return false;
-  }
-
-  for (nsDisplayItemBase* i : *items) {
+  for (nsDisplayItemBase* i : mDisplayItems) {
     if (i->GetPerFrameKey() == aKey) {
       return true;
     }
@@ -1040,12 +1016,7 @@ bool nsIFrame::HasDisplayItem(uint32_t aKey) {
 
 template <typename Condition>
 static void DiscardDisplayItems(nsIFrame* aFrame, Condition aCondition) {
-  auto* items = aFrame->GetProperty(nsIFrame::DisplayItems());
-  if (!items) {
-    return;
-  }
-
-  for (nsDisplayItemBase* i : *items) {
+  for (nsDisplayItemBase* i : aFrame->DisplayItems()) {
     // Only discard items that are invalidated by this frame, as we're only
     // guaranteed to rebuild those items. Table background items are created by
     // the relevant table part, but have the cell frame as the primary frame,
@@ -1078,19 +1049,16 @@ void nsIFrame::RemoveDisplayItemDataForDeletion() {
     delete userDataTable;
   }
 
-  FrameLayerBuilder::RemoveFrameFromLayerManager(this, DisplayItemData());
-  DisplayItemData().Clear();
+  FrameLayerBuilder::RemoveFrameFromLayerManager(this);
 
-  DisplayItemArray* items = TakeProperty(DisplayItems());
-  if (items) {
-    for (nsDisplayItemBase* i : *items) {
-      if (i->GetDependentFrame() == this && !i->HasDeletedFrame()) {
-        i->Frame()->MarkNeedsDisplayItemRebuild();
-      }
-      i->RemoveFrame(this);
+  for (nsDisplayItemBase* i : DisplayItems()) {
+    if (i->GetDependentFrame() == this && !i->HasDeletedFrame()) {
+      i->Frame()->MarkNeedsDisplayItemRebuild();
     }
-    delete items;
+    i->RemoveFrame(this);
   }
+
+  DisplayItems().Clear();
 
   if (!nsLayoutUtils::AreRetainedDisplayListsEnabled()) {
     // Retained display lists are disabled, no need to update
@@ -1171,20 +1139,17 @@ void nsIFrame::MarkNeedsDisplayItemRebuild() {
 
   // Hopefully this is cheap, but we could use a frame state bit to note
   // the presence of dependencies to speed it up.
-  DisplayItemArray* items = GetProperty(DisplayItems());
-  if (items) {
-    for (nsDisplayItemBase* i : *items) {
-      if (i->HasDeletedFrame() || i->Frame() == this) {
-        // Ignore the items with deleted frames, and the items with |this| as
-        // the primary frame.
-        continue;
-      }
+  for (nsDisplayItemBase* i : DisplayItems()) {
+    if (i->HasDeletedFrame() || i->Frame() == this) {
+      // Ignore the items with deleted frames, and the items with |this| as
+      // the primary frame.
+      continue;
+    }
 
-      if (i->GetDependentFrame() == this) {
-        // For items with |this| as a dependent frame, mark the primary frame
-        // for rebuild.
-        i->Frame()->MarkNeedsDisplayItemRebuild();
-      }
+    if (i->GetDependentFrame() == this) {
+      // For items with |this| as a dependent frame, mark the primary frame
+      // for rebuild.
+      i->Frame()->MarkNeedsDisplayItemRebuild();
     }
   }
 }
@@ -2359,12 +2324,9 @@ already_AddRefed<ComputedStyle> nsIFrame::ComputeSelectionStyle(
 
 template <typename SizeOrMaxSize>
 static inline bool IsIntrinsicKeyword(const SizeOrMaxSize& aSize) {
-  if (!aSize.IsExtremumLength()) {
-    return false;
-  }
-
-  // All of the keywords except for '-moz-available' depend on intrinsic sizes.
-  return aSize.AsExtremumLength() != StyleExtremumLength::MozAvailable;
+  // All keywords other than auto/none/-moz-available depend on intrinsic sizes.
+  return aSize.IsMaxContent() || aSize.IsMinContent() ||
+         aSize.IsMozFitContent();
 }
 
 bool nsIFrame::CanBeDynamicReflowRoot() const {
@@ -4778,7 +4740,9 @@ nsresult nsIFrame::SelectByTypeAtPoint(nsPresContext* aPresContext,
   }
 
   ContentOffsets offsets = GetContentOffsetsFromPoint(aPoint, SKIP_HIDDEN);
-  if (!offsets.content) return NS_ERROR_FAILURE;
+  if (!offsets.content) {
+    return NS_ERROR_FAILURE;
+  }
 
   int32_t offset;
   nsIFrame* frame = nsFrameSelection::GetFrameForNodeOffset(
@@ -4861,20 +4825,34 @@ nsresult nsIFrame::PeekBackwardAndForward(nsSelectionAmount aAmountBack,
     }
   }
 
-  // Use peek offset one way then the other:
+  // Search backward for a boundary.
   nsPeekOffsetStruct startpos(aAmountBack, eDirPrevious, baseOffset,
                               nsPoint(0, 0), aJumpLines,
                               true,  // limit on scrolled views
                               false, false, false);
   rv = baseFrame->PeekOffset(&startpos);
-  if (NS_FAILED(rv)) return rv;
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
 
-  nsPeekOffsetStruct endpos(aAmountForward, eDirNext, aStartPos, nsPoint(0, 0),
+  // If the backward search stayed within the same frame, search forward from
+  // that position for the end boundary; but if it crossed out to a sibling or
+  // ancestor, start from the original position.
+  if (startpos.mResultFrame == baseFrame) {
+    baseOffset = startpos.mContentOffset;
+  } else {
+    baseFrame = this;
+    baseOffset = aStartPos;
+  }
+
+  nsPeekOffsetStruct endpos(aAmountForward, eDirNext, baseOffset, nsPoint(0, 0),
                             aJumpLines,
                             true,  // limit on scrolled views
                             false, false, false);
-  rv = PeekOffset(&endpos);
-  if (NS_FAILED(rv)) return rv;
+  rv = baseFrame->PeekOffset(&endpos);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
 
   // Keep frameSelection alive.
   RefPtr<nsFrameSelection> frameSelection = GetFrameSelection();
@@ -4887,13 +4865,17 @@ nsresult nsIFrame::PeekBackwardAndForward(nsSelectionAmount aAmountBack,
       MOZ_KnownLive(startpos.mResultContent) /* bug 1636889 */,
       startpos.mContentOffset, startpos.mContentOffset, focusMode,
       CARET_ASSOCIATE_AFTER);
-  if (NS_FAILED(rv)) return rv;
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
 
   rv = frameSelection->HandleClick(
       MOZ_KnownLive(endpos.mResultContent) /* bug 1636889 */,
       endpos.mContentOffset, endpos.mContentOffset,
       nsFrameSelection::FocusMode::kExtendSelection, CARET_ASSOCIATE_BEFORE);
-  if (NS_FAILED(rv)) return rv;
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
 
   // maintain selection
   return frameSelection->MaintainSelection(aAmountBack);
@@ -4904,6 +4886,12 @@ NS_IMETHODIMP nsIFrame::HandleDrag(nsPresContext* aPresContext,
                                    nsEventStatus* aEventStatus) {
   MOZ_ASSERT(aEvent->mClass == eMouseEventClass,
              "HandleDrag can only handle mouse event");
+
+  NS_ENSURE_ARG_POINTER(aEventStatus);
+
+  if (*aEventStatus == nsEventStatus_eConsumeNoDefault) {
+    return NS_OK;
+  }
 
   RefPtr<nsFrameSelection> frameselection = GetFrameSelection();
   if (!frameselection) {
@@ -6065,6 +6053,9 @@ nsIFrame::SizeComputationResult nsIFrame::ComputeSize(
   const auto& styleBSize = aSizeOverrides.mStyleBSize
                                ? *aSizeOverrides.mStyleBSize
                                : stylePos->BSize(aWM);
+  const auto& aspectRatio = aSizeOverrides.mAspectRatio
+                                ? *aSizeOverrides.mAspectRatio
+                                : GetAspectRatio();
 
   auto parentFrame = GetParent();
   auto alignCB = parentFrame;
@@ -6097,7 +6088,6 @@ nsIFrame::SizeComputationResult nsIFrame::ComputeSize(
                        : eLogicalAxisBlock;
   }
 
-  const auto aspectRatio = GetAspectRatio();
   const bool isOrthogonal = aWM.IsOrthogonalTo(alignCB->GetWritingMode());
   const bool isAutoISize = styleISize.IsAuto();
   // Compute inline-axis size
@@ -6243,7 +6233,14 @@ nsIFrame::SizeComputationResult nsIFrame::ComputeSize(
       result.BSize(aWM) = nsLayoutUtils::ComputeBSizeValue(
           aCBSize.BSize(aWM), boxSizingAdjust.BSize(aWM),
           styleBSize.AsLengthPercentage());
-    } else if (aspectRatio && result.ISize(aWM) != NS_UNCONSTRAINEDSIZE) {
+    } else if (aspectRatio) {
+      // If both inline and block dimensions are auto (i.e. weak size
+      // constraints), the block axis is the ratio-dependent axis.
+      // If we have a super large inline size, aspect-ratio should still be
+      // applied. That's why we apply aspect-ratio unconditionally for auto
+      // block size here.
+      // FIXME: Bug 1690423 moves this part below the handle of grid, so this
+      // shouldn't affect grid layout.
       result.BSize(aWM) = aspectRatio.ComputeRatioDependentSize(
           LogicalAxis::eLogicalAxisBlock, aWM, result.ISize(aWM),
           boxSizingAdjust);
@@ -6410,7 +6407,7 @@ nsIFrame::ISizeComputationResult nsIFrame::ComputeISizeValue(
     gfxContext* aRenderingContext, const WritingMode aWM,
     const LogicalSize& aContainingBlockSize,
     const LogicalSize& aContentEdgeToBoxSizing, nscoord aBoxSizingToMarginEdge,
-    StyleExtremumLength aSize, ComputeSizeFlags aFlags) {
+    ExtremumLength aSize, ComputeSizeFlags aFlags) {
   // If 'this' is a container for font size inflation, then shrink
   // wrapping inside of it should not apply font size inflation.
   AutoMaybeDisableFontInflation an(this);
@@ -6418,20 +6415,20 @@ nsIFrame::ISizeComputationResult nsIFrame::ComputeISizeValue(
   // min-content and max-content size by the aspect-ratio and the block size.
   // https://github.com/w3c/csswg-drafts/issues/5032
   Maybe<nscoord> intrinsicSizeFromAspectRatio =
-      aSize == StyleExtremumLength::MozAvailable
+      aSize == ExtremumLength::MozAvailable
           ? Nothing()
           : ComputeInlineSizeFromAspectRatio(aWM, aContainingBlockSize,
                                              aContentEdgeToBoxSizing, aFlags);
   nscoord result;
   switch (aSize) {
-    case StyleExtremumLength::MaxContent:
+    case ExtremumLength::MaxContent:
       result = intrinsicSizeFromAspectRatio ? *intrinsicSizeFromAspectRatio
                                             : GetPrefISize(aRenderingContext);
       NS_ASSERTION(result >= 0, "inline-size less than zero");
       return {result, intrinsicSizeFromAspectRatio
                           ? AspectRatioUsage::ToComputeISize
                           : AspectRatioUsage::None};
-    case StyleExtremumLength::MinContent:
+    case ExtremumLength::MinContent:
       result = intrinsicSizeFromAspectRatio ? *intrinsicSizeFromAspectRatio
                                             : GetMinISize(aRenderingContext);
       NS_ASSERTION(result >= 0, "inline-size less than zero");
@@ -6445,7 +6442,7 @@ nsIFrame::ISizeComputationResult nsIFrame::ComputeISizeValue(
       return {result, intrinsicSizeFromAspectRatio
                           ? AspectRatioUsage::ToComputeISize
                           : AspectRatioUsage::None};
-    case StyleExtremumLength::MozFitContent: {
+    case ExtremumLength::MozFitContent: {
       nscoord pref = NS_UNCONSTRAINEDSIZE;
       nscoord min = 0;
       if (intrinsicSizeFromAspectRatio) {
@@ -6467,7 +6464,7 @@ nsIFrame::ISizeComputationResult nsIFrame::ComputeISizeValue(
       NS_ASSERTION(result >= 0, "inline-size less than zero");
       return {result};
     }
-    case StyleExtremumLength::MozAvailable:
+    case ExtremumLength::MozAvailable:
       return {aContainingBlockSize.ISize(aWM) -
               (aBoxSizingToMarginEdge + aContentEdgeToBoxSizing.ISize(aWM))};
   }
@@ -7136,9 +7133,7 @@ void nsIFrame::ClearInvalidationStateBits() {
 
 void nsIFrame::InvalidateFrame(uint32_t aDisplayItemKey,
                                bool aRebuildDisplayItems /* = true */) {
-  bool hasDisplayItem =
-      !aDisplayItemKey ||
-      FrameLayerBuilder::HasRetainedDataFor(this, aDisplayItemKey);
+  bool hasDisplayItem = !aDisplayItemKey || HasDisplayItem(aDisplayItemKey);
   InvalidateFrameInternal(this, hasDisplayItem, aRebuildDisplayItems);
 }
 
@@ -7148,9 +7143,7 @@ void nsIFrame::InvalidateFrameWithRect(const nsRect& aRect,
   if (aRect.IsEmpty()) {
     return;
   }
-  bool hasDisplayItem =
-      !aDisplayItemKey ||
-      FrameLayerBuilder::HasRetainedDataFor(this, aDisplayItemKey);
+  bool hasDisplayItem = !aDisplayItemKey || HasDisplayItem(aDisplayItemKey);
   bool alreadyInvalid = false;
   if (!HasAnyStateBits(NS_FRAME_NEEDS_PAINT)) {
     InvalidateFrameInternal(this, hasDisplayItem, aRebuildDisplayItems);
@@ -7437,6 +7430,12 @@ nsRect nsIFrame::GetNormalRect() const {
   return GetRect();
 }
 
+nsRect nsIFrame::GetBoundingClientRect() {
+  return nsLayoutUtils::GetAllInFlowRectsUnion(
+      this, nsLayoutUtils::GetContainingBlockForClientRect(this),
+      nsLayoutUtils::RECTS_ACCOUNT_FOR_TRANSFORMS);
+}
+
 nsPoint nsIFrame::GetPositionIgnoringScrolling() const {
   return GetParent() ? GetParent()->GetPositionOfChildIgnoringScrolling(this)
                      : GetPosition();
@@ -7449,13 +7448,14 @@ nsRect nsIFrame::GetOverflowRect(OverflowType aType) const {
   // areas will invalidate the appropriate area, so any (mis)uses of
   // this method will be fixed up.
 
-  if (mOverflow.mType == NS_FRAME_OVERFLOW_LARGE) {
+  if (mOverflow.mType == OverflowStorageType::Large) {
     // there is an overflow rect, and it's not stored as deltas but as
     // a separately-allocated rect
     return GetOverflowAreasProperty()->Overflow(aType);
   }
 
-  if (aType == OverflowType::Ink && mOverflow.mType != NS_FRAME_OVERFLOW_NONE) {
+  if (aType == OverflowType::Ink &&
+      mOverflow.mType != OverflowStorageType::None) {
     return InkOverflowFromDeltas();
   }
 
@@ -7463,7 +7463,7 @@ nsRect nsIFrame::GetOverflowRect(OverflowType aType) const {
 }
 
 OverflowAreas nsIFrame::GetOverflowAreas() const {
-  if (mOverflow.mType == NS_FRAME_OVERFLOW_LARGE) {
+  if (mOverflow.mType == OverflowStorageType::Large) {
     // there is an overflow rect, and it's not stored as deltas but as
     // a separately-allocated rect
     return *GetOverflowAreasProperty();
@@ -7483,6 +7483,10 @@ OverflowAreas nsIFrame::GetOverflowAreasRelativeToSelf() const {
     }
   }
   return OverflowAreas(InkOverflowRect(), ScrollableOverflowRect());
+}
+
+OverflowAreas nsIFrame::GetOverflowAreasRelativeToParent() const {
+  return GetOverflowAreas() + mRect.TopLeft();
 }
 
 nsRect nsIFrame::ScrollableOverflowRectRelativeToParent() const {
@@ -7660,8 +7664,7 @@ nsIFrame* nsIFrame::GetContainingBlock(
   // still be in-flow.  So we have to check to make sure that the frame
   // is really out-of-flow too.
   nsIFrame* f;
-  if (IsAbsolutelyPositioned(aStyleDisplay) &&
-      HasAnyStateBits(NS_FRAME_OUT_OF_FLOW)) {
+  if (IsAbsolutelyPositioned(aStyleDisplay)) {
     f = GetParent();  // the parent is always the containing block
   } else {
     f = GetNearestBlockContainer(GetParent());
@@ -9147,21 +9150,18 @@ a11y::AccType nsIFrame::AccessibleType() {
 #endif
 
 bool nsIFrame::ClearOverflowRects() {
-  if (mOverflow.mType == NS_FRAME_OVERFLOW_NONE) {
+  if (mOverflow.mType == OverflowStorageType::None) {
     return false;
   }
-  if (mOverflow.mType == NS_FRAME_OVERFLOW_LARGE) {
+  if (mOverflow.mType == OverflowStorageType::Large) {
     RemoveProperty(OverflowAreasProperty());
   }
-  mOverflow.mType = NS_FRAME_OVERFLOW_NONE;
+  mOverflow.mType = OverflowStorageType::None;
   return true;
 }
 
-/** Set the overflowArea rect, storing it as deltas or a separate rect
- * depending on its size in relation to the primary frame rect.
- */
 bool nsIFrame::SetOverflowAreas(const OverflowAreas& aOverflowAreas) {
-  if (mOverflow.mType == NS_FRAME_OVERFLOW_LARGE) {
+  if (mOverflow.mType == OverflowStorageType::Large) {
     OverflowAreas* overflow = GetOverflowAreasProperty();
     bool changed = *overflow != aOverflowAreas;
     *overflow = aOverflowAreas;
@@ -9178,8 +9178,8 @@ bool nsIFrame::SetOverflowAreas(const OverflowAreas& aOverflowAreas) {
       b = vis.YMost() - mRect.height;  // bottom: positive is downwards
   if (aOverflowAreas.ScrollableOverflow().IsEqualEdges(
           nsRect(nsPoint(0, 0), GetSize())) &&
-      l <= NS_FRAME_OVERFLOW_DELTA_MAX && t <= NS_FRAME_OVERFLOW_DELTA_MAX &&
-      r <= NS_FRAME_OVERFLOW_DELTA_MAX && b <= NS_FRAME_OVERFLOW_DELTA_MAX &&
+      l <= InkOverflowDeltas::kMax && t <= InkOverflowDeltas::kMax &&
+      r <= InkOverflowDeltas::kMax && b <= InkOverflowDeltas::kMax &&
       // we have to check these against zero because we *never* want to
       // set a frame as having no overflow in this function.  This is
       // because FinishAndStoreOverflow calls this function prior to
@@ -9189,17 +9189,17 @@ bool nsIFrame::SetOverflowAreas(const OverflowAreas& aOverflowAreas) {
       // so that our eventual SetRect/SetSize will know that it has to
       // reset our overflow areas.
       (l | t | r | b) != 0) {
-    VisualDeltas oldDeltas = mOverflow.mVisualDeltas;
+    InkOverflowDeltas oldDeltas = mOverflow.mInkOverflowDeltas;
     // It's a "small" overflow area so we store the deltas for each edge
     // directly in the frame, rather than allocating a separate rect.
     // If they're all zero, that's fine; we're setting things to
     // no-overflow.
-    mOverflow.mVisualDeltas.mLeft = l;
-    mOverflow.mVisualDeltas.mTop = t;
-    mOverflow.mVisualDeltas.mRight = r;
-    mOverflow.mVisualDeltas.mBottom = b;
+    mOverflow.mInkOverflowDeltas.mLeft = l;
+    mOverflow.mInkOverflowDeltas.mTop = t;
+    mOverflow.mInkOverflowDeltas.mRight = r;
+    mOverflow.mInkOverflowDeltas.mBottom = b;
     // There was no scrollable overflow before, and there isn't now.
-    return oldDeltas != mOverflow.mVisualDeltas;
+    return oldDeltas != mOverflow.mInkOverflowDeltas;
   } else {
     bool changed =
         !aOverflowAreas.ScrollableOverflow().IsEqualEdges(
@@ -9207,7 +9207,7 @@ bool nsIFrame::SetOverflowAreas(const OverflowAreas& aOverflowAreas) {
         !aOverflowAreas.InkOverflow().IsEqualEdges(InkOverflowFromDeltas());
 
     // it's a large overflow area that we need to store as a property
-    mOverflow.mType = NS_FRAME_OVERFLOW_LARGE;
+    mOverflow.mType = OverflowStorageType::Large;
     AddProperty(OverflowAreasProperty(), new OverflowAreas(aOverflowAreas));
     return changed;
   }
@@ -9333,7 +9333,7 @@ static nsRect UnionBorderBoxes(
         u = childRect;
         aOutValid = true;
       } else {
-        u.UnionRectEdges(u, childRect);
+        u = u.UnionEdges(childRect);
       }
     }
   }
@@ -9434,7 +9434,7 @@ static void ComputeAndIncludeOutlineArea(nsIFrame* aFrame,
   }
 
   nsRect& vo = aOverflowAreas.InkOverflow();
-  vo.UnionRectEdges(vo, innerRect.Union(outerRect));
+  vo = vo.UnionEdges(innerRect.Union(outerRect));
 }
 
 bool nsIFrame::FinishAndStoreOverflow(OverflowAreas& aOverflowAreas,
@@ -9556,7 +9556,7 @@ bool nsIFrame::FinishAndStoreOverflow(OverflowAreas& aOverflowAreas,
       !HasAnyStateBits(NS_FRAME_SVG_LAYOUT)) {
     for (const auto otype : AllOverflowTypes()) {
       nsRect& o = aOverflowAreas.Overflow(otype);
-      o.UnionRectEdges(o, bounds);
+      o = o.UnionEdges(bounds);
     }
   }
 
@@ -9569,7 +9569,7 @@ bool nsIFrame::FinishAndStoreOverflow(OverflowAreas& aOverflowAreas,
             presContext->DeviceContext(), this, disp->EffectiveAppearance(),
             &r)) {
       nsRect& vo = aOverflowAreas.InkOverflow();
-      vo.UnionRectEdges(vo, r);
+      vo = vo.UnionEdges(r);
     }
   }
 
@@ -11946,7 +11946,6 @@ void DR_State::InitFrameTypeTable() {
   AddFrameTypeInfo(LayoutFrameType::Text, "text", "text");
   AddFrameTypeInfo(LayoutFrameType::Viewport, "VP", "viewport");
 #  ifdef MOZ_XUL
-  AddFrameTypeInfo(LayoutFrameType::XULLabel, "XULLabel", "XULLabel");
   AddFrameTypeInfo(LayoutFrameType::Box, "Box", "Box");
   AddFrameTypeInfo(LayoutFrameType::Slider, "Slider", "Slider");
   AddFrameTypeInfo(LayoutFrameType::PopupSet, "PopupSet", "PopupSet");

@@ -70,7 +70,13 @@ pub fn get_shader_features(flags: ShaderFeatureFlags) -> ShaderFeatures {
     // Cache shaders
     shaders.insert("cs_blur", vec!["ALPHA_TARGET".to_string(), "COLOR_TARGET".to_string()]);
 
-    for name in &["cs_line_decoration", "cs_gradient", "cs_border_segment", "cs_border_solid", "cs_svg_filter"] {
+    for name in &[
+        "cs_line_decoration",
+        "cs_fast_linear_gradient",
+        "cs_border_segment",
+        "cs_border_solid",
+        "cs_svg_filter",
+    ] {
         shaders.insert(name, vec![String::new()]);
     }
 
@@ -109,7 +115,7 @@ pub fn get_shader_features(flags: ShaderFeatureFlags) -> ShaderFeatures {
     }
 
     // Image brush shaders
-    let mut texture_types = vec!["TEXTURE_2D_ARRAY", "TEXTURE_2D"];
+    let mut texture_types = vec!["TEXTURE_2D"];
     if flags.contains(ShaderFeatureFlags::GL) {
         texture_types.push("TEXTURE_RECT");
     }

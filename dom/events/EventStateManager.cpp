@@ -246,6 +246,8 @@ EventStateManager::EventStateManager()
       mLClickCount(0),
       mMClickCount(0),
       mRClickCount(0),
+      mShouldAlwaysUseLineDeltas(false),
+      mShouldAlwaysUseLineDeltasInitialized(false),
       mInTouchDrag(false),
       m_haveShutdown(false) {
   if (sESMInstanceCount == 0) {
@@ -280,6 +282,22 @@ nsresult EventStateManager::Init() {
   observerService->AddObserver(this, NS_XPCOM_SHUTDOWN_OBSERVER_ID, true);
 
   return NS_OK;
+}
+
+bool EventStateManager::ShouldAlwaysUseLineDeltas() {
+  if (MOZ_UNLIKELY(!mShouldAlwaysUseLineDeltasInitialized)) {
+    mShouldAlwaysUseLineDeltasInitialized = true;
+    mShouldAlwaysUseLineDeltas =
+        !StaticPrefs::dom_event_wheel_deltaMode_lines_disabled();
+    if (!mShouldAlwaysUseLineDeltas && mDocument) {
+      if (nsIPrincipal* principal =
+              mDocument->GetPrincipalForPrefBasedHacks()) {
+        mShouldAlwaysUseLineDeltas = principal->IsURIInPrefList(
+            "dom.event.wheel-deltaMode-lines.always-enabled");
+      }
+    }
+  }
+  return mShouldAlwaysUseLineDeltas;
 }
 
 EventStateManager::~EventStateManager() {
@@ -806,6 +824,7 @@ nsresult EventStateManager::PreHandleEvent(nsPresContext* aPresContext,
     case eWheelOperationEnd: {
       NS_ASSERTION(aEvent->IsTrusted(),
                    "Untrusted wheel event shouldn't be here");
+      using DeltaModeCheckingState = WidgetWheelEvent::DeltaModeCheckingState;
 
       nsIContent* content = GetFocusedContent();
       if (content) {
@@ -824,10 +843,18 @@ nsresult EventStateManager::PreHandleEvent(nsPresContext* aPresContext,
         break;
       }
 
+      if (StaticPrefs::dom_event_wheel_deltaMode_lines_always_disabled()) {
+        wheelEvent->mDeltaModeCheckingState = DeltaModeCheckingState::Unchecked;
+      } else if (ShouldAlwaysUseLineDeltas()) {
+        wheelEvent->mDeltaModeCheckingState = DeltaModeCheckingState::Checked;
+      } else {
+        wheelEvent->mDeltaModeCheckingState = DeltaModeCheckingState::Unknown;
+      }
+
       // Init lineOrPageDelta values for line scroll events for some devices
-      // on some platforms which might dispatch wheel events which don't have
-      // lineOrPageDelta values.  And also, if delta values are customized by
-      // prefs, this recomputes them.
+      // on some platforms which might dispatch wheel events which don't
+      // have lineOrPageDelta values.  And also, if delta values are
+      // customized by prefs, this recomputes them.
       DeltaAccumulator::GetInstance()->InitLineOrPageDelta(aTargetFrame, this,
                                                            wheelEvent);
     } break;
@@ -1015,13 +1042,6 @@ static bool IsAccessKeyTarget(nsIContent* aContent, nsIFrame* aFrame,
   nsCOMPtr<nsIDOMXULControlElement> control =
       aContent->AsElement()->AsXULControl();
   if (control) return true;
-
-  // HTML area, label and legend elements are never focusable, so
-  // we need to check for them explicitly before giving up.
-  if (aContent->IsAnyOfHTMLElements(nsGkAtoms::area, nsGkAtoms::label,
-                                    nsGkAtoms::legend)) {
-    return true;
-  }
 
   // XUL label elements are never focusable, so we need to check for them
   // explicitly before giving up.
@@ -2380,18 +2400,9 @@ void EventStateManager::DispatchLegacyMouseScrollEvents(
 
   // Ignore mouse wheel transaction for computing legacy mouse wheel
   // events' delta value.
-  nsIFrame* scrollFrame = ComputeScrollTargetAndMayAdjustWheelEvent(
-      aTargetFrame, aEvent, COMPUTE_LEGACY_MOUSE_SCROLL_EVENT_TARGET);
-
-  nsIScrollableFrame* scrollTarget = do_QueryFrame(scrollFrame);
-  nsPresContext* pc =
-      scrollFrame ? scrollFrame->PresContext() : aTargetFrame->PresContext();
-
   // DOM event's delta vales are computed from CSS pixels.
-  nsSize scrollAmount = GetScrollAmount(pc, aEvent, scrollTarget);
-  nsIntSize scrollAmountInCSSPixels(
-      nsPresContext::AppUnitsToIntCSSPixels(scrollAmount.width),
-      nsPresContext::AppUnitsToIntCSSPixels(scrollAmount.height));
+  auto scrollAmountInCSSPixels =
+      CSSIntSize::FromAppUnitsRounded(aEvent->mScrollAmount);
 
   // XXX We don't deal with fractional amount in legacy event, though the
   //     default action handler (DoScrollText()) deals with it.
@@ -3927,8 +3938,10 @@ static CursorImage ComputeCustomCursor(nsPresContext* aPresContext,
   // consumer know.
   bool loading = false;
   for (const auto& image : style.StyleUI()->mCursor.images.AsSpan()) {
+    MOZ_ASSERT(image.image.IsImageRequestType(),
+               "Cursor image should only parse url() type");
     uint32_t status;
-    imgRequestProxy* req = image.url.GetImage();
+    imgRequestProxy* req = image.image.GetImageRequest();
     if (!req || NS_FAILED(req->GetImageStatus(&status))) {
       continue;
     }
@@ -4197,8 +4210,7 @@ class MOZ_STACK_CLASS ESMEventCB : public EventDispatchingCallback {
     if (aVisitor.mPresContext) {
       nsIFrame* frame = aVisitor.mPresContext->GetPrimaryFrameFor(mTarget);
       if (frame) {
-        frame->HandleEvent(MOZ_KnownLive(aVisitor.mPresContext),
-                           aVisitor.mEvent->AsGUIEvent(),
+        frame->HandleEvent(aVisitor.mPresContext, aVisitor.mEvent->AsGUIEvent(),
                            &aVisitor.mEventStatus);
       }
     }
@@ -4696,11 +4708,7 @@ OverOutElementsWrapper* EventStateManager::GetWrapperByEventID(
     }
     return mMouseEnterLeaveHelper;
   }
-  return mPointersEnterLeaveHelper.WithEntryHandle(
-      pointer->pointerId, [](auto&& entry) {
-        return entry.OrInsertWith([] { return new OverOutElementsWrapper(); })
-            .get();
-      });
+  return mPointersEnterLeaveHelper.GetOrInsertNew(pointer->pointerId);
 }
 
 /* static */
@@ -5946,6 +5954,15 @@ void EventStateManager::DeltaAccumulator::InitLineOrPageDelta(
   mHandlingDeltaMode = aEvent->mDeltaMode;
   mIsNoLineOrPageDeltaDevice = aEvent->mIsNoLineOrPageDelta;
 
+  {
+    nsIFrame* frame = aESM->ComputeScrollTarget(
+        aTargetFrame, aEvent, COMPUTE_LEGACY_MOUSE_SCROLL_EVENT_TARGET);
+    nsPresContext* pc =
+        frame ? frame->PresContext() : aTargetFrame->PresContext();
+    nsIScrollableFrame* scrollTarget = do_QueryFrame(frame);
+    aEvent->mScrollAmount = aESM->GetScrollAmount(pc, aEvent, scrollTarget);
+  }
+
   // If it's handling neither a device that does not provide line or page deltas
   // nor delta values multiplied by prefs, we must not modify lineOrPageDelta
   // values.
@@ -5978,15 +5995,8 @@ void EventStateManager::DeltaAccumulator::InitLineOrPageDelta(
     // eMouseScrollEventClass (DOMMouseScroll) but not be used for scrolling
     // of default action.  The transaction should be used only for the default
     // action.
-    nsIFrame* frame = aESM->ComputeScrollTarget(
-        aTargetFrame, aEvent, COMPUTE_LEGACY_MOUSE_SCROLL_EVENT_TARGET);
-    nsPresContext* pc =
-        frame ? frame->PresContext() : aTargetFrame->PresContext();
-    nsIScrollableFrame* scrollTarget = do_QueryFrame(frame);
-    nsSize scrollAmount = aESM->GetScrollAmount(pc, aEvent, scrollTarget);
-    nsIntSize scrollAmountInCSSPixels(
-        nsPresContext::AppUnitsToIntCSSPixels(scrollAmount.width),
-        nsPresContext::AppUnitsToIntCSSPixels(scrollAmount.height));
+    auto scrollAmountInCSSPixels =
+        CSSIntSize::FromAppUnitsRounded(aEvent->mScrollAmount);
 
     aEvent->mLineOrPageDeltaX = RoundDown(mX) / scrollAmountInCSSPixels.width;
     aEvent->mLineOrPageDeltaY = RoundDown(mY) / scrollAmountInCSSPixels.height;

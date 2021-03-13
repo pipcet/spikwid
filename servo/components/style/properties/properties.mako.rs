@@ -54,7 +54,8 @@ pub use self::cascade::*;
 
 <%!
     from collections import defaultdict
-    from data import Method, PropertyRestrictions, Keyword, to_rust_ident, to_camel_case, RULE_VALUES, SYSTEM_FONT_LONGHANDS
+    from data import Method, PropertyRestrictions, Keyword, to_rust_ident, \
+                     to_camel_case, RULE_VALUES, SYSTEM_FONT_LONGHANDS
     import os.path
 %>
 
@@ -1199,7 +1200,10 @@ impl LonghandId {
         context: &ParserContext,
         input: &mut Parser<'i, 't>,
     ) -> Result<PropertyDeclaration, ParseError<'i>> {
-        type ParsePropertyFn = for<'i, 't> fn(context: &ParserContext, input: &mut Parser<'i, 't>) -> Result<PropertyDeclaration, ParseError<'i>>;
+        type ParsePropertyFn = for<'i, 't> fn(
+            context: &ParserContext,
+            input: &mut Parser<'i, 't>,
+        ) -> Result<PropertyDeclaration, ParseError<'i>>;
         static PARSE_PROPERTY: [ParsePropertyFn; ${len(data.longhands)}] = [
         % for property in data.longhands:
             longhands::${property.ident}::parse_declared,
@@ -1753,7 +1757,21 @@ impl UnparsedValue {
             shorthand_cache.insert((shorthand, longhand), declaration);
         }
 
-        Cow::Borrowed(&shorthand_cache[&(shorthand, longhand_id)])
+        let key = (shorthand, longhand_id);
+        match shorthand_cache.get(&key) {
+            Some(decl) => Cow::Borrowed(decl),
+            None => {
+                // FIXME: We should always have the key here but it seems
+                // sometimes we don't, see bug 1696409.
+                #[cfg(feature = "gecko")]
+                {
+                    if structs::GECKO_IS_NIGHTLY {
+                        panic!("Expected {:?} to be in the cache but it was not!", key);
+                    }
+                }
+                invalid_at_computed_value_time()
+            }
+        }
     }
 }
 

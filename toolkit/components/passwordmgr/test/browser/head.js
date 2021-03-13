@@ -702,7 +702,8 @@ async function openPasswordContextMenu(
   browser,
   input,
   assertCallback = null,
-  browsingContext = null
+  browsingContext = null,
+  openFillMenu = null
 ) {
   const doc = browser.ownerDocument;
   const CONTEXT_MENU = doc.getElementById("contentAreaContextMenu");
@@ -744,13 +745,15 @@ async function openPasswordContextMenu(
     }
   }
 
-  // Synthesize a mouse click over the fill login menu header.
-  let popupShownPromise = BrowserTestUtils.waitForCondition(
-    () => POPUP_HEADER.open && BrowserTestUtils.is_visible(LOGIN_POPUP),
-    "Waiting for header to be open and submenu to be visible"
-  );
-  EventUtils.synthesizeMouseAtCenter(POPUP_HEADER, {}, browser.ownerGlobal);
-  await popupShownPromise;
+  if (openFillMenu) {
+    // Synthesize a mouse click over the fill login menu header.
+    let popupShownPromise = BrowserTestUtils.waitForCondition(
+      () => POPUP_HEADER.open && BrowserTestUtils.is_visible(LOGIN_POPUP),
+      "Waiting for header to be open and submenu to be visible"
+    );
+    EventUtils.synthesizeMouseAtCenter(POPUP_HEADER, {}, browser.ownerGlobal);
+    await popupShownPromise;
+  }
 }
 
 /**
@@ -789,7 +792,7 @@ async function doFillGeneratedPasswordContextMenuItem(browser, passwordInput) {
     "fill-login-generated-password"
   );
   let generatedPasswordSeparator = document.getElementById(
-    "fill-login-and-generated-password-separator"
+    "passwordmgr-items-separator"
   );
 
   ok(

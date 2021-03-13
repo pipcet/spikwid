@@ -281,12 +281,9 @@ pref("browser.startup.preXulSkeletonUI", false);
 
 // Don't create the hidden window during startup on
 // platforms that don't always need it (Win/Linux).
-pref("toolkit.lazyHiddenWindow", true);
+PREF("toolkit.lazyHiddenWindow", true);
 
 pref("browser.slowStartup.notificationDisabled", true);
-pref("browser.slowStartup.timeThreshold", 20000);
-pref("browser.slowStartup.maxSamples", 5);
-
 pref("browser.chrome.site_icons", true);
 // browser.warnOnQuit == false will override all other possible prompts when quitting or restarting
 pref("browser.warnOnQuit", false);
@@ -360,6 +357,9 @@ pref("browser.urlbar.openintab", false);
 
 // If true, we show tail suggestions when available.
 pref("browser.urlbar.richSuggestions.tail", true);
+
+// If true, top sites may include sponsored ones.
+pref("browser.urlbar.sponsoredTopSites", false);
 
 // Controls the empty search behavior in Search Mode:
 //  0 - Show nothing
@@ -706,7 +706,11 @@ pref("browser.gesture.twist.threshold", 0);
 pref("browser.gesture.twist.right", "cmd_gestureRotateRight");
 pref("browser.gesture.twist.left", "cmd_gestureRotateLeft");
 pref("browser.gesture.twist.end", "cmd_gestureRotateEnd");
-pref("browser.gesture.tap", "cmd_fullZoomReset");
+#if defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
+  pref("browser.gesture.tap", "cmd_fullZoomReset");
+#else
+  pref("browser.gesture.tap", "");
+#endif
 
 pref("browser.history_swipe_animation.disabled", false);
 
@@ -1472,8 +1476,9 @@ pref("trailhead.firstrun.newtab.triplets", "");
 // Separate about welcome
 pref("browser.aboutwelcome.enabled", true);
 // Used to set multistage welcome UX
-pref("browser.aboutwelcome.overrideContent", "");
+pref("browser.aboutwelcome.screens", "");
 pref("browser.aboutwelcome.skipFocus", false);
+pref("browser.aboutwelcome.design", "");
 
 // The pref that controls if the What's New panel is enabled.
 pref("browser.messaging-system.whatsNewPanel.enabled", true);
@@ -1713,10 +1718,8 @@ pref("dom.storage_access.enabled", true);
 
 pref("browser.contentblocking.cryptomining.preferences.ui.enabled", true);
 pref("browser.contentblocking.fingerprinting.preferences.ui.enabled", true);
-#ifdef NIGHTLY_BUILD
-  // Enable cookieBehavior = BEHAVIOR_REJECT_TRACKER_AND_PARTITION_FOREIGN as an option in the custom category ui
-  pref("browser.contentblocking.reject-and-isolate-cookies.preferences.ui.enabled", true);
-#endif
+// Enable cookieBehavior = BEHAVIOR_REJECT_TRACKER_AND_PARTITION_FOREIGN as an option in the custom category ui
+pref("browser.contentblocking.reject-and-isolate-cookies.preferences.ui.enabled", true);
 // State Partitioning MVP UI.
 pref("browser.contentblocking.state-partitioning.mvp.ui.enabled", true);
 
@@ -1868,9 +1871,6 @@ pref("browser.tabs.remote.warmup.unloadDelayMs", 2000);
 // For the about:tabcrashed page
 pref("browser.tabs.crashReporting.sendReport", true);
 pref("browser.tabs.crashReporting.includeURL", false);
-pref("browser.tabs.crashReporting.requestEmail", false);
-pref("browser.tabs.crashReporting.emailMe", false);
-pref("browser.tabs.crashReporting.email", "");
 
 // If true, unprivileged extensions may use experimental APIs on
 // nightly and developer edition.

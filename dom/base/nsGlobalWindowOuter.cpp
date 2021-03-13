@@ -213,6 +213,8 @@
 #include "nsRefreshDriver.h"
 #include "Layers.h"
 
+#include "mozilla/extensions/WebExtensionPolicy.h"
+
 #include "mozilla/BasePrincipal.h"
 #include "mozilla/Services.h"
 #include "mozilla/Telemetry.h"
@@ -1322,7 +1324,6 @@ nsGlobalWindowOuter::nsGlobalWindowOuter(uint64_t aWindowID)
       mIsClosed(false),
       mInClose(false),
       mHavePendingClose(false),
-      mIsPopupSpam(false),
       mBlockScriptedClosingFlag(false),
       mWasOffline(false),
       mCreatingInnerWindow(false),
@@ -1372,12 +1373,12 @@ nsGlobalWindowOuter::nsGlobalWindowOuter(uint64_t aWindowID)
   MOZ_ASSERT(sOuterWindowsById, "Outer Windows hash table must be created!");
 
   // |this| is an outer window, add to the outer windows list.
-  MOZ_ASSERT(!sOuterWindowsById->Get(mWindowID),
+  MOZ_ASSERT(!sOuterWindowsById->Contains(mWindowID),
              "This window shouldn't be in the hash table yet!");
   // We seem to see crashes in release builds because of null
   // |sOuterWindowsById|.
   if (sOuterWindowsById) {
-    sOuterWindowsById->Put(mWindowID, this);
+    sOuterWindowsById->InsertOrUpdate(mWindowID, this);
   }
 }
 
@@ -4785,12 +4786,19 @@ void nsGlobalWindowOuter::MakeScriptDialogTitle(
         nsContentUtils::eCOMMON_DIALOG_PROPERTIES,
         "ScriptDlgNullPrincipalHeading", aOutTitle);
   } else {
-    nsresult rv = aSubjectPrincipal->GetExposablePrePath(prepath);
-    if (NS_SUCCEEDED(rv) && !prepath.IsEmpty()) {
-      NS_ConvertUTF8toUTF16 ucsPrePath(prepath);
+    auto* addonPolicy = BasePrincipal::Cast(aSubjectPrincipal)->AddonPolicy();
+    if (addonPolicy) {
       nsContentUtils::FormatLocalizedString(
           aOutTitle, nsContentUtils::eCOMMON_DIALOG_PROPERTIES,
-          "ScriptDlgHeading", ucsPrePath);
+          "ScriptDlgHeading", addonPolicy->Name());
+    } else {
+      nsresult rv = aSubjectPrincipal->GetExposablePrePath(prepath);
+      if (NS_SUCCEEDED(rv) && !prepath.IsEmpty()) {
+        NS_ConvertUTF8toUTF16 ucsPrePath(prepath);
+        nsContentUtils::FormatLocalizedString(
+            aOutTitle, nsContentUtils::eCOMMON_DIALOG_PROPERTIES,
+            "ScriptDlgHeading", ucsPrePath);
+      }
     }
   }
 
@@ -5085,8 +5093,6 @@ void nsGlobalWindowOuter::FocusOuter(CallerType aCallerType,
     if (!parent->IsInProcess()) {
       if (isActive) {
         fm->WindowRaised(this, aActionId);
-        // XXX we still need to notify framer about the focus moves to OOP
-        // iframe to generate corresponding blur event for bug 1677474.
       } else {
         ContentChild* contentChild = ContentChild::GetSingleton();
         MOZ_ASSERT(contentChild);
@@ -5235,7 +5241,12 @@ Nullable<WindowProxyHolder> nsGlobalWindowOuter::Print(
   if (docToPrint->IsStaticDocument() &&
       (aIsPreview == IsPreview::Yes ||
        StaticPrefs::print_tab_modal_enabled())) {
-    MOZ_DIAGNOSTIC_ASSERT(aForWindowDotPrint == IsForWindowDotPrint::No);
+    if (aForWindowDotPrint == IsForWindowDotPrint::Yes) {
+      aError.ThrowNotSupportedError(
+          "Calling print() from a print preview is unsupported, did you intend "
+          "to call printPreview() instead?");
+      return nullptr;
+    }
     // We're already a print preview window, just reuse our browsing context /
     // content viewer.
     bc = sourceBC;
@@ -5350,11 +5361,21 @@ Nullable<WindowProxyHolder> nsGlobalWindowOuter::Print(
   // When using window.print() with the new UI, we usually want to block until
   // the print dialog is hidden. But we can't really do that if we have print
   // callbacks, because we are inside a sync operation, and we want to run
-  // microtasks / etc that the print callbacks may create.
+  // microtasks / etc that the print callbacks may create. It is really awkward
+  // to have this subtle behavior difference...
   //
-  // It is really awkward to have this subtle behavior difference...
-  if (aIsPreview == IsPreview::Yes &&
-      aForWindowDotPrint == IsForWindowDotPrint::Yes && !hasPrintCallbacks) {
+  // We also want to do this for fuzzing, so that they can test window.print().
+  const bool shouldBlock = [&] {
+    if (aForWindowDotPrint == IsForWindowDotPrint::No) {
+      return false;
+    }
+    if (aIsPreview == IsPreview::Yes) {
+      return !hasPrintCallbacks;
+    }
+    return StaticPrefs::dom_window_print_fuzzing_block_while_printing();
+  }();
+
+  if (shouldBlock) {
     SpinEventLoopUntil([&] { return bc->IsDiscarded(); });
   }
 

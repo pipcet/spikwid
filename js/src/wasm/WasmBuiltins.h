@@ -74,12 +74,14 @@ extern const SymbolicAddressSignature SASigPreBarrierFiltering;
 extern const SymbolicAddressSignature SASigPostBarrier;
 extern const SymbolicAddressSignature SASigPostBarrierFiltering;
 extern const SymbolicAddressSignature SASigStructNew;
-extern const SymbolicAddressSignature SASigStructNarrow;
 #ifdef ENABLE_WASM_EXCEPTIONS
 extern const SymbolicAddressSignature SASigExceptionNew;
 extern const SymbolicAddressSignature SASigThrowException;
 extern const SymbolicAddressSignature SASigGetLocalExceptionIndex;
 #endif
+extern const SymbolicAddressSignature SASigArrayNew;
+extern const SymbolicAddressSignature SASigRefTest;
+extern const SymbolicAddressSignature SASigRttSub;
 
 // A SymbolicAddress that NeedsBuiltinThunk() will call through a thunk to the
 // C++ function. This will be true for all normal calls from normal wasm
@@ -107,7 +109,7 @@ bool HandleThrow(JSContext* cx, WasmFrameIter& iter,
 
 void* SymbolicAddressTarget(SymbolicAddress sym);
 
-void* ProvisionalJitEntryStub();
+void* ProvisionalLazyJitEntryStub();
 
 void* MaybeGetBuiltinThunk(JSFunction* f, const FuncType& funcType);
 

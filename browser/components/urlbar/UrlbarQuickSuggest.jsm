@@ -10,6 +10,8 @@ const { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
 );
 
+const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
+
 XPCOMUtils.defineLazyModuleGetters(this, {
   RemoteSettings: "resource://services-settings/remote-settings.js",
   UrlbarPrefs: "resource:///modules/UrlbarPrefs.jsm",
@@ -25,6 +27,9 @@ const log = console.createInstance({
 const RS_COLLECTION = "quicksuggest";
 const RS_PREF = "quicksuggest.enabled";
 
+// Categories that should show "Firefox Suggest" instead of "Sponsored"
+const NONSPONSORED_IAB_CATEGORIES = new Set(["5 - Education"]);
+
 /**
  * Fetches the suggestions data from RemoteSettings and builds the tree
  * to provide suggestions for UrlbarProviderQuickSuggest.
@@ -34,6 +39,8 @@ class Suggestions {
   _rs = null;
   // Let tests wait for init to complete.
   _initPromise = null;
+  // Resolver function stored to call when init is complete.
+  _initResolve = null;
   // A tree that maps keywords to a result.
   _tree = new KeywordTree();
   // A map of the result data.
@@ -46,8 +53,10 @@ class Suggestions {
     this._initPromise = Promise.resolve();
     this._rs = RemoteSettings(RS_COLLECTION);
     if (UrlbarPrefs.get(RS_PREF)) {
-      this._setupRemoteSettings();
-      this._initPromise = this._ensureAttachmentsDownloaded();
+      this._initPromise = new Promise(resolve => (this._initResolve = resolve));
+      Services.tm.idleDispatchToMainThread(
+        this._setupRemoteSettings.bind(this)
+      );
     } else {
       UrlbarPrefs.addObserver(this);
     }
@@ -59,18 +68,28 @@ class Suggestions {
    */
   async query(phrase) {
     log.info("Handling query for", phrase);
-    let index = this._tree.get(phrase);
-    if (!index || !this._results.has(index)) {
+    phrase = phrase.toLowerCase();
+    let match = this._tree.get(phrase);
+    if (!match.result || !this._results.has(match.result)) {
       return null;
     }
-    let result = this._results.get(index);
+    let result = this._results.get(match.result);
     let d = new Date();
-    let date = `${d.getFullYear()}${d.getMonth() +
-      1}${d.getDate()}${d.getHours()}`;
+    let pad = number => number.toString().padStart(2, "0");
+    let date =
+      `${d.getFullYear()}${pad(d.getMonth() + 1)}` +
+      `${pad(d.getDate())}${pad(d.getHours())}`;
     let icon = await this.fetchIcon(result.icon);
     return {
+      fullKeyword: match.fullKeyword,
       title: result.title,
       url: result.url.replace("%YYYYMMDDHH%", date),
+      click_url: result.click_url.replace("%YYYYMMDDHH%", date),
+      // impression_url doesn't have any parameters
+      impression_url: result.impression_url,
+      block_id: result.id,
+      advertiser: result.advertiser.toLocaleLowerCase(),
+      isSponsored: !NONSPONSORED_IAB_CATEGORIES.has(result.iab_category),
       icon,
     };
   }
@@ -81,7 +100,6 @@ class Suggestions {
   onPrefChanged(changedPref) {
     if (changedPref == RS_PREF && UrlbarPrefs.get(RS_PREF)) {
       this._setupRemoteSettings();
-      this._ensureAttachmentsDownloaded();
     }
   }
 
@@ -90,6 +108,11 @@ class Suggestions {
    */
   async _setupRemoteSettings() {
     this._rs.on("sync", this._onSettingsSync.bind(this));
+    await this._ensureAttachmentsDownloaded();
+    if (this._initResolve) {
+      this._initResolve();
+      this._initResolve = null;
+    }
   }
 
   /*
@@ -216,28 +239,121 @@ class KeywordTree {
     tree.set(RESULT_KEY, id);
   }
 
-  /*
+  /**
    * Get the result for a given phrase.
+   *
+   * @param {string} query
+   *   The query string.
+   * @returns {object}
+   *   The match object: { result, fullKeyword }, where `result` is the matching
+   *   result ID and `fullKeyword` is the suggestion.  If there is no match,
+   *   then `result` will be null and `fullKeyword` will not be defined.
    */
-  get(phrase) {
-    let tree = this.tree;
-    /*eslint no-labels: ["error", { "allowLoop": true }]*/
-    loop: while (phrase.length) {
-      for (const [key, child] of tree.entries()) {
-        // We need to check if key starts with phrase because we
-        // may have flattened the key and so .get("hel") will need
-        // to match index "hello", we will only flatten this way if
-        // the result matches.
-        if (phrase.startsWith(key) || key.startsWith(phrase)) {
-          phrase = phrase.slice(key.length);
-          if (!phrase.length) {
-            return child.get(RESULT_KEY) || null;
-          }
-          tree = child;
-          continue loop;
+  get(query) {
+    query = query.trimStart();
+    let match = this._getMatch(query, this.tree, "");
+    if (!match) {
+      return { result: null };
+    }
+
+    let result = UrlbarQuickSuggest._results.get(match.resultID);
+    if (!result) {
+      return { result: null };
+    }
+
+    let longerPhrase;
+    let trimmedQuery = query.trim();
+    let queryWords = trimmedQuery.split(" ");
+
+    // We need to determine a suggestion for the result (called `fullKeyword` in
+    // the returned object).  The data doesn't include suggestions, so we'll
+    // need to make our own based on the keyword phrases in the result.  First,
+    // find a decent matching phrase.  We'll use two heuristics:
+    //
+    // (1) Find the first phrase that has more words than the query.  Use its
+    //     first `queryWords.length` words as the suggestion.  e.g., if the
+    //     query is "moz" and `result.keywords` is ["moz", "mozi", "mozil",
+    //     "mozill", "mozilla", "mozilla firefox"], pick "mozilla firefox", pop
+    //     off the "firefox" and use "mozilla" as the suggestion.
+    // (2) If there isn't any phrase with more words, then pick the longest
+    //     phrase.  e.g., pick "mozilla" in the previous example (assuming the
+    //     "mozilla firefox" phrase isn't there).
+    for (let phrase of result.keywords) {
+      if (phrase.startsWith(query)) {
+        let trimmedPhrase = phrase.trim();
+        let phraseWords = trimmedPhrase.split(" ");
+        // As an exception to (1), if the query ends with a space, then look for
+        // phrases with one more word so that the suggestion includes a word
+        // following the space.
+        let extra = query.endsWith(" ") ? 1 : 0;
+        let len = queryWords.length + extra;
+        if (len < phraseWords.length) {
+          // We found a phrase with more words.
+          return {
+            result: match.resultID,
+            fullKeyword: phraseWords.slice(0, len).join(" "),
+          };
+        }
+        if (
+          query.length < phrase.length &&
+          (!longerPhrase || longerPhrase.length < trimmedPhrase.length)
+        ) {
+          // We found a longer phrase with the same number of words.
+          longerPhrase = trimmedPhrase;
         }
       }
-      return null;
+    }
+    return {
+      result: match.resultID,
+      fullKeyword: longerPhrase || trimmedQuery,
+    };
+  }
+
+  /**
+   * Recursively looks up a match in the tree.
+   *
+   * @param {string} query
+   *   The query string.
+   * @param {Map} node
+   *   The node to start the search at.
+   * @param {string} phrase
+   *   The current phrase key path through the tree.
+   * @returns {object}
+   *   The match object: { resultID }, or null if no match was found.
+   */
+  _getMatch(query, node, phrase) {
+    for (const [key, child] of node.entries()) {
+      if (key == RESULT_KEY) {
+        continue;
+      }
+      let newPhrase = phrase + key;
+      let len = Math.min(newPhrase.length, query.length);
+      if (newPhrase.substring(0, len) == query.substring(0, len)) {
+        // The new phrase is a prefix of the query or vice versa.
+        let resultID = child.get(RESULT_KEY);
+        if (resultID !== undefined) {
+          // This child has a result.  Look it up to see if its keyword phrases
+          // match the query.  If it has a phrase that starts with the query,
+          // then it potentially matches, but we don't want to match when the
+          // query is shorter than every phrase, so also check that the query
+          // starts with some phrase.  For example, if the query is "m" and the
+          // phrases are ["moz", "mozilla"], we don't want to match until the
+          // query is at least "moz".
+          let result = UrlbarQuickSuggest._results.get(resultID);
+          if (
+            result &&
+            result.keywords.some(p => p.startsWith(query)) &&
+            result.keywords.some(p => query.startsWith(p))
+          ) {
+            return { resultID };
+          }
+        }
+        // Recurse into descendants and return any match.
+        let match = this._getMatch(query, child, newPhrase);
+        if (match) {
+          return match;
+        }
+      }
     }
     return null;
   }

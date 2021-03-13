@@ -86,6 +86,7 @@ void ABIResultIter::settleRegister(ValType type) {
     case ValType::F64:
       cur_ = ABIResult(type, ReturnDoubleReg);
       break;
+    case ValType::Rtt:
     case ValType::Ref:
       cur_ = ABIResult(type, ReturnReg);
       break;
@@ -428,7 +429,7 @@ static void SetupABIArguments(MacroAssembler& masm, const FuncExport& fe,
             MOZ_CRASH("V128 not supported in SetupABIArguments");
 #endif
           default:
-            MOZ_MAKE_COMPILER_ASSUME_IS_UNREACHABLE("unexpected FPU type");
+            MOZ_CRASH("unexpected FPU type");
             break;
         }
         break;
@@ -483,8 +484,7 @@ static void SetupABIArguments(MacroAssembler& masm, const FuncExport& fe,
             break;
           }
           default:
-            MOZ_MAKE_COMPILER_ASSUME_IS_UNREACHABLE(
-                "unexpected stack arg type");
+            MOZ_CRASH("unexpected stack arg type");
         }
         break;
       case ABIArg::Uninitialized:
@@ -524,6 +524,7 @@ static void StoreRegisterResult(MacroAssembler& masm, const FuncExport& fe,
           masm.canonicalizeDouble(result.fpr());
           masm.storeDouble(result.fpr(), Address(loc, 0));
           break;
+        case ValType::Rtt:
         case ValType::Ref:
           masm.storePtr(result.gpr(), Address(loc, 0));
           break;
@@ -1353,6 +1354,7 @@ static bool GenerateJitEntry(MacroAssembler& masm, size_t funcExportIndex,
         masm.setFramePushed(0);
         break;
       }
+      case ValType::Rtt:
       case ValType::V128: {
         MOZ_CRASH("unexpected return type when calling from ion to wasm");
       }
@@ -1674,6 +1676,7 @@ void wasm::GenerateDirectCallFromJit(MacroAssembler& masm, const FuncExport& fe,
             MOZ_CRASH("unexpected return type when calling from ion to wasm");
         }
         break;
+      case wasm::ValType::Rtt:
       case wasm::ValType::V128:
         MOZ_CRASH("unexpected return type when calling from ion to wasm");
     }
@@ -2156,8 +2159,9 @@ static bool GenerateImportInterpExit(MacroAssembler& masm, const FuncImport& fi,
                   funcImportIndex);
         GenPrintI64(DebugChannel::Import, masm, ReturnReg64);
         break;
+      case ValType::Rtt:
       case ValType::V128:
-        // Note, CallImport_V128 currently always throws, so we should never
+        // Note, CallImport_Rtt/V128 currently always throws, so we should never
         // reach this point.
         masm.breakpoint();
         break;
@@ -2392,6 +2396,7 @@ static bool GenerateImportJitExit(MacroAssembler& masm, const FuncImport& fi,
         // No fastpath for now, go immediately to ool case
         masm.jump(&oolConvert);
         break;
+      case ValType::Rtt:
       case ValType::V128:
         // Unreachable as callImport should not call the stub.
         masm.breakpoint();
@@ -2831,8 +2836,8 @@ static bool GenerateThrowStub(MacroAssembler& masm, Label* throwLabel,
   masm.bind(&resumeCatch);
   masm.loadPtr(Address(ReturnReg, offsetof(ResumeFromException, framePointer)),
                FramePointer);
-  masm.loadStackPtr(
-      Address(ReturnReg, offsetof(ResumeFromException, stackPointer)));
+  // Defer reloading stackPointer until just before the jump, so as to
+  // protect other live data on the stack.
 
   // When there is a catch handler, HandleThrow passes it the Value needed for
   // the handler's argument as well.
@@ -2846,6 +2851,10 @@ static bool GenerateThrowStub(MacroAssembler& masm, Label* throwLabel,
   Register obj = masm.extractObject(val, scratch2);
   masm.loadPtr(Address(ReturnReg, offsetof(ResumeFromException, target)),
                scratch);
+  // Now it's safe to reload stackPointer.
+  masm.loadStackPtr(Address(ReturnReg, offsetof(ResumeFromException, stackPointer)));
+  // This move must come after the SP is reloaded because WasmExceptionReg may
+  // alias ReturnReg.
   masm.movePtr(obj, WasmExceptionReg);
   masm.jump(scratch);
 
@@ -2964,8 +2973,8 @@ bool wasm::GenerateEntryStubs(MacroAssembler& masm, size_t funcExportIndex,
   return true;
 }
 
-bool wasm::GenerateProvisionalJitEntryStub(MacroAssembler& masm,
-                                           Offsets* offsets) {
+bool wasm::GenerateProvisionalLazyJitEntryStub(MacroAssembler& masm,
+                                               Offsets* offsets) {
   AssertExpectedSP(masm);
   masm.setFramePushed(0);
   offsets->begin = masm.currentOffset();

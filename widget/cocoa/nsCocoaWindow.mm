@@ -79,35 +79,6 @@ extern NSMenu* sApplicationMenu;  // Application menu shared by all menubars
 // defined in nsChildView.mm
 extern BOOL gSomeMenuBarPainted;
 
-#if !defined(MAC_OS_X_VERSION_10_9) || MAC_OS_X_VERSION_MAX_ALLOWED < MAC_OS_X_VERSION_10_9
-
-enum NSWindowOcclusionState { NSWindowOcclusionStateVisible = 0x1 << 1 };
-
-@interface NSWindow (OcclusionState)
-- (NSWindowOcclusionState)occlusionState;
-@end
-
-#endif
-
-#if !defined(MAC_OS_X_VERSION_10_10) || MAC_OS_X_VERSION_MAX_ALLOWED < MAC_OS_X_VERSION_10_10
-
-enum NSWindowTitleVisibility { NSWindowTitleVisible = 0, NSWindowTitleHidden = 1 };
-
-@interface NSWindow (TitleVisibility)
-- (void)setTitleVisibility:(NSWindowTitleVisibility)visibility;
-- (void)setTitlebarAppearsTransparent:(BOOL)isTitlebarTransparent;
-@end
-
-#endif
-
-#if !defined(MAC_OS_X_VERSION_10_12) || MAC_OS_X_VERSION_MAX_ALLOWED < MAC_OS_X_VERSION_10_12
-
-@interface NSWindow (AutomaticWindowTabbing)
-+ (void)setAllowsAutomaticWindowTabbing:(BOOL)allow;
-@end
-
-#endif
-
 extern "C" {
 // CGSPrivate.h
 typedef NSInteger CGSConnection;
@@ -170,11 +141,9 @@ nsCocoaWindow::nsCocoaWindow()
       mNumModalDescendents(0),
       mWindowAnimationBehavior(NSWindowAnimationBehaviorDefault),
       mWasShown(false) {
-  if ([NSWindow respondsToSelector:@selector(setAllowsAutomaticWindowTabbing:)]) {
-    // Disable automatic tabbing on 10.12. We need to do this before we
-    // orderFront any of our windows.
-    [NSWindow setAllowsAutomaticWindowTabbing:NO];
-  }
+  // Disable automatic tabbing. We need to do this before we
+  // orderFront any of our windows.
+  [NSWindow setAllowsAutomaticWindowTabbing:NO];
 }
 
 void nsCocoaWindow::DestroyNativeWindow() {
@@ -293,7 +262,49 @@ static bool UseNativePopupWindows() {
 #endif /* MOZ_USE_NATIVE_POPUP_WINDOWS */
 }
 
+DesktopToLayoutDeviceScale ParentBackingScaleFactor(nsIWidget* aParent, NSView* aParentView) {
+  if (aParent) {
+    return aParent->GetDesktopToDeviceScale();
+  }
+  NSWindow* parentWindow = [aParentView window];
+  if (parentWindow) {
+    return DesktopToLayoutDeviceScale([parentWindow backingScaleFactor]);
+  }
+  return DesktopToLayoutDeviceScale(1.0);
+}
+
+// Returns the screen rectangle for the given widget.
+// Child widgets are positioned relative to this rectangle.
+// Exactly one of the arguments must be non-null.
+static DesktopRect GetWidgetScreenRectForChildren(nsIWidget* aWidget, NSView* aView) {
+  if (aWidget) {
+    mozilla::DesktopToLayoutDeviceScale scale = aWidget->GetDesktopToDeviceScale();
+    if (aWidget->WindowType() == eWindowType_child) {
+      return aWidget->GetScreenBounds() / scale;
+    }
+    return aWidget->GetClientBounds() / scale;
+  }
+
+  MOZ_RELEASE_ASSERT(aView);
+
+  // 1. Transform the view rect into window coords.
+  // The returned rect is in "origin bottom-left" coordinates.
+  NSRect rectInWindowCoordinatesOBL = [aView convertRect:[aView bounds] toView:nil];
+
+  // 2. Turn the window-coord rect into screen coords, still origin bottom-left.
+  NSRect rectInScreenCoordinatesOBL =
+      [[aView window] convertRectToScreen:rectInWindowCoordinatesOBL];
+
+  // 3. Convert the NSRect to a DesktopRect. This will convert to coordinates
+  // with the origin in the top left corner of the primary screen.
+  return DesktopRect(nsCocoaUtils::CocoaRectToGeckoRect(rectInScreenCoordinatesOBL));
+}
+
 // aRect here is specified in desktop pixels
+//
+// For child windows (where either aParent or aNativeParent is non-null),
+// aRect.{x,y} are offsets from the origin of the parent window and not an
+// absolute position.
 nsresult nsCocoaWindow::Create(nsIWidget* aParent, nsNativeWidget aNativeParent,
                                const DesktopIntRect& aRect, nsWidgetInitData* aInitData) {
   NS_OBJC_BEGIN_TRY_BLOCK_RETURN;
@@ -301,9 +312,6 @@ nsresult nsCocoaWindow::Create(nsIWidget* aParent, nsNativeWidget aNativeParent,
   // Because the hidden window is created outside of an event loop,
   // we have to provide an autorelease pool (see bug 559075).
   nsAutoreleasePool localPool;
-
-  DesktopIntRect newBounds = aRect;
-  FitRectToVisibleAreaForScreen(newBounds, nullptr);
 
   // Set defaults which can be overriden from aInitData in BaseCreate
   mWindowType = eWindowType_toplevel;
@@ -321,16 +329,29 @@ nsresult nsCocoaWindow::Create(nsIWidget* aParent, nsNativeWidget aNativeParent,
   // Applications that use native popups don't want us to create popup windows.
   if ((mWindowType == eWindowType_popup) && UseNativePopupWindows()) return NS_OK;
 
+  // If we have a parent widget, the new widget will be offset from the
+  // parent widget by aRect.{x,y}. Otherwise, we'll use aRect for the
+  // new widget coordinates.
+  DesktopIntPoint parentOrigin;
+
+  // Do we have a parent widget?
+  if (aParent || aNativeParent) {
+    DesktopRect parentDesktopRect = GetWidgetScreenRectForChildren(aParent, (NSView*)aNativeParent);
+    parentOrigin = gfx::RoundedToInt(parentDesktopRect.TopLeft());
+  }
+
+  DesktopIntRect widgetRect = aRect + parentOrigin;
+
   nsresult rv =
-      CreateNativeWindow(nsCocoaUtils::GeckoRectToCocoaRect(newBounds), mBorderStyle, false);
+      CreateNativeWindow(nsCocoaUtils::GeckoRectToCocoaRect(widgetRect), mBorderStyle, false);
   NS_ENSURE_SUCCESS(rv, rv);
 
   if (mWindowType == eWindowType_popup) {
     SetWindowMouseTransparent(aInitData->mMouseTransparent);
 
-    // now we can convert newBounds to device pixels for the window we created,
+    // now we can convert widgetRect to device pixels for the window we created,
     // as the child view expects a rect expressed in the dev pix of its parent
-    LayoutDeviceIntRect devRect = RoundedToInt(newBounds * GetDesktopToDeviceScale());
+    LayoutDeviceIntRect devRect = RoundedToInt(widgetRect * GetDesktopToDeviceScale());
     return CreatePopupContentView(devRect, aInitData);
   }
 
@@ -343,7 +364,9 @@ nsresult nsCocoaWindow::Create(nsIWidget* aParent, nsNativeWidget aNativeParent,
 
 nsresult nsCocoaWindow::Create(nsIWidget* aParent, nsNativeWidget aNativeParent,
                                const LayoutDeviceIntRect& aRect, nsWidgetInitData* aInitData) {
-  DesktopIntRect desktopRect = RoundedToInt(aRect / GetDesktopToDeviceScale());
+  DesktopToLayoutDeviceScale desktopToDevScale =
+      ParentBackingScaleFactor(aParent, (NSView*)aNativeParent);
+  DesktopIntRect desktopRect = RoundedToInt(aRect / desktopToDevScale);
   return Create(aParent, aNativeParent, desktopRect, aInitData);
 }
 
@@ -1799,7 +1822,6 @@ CGFloat nsCocoaWindow::BackingScaleFactor() {
 }
 
 void nsCocoaWindow::BackingScaleFactorChanged() {
-  CGFloat oldScale = mBackingScaleFactor;
   CGFloat newScale = GetBackingScaleFactor(mWindow);
 
   // ignore notification if it hasn't really changed (or maybe we have
@@ -1833,23 +1855,6 @@ void nsCocoaWindow::BackingScaleFactorChanged() {
     presShell->BackingScaleFactorChanged();
   }
   mWidgetListener->UIResolutionChanged();
-
-  if ((mWindowType == eWindowType_popup) && (mBackingScaleFactor == 2.0)) {
-    // Recalculate the size and y-origin for the popup now that the backing
-    // scale factor has changed. After creating the popup window NSWindow,
-    // setting the frame when the menu is moved into the correct location
-    // causes the backing scale factor to change if the window is not on the
-    // menu bar display. Update the dimensions and y-origin here so that the
-    // frame is correct for the following ::Show(). Only do this when the
-    // scale factor changes from 1.0 to 2.0. When the scale factor changes
-    // from 2.0 to 1.0, the view will resize the widget before it is shown.
-    NSRect frame = [mWindow frame];
-    CGFloat previousYOrigin = frame.origin.y + frame.size.height;
-    frame.size.width = mBounds.Width() * (oldScale / newScale);
-    frame.size.height = mBounds.Height() * (oldScale / newScale);
-    frame.origin.y = previousYOrigin - frame.size.height;
-    [mWindow setFrame:frame display:NO animate:NO];
-  }
 }
 
 int32_t nsCocoaWindow::RoundsWidgetCoordinatesTo() {
@@ -2130,13 +2135,12 @@ void nsCocoaWindow::ResumeCompositor() {
   Unused << bc->SetExplicitActive(ExplicitActiveStatus::Active);
 }
 
-void nsCocoaWindow::SetMenuBar(nsMenuBarX* aMenuBar) {
-  if (mMenuBar) mMenuBar->SetParent(nullptr);
+void nsCocoaWindow::SetMenuBar(RefPtr<nsMenuBarX>&& aMenuBar) {
   if (!mWindow) {
     mMenuBar = nullptr;
     return;
   }
-  mMenuBar = aMenuBar;
+  mMenuBar = std::move(aMenuBar);
 
   // Only paint for active windows, or paint the hidden window menu bar if no
   // other menu bar has been painted yet so that some reasonable menu bar is
@@ -2442,15 +2446,17 @@ void nsCocoaWindow::SetDrawsInTitlebar(bool aState) {
 }
 
 NS_IMETHODIMP nsCocoaWindow::SynthesizeNativeMouseEvent(LayoutDeviceIntPoint aPoint,
-                                                        uint32_t aNativeMessage,
-                                                        uint32_t aModifierFlags,
+                                                        NativeMouseMessage aNativeMessage,
+                                                        MouseButton aButton,
+                                                        nsIWidget::Modifiers aModifierFlags,
                                                         nsIObserver* aObserver) {
   NS_OBJC_BEGIN_TRY_BLOCK_RETURN;
 
   AutoObserverNotifier notifier(aObserver, "mouseevent");
-  if (mPopupContentView)
-    return mPopupContentView->SynthesizeNativeMouseEvent(aPoint, aNativeMessage, aModifierFlags,
-                                                         nullptr);
+  if (mPopupContentView) {
+    return mPopupContentView->SynthesizeNativeMouseEvent(aPoint, aNativeMessage, aButton,
+                                                         aModifierFlags, nullptr);
+  }
 
   return NS_OK;
 
@@ -2657,20 +2663,6 @@ already_AddRefed<nsIWidget> nsIWidget::CreateChildWindow() {
   }
 
   mGeckoWindow->ReportMoveEvent();
-}
-
-- (NSArray<NSWindow*>*)customWindowsToEnterFullScreenForWindow:(NSWindow*)window {
-  return AlwaysUsesNativeFullScreen() ? @[ window ] : nil;
-}
-
-- (void)window:(NSWindow*)window
-    startCustomAnimationToEnterFullScreenOnScreen:(NSScreen*)screen
-                                     withDuration:(NSTimeInterval)duration {
-  // Immediately switch to cover full screen, so we don't show the default
-  // transition effect which stops video from playing.
-  // XXX Is it possible to simulate the native transition effect without
-  //     triggering content size change?
-  [window setFrame:[screen frame] display:YES];
 }
 
 - (void)windowWillEnterFullScreen:(NSNotification*)notification {
@@ -2958,33 +2950,6 @@ static NSMutableSet* gSwizzledFrameViewClasses = nil;
 - (void)_setNeedsDisplayInRect:(NSRect)aRect;
 @end
 
-// This method is on NSThemeFrame starting with 10.10, but since NSThemeFrame
-// is not a public class, we declare the method on NSView instead. We only have
-// this declaration in order to avoid compiler warnings.
-@interface NSView (PrivateAddKnownSubviewMethod)
-- (void)_addKnownSubview:(NSView*)aView
-              positioned:(NSWindowOrderingMode)place
-              relativeTo:(NSView*)otherView;
-@end
-
-#if !defined(MAC_OS_X_VERSION_10_10) || MAC_OS_X_VERSION_MAX_ALLOWED < MAC_OS_X_VERSION_10_10
-
-@interface NSImage (CapInsets)
-- (void)setCapInsets:(NSEdgeInsets)capInsets;
-@end
-
-#endif
-
-#if !defined(MAC_OS_X_VERSION_10_8) || MAC_OS_X_VERSION_MAX_ALLOWED < MAC_OS_X_VERSION_10_8
-
-@interface NSImage (ImageCreationWithDrawingHandler)
-+ (NSImage*)imageWithSize:(NSSize)size
-                  flipped:(BOOL)drawingHandlerShouldBeCalledWithFlippedContext
-           drawingHandler:(BOOL (^)(NSRect dstRect))drawingHandler;
-@end
-
-#endif
-
 #if !defined(MAC_OS_X_VERSION_10_12_2) || MAC_OS_X_VERSION_MAX_ALLOWED < MAC_OS_X_VERSION_10_12_2
 @interface NSView (NSTouchBarProvider)
 - (NSTouchBar*)makeTouchBar;
@@ -3104,9 +3069,7 @@ static NSImage* GetMenuMaskImage() {
   if (aValue && !mUseMenuStyle) {
     // Turn on rounded corner masking.
     NSView* effectView = VibrancyManager::CreateEffectView(VibrancyType::MENU, YES);
-    if ([effectView respondsToSelector:@selector(setMaskImage:)]) {
-      [effectView setMaskImage:GetMenuMaskImage()];
-    }
+    [effectView setMaskImage:GetMenuMaskImage()];
     [self swapOutChildViewWrapper:effectView];
     [effectView release];
   } else if (mUseMenuStyle && !aValue) {
@@ -3235,9 +3198,7 @@ static const NSString* kStateWantsTitleDrawn = @"wantsTitleDrawn";
 
 - (void)setWantsTitleDrawn:(BOOL)aDrawTitle {
   mDrawTitle = aDrawTitle;
-  if ([self respondsToSelector:@selector(setTitleVisibility:)]) {
-    [self setTitleVisibility:mDrawTitle ? NSWindowTitleVisible : NSWindowTitleHidden];
-  }
+  [self setTitleVisibility:mDrawTitle ? NSWindowTitleVisible : NSWindowTitleHidden];
 }
 
 - (BOOL)wantsTitleDrawn {
@@ -3478,10 +3439,14 @@ static const NSString* kStateWantsTitleDrawn = @"wantsTitleDrawn";
   NSRect frameRect = [NSWindow frameRectForContentRect:aChildViewRect styleMask:aStyle];
 
   // Always size the content view to the full frame size of the window.
-  // We cannot use this window mask when our CoreAnimation pref is disabled: This flag forces
-  // CoreAnimation on for the entire window, which causes glitches in combination with our
-  // non-CoreAnimation drawing. (Specifically, on macOS versions up until at least 10.14.0,
-  // layer-backed NSOpenGLViews have extremely glitchy resizing behavior.)
+  // We do this even if we want this window to have a titlebar; in that case, the window's content
+  // view covers the entire window but the ChildView inside it will only cover the content area. We
+  // do this so that we can render the titlebar gradient manually, with a subview of our content
+  // view that's positioned in the titlebar area. This lets us have a smooth connection between
+  // titlebar and toolbar gradient in case the window has a "unified toolbar + titlebar" look.
+  // Moreover, always using a full size content view lets us toggle the titlebar on and off without
+  // changing the window's style mask (which would have other subtle effects, for example on
+  // keyboard focus).
   aStyle |= NSWindowStyleMaskFullSizeContentView;
 
   // -[NSWindow initWithContentRect:styleMask:backing:defer:] calls
@@ -3500,10 +3465,7 @@ static const NSString* kStateWantsTitleDrawn = @"wantsTitleDrawn";
     mSheetAttachmentPosition = aChildViewRect.size.height;
     mWindowButtonsRect = NSZeroRect;
 
-    if ([self respondsToSelector:@selector(setTitlebarAppearsTransparent:)]) {
-      [self setTitlebarAppearsTransparent:YES];
-    }
-
+    [self setTitlebarAppearsTransparent:YES];
     [self updateTitlebarGradientViewPresence];
   }
   return self;
@@ -3535,46 +3497,6 @@ static const NSString* kStateWantsTitleDrawn = @"wantsTitleDrawn";
     [mTitlebarGradientView removeFromSuperview];
     [mTitlebarGradientView release];
     mTitlebarGradientView = nil;
-  }
-}
-
-// Override methods that translate between content rect and frame rect.
-// These overrides are only needed on 10.9 or when the CoreAnimation pref is
-// is false; otherwise we use NSFullSizeContentViewMask and get this behavior
-// for free.
-- (NSRect)contentRectForFrameRect:(NSRect)aRect {
-  return aRect;
-}
-
-- (NSRect)contentRectForFrameRect:(NSRect)aRect styleMask:(NSUInteger)aMask {
-  return aRect;
-}
-
-- (NSRect)frameRectForContentRect:(NSRect)aRect {
-  return aRect;
-}
-
-- (NSRect)frameRectForContentRect:(NSRect)aRect styleMask:(NSUInteger)aMask {
-  return aRect;
-}
-
-- (void)setContentView:(NSView*)aView {
-  [super setContentView:aView];
-
-  if (!([self styleMask] & NSWindowStyleMaskFullSizeContentView)) {
-    // Move the contentView to the bottommost layer so that it's guaranteed
-    // to be under the window buttons.
-    // When the window uses the NSFullSizeContentViewMask, this manual
-    // adjustment is not necessary.
-    NSView* frameView = [aView superview];
-    [aView removeFromSuperview];
-    if ([frameView respondsToSelector:@selector(_addKnownSubview:positioned:relativeTo:)]) {
-      // 10.10 prints a warning when we call addSubview on the frame view, so we
-      // silence the warning by calling a private method instead.
-      [frameView _addKnownSubview:aView positioned:NSWindowBelow relativeTo:nil];
-    } else {
-      [frameView addSubview:aView positioned:NSWindowBelow relativeTo:nil];
-    }
   }
 }
 
@@ -3790,7 +3712,7 @@ static const NSString* kStateWantsTitleDrawn = @"wantsTitleDrawn";
 // shadowOptions method on the various window types.
 static const NSUInteger kWindowShadowOptionsNoShadow = 0;
 static const NSUInteger kWindowShadowOptionsMenu = 2;
-static const NSUInteger kWindowShadowOptionsTooltip = 4;
+static const NSUInteger kWindowShadowOptionsTooltipMojaveOrLater = 4;
 - (NSUInteger)shadowOptions {
   if (!self.hasShadow) {
     return kWindowShadowOptionsNoShadow;
@@ -3799,12 +3721,17 @@ static const NSUInteger kWindowShadowOptionsTooltip = 4;
   switch (self.shadowStyle) {
     case StyleWindowShadow::None:
       return kWindowShadowOptionsNoShadow;
+
     case StyleWindowShadow::Default:  // we treat "default" as "default panel"
     case StyleWindowShadow::Menu:
     case StyleWindowShadow::Sheet:
       return kWindowShadowOptionsMenu;
+
     case StyleWindowShadow::Tooltip:
-      return kWindowShadowOptionsTooltip;
+      if (nsCocoaFeatures::OnMojaveOrLater()) {
+        return kWindowShadowOptionsTooltipMojaveOrLater;
+      }
+      return kWindowShadowOptionsMenu;
   }
 }
 

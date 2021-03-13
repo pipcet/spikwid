@@ -298,6 +298,11 @@ var SessionStore = {
     SessionStoreInternal.setTabState(aTab, aState);
   },
 
+  // Return whether a tab is restoring.
+  isTabRestoring(aTab) {
+    return TAB_STATE_FOR_BROWSER.has(aTab.linkedBrowser);
+  },
+
   getInternalObjectState(obj) {
     return SessionStoreInternal.getInternalObjectState(obj);
   },
@@ -988,20 +993,19 @@ var SessionStoreInternal = {
     }
   },
 
-  // Create a sHistoryLister and register it.
+  // Create a sHistoryListener and register it.
   // We also need to save the SHistoryLister into this._browserSHistoryListener.
   addSHistoryListener(aBrowser) {
     function SHistoryListener(browser) {
       browser.browsingContext.sessionHistory.addSHistoryListener(this);
 
-      this.browser = browser;
+      this.browserId = browser.browsingContext.browserId;
       this._fromIdx = kNoIndex;
       this._sHistoryChanges = false;
-      if (this.browser.currentURI && this.browser.ownerGlobal) {
+      this._permanentKey = browser.permanentKey;
+      if (browser.currentURI && browser.ownerGlobal) {
         this._lastKnownUri = browser.currentURI.displaySpec;
         this._lastKnownBody = browser.ownerGlobal.document.body;
-        this._lastKnownUserContextId =
-          browser.contentPrincipal.originAttributes.userContextId;
       }
     }
     SHistoryListener.prototype = {
@@ -1020,27 +1024,32 @@ var SessionStoreInternal = {
           return;
         }
 
+        let browser = BrowsingContext.getCurrentTopByBrowserId(this.browserId)
+          ?.embedderElement;
+
+        if (!browser) {
+          // The browser has gone away.
+          return;
+        }
+
         if (!this._sHistoryChanges) {
-          this.browser.frameLoader.requestSHistoryUpdate(
-            /*aImmediately*/ false
-          );
+          browser.frameLoader.requestSHistoryUpdate(/*aImmediately*/ false);
           this._sHistoryChanges = true;
         }
         this._fromIdx = index;
-        if (this.browser.currentURI && this.browser.ownerGlobal) {
-          this._lastKnownUri = this.browser.currentURI.displaySpec;
-          this._lastKnownBody = this.browser.ownerGlobal.document.body;
-          this._lastKnownUserContextId = this.browser.contentPrincipal.originAttributes.userContextId;
+        if (browser.currentURI && browser.ownerGlobal) {
+          this._lastKnownUri = browser.currentURI.displaySpec;
+          this._lastKnownBody = browser.ownerGlobal.document.body;
         }
       },
 
       uninstall() {
-        if (this.browser.browsingContext?.sessionHistory) {
-          this.browser.browsingContext.sessionHistory.removeSHistoryListener(
-            this
-          );
+        let bc = BrowsingContext.getCurrentTopByBrowserId(this.browserId);
+
+        if (bc?.sessionHistory) {
+          bc.sessionHistory.removeSHistoryListener(this);
           SessionStoreInternal._browserSHistoryListener.delete(
-            this.browser.permanentKey
+            this._permanentKey
           );
         }
       },
@@ -1264,9 +1273,6 @@ var SessionStoreInternal = {
           let body = aBrowser.ownerGlobal
             ? aBrowser.ownerGlobal.document.body
             : listener._lastKnownBody;
-          let userContextId = aBrowser.contentPrincipal
-            ? aBrowser.contentPrincipal.originAttributes.userContextId
-            : listener._lastKnownUserContextId;
           // If aData.sHistoryNeeded we need to collect all session
           // history entries, because with SHIP this indicates that we
           // either saw 'DOMTitleChanged' in
@@ -1278,7 +1284,6 @@ var SessionStoreInternal = {
             uri,
             body,
             aBrowsingContext.sessionHistory,
-            userContextId,
             listener._sHistoryChanges && !aData.sHistoryNeeded
               ? listener._fromIdx
               : -1
@@ -4038,15 +4043,19 @@ var SessionStoreInternal = {
    * @returns a promise resolved when all windows have been opened
    */
   _openWindows(root) {
+    let windowsOpened = [];
     for (let winData of root.windows) {
       if (!winData || !winData.tabs || !winData.tabs[0]) {
         continue;
       }
-      this._openWindowWithState({ windows: [winData] });
+      windowsOpened.push(this._openWindowWithState({ windows: [winData] }));
     }
-    return Promise.all(
-      [...WINDOW_SHOWING_PROMISES.values()].map(deferred => deferred.promise)
-    );
+    let windowOpenedPromises = [];
+    for (const openedWindow of windowsOpened) {
+      let deferred = WINDOW_SHOWING_PROMISES.get(openedWindow);
+      windowOpenedPromises.push(deferred.promise);
+    }
+    return Promise.all(windowOpenedPromises);
   },
 
   /**

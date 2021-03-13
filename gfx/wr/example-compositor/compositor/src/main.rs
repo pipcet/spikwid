@@ -158,7 +158,10 @@ impl webrender::Compositor for DirectCompositeInterface {
     }
 
     fn get_capabilities(&self) -> webrender::CompositorCapabilities {
-        webrender::CompositorCapabilities { virtual_surface_size: 1024 * 1024 }
+        webrender::CompositorCapabilities {
+            virtual_surface_size: 1024 * 1024,
+            ..Default::default()
+        }
     }
 
     fn invalidate_tile(
@@ -236,7 +239,10 @@ fn push_rotated_rect(
         spatial_id,
         TransformStyle::Flat,
         PropertyBinding::Value(transform),
-        ReferenceFrameKind::Transform,
+        ReferenceFrameKind::Transform {
+            is_2d_scale_translation: false,
+            should_snap: false,
+        },
     );
     builder.push_rect(
         &CommonItemProperties::new(

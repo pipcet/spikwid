@@ -35,6 +35,7 @@
 #include "mozilla/Bootstrap.h"
 #if defined(MOZ_UPDATER) && !defined(MOZ_WIDGET_ANDROID)
 #  include "nsUpdateDriver.h"
+#  include "nsUpdateSyncManager.h"
 #endif
 #include "ProfileReset.h"
 
@@ -242,11 +243,6 @@
 #include "mozilla/mozalloc_oom.h"
 #include "SafeMode.h"
 
-#ifdef MOZ_THUNDERBIRD
-#  include "nsIPK11TokenDB.h"
-#  include "nsIPK11Token.h"
-#endif
-
 #ifdef MOZ_BACKGROUNDTASKS
 #  include "mozilla/BackgroundTasks.h"
 #  include "nsIPowerManagerService.h"
@@ -302,6 +298,10 @@ bool gIsGtest = false;
 
 nsString gAbsoluteArgv0Path;
 
+#if defined(XP_WIN)
+nsString gProcessStartupShortcut;
+#endif
+
 #if defined(MOZ_WIDGET_GTK)
 #  include <glib.h>
 #  if defined(DEBUG) || defined(NS_BUILD_REFCNT_LOGGING)
@@ -309,6 +309,7 @@ nsString gAbsoluteArgv0Path;
 #    define PANGO_ENABLE_BACKEND
 #    include <pango/pangofc-fontmap.h>
 #  endif
+#  include "mozilla/WidgetUtilsGtk.h"
 #  include <gtk/gtk.h>
 #  ifdef MOZ_WAYLAND
 #    include <gdk/gdkwayland.h>
@@ -579,13 +580,13 @@ bool BrowserTabsRemoteAutostart() {
   return gBrowserTabsRemoteAutostart;
 }
 
-}  // namespace mozilla
-
-static bool FissionExperimentEnrolled() {
+bool FissionExperimentEnrolled() {
   MOZ_ASSERT(XRE_IsParentProcess());
   return gFissionExperimentStatus == nsIXULRuntime::eExperimentStatusControl ||
          gFissionExperimentStatus == nsIXULRuntime::eExperimentStatusTreatment;
 }
+
+}  // namespace mozilla
 
 static void FissionExperimentDisqualify() {
   MOZ_ASSERT(XRE_IsParentProcess());
@@ -748,6 +749,11 @@ bool SessionHistoryInParent() {
   return FissionAutostart() ||
          StaticPrefs::
              fission_sessionHistoryInParent_AtStartup_DoNotUseDirectly();
+}
+
+bool BFCacheInParent() {
+  return SessionHistoryInParent() &&
+         StaticPrefs::fission_bfcacheInParent_DoNotUseDirectly();
 }
 
 }  // namespace mozilla
@@ -1305,6 +1311,17 @@ NS_IMETHODIMP
 nsXULAppInfo::GetRestartedByOS(bool* aResult) {
   *aResult = gRestartedByOS;
   return NS_OK;
+}
+
+NS_IMETHODIMP
+nsXULAppInfo::GetProcessStartupShortcut(nsAString& aShortcut) {
+#if defined(XP_WIN)
+  if (XRE_IsParentProcess()) {
+    aShortcut.Assign(gProcessStartupShortcut);
+    return NS_OK;
+  }
+#endif
+  return NS_ERROR_NOT_AVAILABLE;
 }
 
 #if defined(XP_WIN) && defined(MOZ_LAUNCHER_PROCESS)
@@ -2274,6 +2291,14 @@ class ReturnAbortOnError {
     if (NS_SUCCEEDED(aRv) || aRv == NS_ERROR_LAUNCHED_CHILD_PROCESS) {
       return aRv;
     }
+#ifdef MOZ_BACKGROUNDTASKS
+    // A background task that fails to lock its profile will return
+    // NS_ERROR_UNEXPECTED and this will allow the task to exit with a
+    // non-zero exit code.
+    if (aRv == NS_ERROR_UNEXPECTED && BackgroundTasks::IsBackgroundTaskMode()) {
+      return aRv;
+    }
+#endif
     return NS_ERROR_ABORT;
   }
 
@@ -2384,6 +2409,14 @@ static ReturnAbortOnError ProfileLockedDialog(nsIFile* aProfileDir,
     nsAutoString killTitle;
     rv = sb->FormatStringFromName("restartTitle", params, killTitle);
     NS_ENSURE_SUCCESS(rv, NS_ERROR_FAILURE);
+
+#ifdef MOZ_BACKGROUNDTASKS
+    if (BackgroundTasks::IsBackgroundTaskMode()) {
+      // This error is handled specially to exit with a non-zero exit code.
+      printf_stderr("%s\n", NS_LossyConvertUTF16toASCII(killMessage).get());
+      return NS_ERROR_UNEXPECTED;
+    }
+#endif
 
     if (gfxPlatform::IsHeadless()) {
       // TODO: make a way to turn off all dialogs when headless.
@@ -4142,7 +4175,12 @@ static void PR_CALLBACK ReadAheadDlls_ThreadStart(void* arg) {
 #endif
 
 #if defined(MOZ_WAYLAND)
-bool IsWaylandDisabled() {
+bool IsWaylandEnabled() {
+  const char* waylandDisplay = PR_GetEnv("WAYLAND_DISPLAY");
+  if (!waylandDisplay) {
+    return false;
+  }
+
   // MOZ_ENABLE_WAYLAND is our primary Wayland on/off switch.
   const char* waylandPref = PR_GetEnv("MOZ_ENABLE_WAYLAND");
   bool enableWayland = (waylandPref && *waylandPref);
@@ -4158,7 +4196,60 @@ bool IsWaylandDisabled() {
   if (enableWayland && gtk_check_version(3, 22, 0) != nullptr) {
     NS_WARNING("Running Wayland backen on Gtk3 < 3.22. Expect issues/glitches");
   }
-  return !enableWayland;
+  return enableWayland;
+}
+#endif
+
+#if defined(MOZ_UPDATER) && !defined(MOZ_WIDGET_ANDROID)
+bool ShouldProcessUpdates(nsXREDirProvider& aDirProvider) {
+  // Do not process updates if we're launching devtools, as evidenced by
+  // "--chrome ..." with the browser toolbox chrome document URL.
+
+  // Keep this synchronized with the value of the same name in
+  // devtools/client/framework/browser-toolbox/Launcher.jsm.  Or, for bonus
+  // points, lift this value to nsIXulRuntime or similar, so that it can be
+  // accessed in both locations.  (The prefs service isn't available at this
+  // point so the simplest manner of sharing the value is not available to us.)
+  const char* BROWSER_TOOLBOX_WINDOW_URL =
+      "chrome://devtools/content/framework/browser-toolbox/window.html";
+
+  const char* chromeParam = nullptr;
+  if (ARG_FOUND == CheckArg("chrome", &chromeParam, CheckArgFlag::None)) {
+    if (!chromeParam || !strcmp(BROWSER_TOOLBOX_WINDOW_URL, chromeParam)) {
+      NS_WARNING("!ShouldProcessUpdates(): launching devtools");
+      return false;
+    }
+  }
+
+#  ifdef MOZ_BACKGROUNDTASKS
+  // Do not process updates if we're running a background task mode and another
+  // instance is already running.  This avoids periodic maintenance updating
+  // underneath a browsing session.
+  if (BackgroundTasks::IsBackgroundTaskMode()) {
+    // At this point we have a dir provider but no XPCOM directory service.  We
+    // launch the update sync manager using that information so that it doesn't
+    // need to ask for (and fail to find) the directory service.
+    nsCOMPtr<nsIFile> anAppFile;
+    bool persistent;
+    nsresult rv = aDirProvider.GetFile(XRE_EXECUTABLE_FILE, &persistent,
+                                       getter_AddRefs(anAppFile));
+    if (NS_FAILED(rv) || !anAppFile) {
+      // Strange, but not a reason to skip processing updates.
+      return true;
+    }
+
+    auto updateSyncManager = new nsUpdateSyncManager(anAppFile);
+
+    bool otherInstance = false;
+    updateSyncManager->IsOtherInstanceRunning(&otherInstance);
+    if (otherInstance) {
+      NS_WARNING("!ShouldProcessUpdates(): other instance is running");
+      return false;
+    }
+  }
+#  endif
+
+  return true;
 }
 #endif
 
@@ -4249,6 +4340,20 @@ int XREMain::XRE_mainStartup(bool* aExitFlag) {
   }
 #endif
 
+#if defined(XP_WIN)
+  {
+    // Save the shortcut path before lpTitle is replaced by an AUMID,
+    // such as by WinTaskbar
+    STARTUPINFOW si;
+    GetStartupInfoW(&si);
+    if (si.dwFlags & STARTF_TITLEISAPPID) {
+      NS_WARNING("AUMID was already set, shortcut may have been lost.");
+    } else if ((si.dwFlags & STARTF_TITLEISLINKNAME) && si.lpTitle) {
+      gProcessStartupShortcut.Assign(si.lpTitle);
+    }
+  }
+#endif /* XP_WIN */
+
 #if defined(MOZ_WIDGET_GTK)
   // setup for private colormap.  Ideally we'd like to do this
   // in nsAppShell::Create, but we need to get in before gtk
@@ -4333,13 +4438,13 @@ int XREMain::XRE_mainStartup(bool* aExitFlag) {
       saveDisplayArg = true;
     }
 
-    bool disableWayland = true;
+    bool waylandEnabled = false;
 #  if defined(MOZ_WAYLAND)
-    disableWayland = IsWaylandDisabled();
+    waylandEnabled = IsWaylandEnabled();
 #  endif
     // On Wayland disabled builds read X11 DISPLAY env exclusively
     // and don't care about different displays.
-    if (disableWayland && !display_name) {
+    if (!waylandEnabled && !display_name) {
       display_name = PR_GetEnv("DISPLAY");
       if (!display_name) {
         PR_fprintf(PR_STDERR,
@@ -4357,11 +4462,11 @@ int XREMain::XRE_mainStartup(bool* aExitFlag) {
       gdk_display_manager_set_default_display(gdk_display_manager_get(),
                                               mGdkDisplay);
       if (saveDisplayArg) {
-        if (GDK_IS_X11_DISPLAY(mGdkDisplay)) {
+        if (GdkIsX11Display(mGdkDisplay)) {
           SaveWordToEnv("DISPLAY", nsDependentCString(display_name));
         }
 #  ifdef MOZ_WAYLAND
-        else if (!GDK_IS_X11_DISPLAY(mGdkDisplay)) {
+        else if (GdkIsWaylandDisplay(mGdkDisplay)) {
           SaveWordToEnv("WAYLAND_DISPLAY", nsDependentCString(display_name));
         }
 #  endif
@@ -4437,14 +4542,17 @@ int XREMain::XRE_mainStartup(bool* aExitFlag) {
 
 #ifdef MOZ_BACKGROUNDTASKS
   if (BackgroundTasks::IsBackgroundTaskMode()) {
-    nsCOMPtr<nsIFile> file;
-    nsresult rv = BackgroundTasks::GetOrCreateTemporaryProfileDirectory(
-        getter_AddRefs(file));
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return 1;
-    }
+    if (!EnvHasValue("XRE_PROFILE_PATH")) {
+      // Allow tests to specify profile path via the environment.
+      nsCOMPtr<nsIFile> file;
+      nsresult rv = BackgroundTasks::GetOrCreateTemporaryProfileDirectory(
+          getter_AddRefs(file));
+      if (NS_WARN_IF(NS_FAILED(rv))) {
+        return 1;
+      }
 
-    SaveFileToEnv("XRE_PROFILE_PATH", file);
+      SaveFileToEnv("XRE_PROFILE_PATH", file);
+    }
   }
 #endif
 
@@ -4503,56 +4611,66 @@ int XREMain::XRE_mainStartup(bool* aExitFlag) {
 #endif
 
 #if defined(MOZ_UPDATER) && !defined(MOZ_WIDGET_ANDROID)
-  // Check for and process any available updates
-  nsCOMPtr<nsIFile> updRoot;
-  bool persistent;
-  rv = mDirProvider.GetFile(XRE_UPDATE_ROOT_DIR, &persistent,
-                            getter_AddRefs(updRoot));
-  // XRE_UPDATE_ROOT_DIR may fail. Fallback to appDir if failed
-  if (NS_FAILED(rv)) {
-    updRoot = mDirProvider.GetAppDir();
-  }
-
-  // If the MOZ_TEST_PROCESS_UPDATES environment variable already exists, then
-  // we are being called from the callback application.
-  if (EnvHasValue("MOZ_TEST_PROCESS_UPDATES")) {
-    // If the caller has asked us to log our arguments, do so.  This is used
-    // to make sure that the maintenance service successfully launches the
-    // callback application.
-    const char* logFile = nullptr;
-    if (ARG_FOUND == CheckArg("dump-args", &logFile)) {
-      FILE* logFP = fopen(logFile, "wb");
-      if (logFP) {
-        for (int i = 1; i < gRestartArgc; ++i) {
-          fprintf(logFP, "%s\n", gRestartArgv[i]);
-        }
-        fclose(logFP);
-      }
+  if (ShouldProcessUpdates(mDirProvider)) {
+    // Check for and process any available updates
+    nsCOMPtr<nsIFile> updRoot;
+    bool persistent;
+    rv = mDirProvider.GetFile(XRE_UPDATE_ROOT_DIR, &persistent,
+                              getter_AddRefs(updRoot));
+    // XRE_UPDATE_ROOT_DIR may fail. Fallback to appDir if failed
+    if (NS_FAILED(rv)) {
+      updRoot = mDirProvider.GetAppDir();
     }
-    *aExitFlag = true;
-    return 0;
-  }
 
-  // Support for processing an update and exiting. The MOZ_TEST_PROCESS_UPDATES
-  // environment variable will be part of the updater's environment and the
-  // application that is relaunched by the updater. When the application is
-  // relaunched by the updater it will be removed below and the application
-  // will exit.
-  if (CheckArg("test-process-updates")) {
-    SaveToEnv("MOZ_TEST_PROCESS_UPDATES=1");
-  }
-  nsCOMPtr<nsIFile> exeFile, exeDir;
-  rv = mDirProvider.GetFile(XRE_EXECUTABLE_FILE, &persistent,
-                            getter_AddRefs(exeFile));
-  NS_ENSURE_SUCCESS(rv, 1);
-  rv = exeFile->GetParent(getter_AddRefs(exeDir));
-  NS_ENSURE_SUCCESS(rv, 1);
-  ProcessUpdates(mDirProvider.GetGREDir(), exeDir, updRoot, gRestartArgc,
-                 gRestartArgv, mAppData->version);
-  if (EnvHasValue("MOZ_TEST_PROCESS_UPDATES")) {
-    SaveToEnv("MOZ_TEST_PROCESS_UPDATES=");
-    *aExitFlag = true;
-    return 0;
+    // If the MOZ_TEST_PROCESS_UPDATES environment variable already exists, then
+    // we are being called from the callback application.
+    if (EnvHasValue("MOZ_TEST_PROCESS_UPDATES")) {
+      // If the caller has asked us to log our arguments, do so.  This is used
+      // to make sure that the maintenance service successfully launches the
+      // callback application.
+      const char* logFile = nullptr;
+      if (ARG_FOUND == CheckArg("dump-args", &logFile)) {
+        FILE* logFP = fopen(logFile, "wb");
+        if (logFP) {
+          for (int i = 1; i < gRestartArgc; ++i) {
+            fprintf(logFP, "%s\n", gRestartArgv[i]);
+          }
+          fclose(logFP);
+        }
+      }
+      *aExitFlag = true;
+      return 0;
+    }
+
+    // Support for processing an update and exiting. The
+    // MOZ_TEST_PROCESS_UPDATES environment variable will be part of the
+    // updater's environment and the application that is relaunched by the
+    // updater. When the application is relaunched by the updater it will be
+    // removed below and the application will exit.
+    if (CheckArg("test-process-updates")) {
+      SaveToEnv("MOZ_TEST_PROCESS_UPDATES=1");
+    }
+    nsCOMPtr<nsIFile> exeFile, exeDir;
+    rv = mDirProvider.GetFile(XRE_EXECUTABLE_FILE, &persistent,
+                              getter_AddRefs(exeFile));
+    NS_ENSURE_SUCCESS(rv, 1);
+    rv = exeFile->GetParent(getter_AddRefs(exeDir));
+    NS_ENSURE_SUCCESS(rv, 1);
+    ProcessUpdates(mDirProvider.GetGREDir(), exeDir, updRoot, gRestartArgc,
+                   gRestartArgv, mAppData->version);
+    if (EnvHasValue("MOZ_TEST_PROCESS_UPDATES")) {
+      SaveToEnv("MOZ_TEST_PROCESS_UPDATES=");
+      *aExitFlag = true;
+      return 0;
+    }
+  } else {
+    if (CheckArg("test-process-updates") ||
+        EnvHasValue("MOZ_TEST_PROCESS_UPDATES")) {
+      // Support for testing *not* processing an update.  The launched process
+      // can witness this environment variable and conclude that its runtime
+      // environment resulted in not processing updates.
+      SaveToEnv("MOZ_TEST_PROCESS_UPDATES=!ShouldProcessUpdates()");
+    }
   }
 #endif
 
@@ -4982,22 +5100,6 @@ nsresult XREMain::XRE_mainRun() {
     NS_ENSURE_TRUE(appStartup, NS_ERROR_FAILURE);
 
     mDirProvider.DoStartup();
-
-#ifdef MOZ_THUNDERBIRD
-    if (Preferences::GetBool("security.prompt_for_master_password_on_startup",
-                             false)) {
-      // Prompt for the master password prior to opening application windows,
-      // to avoid the race that triggers multiple prompts (see bug 177175).
-      // We use this code until we have a better solution, possibly as
-      // described in bug 177175 comment 384.
-      nsCOMPtr<nsIPK11TokenDB> db =
-          do_GetService("@mozilla.org/security/pk11tokendb;1");
-      nsCOMPtr<nsIPK11Token> token;
-      if (NS_SUCCEEDED(db->GetInternalKeyToken(getter_AddRefs(token)))) {
-        Unused << token->Login(false);
-      }
-    }
-#endif
 
     // As FilePreferences need the profile directory, we must initialize right
     // here.
@@ -5433,7 +5535,6 @@ int XREMain::XRE_main(int argc, char* argv[], const BootstrapConfig& aConfig) {
   // XRE_mainRun wants to initialize the JSContext after reading user prefs.
 
   mScopedXPCOM = MakeUnique<ScopedXPCOMStartup>();
-  if (!mScopedXPCOM) return 1;
 
   rv = mScopedXPCOM->Initialize(/* aInitJSContext = */ false);
   NS_ENSURE_SUCCESS(rv, 1);

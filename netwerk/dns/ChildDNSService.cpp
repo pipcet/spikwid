@@ -40,7 +40,7 @@ already_AddRefed<ChildDNSService> ChildDNSService::GetSingleton() {
                 XRE_IsContentProcess() || XRE_IsSocketProcess());
 
   if (!gChildDNSService) {
-    if (!NS_IsMainThread()) {
+    if (NS_WARN_IF(!NS_IsMainThread())) {
       return nullptr;
     }
     gChildDNSService = new ChildDNSService();
@@ -135,12 +135,7 @@ nsresult ChildDNSService::AsyncResolveInternal(
     nsCString key;
     GetDNSRecordHashKey(hostname, DNSResolverInfo::URL(aResolver), type,
                         aOriginAttributes, flags, originalListenerAddr, key);
-    mPendingRequests.WithEntryHandle(key, [&](auto&& entry) {
-      entry
-          .OrInsertWith(
-              [] { return MakeUnique<nsTArray<RefPtr<DNSRequestSender>>>(); })
-          ->AppendElement(sender);
-    });
+    mPendingRequests.GetOrInsertNew(key)->AppendElement(sender);
   }
 
   sender->StartRequest();

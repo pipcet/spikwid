@@ -45,6 +45,13 @@ XPCOMUtils.defineLazyServiceGetter(
   "nsIOSPermissionRequest"
 );
 
+XPCOMUtils.defineLazyPreferenceGetter(
+  this,
+  "gProtonDoorhangersEnabled",
+  "browser.proton.doorhangers.enabled",
+  false
+);
+
 // Keep in sync with defines at base_capturer_pipewire.cc
 // With PipeWire we can't select which system resource is shared so
 // we don't create a window/screen list. Instead we place these constants
@@ -381,13 +388,6 @@ class WebRTCParent extends JSWindowActorParent {
         allowedDevices.push((activeMic || audioDevices[0]).deviceIndex);
       }
 
-      // Remember on which URIs we found persistent permissions so that we
-      // can remove them if the user clicks 'Stop Sharing'. There's no
-      // other way for the stop sharing code to know the hostnames of frames
-      // using devices until bug 1066082 is fixed.
-      let browser = this.getBrowser();
-      browser.getDevicePermissionOrigins("webrtc").add(aPrincipal.origin);
-
       // If sharingScreen, we're requesting screen-sharing, otherwise camera
       let camNeeded = !!videoDevices.length && !sharingScreen;
       let scrNeeded = !!videoDevices.length && sharingScreen;
@@ -497,28 +497,28 @@ function prompt(aActor, aBrowser, aRequest) {
   if (aRequest.secondOrigin) {
     requestMessages = [
       // Individual request types first.
-      "getUserMedia.shareCameraUnsafeDelegation.message",
-      "getUserMedia.shareMicrophoneUnsafeDelegations.message",
-      "getUserMedia.shareScreenUnsafeDelegation.message",
-      "getUserMedia.shareAudioCaptureUnsafeDelegation.message",
+      "getUserMedia.shareCameraUnsafeDelegation2.message",
+      "getUserMedia.shareMicrophoneUnsafeDelegations2.message",
+      "getUserMedia.shareScreenUnsafeDelegation2.message",
+      "getUserMedia.shareAudioCaptureUnsafeDelegation2.message",
       // Combinations of the above request types last.
-      "getUserMedia.shareCameraAndMicrophoneUnsafeDelegation.message",
-      "getUserMedia.shareCameraAndAudioCaptureUnsafeDelegation.message",
-      "getUserMedia.shareScreenAndMicrophoneUnsafeDelegation.message",
-      "getUserMedia.shareScreenAndAudioCaptureUnsafeDelegation.message",
+      "getUserMedia.shareCameraAndMicrophoneUnsafeDelegation2.message",
+      "getUserMedia.shareCameraAndAudioCaptureUnsafeDelegation2.message",
+      "getUserMedia.shareScreenAndMicrophoneUnsafeDelegation2.message",
+      "getUserMedia.shareScreenAndAudioCaptureUnsafeDelegation2.message",
     ];
   } else {
     requestMessages = [
       // Individual request types first.
-      "getUserMedia.shareCamera2.message",
-      "getUserMedia.shareMicrophone2.message",
-      "getUserMedia.shareScreen3.message",
-      "getUserMedia.shareAudioCapture2.message",
+      "getUserMedia.shareCamera3.message",
+      "getUserMedia.shareMicrophone3.message",
+      "getUserMedia.shareScreen4.message",
+      "getUserMedia.shareAudioCapture3.message",
       // Combinations of the above request types last.
-      "getUserMedia.shareCameraAndMicrophone2.message",
-      "getUserMedia.shareCameraAndAudioCapture2.me ssage",
-      "getUserMedia.shareScreenAndMicrophone3.message",
-      "getUserMedia.shareScreenAndAudioCapture3.message",
+      "getUserMedia.shareCameraAndMicrophone3.message",
+      "getUserMedia.shareCameraAndAudioCapture3.message",
+      "getUserMedia.shareScreenAndMicrophone4.message",
+      "getUserMedia.shareScreenAndAudioCapture4.message",
     ];
   }
 
@@ -574,17 +574,17 @@ function prompt(aActor, aBrowser, aRequest) {
       });
     };
 
-    let [notNow, never] = convertAttributesToObjects(
+    let [block, alwaysBlock] = convertAttributesToObjects(
       localization.formatMessagesSync([
-        { id: "popup-screen-sharing-not-now" },
-        { id: "popup-screen-sharing-never" },
+        { id: "popup-screen-sharing-block" },
+        { id: "popup-screen-sharing-always-block" },
       ])
     );
 
     secondaryActions = [
       {
-        label: notNow.label,
-        accessKey: notNow.accesskey,
+        label: block.label,
+        accessKey: block.accesskey,
         callback(aState) {
           aActor.denyRequest(aRequest);
           SitePermissions.setForPrincipal(
@@ -597,8 +597,8 @@ function prompt(aActor, aBrowser, aRequest) {
         },
       },
       {
-        label: never.label,
-        accessKey: never.accesskey,
+        label: alwaysBlock.label,
+        accessKey: alwaysBlock.accesskey,
         callback(aState) {
           aActor.denyRequest(aRequest);
           SitePermissions.setForPrincipal(
@@ -614,8 +614,8 @@ function prompt(aActor, aBrowser, aRequest) {
   } else {
     secondaryActions = [
       {
-        label: stringBundle.getString("getUserMedia.dontAllow.label"),
-        accessKey: stringBundle.getString("getUserMedia.dontAllow.accesskey"),
+        label: stringBundle.getString("getUserMedia.block.label"),
+        accessKey: stringBundle.getString("getUserMedia.block.accesskey"),
         callback(aState) {
           aActor.denyRequest(aRequest);
           let scope = SitePermissions.SCOPE_TEMPORARY;
@@ -700,28 +700,40 @@ function prompt(aActor, aBrowser, aRequest) {
         return true;
       }
 
-      function listDevices(menupopup, devices) {
+      function listDevices(menupopup, devices, labelID) {
         while (menupopup.lastChild) {
           menupopup.removeChild(menupopup.lastChild);
         }
+        let menulist = menupopup.parentNode;
         // Removing the child nodes of the menupopup doesn't clear the value
         // attribute of the menulist. This can have unfortunate side effects
         // when the list is rebuilt with a different content, so we remove
         // the value attribute and unset the selectedItem explicitly.
-        menupopup.parentNode.removeAttribute("value");
-        menupopup.parentNode.selectedItem = null;
+        menulist.removeAttribute("value");
+        menulist.selectedItem = null;
 
         for (let device of devices) {
           addDeviceToList(menupopup, device.name, device.deviceIndex);
         }
+
+        let label = doc.getElementById(labelID);
+        if (devices.length == 1) {
+          label.value = devices[0].name;
+          label.hidden = false;
+          menulist.hidden = true;
+        } else {
+          label.hidden = true;
+          menulist.hidden = false;
+        }
       }
+
+      let notificationElement = doc.getElementById(
+        "webRTC-shareDevices-notification"
+      );
 
       function checkDisabledWindowMenuItem() {
         let list = doc.getElementById("webRTC-selectWindow-menulist");
         let item = list.selectedItem;
-        let notificationElement = doc.getElementById(
-          "webRTC-shareDevices-notification"
-        );
         if (!item || item.hasAttribute("disabled")) {
           notificationElement.setAttribute("invalidselection", "true");
         } else {
@@ -742,7 +754,7 @@ function prompt(aActor, aBrowser, aRequest) {
         menupopup.parentNode.selectedItem = null;
 
         let label = doc.getElementById("webRTC-selectWindow-label");
-        const gumStringId = "getUserMedia.selectWindowOrScreen";
+        const gumStringId = "getUserMedia.selectWindowOrScreen2";
         label.setAttribute(
           "value",
           stringBundle.getString(gumStringId + ".label")
@@ -849,10 +861,11 @@ function prompt(aActor, aBrowser, aRequest) {
 
           let scary = event.target.scary;
           let warning = doc.getElementById("webRTC-previewWarning");
-          warning.hidden = !scary;
+          let warningBox = doc.getElementById("webRTC-previewWarningBox");
+          warningBox.hidden = !scary;
           let chromeWin = doc.defaultView;
           if (scary) {
-            warning.hidden = false;
+            warningBox.hidden = false;
             let string;
             let bundle = chromeWin.gNavigatorBundle;
 
@@ -863,31 +876,27 @@ function prompt(aActor, aBrowser, aRequest) {
               "app.support.baseURL"
             );
 
-            let learnMore = chromeWin.document.createXULElement("label", {
-              is: "text-link",
-            });
-            learnMore.setAttribute("href", baseURL + "screenshare-safety");
-            learnMore.textContent = learnMoreText;
-
             if (type == "screen") {
-              string = bundle.getFormattedString(
-                "getUserMedia.shareScreenWarning.message",
-                ["<>"]
+              string = bundle.getString(
+                "getUserMedia.shareScreenWarning2.message"
               );
             } else {
               let brand = doc
                 .getElementById("bundle_brand")
                 .getString("brandShortName");
               string = bundle.getFormattedString(
-                "getUserMedia.shareFirefoxWarning.message",
-                [brand, "<>"]
+                "getUserMedia.shareFirefoxWarning2.message",
+                [brand]
               );
             }
 
-            let [pre, post] = string.split("<>");
-            warning.textContent = pre;
-            warning.appendChild(learnMore);
-            warning.appendChild(chromeWin.document.createTextNode(post));
+            warning.textContent = string;
+
+            let learnMore = doc.getElementById(
+              "webRTC-previewWarning-learnMore"
+            );
+            learnMore.setAttribute("href", baseURL + "screenshare-safety");
+            learnMore.textContent = learnMoreText;
 
             // On Catalina, we don't want to blow our chance to show the
             // OS-level helper prompt to enable screen recording if the user
@@ -984,19 +993,37 @@ function prompt(aActor, aBrowser, aRequest) {
       let micMenupopup = doc.getElementById(
         "webRTC-selectMicrophone-menupopup"
       );
+      let describedByIDs = ["webRTC-shareDevices-notification-description"];
+      let describedBySuffix = gProtonDoorhangersEnabled ? "icon" : "label";
+
       if (sharingScreen) {
         listScreenShareDevices(windowMenupopup, videoDevices);
         checkDisabledWindowMenuItem();
       } else {
-        listDevices(camMenupopup, videoDevices);
-        doc
-          .getElementById("webRTC-shareDevices-notification")
-          .removeAttribute("invalidselection");
+        let labelID = "webRTC-selectCamera-single-device-label";
+        listDevices(camMenupopup, videoDevices, labelID);
+        notificationElement.removeAttribute("invalidselection");
+        if (videoDevices.length == 1) {
+          describedByIDs.push("webRTC-selectCamera-" + describedBySuffix);
+          describedByIDs.push(labelID);
+        }
       }
 
       if (!sharingAudio) {
-        listDevices(micMenupopup, audioDevices);
+        let labelID = "webRTC-selectMicrophone-single-device-label";
+        listDevices(micMenupopup, audioDevices, labelID);
+        if (audioDevices.length == 1) {
+          describedByIDs.push("webRTC-selectMicrophone-" + describedBySuffix);
+          describedByIDs.push(labelID);
+        }
       }
+
+      // PopupNotifications knows to clear the aria-describedby attribute
+      // when hiding, so we don't have to worry about cleaning it up ourselves.
+      chromeDoc.defaultView.PopupNotifications.panel.setAttribute(
+        "aria-describedby",
+        describedByIDs.join(" ")
+      );
 
       this.mainAction.callback = async function(aState) {
         let remember = false;
@@ -1090,12 +1117,6 @@ function prompt(aActor, aBrowser, aRequest) {
           return;
         }
 
-        if (remember) {
-          // Remember on which URIs we set persistent permissions so that we
-          // can remove them if the user clicks 'Stop Sharing'.
-          aBrowser.getDevicePermissionOrigins("webrtc").add(principal.origin);
-        }
-
         let camNeeded = !!videoDevices.length && !sharingScreen;
         let scrNeeded = !!videoDevices.length && sharingScreen;
         let micNeeded = !!audioDevices.length;
@@ -1179,12 +1200,8 @@ function prompt(aActor, aBrowser, aRequest) {
   // screen, then the checkbox for the permission panel is what controls
   // notification silencing.
   if (notificationSilencingEnabled && sharingScreen) {
-    let [
-      silenceNotifications,
-      silenceNotificationsWarning,
-    ] = localization.formatMessagesSync([
-      { id: "popup-silence-notifications-checkbox" },
-      { id: "popup-silence-notifications-checkbox-warning" },
+    let [silenceNotifications] = localization.formatMessagesSync([
+      { id: "popup-mute-notifications-checkbox" },
     ]);
 
     options.checkbox = {
@@ -1192,7 +1209,6 @@ function prompt(aActor, aBrowser, aRequest) {
       checked: false,
       checkedState: {
         disableMainAction: false,
-        warningLabel: silenceNotificationsWarning.value,
       },
     };
   }
@@ -1209,17 +1225,23 @@ function prompt(aActor, aBrowser, aRequest) {
   }
   let anchorId = "webRTC-share" + iconType + "-notification-icon";
 
-  let iconClass = iconType.toLowerCase();
-  if (iconClass == "devices") {
-    iconClass = "camera";
+  if (!gProtonDoorhangersEnabled) {
+    let iconClass = iconType.toLowerCase();
+    if (iconClass == "devices") {
+      iconClass = "camera";
+    }
+    options.popupIconClass = iconClass + "-icon";
   }
-  options.popupIconClass = iconClass + "-icon";
 
   if (aRequest.secondOrigin) {
     options.secondName = webrtcUI.getHostOrExtensionName(
       null,
       aRequest.secondOrigin
     );
+  }
+
+  if (gProtonDoorhangersEnabled) {
+    mainAction.disableHighlight = true;
   }
 
   notification = chromeDoc.defaultView.PopupNotifications.show(

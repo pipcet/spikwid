@@ -197,7 +197,8 @@ enum class ExplicitActiveStatus : uint8_t {
   FIELD(HasMainMediaController, bool)                                         \
   /* The number of entries added to the session history because of this       \
    * browsing context. */                                                     \
-  FIELD(HistoryEntryCount, uint32_t)
+  FIELD(HistoryEntryCount, uint32_t)                                          \
+  FIELD(IsInBFCache, bool)
 
 // BrowsingContext, in this context, is the cross process replicated
 // environment in which information about documents is stored. In
@@ -223,6 +224,7 @@ class BrowsingContext : public nsILoadContext, public nsWrapperCache {
 
   static void Init();
   static LogModule* GetLog();
+  static LogModule* GetSyncLog();
 
   // Look up a BrowsingContext in the current process by ID.
   static already_AddRefed<BrowsingContext> Get(uint64_t aId);
@@ -232,6 +234,10 @@ class BrowsingContext : public nsILoadContext, public nsWrapperCache {
   // Look up the top-level BrowsingContext by BrowserID.
   static already_AddRefed<BrowsingContext> GetCurrentTopByBrowserId(
       uint64_t aBrowserId);
+  static already_AddRefed<BrowsingContext> GetCurrentTopByBrowserId(
+      GlobalObject&, uint64_t aId) {
+    return GetCurrentTopByBrowserId(aId);
+  }
 
   static already_AddRefed<BrowsingContext> GetFromWindow(
       WindowProxyHolder& aProxy);
@@ -885,6 +891,8 @@ class BrowsingContext : public nsILoadContext, public nsWrapperCache {
   void SendCommitTransaction(ContentChild* aChild, const BaseTransaction& aTxn,
                              uint64_t aEpoch);
 
+  using CanSetResult = syncedcontext::CanSetResult;
+
   // Ensure that opener is in the same BrowsingContextGroup.
   bool CanSet(FieldIndex<IDX_OpenerId>, const uint64_t& aValue,
               ContentParent* aSource) {
@@ -947,8 +955,8 @@ class BrowsingContext : public nsILoadContext, public nsWrapperCache {
   bool CanSet(FieldIndex<IDX_EmbedderInnerWindowId>, const uint64_t& aValue,
               ContentParent* aSource);
 
-  bool CanSet(FieldIndex<IDX_CurrentInnerWindowId>, const uint64_t& aValue,
-              ContentParent* aSource);
+  CanSetResult CanSet(FieldIndex<IDX_CurrentInnerWindowId>,
+                      const uint64_t& aValue, ContentParent* aSource);
 
   void DidSet(FieldIndex<IDX_CurrentInnerWindowId>);
 
@@ -1031,6 +1039,9 @@ class BrowsingContext : public nsILoadContext, public nsWrapperCache {
   void DidSet(FieldIndex<IDX_FullZoom>, float aOldValue);
   void DidSet(FieldIndex<IDX_TextZoom>, float aOldValue);
   void DidSet(FieldIndex<IDX_AuthorStyleDisabledDefault>);
+
+  bool CanSet(FieldIndex<IDX_IsInBFCache>, bool, ContentParent* aSource);
+  void DidSet(FieldIndex<IDX_IsInBFCache>);
 
   // True if the process attemping to set field is the same as the owning
   // process. Deprecated. New code that might use this should generally be moved

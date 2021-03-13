@@ -3,15 +3,13 @@
 
 "use strict";
 
-// Test the TargetList API around processes
-
-const { TargetList } = require("devtools/shared/resources/target-list");
+// Test the TargetCommand API around processes
 
 const TEST_URL =
   "data:text/html;charset=utf-8," + encodeURIComponent(`<div id="test"></div>`);
 
 add_task(async function() {
-  // Enabled fission's pref as the TargetList is almost disabled without it
+  // Enabled fission's pref as the TargetCommand is almost disabled without it
   await pushPref("devtools.browsertoolbox.fission", true);
   // Disable the preloaded process as it gets created lazily and may interfere
   // with process count assertions
@@ -22,7 +20,8 @@ add_task(async function() {
   const client = await createLocalClient();
   const targetDescriptor = await client.mainRoot.getMainProcess();
 
-  const targetList = new TargetList(targetDescriptor);
+  const commands = await targetDescriptor.getCommands();
+  const targetList = commands.targetCommand;
   await targetList.startListening();
 
   await testProcesses(targetList, targetList.targetFront);
@@ -38,19 +37,66 @@ add_task(async function() {
   await client.close();
 });
 
+add_task(async function() {
+  const client = await createLocalClient();
+  const targetDescriptor = await client.mainRoot.getMainProcess();
+
+  const commands = await targetDescriptor.getCommands();
+  const targetList = commands.targetCommand;
+  await targetList.startListening();
+
+  const created = [];
+  const destroyed = [];
+  const onAvailable = ({ targetFront }) => {
+    created.push(targetFront);
+  };
+  const onDestroyed = ({ targetFront }) => {
+    destroyed.push(targetFront);
+  };
+  await targetList.watchTargets(
+    [targetList.TYPES.PROCESS],
+    onAvailable,
+    onDestroyed
+  );
+  ok(created.length > 1, "We get many content process targets");
+
+  targetList.stopListening();
+
+  await waitFor(
+    () => created.length == destroyed.length,
+    "Wait for the destruction of all content process targets when calling stopListening"
+  );
+  is(
+    created.length,
+    destroyed.length,
+    "Got notification of destruction for all previously reported targets"
+  );
+
+  targetList.destroy();
+  // Wait for all the targets to be fully attached so we don't have pending requests.
+  await Promise.all(
+    targetList
+      .getAllTargets(targetList.ALL_TYPES)
+      .map(t => t.attachAndInitThread(targetList))
+  );
+
+  await client.close();
+});
+
 async function testProcesses(targetList, target) {
-  info("Test TargetList against processes");
+  info("Test TargetCommand against processes");
+  const { TYPES } = targetList;
 
   // Note that ppmm also includes the parent process, which is considered as a frame rather than a process
   const originalProcessesCount = Services.ppmm.childCount - 1;
-  const processes = await targetList.getAllTargets([TargetList.TYPES.PROCESS]);
+  const processes = await targetList.getAllTargets([TYPES.PROCESS]);
   is(
     processes.length,
     originalProcessesCount,
     "Get a target for all content processes"
   );
 
-  const processes2 = await targetList.getAllTargets([TargetList.TYPES.PROCESS]);
+  const processes2 = await targetList.getAllTargets([TYPES.PROCESS]);
   is(
     processes2.length,
     originalProcessesCount,
@@ -73,7 +119,7 @@ async function testProcesses(targetList, target) {
     }
     is(
       targetFront.targetType,
-      TargetList.TYPES.PROCESS,
+      TYPES.PROCESS,
       "We are only notified about process targets"
     );
     ok(
@@ -91,7 +137,7 @@ async function testProcesses(targetList, target) {
     }
     is(
       targetFront.targetType,
-      TargetList.TYPES.PROCESS,
+      TYPES.PROCESS,
       "We are only notified about process targets"
     );
     ok(
@@ -100,11 +146,7 @@ async function testProcesses(targetList, target) {
     );
     targets.delete(targetFront);
   };
-  await targetList.watchTargets(
-    [TargetList.TYPES.PROCESS],
-    onAvailable,
-    onDestroyed
-  );
+  await targetList.watchTargets([TYPES.PROCESS], onAvailable, onDestroyed);
   is(
     targets.size,
     originalProcessesCount,
@@ -124,10 +166,10 @@ async function testProcesses(targetList, target) {
       if (previousTargets.has(targetFront)) {
         return;
       }
-      targetList.unwatchTargets([TargetList.TYPES.PROCESS], onAvailable2);
+      targetList.unwatchTargets([TYPES.PROCESS], onAvailable2);
       resolve(targetFront);
     };
-    targetList.watchTargets([TargetList.TYPES.PROCESS], onAvailable2);
+    targetList.watchTargets([TYPES.PROCESS], onAvailable2);
   });
   const tab1 = await BrowserTestUtils.openNewForegroundTab({
     gBrowser,
@@ -146,17 +188,9 @@ async function testProcesses(targetList, target) {
     const onAvailable3 = () => {};
     const onDestroyed3 = ({ targetFront }) => {
       resolve(targetFront);
-      targetList.unwatchTargets(
-        [TargetList.TYPES.PROCESS],
-        onAvailable3,
-        onDestroyed3
-      );
+      targetList.unwatchTargets([TYPES.PROCESS], onAvailable3, onDestroyed3);
     };
-    targetList.watchTargets(
-      [TargetList.TYPES.PROCESS],
-      onAvailable3,
-      onDestroyed3
-    );
+    targetList.watchTargets([TYPES.PROCESS], onAvailable3, onDestroyed3);
   });
 
   BrowserTestUtils.removeTab(tab1);
@@ -177,14 +211,10 @@ async function testProcesses(targetList, target) {
     "The destroyed target is the one that has been reported as created"
   );
 
-  targetList.unwatchTargets(
-    [TargetList.TYPES.PROCESS],
-    onAvailable,
-    onDestroyed
-  );
+  targetList.unwatchTargets([TYPES.PROCESS], onAvailable, onDestroyed);
 
   // Ensure that getAllTargets still works after the call to unwatchTargets
-  const processes3 = await targetList.getAllTargets([TargetList.TYPES.PROCESS]);
+  const processes3 = await targetList.getAllTargets([TYPES.PROCESS]);
   is(
     processes3.length,
     processCountAfterTabOpen - 1,

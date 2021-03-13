@@ -273,6 +273,8 @@ class Axis {
   bool OverscrollBehaviorAllowsHandoff() const;
   bool OverscrollBehaviorAllowsOverscrollEffect() const;
 
+  virtual CSSToParentLayerScale GetAxisScale(
+      const CSSToParentLayerScale2D& aScale) const = 0;
   virtual ParentLayerCoord GetPointOffset(
       const ParentLayerPoint& aPoint) const = 0;
   virtual ParentLayerCoord GetRectLength(
@@ -340,6 +342,8 @@ class Axis {
 class AxisX : public Axis {
  public:
   explicit AxisX(AsyncPanZoomController* mAsyncPanZoomController);
+  CSSToParentLayerScale GetAxisScale(
+      const CSSToParentLayerScale2D& aScale) const override;
   ParentLayerCoord GetPointOffset(
       const ParentLayerPoint& aPoint) const override;
   ParentLayerCoord GetRectLength(const ParentLayerRect& aRect) const override;
@@ -349,6 +353,7 @@ class AxisX : public Axis {
   ScreenPoint MakePoint(ScreenCoord aCoord) const override;
   const char* Name() const override;
   bool CanScrollTo(Side aSide) const;
+  SideBits ScrollableDirections() const;
 
  private:
   OverscrollBehavior GetOverscrollBehavior() const override;
@@ -359,6 +364,8 @@ class AxisY : public Axis {
   explicit AxisY(AsyncPanZoomController* mAsyncPanZoomController);
   ParentLayerCoord GetPointOffset(
       const ParentLayerPoint& aPoint) const override;
+  CSSToParentLayerScale GetAxisScale(
+      const CSSToParentLayerScale2D& aScale) const override;
   ParentLayerCoord GetRectLength(const ParentLayerRect& aRect) const override;
   ParentLayerCoord GetRectOffset(const ParentLayerRect& aRect) const override;
   CSSToParentLayerScale GetScaleForAxis(
@@ -366,11 +373,15 @@ class AxisY : public Axis {
   ScreenPoint MakePoint(ScreenCoord aCoord) const override;
   const char* Name() const override;
   bool CanScrollTo(Side aSide) const;
-  bool CanScrollDownwardsWithDynamicToolbar() const;
+  bool CanVerticalScrollWithDynamicToolbar() const;
+  SideBits ScrollableDirections() const;
+  SideBits ScrollableDirectionsWithDynamicToolbar(
+      const ScreenMargin& aFixedLayerMargins) const;
 
  private:
   OverscrollBehavior GetOverscrollBehavior() const override;
   ParentLayerCoord GetCompositionLengthWithoutDynamicToolbar() const;
+  bool HasDynamicToolbar() const;
 };
 
 }  // namespace layers

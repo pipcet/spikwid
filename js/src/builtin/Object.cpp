@@ -94,10 +94,11 @@ bool js::obj_propertyIsEnumerable(JSContext* cx, unsigned argc, Value* vp) {
 
     /* Step 3. */
     PropertyResult prop;
-    if (obj->isNative() && NativeLookupOwnProperty<NoGC>(
-                               cx, &obj->as<NativeObject>(), id, &prop)) {
+    if (obj->is<NativeObject>() &&
+        NativeLookupOwnProperty<NoGC>(cx, &obj->as<NativeObject>(), id,
+                                      &prop)) {
       /* Step 4. */
-      if (!prop) {
+      if (prop.isNotFound()) {
         args.rval().setBoolean(false);
         return true;
       }
@@ -543,7 +544,7 @@ static MOZ_ALWAYS_INLINE JSString* GetBuiltinTagFast(JSObject* obj,
                                                      const JSClass* clasp,
                                                      JSContext* cx) {
   MOZ_ASSERT(clasp == obj->getClass());
-  MOZ_ASSERT(!clasp->isProxy());
+  MOZ_ASSERT(!clasp->isProxyObject());
 
   // Optimize the non-proxy case to bypass GetBuiltinClass.
   if (clasp == &PlainObject::class_) {
@@ -671,7 +672,7 @@ bool js::obj_toString(JSContext* cx, unsigned argc, Value* vp) {
   // When |obj| is a non-proxy object, compute |builtinTag| only when needed.
   RootedString builtinTag(cx);
   const JSClass* clasp = obj->getClass();
-  if (MOZ_UNLIKELY(clasp->isProxy())) {
+  if (MOZ_UNLIKELY(clasp->isProxyObject())) {
     builtinTag = GetBuiltinTagSlow(cx, obj);
     if (!builtinTag) {
       return false;
@@ -773,9 +774,9 @@ static bool obj_setPrototypeOf(JSContext* cx, unsigned argc, Value* vp) {
 static bool PropertyIsEnumerable(JSContext* cx, HandleObject obj, HandleId id,
                                  bool* enumerable) {
   PropertyResult prop;
-  if (obj->isNative() &&
+  if (obj->is<NativeObject>() &&
       NativeLookupOwnProperty<NoGC>(cx, &obj->as<NativeObject>(), id, &prop)) {
-    if (!prop) {
+    if (prop.isNotFound()) {
       *enumerable = false;
       return true;
     }
@@ -798,7 +799,7 @@ static bool TryAssignNative(JSContext* cx, HandleObject to, HandleObject from,
                             bool* optimized) {
   *optimized = false;
 
-  if (!from->isNative() || !to->isNative()) {
+  if (!from->is<NativeObject>() || !to->is<NativeObject>()) {
     return true;
   }
 
@@ -843,7 +844,7 @@ static bool TryAssignNative(JSContext* cx, HandleObject to, HandleObject from,
 
     // Ensure |from| is still native: a getter/setter might have been swapped
     // with a non-native object.
-    if (MOZ_LIKELY(from->isNative() &&
+    if (MOZ_LIKELY(from->is<NativeObject>() &&
                    from->as<NativeObject>().lastProperty() == fromShape &&
                    shape->isDataProperty())) {
       if (!shape->enumerable()) {
@@ -993,18 +994,10 @@ bool js::obj_isPrototypeOf(JSContext* cx, unsigned argc, Value* vp) {
 }
 
 PlainObject* js::ObjectCreateImpl(JSContext* cx, HandleObject proto,
-                                  NewObjectKind newKind,
-                                  HandleObjectGroup group) {
+                                  NewObjectKind newKind) {
   // Give the new object a small number of fixed slots, like we do for empty
   // object literals ({}).
   gc::AllocKind allocKind = GuessObjectGCKind(0);
-
-  // Use a faster allocation path if the group is known.
-  if (group) {
-    MOZ_ASSERT(group->proto().toObjectOrNull() == proto);
-    return NewObjectWithGroup<PlainObject>(cx, group, allocKind, newKind);
-  }
-
   return NewObjectWithGivenProtoAndKinds<PlainObject>(cx, proto, allocKind,
                                                       newKind);
 }
@@ -1012,8 +1005,7 @@ PlainObject* js::ObjectCreateImpl(JSContext* cx, HandleObject proto,
 PlainObject* js::ObjectCreateWithTemplate(JSContext* cx,
                                           HandlePlainObject templateObj) {
   RootedObject proto(cx, templateObj->staticPrototype());
-  RootedObjectGroup group(cx, templateObj->group());
-  return ObjectCreateImpl(cx, proto, GenericObject, group);
+  return ObjectCreateImpl(cx, proto, GenericObject);
 }
 
 // ES 2017 draft 19.1.2.3.1
@@ -1272,7 +1264,7 @@ static bool TryEnumerableOwnPropertiesNative(JSContext* cx, HandleObject obj,
   // they're only marked as indexed after their enumerate hook ran. And
   // because their enumerate hook is slowish, it's more performant to
   // exclude them directly instead of executing the hook first.
-  if (!obj->isNative() || obj->as<NativeObject>().isIndexed() ||
+  if (!obj->is<NativeObject>() || obj->as<NativeObject>().isIndexed() ||
       obj->getClass()->getNewEnumerate() || obj->is<StringObject>()) {
     return true;
   }
@@ -1384,7 +1376,7 @@ static bool TryEnumerableOwnPropertiesNative(JSContext* cx, HandleObject obj,
 
   // Up to this point no side-effects through accessor properties are
   // possible which could have replaced |obj| with a non-native object.
-  MOZ_ASSERT(obj->isNative());
+  MOZ_ASSERT(obj->is<NativeObject>());
 
   if (kind == EnumerableOwnPropertiesKind::Keys ||
       kind == EnumerableOwnPropertiesKind::Names ||
@@ -1470,7 +1462,7 @@ static bool TryEnumerableOwnPropertiesNative(JSContext* cx, HandleObject obj,
 
       // Ensure |obj| is still native: a getter might have been swapped with a
       // non-native object.
-      if (obj->isNative() &&
+      if (obj->is<NativeObject>() &&
           obj->as<NativeObject>().lastProperty() == objShape &&
           shape->isDataProperty()) {
         if (!shape->enumerable()) {
@@ -1989,7 +1981,7 @@ static JSObject* CreateObjectConstructor(JSContext* cx, JSProtoKey key) {
 
 static JSObject* CreateObjectPrototype(JSContext* cx, JSProtoKey key) {
   MOZ_ASSERT(!cx->zone()->isAtomsZone());
-  MOZ_ASSERT(cx->global()->isNative());
+  MOZ_ASSERT(cx->global()->is<NativeObject>());
 
   /*
    * Create |Object.prototype| first, mirroring CreateBlankProto but for the
@@ -2044,9 +2036,9 @@ static bool FinishObjectClassInit(JSContext* cx, JS::HandleObject ctor,
    * [[Prototype]] before standard classes have been initialized.  For now,
    * only set the [[Prototype]] if it hasn't already been set.
    */
-  Rooted<TaggedProto> tagged(cx, TaggedProto(proto));
-  if (global->shouldSplicePrototype()) {
-    if (!GlobalObject::splicePrototype(cx, global, tagged)) {
+  if (global->staticPrototype() == nullptr) {
+    MOZ_ASSERT(!global->staticPrototypeIsImmutable());
+    if (!SetPrototype(cx, global, proto)) {
       return false;
     }
   }

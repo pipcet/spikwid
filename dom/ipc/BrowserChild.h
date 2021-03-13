@@ -329,6 +329,13 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
       const mozilla::WidgetMouseEvent& aEvent, const ScrollableLayerGuid& aGuid,
       const uint64_t& aInputBlockId);
 
+  mozilla::ipc::IPCResult RecvRealMouseEnterExitWidgetEvent(
+      const mozilla::WidgetMouseEvent& aEvent, const ScrollableLayerGuid& aGuid,
+      const uint64_t& aInputBlockId);
+  mozilla::ipc::IPCResult RecvNormalPriorityRealMouseEnterExitWidgetEvent(
+      const mozilla::WidgetMouseEvent& aEvent, const ScrollableLayerGuid& aGuid,
+      const uint64_t& aInputBlockId);
+
   MOZ_CAN_RUN_SCRIPT_BOUNDARY
   mozilla::ipc::IPCResult RecvRealDragEvent(const WidgetDragEvent& aEvent,
                                             const uint32_t& aDragAction,
@@ -756,8 +763,6 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
 
   bool HasValidInnerSize();
 
-  void SetTabId(const TabId& aTabId);
-
   ScreenIntRect GetOuterRect();
 
   void SetUnscaledInnerSize(const CSSSize& aSize) {
@@ -789,9 +794,10 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
   bool CreateRemoteLayerManager(
       mozilla::layers::PCompositorBridgeChild* aCompositorChild);
 
+  nsresult PrepareRequestData(nsIRequest* aRequest, RequestData& aRequestData);
   nsresult PrepareProgressListenerData(nsIWebProgress* aWebProgress,
                                        nsIRequest* aRequest,
-                                       Maybe<WebProgressData>& aWebProgressData,
+                                       WebProgressData& aWebProgressData,
                                        RequestData& aRequestData);
   already_AddRefed<nsIWebBrowserChrome3> GetWebBrowserChromeActor();
 

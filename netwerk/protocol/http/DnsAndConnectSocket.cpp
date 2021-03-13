@@ -10,7 +10,7 @@
 #include "DnsAndConnectSocket.h"
 #include "nsHttpConnection.h"
 #include "nsIDNSRecord.h"
-#include "nsIDNSService.h"
+#include "nsDNSService2.h"
 #include "nsQueryObject.h"
 #include "nsURLHelper.h"
 #include "mozilla/Components.h"
@@ -211,11 +211,13 @@ nsresult DnsAndConnectSocket::SetupDnsFlags() {
   mPrimaryTransport.mDnsFlags = dnsFlags;
   mBackupTransport.mDnsFlags = dnsFlags;
   if (disableIpv6ForBackup) {
-    mBackupTransport.mDnsFlags |= nsISocketTransport::DISABLE_IPV6;
+    mBackupTransport.mDnsFlags |= nsIDNSService::RESOLVE_DISABLE_IPV6;
   }
+  LOG(("DnsAndConnectSocket::SetupDnsFlags flags=%u flagsBackup=%u [this=%p]",
+       mPrimaryTransport.mDnsFlags, mBackupTransport.mDnsFlags, this));
   NS_ASSERTION(
-      !( mBackupTransport.mDnsFlags & nsIDNSService::RESOLVE_DISABLE_IPV6) ||
-           !( mBackupTransport.mDnsFlags & nsIDNSService::RESOLVE_DISABLE_IPV4),
+      !(mBackupTransport.mDnsFlags & nsIDNSService::RESOLVE_DISABLE_IPV6) ||
+          !(mBackupTransport.mDnsFlags & nsIDNSService::RESOLVE_DISABLE_IPV4),
       "Setting both RESOLVE_DISABLE_IPV6 and RESOLVE_DISABLE_IPV4");
   return NS_OK;
 }
@@ -233,7 +235,7 @@ nsresult DnsAndConnectSocket::SetupEvent(SetupEvents event) {
       }
       if (mPrimaryTransport.FirstResolving()) {
         mState = DnsAndSocketState::RESOLVING;
-      } else if (mPrimaryTransport.ConnectingOrRetry()) {
+      } else if (!mIsHttp3 && mPrimaryTransport.ConnectingOrRetry()) {
         mState = DnsAndSocketState::CONNECTING;
         SetupBackupTimer();
       } else {
@@ -244,7 +246,7 @@ nsresult DnsAndConnectSocket::SetupEvent(SetupEvents event) {
     case SetupEvents::RESOLVED_PRIMARY_EVENT:
       // This eventt may be posted multiple times if a DNS lookup is
       // retriggered, e.g with different parameter.
-      if (mState == DnsAndSocketState::RESOLVING) {
+      if (!mIsHttp3 && (mState == DnsAndSocketState::RESOLVING)) {
         mState = DnsAndSocketState::CONNECTING;
         SetupBackupTimer();
       }
@@ -408,14 +410,15 @@ DnsAndConnectSocket::OnLookupComplete(nsICancelable* request, nsIDNSRecord* rec,
   bool isPrimary = IsPrimary(request);
   if (IsPrimary(request)) {
     rv = mPrimaryTransport.OnLookupComplete(this, rec, status);
-    if (mPrimaryTransport.ConnectingOrRetry()) {
+    if ((!mIsHttp3 && mPrimaryTransport.ConnectingOrRetry()) ||
+        (mIsHttp3 && mPrimaryTransport.Resolved())) {
       SetupEvent(SetupEvents::RESOLVED_PRIMARY_EVENT);
     }
   } else {
     rv = mBackupTransport.OnLookupComplete(this, rec, status);
   }
 
-  if (NS_FAILED(rv)) {
+  if (NS_FAILED(rv) || mIsHttp3) {
     SetupConn(isPrimary, rv);
   }
   return NS_OK;
@@ -486,11 +489,11 @@ nsresult DnsAndConnectSocket::SetupConn(bool isPrimary, nsresult status) {
   nsresult rv = NS_OK;
   if (isPrimary) {
     SetupEvent(SetupEvents::PRIMARY_DONE_EVENT);
-    rv = mPrimaryTransport.SetupConn(mTransaction, mEnt, status,
+    rv = mPrimaryTransport.SetupConn(mTransaction, mEnt, status, mCaps,
                                      getter_AddRefs(conn));
   } else {
     SetupEvent(SetupEvents::BACKUP_DONE_EVENT);
-    rv = mBackupTransport.SetupConn(mTransaction, mEnt, status,
+    rv = mBackupTransport.SetupConn(mTransaction, mEnt, status, mCaps,
                                     getter_AddRefs(conn));
   }
 
@@ -778,6 +781,7 @@ bool DnsAndConnectSocket::AcceptsTransaction(nsHttpTransaction* trans) {
 bool DnsAndConnectSocket::Claim() {
   if (mSpeculative) {
     mSpeculative = false;
+    mAllow1918 = true;
     uint32_t flags;
     if (mPrimaryTransport.mSocketTransport &&
         NS_SUCCEEDED(
@@ -949,7 +953,7 @@ nsresult DnsAndConnectSocket::TransportSetup::CheckConnectedResult(
 
 nsresult DnsAndConnectSocket::TransportSetup::SetupConn(
     nsAHttpTransaction* transaction, ConnectionEntry* ent, nsresult status,
-    HttpConnectionBase** connection) {
+    uint32_t cap, HttpConnectionBase** connection) {
   RefPtr<HttpConnectionBase> conn;
   if (!ent->mConnInfo->IsHttp3()) {
     conn = new nsHttpConnection();
@@ -973,11 +977,19 @@ nsresult DnsAndConnectSocket::TransportSetup::SetupConn(
 
   nsCOMPtr<nsIInterfaceRequestor> callbacks;
   transaction->GetSecurityCallbacks(getter_AddRefs(callbacks));
-  nsresult rv = conn->Init(
-      ent->mConnInfo, gHttpHandler->ConnMgr()->mMaxRequestDelay,
-      mSocketTransport, mStreamIn, mStreamOut, mConnectedOK, status, callbacks,
-      PR_MillisecondsToInterval(static_cast<uint32_t>(
-          (TimeStamp::Now() - mSynStarted).ToMilliseconds())));
+  nsresult rv = NS_OK;
+  if (!ent->mConnInfo->IsHttp3()) {
+    RefPtr<nsHttpConnection> connTCP = do_QueryObject(conn);
+    rv =
+        connTCP->Init(ent->mConnInfo, gHttpHandler->ConnMgr()->mMaxRequestDelay,
+                      mSocketTransport, mStreamIn, mStreamOut, mConnectedOK,
+                      status, callbacks,
+                      PR_MillisecondsToInterval(static_cast<uint32_t>(
+                          (TimeStamp::Now() - mSynStarted).ToMilliseconds())));
+  } else {
+    RefPtr<HttpConnectionUDP> connUDP = do_QueryObject(conn);
+    rv = connUDP->Init(ent->mConnInfo, mDNSRecord, status, callbacks, cap);
+  }
 
   bool resetPreference = false;
   if (mResetFamilyPreference ||
@@ -1207,22 +1219,7 @@ nsresult DnsAndConnectSocket::TransportSetup::ResolveHost(
        PromiseFlatCString(mHost).get(),
        (mDnsFlags & nsIDNSService::RESOLVE_BYPASS_CACHE) ? " bypass cache"
                                                          : ""));
-  nsCOMPtr<nsIDNSService> dns = nullptr;
-  auto initTask = [&dns]() { dns = do_GetService(NS_DNSSERVICE_CID); };
-  if (!NS_IsMainThread()) {
-    // Forward to the main thread synchronously.
-    RefPtr<nsIThread> mainThread = do_GetMainThread();
-    if (!mainThread) {
-      return NS_ERROR_FAILURE;
-    }
-
-    SyncRunnable::DispatchToThread(
-        mainThread,
-        new SyncRunnable(NS_NewRunnableFunction(
-            "nsSocketTransport::ResolveHost->GetDNSService", initTask)));
-  } else {
-    initTask();
-  }
+  nsCOMPtr<nsIDNSService> dns = GetOrInitDNSService();
   if (!dns) {
     return NS_ERROR_FAILURE;
   }
@@ -1246,14 +1243,19 @@ nsresult DnsAndConnectSocket::TransportSetup::OnLookupComplete(
     mDNSRecord = do_QueryInterface(rec);
     MOZ_ASSERT(mDNSRecord);
 
-    nsresult rv = SetupStreams(dnsAndSock);
-    if (NS_SUCCEEDED(rv)) {
-      mState = TransportSetup::TransportSetupState::CONNECTING;
+    if (dnsAndSock->mEnt->mConnInfo->IsHttp3()) {
+      mState = TransportSetup::TransportSetupState::RESOLVED;
+      return status;
     } else {
-      CloseAll();
-      mState = TransportSetup::TransportSetupState::DONE;
+      nsresult rv = SetupStreams(dnsAndSock);
+      if (NS_SUCCEEDED(rv)) {
+        mState = TransportSetup::TransportSetupState::CONNECTING;
+      } else {
+        CloseAll();
+        mState = TransportSetup::TransportSetupState::DONE;
+      }
+      return rv;
     }
-    return rv;
   }
 
   // DNS lookup status failed

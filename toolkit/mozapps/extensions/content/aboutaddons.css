@@ -68,6 +68,7 @@ body {
   grid-template-columns: 1fr auto;
   margin-block: 0;
   align-items: center;
+  font-weight: normal;
 }
 
 .category[badge-count]::after {
@@ -108,10 +109,6 @@ body {
 }
 .category[name="recent-updates"] {
   background-image: url("chrome://mozapps/skin/extensions/category-recent.svg");
-}
-
-.header-name {
-  user-select: initial;
 }
 
 .sticky-container {
@@ -346,7 +343,7 @@ addon-card[expanded] .update-postponed-bar + .addon-card-message {
 
 .addon-badge-verified {
   background-color: var(--green-70);
-  background-image: url("chrome://global/skin/icons/check.svg");
+  background-image: url("chrome://global/skin/icons/success.svg");
 }
 
 .theme-enable-button {
@@ -356,6 +353,8 @@ addon-card[expanded] .update-postponed-bar + .addon-card-message {
   min-height: auto;
   height: 24px;
   margin: 0;
+  padding: 0 8px;
+  font-weight: normal;
 }
 
 .addon-description {

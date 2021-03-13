@@ -74,7 +74,7 @@ use crate::gpu_cache::{GpuCacheDebugChunk, GpuCacheDebugCmd};
 use crate::gpu_types::{PrimitiveInstanceData, ScalingInstance, SvgFilterInstance};
 use crate::gpu_types::{BlurInstance, ClearInstance, CompositeInstance, ZBufferId};
 use crate::internal_types::{TextureSource, ResourceCacheError};
-use crate::internal_types::{CacheTextureId, DebugOutput, FastHashMap, FastHashSet, LayerIndex, RenderedDocument, ResultMsg};
+use crate::internal_types::{CacheTextureId, DebugOutput, FastHashMap, FastHashSet, RenderedDocument, ResultMsg};
 use crate::internal_types::{TextureCacheAllocationKind, TextureUpdateList};
 use crate::internal_types::{RenderTargetInfo, Swizzle, DeferredResolveIndex};
 use crate::picture::{self, ResolvedSurfaceTexture};
@@ -90,7 +90,7 @@ use crate::scene_builder_thread::{SceneBuilderThread, SceneBuilderThreadChannels
 use crate::screen_capture::AsyncScreenshotGrabber;
 use crate::render_target::{AlphaRenderTarget, ColorRenderTarget, PictureCacheTarget};
 use crate::render_target::{RenderTarget, TextureCacheRenderTarget};
-use crate::render_target::{RenderTargetKind, BlitJob, BlitJobSource};
+use crate::render_target::{RenderTargetKind, BlitJob};
 use crate::texture_cache::{TextureCache, TextureCacheConfig};
 use crate::tile_cache::PictureCacheDebugInfo;
 use crate::util::drain_filter;
@@ -496,7 +496,6 @@ impl TextureResolver {
                 1,
                 TextureFilter::Linear,
                 None,
-                1,
             );
         device.upload_texture_immediate(
             &dummy_cache_texture,
@@ -657,13 +656,6 @@ impl BlendMode {
             _ => return None,
         })
     }
-}
-
-#[derive(PartialEq)]
-struct TargetSelector {
-    size: DeviceIntSize,
-    num_layers: usize,
-    format: ImageFormat,
 }
 
 /// Information about the state of the debugging / profiler overlay in native compositing mode.
@@ -1058,7 +1050,6 @@ impl Renderer {
                 8,
                 TextureFilter::Nearest,
                 None,
-                1,
             );
             device.upload_texture_immediate(&texture, &dither_matrix);
 
@@ -1122,7 +1113,7 @@ impl Renderer {
 
                 CompositorKind::Native {
                     max_update_rects,
-                    virtual_surface_size: capabilities.virtual_surface_size,
+                    capabilities,
                 }
             }
         };
@@ -2375,7 +2366,6 @@ impl Renderer {
                             // This needs to be a render target because some render
                             // tasks get rendered into the texture cache.
                             Some(RenderTargetInfo { has_depth: info.has_depth }),
-                            info.layer_count,
                         );
 
                         if info.is_shared_cache {
@@ -2551,20 +2541,18 @@ impl Renderer {
         // Before submitting the composite batch, do the
         // framebuffer readbacks that are needed for each
         // composite operation in this batch.
-        let (readback_rect, readback_layer) = readback.get_target_rect();
-        let (backdrop_rect, _) = backdrop.get_target_rect();
+        let readback_rect = readback.get_target_rect();
+        let backdrop_rect = backdrop.get_target_rect();
         let (backdrop_screen_origin, _) = match backdrop.kind {
             RenderTaskKind::Picture(ref task_info) => (task_info.content_origin, task_info.device_pixel_scale),
             _ => panic!("bug: composite on non-picture?"),
         };
 
         // Bind the FBO to blit the backdrop to.
-        // Called per-instance in case the layer (and therefore FBO)
-        // changes. The device will skip the GL call if the requested
-        // target is already bound.
+        // Called per-instance in case the FBO changes. The device will skip
+        // the GL call if the requested target is already bound.
         let cache_draw_target = DrawTarget::from_texture(
             cache_texture,
-            readback_layer.0 as usize,
             false,
         );
 
@@ -2618,7 +2606,7 @@ impl Renderer {
             );
         }
 
-        // Restore draw target to current pass render target + layer, and reset
+        // Restore draw target to current pass render target, and reset
         // the read target.
         self.device.bind_draw_target(draw_target);
         self.device.reset_read_target();
@@ -2643,23 +2631,15 @@ impl Renderer {
         // TODO(gw): For now, we don't bother batching these by source texture.
         //           If if ever shows up as an issue, we can easily batch them.
         for blit in blits {
-            let (source, layer, source_rect) = match blit.source {
-                BlitJobSource::Texture(texture_id, layer, source_rect) => {
-                    // A blit from a texture into this target.
-                    (texture_id, layer as usize, source_rect)
-                }
-                BlitJobSource::RenderTask(task_id) => {
-                    // A blit from the child render task into this target.
-                    // TODO(gw): Support R8 format here once we start
-                    //           creating mips for alpha masks.
-                    let source = &render_tasks[task_id];
-                    let (source_rect, layer) = source.get_target_rect();
-                    let source_texture = TextureSource::TextureCache(
-                        source.get_target_texture(),
-                        Swizzle::default(),
-                    );
-                    (source_texture, layer.0, source_rect)
-                }
+            let (source, source_rect) = {
+                // A blit from the child render task into this target.
+                // TODO(gw): Support R8 format here once we start
+                //           creating mips for alpha masks.
+                let task = &render_tasks[blit.source];
+                let source_rect = task.get_target_rect();
+                let source_texture = task.get_texture_source();
+
+                (source_texture, source_rect)
             };
 
             debug_assert_eq!(source_rect.size, blit.target_rect.size);
@@ -2673,7 +2653,6 @@ impl Renderer {
 
             let read_target = DrawTarget::from_texture(
                 texture,
-                layer,
                 false,
             );
 
@@ -3143,11 +3122,6 @@ impl Renderer {
                         color_space,
                         format,
                         rescale,
-                        [
-                            planes[0].texture_layer as f32,
-                            planes[1].texture_layer as f32,
-                            planes[2].texture_layer as f32,
-                        ],
                         uv_rects,
                     );
 
@@ -3176,7 +3150,6 @@ impl Renderer {
                         surface_rect.to_f32(),
                         surface_rect.to_f32(),
                         PremultipliedColorF::WHITE,
-                        plane.texture_layer as f32,
                         ZBufferId(0),
                         uv_rect,
                     );
@@ -3259,7 +3232,6 @@ impl Renderer {
                             tile.rect,
                             clip_rect,
                             color.premultiplied(),
-                            0.0,
                             tile.z_id,
                         ),
                         BatchTextures::composite_rgb(dummy),
@@ -3274,20 +3246,18 @@ impl Renderer {
                             tile.rect,
                             clip_rect,
                             PremultipliedColorF::BLACK,
-                            0.0,
                             tile.z_id,
                         ),
                         BatchTextures::composite_rgb(dummy),
                         (CompositeSurfaceFormat::Rgba, image_buffer_kind),
                     )
                 }
-                CompositeTileSurface::Texture { surface: ResolvedSurfaceTexture::TextureCache { texture, layer } } => {
+                CompositeTileSurface::Texture { surface: ResolvedSurfaceTexture::TextureCache { texture } } => {
                     (
                         CompositeInstance::new(
                             tile.rect,
                             clip_rect,
                             PremultipliedColorF::WHITE,
-                            layer as f32,
                             tile.z_id,
                         ),
                         BatchTextures::composite_rgb(texture),
@@ -3324,11 +3294,6 @@ impl Renderer {
                                     color_space,
                                     format,
                                     rescale,
-                                    [
-                                        planes[0].texture_layer as f32,
-                                        planes[1].texture_layer as f32,
-                                        planes[2].texture_layer as f32,
-                                    ],
                                     uv_rects,
                                 ),
                                 textures,
@@ -3349,7 +3314,6 @@ impl Renderer {
                                     tile.rect,
                                     clip_rect,
                                     PremultipliedColorF::WHITE,
-                                    plane.texture_layer as f32,
                                     tile.z_id,
                                     uv_rect,
                                 ),
@@ -3772,7 +3736,7 @@ impl Renderer {
 
             let zero_color = [0.0, 0.0, 0.0, 0.0];
             for &task_id in &target.zero_clears {
-                let (rect, _) = render_tasks[task_id].get_target_rect();
+                let rect = render_tasks[task_id].get_target_rect();
                 self.device.clear_target(
                     Some(zero_color),
                     None,
@@ -3782,7 +3746,7 @@ impl Renderer {
 
             let one_color = [1.0, 1.0, 1.0, 1.0];
             for &task_id in &target.one_clears {
-                let (rect, _) = render_tasks[task_id].get_target_rect();
+                let rect = render_tasks[task_id].get_target_rect();
                 self.device.clear_target(
                     Some(one_color),
                     None,
@@ -3858,7 +3822,6 @@ impl Renderer {
     fn draw_texture_cache_target(
         &mut self,
         texture: &CacheTextureId,
-        layer: LayerIndex,
         target: &TextureCacheRenderTarget,
         render_tasks: &RenderTaskGraph,
         stats: &mut RendererStats,
@@ -3884,7 +3847,6 @@ impl Renderer {
 
         let draw_target = DrawTarget::from_texture(
             texture,
-            layer,
             false,
         );
         self.device.bind_draw_target(draw_target);
@@ -4003,20 +3965,20 @@ impl Renderer {
         }
 
         // Draw any gradients for this target.
-        if !target.gradients.is_empty() {
+        if !target.fast_linear_gradients.is_empty() {
             let _timer = self.gpu_profiler.start_timer(GPU_TAG_CACHE_GRADIENT);
 
             self.set_blend(false, FramebufferKind::Other);
 
-            self.shaders.borrow_mut().cs_gradient.bind(
+            self.shaders.borrow_mut().cs_fast_linear_gradient.bind(
                 &mut self.device,
                 &projection,
                 &mut self.renderer_errors,
             );
 
             self.draw_instanced_batch(
-                &target.gradients,
-                VertexArrayKind::Gradient,
+                &target.fast_linear_gradients,
+                VertexArrayKind::FastLinearGradient,
                 &BatchTextures::empty(),
                 stats,
             );
@@ -4407,10 +4369,9 @@ impl Renderer {
             // cache targets have already been updated and can be
             // skipped this time.
             if !frame.has_been_rendered {
-                for (&(texture_id, target_index), target) in &pass.texture_cache {
+                for (&texture_id, target) in &pass.texture_cache {
                     self.draw_texture_cache_target(
                         &texture_id,
-                        target_index,
                         target,
                         &frame.render_tasks,
                         &mut results.stats,
@@ -4426,14 +4387,13 @@ impl Renderer {
                     results.stats.color_target_count += 1;
 
                     let draw_target = match picture_target.surface {
-                        ResolvedSurfaceTexture::TextureCache { ref texture, layer } => {
+                        ResolvedSurfaceTexture::TextureCache { ref texture } => {
                             let (texture, _) = self.texture_resolver
                                 .resolve(texture)
                                 .expect("bug");
 
                             DrawTarget::from_texture(
                                 texture,
-                                layer as usize,
                                 true,
                             )
                         }
@@ -4504,7 +4464,6 @@ impl Renderer {
 
                 let draw_target = DrawTarget::from_texture(
                     alpha_tex,
-                    0,
                     false,
                 );
 
@@ -4545,7 +4504,6 @@ impl Renderer {
 
                 let draw_target = DrawTarget::from_texture(
                     color_tex,
-                    0,
                     target.needs_depth(),
                 );
 
@@ -4831,7 +4789,6 @@ impl Renderer {
                 source_rect.size.height,
                 TextureFilter::Nearest,
                 Some(RenderTargetInfo { has_depth: false }),
-                1,
             );
 
             self.zoom_debug_texture = Some(texture);
@@ -4844,7 +4801,6 @@ impl Renderer {
             read_target.to_framebuffer_rect(source_rect),
             DrawTarget::from_texture(
                 self.zoom_debug_texture.as_ref().unwrap(),
-                0,
                 false,
             ),
             texture_rect,
@@ -4855,7 +4811,6 @@ impl Renderer {
         self.device.blit_render_target(
             ReadTarget::from_texture(
                 self.zoom_debug_texture.as_ref().unwrap(),
-                0,
             ),
             texture_rect,
             read_target,
@@ -4911,12 +4866,10 @@ impl Renderer {
         let fb_height = device_size.height;
         let surface_origin_is_top_left = draw_target.surface_origin_is_top_left();
 
-        let num_layers: i32 = textures.iter()
-            .map(|texture| texture.get_layer_count())
-            .sum();
+        let num_textures = textures.len() as i32;
 
-        if num_layers * (size + spacing) > fb_width {
-            let factor = fb_width as f32 / (num_layers * (size + spacing)) as f32;
+        if num_textures * (size + spacing) > fb_width {
+            let factor = fb_width as f32 / (num_textures * (size + spacing)) as f32;
             size = (size as f32 * factor) as i32;
             spacing = (spacing as f32 * factor) as i32;
         }
@@ -4927,12 +4880,12 @@ impl Renderer {
         let tag_y = fb_height - (bottom + spacing + tag_height);
         let image_y = tag_y - size;
 
-        // Sort the display by layer size (in bytes), so that left-to-right is
+        // Sort the display by size (in bytes), so that left-to-right is
         // largest-to-smallest.
         //
         // Note that the vec here is in increasing order, because the elements
         // get drawn right-to-left.
-        textures.sort_by_key(|t| t.layer_size_in_bytes());
+        textures.sort_by_key(|t| t.size_in_bytes());
 
         let mut i = 0;
         for texture in textures.iter() {
@@ -4942,58 +4895,55 @@ impl Renderer {
                 FramebufferIntSize::new(dimensions.width as i32, dimensions.height as i32),
             );
 
-            let layer_count = texture.get_layer_count() as usize;
-            for layer in 0 .. layer_count {
-                let x = fb_width - (spacing + size) * (i as i32 + 1);
+            let x = fb_width - (spacing + size) * (i as i32 + 1);
 
-                // If we have more targets than fit on one row in screen, just early exit.
-                if x > fb_width {
-                    return;
-                }
-
-                // Draw the info tag.
-                let tag_rect = rect(x, tag_y, size, tag_height);
-                let tag_color = select_color(texture);
-                device.clear_target(
-                    Some(tag_color),
-                    None,
-                    Some(draw_target.to_framebuffer_rect(tag_rect)),
-                );
-
-                // Draw the dimensions onto the tag.
-                let dim = texture.get_dimensions();
-                let text_rect = tag_rect.inflate(-text_margin, -text_margin);
-                debug_renderer.add_text(
-                    text_rect.min_x() as f32,
-                    text_rect.max_y() as f32, // Top-relative.
-                    &format!("{}x{}", dim.width, dim.height),
-                    ColorU::new(0, 0, 0, 255),
-                    Some(tag_rect.to_f32())
-                );
-
-                // Blit the contents of the layer.
-                let dest_rect = draw_target.to_framebuffer_rect(rect(x, image_y, size, size));
-                let read_target = ReadTarget::from_texture(texture, layer);
-
-                if surface_origin_is_top_left {
-                    device.blit_render_target(
-                        read_target,
-                        src_rect,
-                        *draw_target,
-                        dest_rect,
-                        TextureFilter::Linear,
-                    );
-                } else {
-                     // Invert y.
-                     device.blit_render_target_invert_y(
-                        read_target,
-                        src_rect,
-                        *draw_target,
-                        dest_rect,
-                    );
-                }
-                i += 1;
+            // If we have more targets than fit on one row in screen, just early exit.
+            if x > fb_width {
+                return;
             }
+
+            // Draw the info tag.
+            let tag_rect = rect(x, tag_y, size, tag_height);
+            let tag_color = select_color(texture);
+            device.clear_target(
+                Some(tag_color),
+                None,
+                Some(draw_target.to_framebuffer_rect(tag_rect)),
+            );
+
+            // Draw the dimensions onto the tag.
+            let dim = texture.get_dimensions();
+            let text_rect = tag_rect.inflate(-text_margin, -text_margin);
+            debug_renderer.add_text(
+                text_rect.min_x() as f32,
+                text_rect.max_y() as f32, // Top-relative.
+                &format!("{}x{}", dim.width, dim.height),
+                ColorU::new(0, 0, 0, 255),
+                Some(tag_rect.to_f32())
+            );
+
+            // Blit the contents of the texture.
+            let dest_rect = draw_target.to_framebuffer_rect(rect(x, image_y, size, size));
+            let read_target = ReadTarget::from_texture(texture);
+
+            if surface_origin_is_top_left {
+                device.blit_render_target(
+                    read_target,
+                    src_rect,
+                    *draw_target,
+                    dest_rect,
+                    TextureFilter::Linear,
+                );
+            } else {
+                 // Invert y.
+                 device.blit_render_target_invert_y(
+                    read_target,
+                    src_rect,
+                    *draw_target,
+                    dest_rect,
+                );
+            }
+            i += 1;
         }
     }
 
@@ -5217,16 +5167,13 @@ impl Renderer {
         }
     }
 
-    /// Clears all the layers of a texture with a given color.
+    /// Clears the texture with a given color.
     fn clear_texture(&mut self, texture: &Texture, color: [f32; 4]) {
-        for i in 0..texture.get_layer_count() {
-            self.device.bind_draw_target(DrawTarget::from_texture(
-                &texture,
-                i as usize,
-                false,
-            ));
-            self.device.clear_target(Some(color), None, None);
-        }
+        self.device.bind_draw_target(DrawTarget::from_texture(
+            &texture,
+            false,
+        ));
+        self.device.clear_target(Some(color), None, None);
     }
 }
 
@@ -5510,11 +5457,10 @@ pub struct RenderResults {
 #[cfg_attr(feature = "replay", derive(Deserialize))]
 struct PlainTexture {
     data: String,
-    size: (DeviceIntSize, i32),
+    size: DeviceIntSize,
     format: ImageFormat,
     filter: TextureFilter,
     has_depth: bool,
-    is_array: bool,
 }
 
 
@@ -5583,46 +5529,43 @@ impl Renderer {
 
         let mut file = fs::File::create(root.join(&short_path))
             .expect(&format!("Unable to create {}", short_path));
-        let bytes_per_layer = (rect_size.width * rect_size.height * bytes_per_pixel) as usize;
-        let mut data = vec![0; bytes_per_layer];
+        let bytes_per_texture = (rect_size.width * rect_size.height * bytes_per_pixel) as usize;
+        let mut data = vec![0; bytes_per_texture];
 
         //TODO: instead of reading from an FBO with `read_pixels*`, we could
         // read from textures directly with `get_tex_image*`.
 
-        for layer_id in 0 .. texture.get_layer_count() {
-            let rect = device_size_as_framebuffer_size(rect_size).into();
+        let rect = device_size_as_framebuffer_size(rect_size).into();
 
-            device.attach_read_texture(texture, layer_id);
-            #[cfg(feature = "png")]
-            {
-                let mut png_data;
-                let (data_ref, format) = match texture.get_format() {
-                    ImageFormat::RGBAF32 => {
-                        png_data = vec![0; (rect_size.width * rect_size.height * 4) as usize];
-                        device.read_pixels_into(rect, ImageFormat::RGBA8, &mut png_data);
-                        (&png_data, ImageFormat::RGBA8)
-                    }
-                    fm => (&data, fm),
-                };
-                CaptureConfig::save_png(
-                    root.join(format!("textures/{}-{}.png", name, layer_id)),
-                    rect_size, format,
-                    None,
-                    data_ref,
-                );
-            }
-            device.read_pixels_into(rect, read_format, &mut data);
-            file.write_all(&data)
-                .unwrap();
+        device.attach_read_texture(texture);
+        #[cfg(feature = "png")]
+        {
+            let mut png_data;
+            let (data_ref, format) = match texture.get_format() {
+                ImageFormat::RGBAF32 => {
+                    png_data = vec![0; (rect_size.width * rect_size.height * 4) as usize];
+                    device.read_pixels_into(rect, ImageFormat::RGBA8, &mut png_data);
+                    (&png_data, ImageFormat::RGBA8)
+                }
+                fm => (&data, fm),
+            };
+            CaptureConfig::save_png(
+                root.join(format!("textures/{}-{}.png", name, 0)),
+                rect_size, format,
+                None,
+                data_ref,
+            );
         }
+        device.read_pixels_into(rect, read_format, &mut data);
+        file.write_all(&data)
+            .unwrap();
 
         PlainTexture {
             data: short_path,
-            size: (rect_size, texture.get_layer_count()),
+            size: rect_size,
             format: texture.get_format(),
             filter: texture.get_filter(),
             has_depth: texture.supports_depth(),
-            is_array: texture.is_array(),
         }
     }
 
@@ -5647,11 +5590,10 @@ impl Renderer {
         let texture = device.create_texture(
             target,
             plain.format,
-            plain.size.0.width,
-            plain.size.0.height,
+            plain.size.width,
+            plain.size.height,
             plain.filter,
             rt_info,
-            plain.size.1,
         );
         device.upload_texture_immediate(&texture, &texels);
 
@@ -5673,7 +5615,7 @@ impl Renderer {
 
         self.device.begin_frame();
         let _gm = self.gpu_profiler.start_marker("read GPU data");
-        self.device.bind_read_target_impl(self.read_fbo);
+        self.device.bind_read_target_impl(self.read_fbo, DeviceIntPoint::zero());
 
         if config.bits.contains(CaptureBits::EXTERNAL_RESOURCES) && !deferred_images.is_empty() {
             info!("saving external images");
@@ -5712,8 +5654,7 @@ impl Renderer {
                                     ExternalImageType::Buffer => unreachable!(),
                                 };
                                 info!("\t\tnative texture of target {:?}", target);
-                                let layer_index = 0; //TODO: what about layered textures?
-                                self.device.attach_read_texture_external(gl_id, target, layer_index);
+                                self.device.attach_read_texture_external(gl_id, target);
                                 let data = self.device.read_pixels(&def.descriptor);
                                 let short_path = format!("externals/t{}.raw", tex_id);
                                 (Some(data), e.insert(short_path).clone())
@@ -5851,15 +5792,12 @@ impl Renderer {
                 let tid = match native_map.entry(plain_ext.data) {
                     Entry::Occupied(e) => e.get().clone(),
                     Entry::Vacant(e) => {
-                        //TODO: provide a way to query both the layer count and the filter from external images
-                        let (layer_count, filter) = (1, TextureFilter::Linear);
                         let plain_tex = PlainTexture {
                             data: e.key().clone(),
-                            size: (descriptor.size, layer_count),
+                            size: descriptor.size,
                             format: descriptor.format,
-                            filter,
+                            filter: TextureFilter::Linear,
                             has_depth: false,
-                            is_array: false,
                         };
                         let t = Self::load_texture(
                             target,
@@ -5891,11 +5829,7 @@ impl Renderer {
             }
             for (id, texture) in renderer.textures {
                 info!("\t{}", texture.data);
-                let target = if texture.is_array {
-                    ImageBufferKind::Texture2DArray
-                } else {
-                    ImageBufferKind::Texture2D
-                };
+                let target = ImageBufferKind::Texture2D;
                 let t = Self::load_texture(
                     target,
                     &texture,

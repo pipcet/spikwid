@@ -7,6 +7,7 @@
 
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/Helpers.h"
+#include "mozilla/gfx/PathHelpers.h"
 #include "nsChildView.h"
 #include "nsDeviceContext.h"
 #include "nsLayoutUtils.h"
@@ -38,6 +39,7 @@
 #include "mozilla/StaticPrefs_layout.h"
 #include "mozilla/StaticPrefs_widget.h"
 #include "nsLookAndFeel.h"
+#include "MacThemeGeometryType.h"
 #include "VibrancyManager.h"
 
 #include "gfxContext.h"
@@ -82,7 +84,9 @@ void CUIDraw(CUIRendererRef r, CGRect rect, CGContextRef ctx, CFDictionaryRef op
 // There's no need to pass the actual NSView that we're drawing into to
 // drawWithFrame:inView:. What's more, doing so even causes unnecessary
 // invalidations as soon as we draw a focusring!
-@interface CellDrawView : NSView
+// This class needs to be an NSControl so that NSTextFieldCell (and
+// NSSearchFieldCell, which is a subclass of NSTextFieldCell) draws a focus ring.
+@interface CellDrawView : NSControl
 
 @end
 
@@ -96,25 +100,6 @@ void CUIDraw(CUIRendererRef r, CGRect rect, CGContextRef ctx, CFDictionaryRef op
   return nil;
 }
 
-@end
-
-// These two classes don't actually add any behavior over NSButtonCell. Their
-// purpose is to make it easy to distinguish NSCell objects that are used for
-// drawing radio buttons / checkboxes from other cell types.
-// The class names are made up, there are no classes with these names in AppKit.
-// The reason we need them is that calling [cell setButtonType:NSRadioButton]
-// doesn't leave an easy-to-check "marker" on the cell object - there is no
-// -[NSButtonCell buttonType] method.
-@interface RadioButtonCell : NSButtonCell
-@end
-
-@implementation RadioButtonCell
-@end
-
-@interface CheckboxCell : NSButtonCell
-@end
-
-@implementation CheckboxCell
 @end
 
 static void DrawFocusRingForCellIfNeeded(NSCell* aCell, NSRect aWithFrame, NSView* aInView) {
@@ -144,30 +129,9 @@ static void DrawFocusRingForCellIfNeeded(NSCell* aCell, NSRect aWithFrame, NSVie
   }
 }
 
-static bool FocusIsDrawnByDrawWithFrame(NSCell* aCell) {
-#if defined(MAC_OS_X_VERSION_10_8) && MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_8
-  // When building with the 10.8 SDK or higher, focus rings don't draw as part
-  // of -[NSCell drawWithFrame:inView:] and must be drawn by a separate call
-  // to -[NSCell drawFocusRingMaskWithFrame:inView:]; .
-  // See the NSButtonCell section under
-  // https://developer.apple.com/library/mac/releasenotes/AppKit/RN-AppKitOlderNotes/#X10_8Notes
-  return false;
-#else
-  // On 10.10, whether the focus ring is drawn as part of
-  // -[NSCell drawWithFrame:inView:] depends on the cell type.
-  // Radio buttons and checkboxes draw their own focus rings, other cell
-  // types need -[NSCell drawFocusRingMaskWithFrame:inView:].
-  return
-      [aCell isKindOfClass:[RadioButtonCell class]] || [aCell isKindOfClass:[CheckboxCell class]];
-#endif
-}
-
 static void DrawCellIncludingFocusRing(NSCell* aCell, NSRect aWithFrame, NSView* aInView) {
   [aCell drawWithFrame:aWithFrame inView:aInView];
-
-  if (!FocusIsDrawnByDrawWithFrame(aCell)) {
-    DrawFocusRingForCellIfNeeded(aCell, aWithFrame, aInView);
-  }
+  DrawFocusRingForCellIfNeeded(aCell, aWithFrame, aInView);
 }
 
 /**
@@ -260,39 +224,10 @@ static void DrawCellIncludingFocusRing(NSCell* aCell, NSRect aWithFrame, NSView*
 
 @end
 
-@interface SearchFieldCellWithFocusRing : NSSearchFieldCell {
-}
+@interface MOZToolbarSearchFieldCell : NSSearchFieldCell
 @end
 
-// Workaround for Bug 542048
-// On 64-bit, NSSearchFieldCells don't draw focus rings.
-@implementation SearchFieldCellWithFocusRing
-
-- (void)drawWithFrame:(NSRect)rect inView:(NSView*)controlView {
-  [super drawWithFrame:rect inView:controlView];
-
-  if (FocusIsDrawnByDrawWithFrame(self)) {
-    // For some reason, -[NSSearchFieldCell drawWithFrame:inView] doesn't draw a
-    // focus ring in 64 bit mode, no matter what SDK is used or what OS X version
-    // we're running on. But if FocusIsDrawnByDrawWithFrame(self), then our
-    // caller expects us to draw a focus ring. So we just do that here.
-    DrawFocusRingForCellIfNeeded(self, rect, controlView);
-  }
-}
-
-- (void)drawFocusRingMaskWithFrame:(NSRect)rect inView:(NSView*)controlView {
-  // By default this draws nothing. I don't know why.
-  // We just draw the search field again. It's a great mask shape for its own
-  // focus ring.
-  [super drawWithFrame:rect inView:controlView];
-}
-
-@end
-
-@interface ToolbarSearchFieldCellWithFocusRing : SearchFieldCellWithFocusRing
-@end
-
-@implementation ToolbarSearchFieldCellWithFocusRing
+@implementation MOZToolbarSearchFieldCell
 
 - (BOOL)_isToolbarMode {
   // This function is called during -[NSSearchFieldCell drawWithFrame:inView:].
@@ -451,20 +386,25 @@ nsNativeThemeCocoa::nsNativeThemeCocoa() {
   [mPushButtonCell setButtonType:NSMomentaryPushInButton];
   [mPushButtonCell setHighlightsBy:NSPushInCellMask];
 
-  mRadioButtonCell = [[RadioButtonCell alloc] initTextCell:@""];
+  mRadioButtonCell = [[NSButtonCell alloc] initTextCell:@""];
   [mRadioButtonCell setButtonType:NSRadioButton];
 
-  mCheckboxCell = [[CheckboxCell alloc] initTextCell:@""];
+  mCheckboxCell = [[NSButtonCell alloc] initTextCell:@""];
   [mCheckboxCell setButtonType:NSSwitchButton];
   [mCheckboxCell setAllowsMixedState:YES];
 
-  mSearchFieldCell = [[SearchFieldCellWithFocusRing alloc] initTextCell:@""];
+  mTextFieldCell = [[NSTextFieldCell alloc] initTextCell:@""];
+  [mTextFieldCell setBezeled:YES];
+  [mTextFieldCell setEditable:YES];
+  [mTextFieldCell setFocusRingType:NSFocusRingTypeExterior];
+
+  mSearchFieldCell = [[NSSearchFieldCell alloc] initTextCell:@""];
   [mSearchFieldCell setBezelStyle:NSTextFieldRoundedBezel];
   [mSearchFieldCell setBezeled:YES];
   [mSearchFieldCell setEditable:YES];
   [mSearchFieldCell setFocusRingType:NSFocusRingTypeExterior];
 
-  mToolbarSearchFieldCell = [[ToolbarSearchFieldCellWithFocusRing alloc] initTextCell:@""];
+  mToolbarSearchFieldCell = [[MOZToolbarSearchFieldCell alloc] initTextCell:@""];
   [mToolbarSearchFieldCell setBezelStyle:NSTextFieldRoundedBezel];
   [mToolbarSearchFieldCell setBezeled:YES];
   [mToolbarSearchFieldCell setEditable:YES];
@@ -497,6 +437,7 @@ nsNativeThemeCocoa::~nsNativeThemeCocoa() {
   [mPushButtonCell release];
   [mRadioButtonCell release];
   [mCheckboxCell release];
+  [mTextFieldCell release];
   [mSearchFieldCell release];
   [mToolbarSearchFieldCell release];
   [mDropdownCell release];
@@ -997,19 +938,44 @@ static bool IsInsideToolbar(nsIFrame* aFrame) {
   return false;
 }
 
-nsNativeThemeCocoa::SearchFieldParams nsNativeThemeCocoa::ComputeSearchFieldParams(
+nsNativeThemeCocoa::TextFieldParams nsNativeThemeCocoa::ComputeTextFieldParams(
     nsIFrame* aFrame, EventStates aEventState) {
-  SearchFieldParams params;
+  TextFieldParams params;
   params.insideToolbar = IsInsideToolbar(aFrame);
   params.disabled = IsDisabled(aFrame, aEventState);
-  params.focused = IsFocused(aFrame);
+
+  // See ShouldUnconditionallyDrawFocusRingIfFocused.
+  params.focused = aEventState.HasState(NS_EVENT_STATE_FOCUS);
+  // XUL textboxes set the native appearance on the containing box, while
+  // concrete focus is set on the html:input element within it. We can
+  // though, check the focused attribute of xul textboxes in this case.
+  // On Mac, focus rings are always shown for textboxes, so we do not need
+  // to check the window's focus ring state here
+  if (aFrame->GetContent()->IsXULElement() && IsFocused(aFrame)) {
+    params.focused = true;
+  }
+
   params.rtl = IsFrameRTL(aFrame);
   params.verticalAlignFactor = VerticalAlignFactor(aFrame);
   return params;
 }
 
+void nsNativeThemeCocoa::DrawTextField(CGContextRef cgContext, const HIRect& inBoxRect,
+                                       const TextFieldParams& aParams) {
+  NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
+
+  NSTextFieldCell* cell = mTextFieldCell;
+  [cell setEnabled:!aParams.disabled];
+  [cell setShowsFirstResponder:aParams.focused];
+
+  DrawCellWithSnapping(cell, cgContext, inBoxRect, searchFieldSettings, aParams.verticalAlignFactor,
+                       mCellDrawView, aParams.rtl);
+
+  NS_OBJC_END_TRY_IGNORE_BLOCK;
+}
+
 void nsNativeThemeCocoa::DrawSearchField(CGContextRef cgContext, const HIRect& inBoxRect,
-                                         const SearchFieldParams& aParams) {
+                                         const TextFieldParams& aParams) {
   NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
 
   NSSearchFieldCell* cell = aParams.insideToolbar ? mToolbarSearchFieldCell : mSearchFieldCell;
@@ -1698,47 +1664,6 @@ void nsNativeThemeCocoa::DrawSpinButton(CGContextRef cgContext, const HIRect& in
   HIThemeDrawButton(&drawRect, &bdi, cgContext, HITHEME_ORIENTATION, NULL);
 
   CGContextRestoreGState(cgContext);
-
-  NS_OBJC_END_TRY_IGNORE_BLOCK;
-}
-
-void nsNativeThemeCocoa::DrawTextBox(CGContextRef cgContext, const HIRect& inBoxRect,
-                                     TextBoxParams aParams) {
-  NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
-
-  SetCGContextFillColor(cgContext, sRGBColor(1.0, 1.0, 1.0, 1.0));
-  CGContextFillRect(cgContext, inBoxRect);
-
-#if DRAW_IN_FRAME_DEBUG
-  CGContextSetRGBFillColor(cgContext, 0.0, 0.0, 0.5, 0.25);
-  CGContextFillRect(cgContext, inBoxRect);
-#endif
-
-  if (aParams.borderless) {
-    return;
-  }
-
-  HIThemeFrameDrawInfo fdi;
-  fdi.version = 0;
-  fdi.kind = kHIThemeFrameTextFieldSquare;
-
-  // We don't ever set an inactive state for this because it doesn't
-  // look right (see other apps).
-  fdi.state = aParams.disabled ? kThemeStateUnavailable : kThemeStateActive;
-  fdi.isFocused = aParams.focused;
-
-  // HIThemeDrawFrame takes the rect for the content area of the frame, not
-  // the bounding rect for the frame. Here we reduce the size of the rect we
-  // will pass to make it the size of the content.
-  HIRect drawRect = inBoxRect;
-  SInt32 frameOutset = 0;
-  ::GetThemeMetric(kThemeMetricEditTextFrameOutset, &frameOutset);
-  drawRect.origin.x += frameOutset;
-  drawRect.origin.y += frameOutset;
-  drawRect.size.width -= frameOutset * 2;
-  drawRect.size.height -= frameOutset * 2;
-
-  HIThemeDrawFrame(&drawRect, &fdi, cgContext, HITHEME_ORIENTATION);
 
   NS_OBJC_END_TRY_IGNORE_BLOCK;
 }
@@ -2635,25 +2560,11 @@ Maybe<nsNativeThemeCocoa::WidgetInfo> nsNativeThemeCocoa::ComputeWidgetInfo(
       return Some(WidgetInfo::GroupBox());
 
     case StyleAppearance::Textfield:
-    case StyleAppearance::NumberInput: {
-      // See ShouldUnconditionallyDrawFocusRingIfFocused.
-      bool isFocused = eventState.HasState(NS_EVENT_STATE_FOCUS);
-      // XUL textboxes set the native appearance on the containing box, while
-      // concrete focus is set on the html:input element within it. We can
-      // though, check the focused attribute of xul textboxes in this case.
-      // On Mac, focus rings are always shown for textboxes, so we do not need
-      // to check the window's focus ring state here
-      if (aFrame->GetContent()->IsXULElement() && IsFocused(aFrame)) {
-        isFocused = true;
-      }
-
-      bool isDisabled = IsDisabled(aFrame, eventState) || IsReadOnly(aFrame);
-      return Some(
-          WidgetInfo::TextBox(TextBoxParams{isDisabled, isFocused, /* borderless = */ false}));
-    }
+    case StyleAppearance::NumberInput:
+      return Some(WidgetInfo::TextField(ComputeTextFieldParams(aFrame, eventState)));
 
     case StyleAppearance::Searchfield:
-      return Some(WidgetInfo::SearchField(ComputeSearchFieldParams(aFrame, eventState)));
+      return Some(WidgetInfo::SearchField(ComputeTextFieldParams(aFrame, eventState)));
 
     case StyleAppearance::ProgressBar: {
       if (IsIndeterminateProgress(aFrame, eventState)) {
@@ -2814,9 +2725,6 @@ void nsNativeThemeCocoa::RenderWidget(const WidgetInfo& aWidgetInfo, DrawTarget&
   AutoRestoreTransform autoRestoreTransform(&aDrawTarget);
 
   gfx::Rect dirtyRect = aDirtyRect;
-  gfx::Rect widgetRect = aWidgetRect;
-  dirtyRect.Scale(1.0f / aScale);
-  widgetRect.Scale(1.0f / aScale);
   aDrawTarget.SetTransform(aDrawTarget.GetTransform().PreScale(aScale, aScale));
 
   const Widget widget = aWidgetInfo.Widget();
@@ -2825,25 +2733,51 @@ void nsNativeThemeCocoa::RenderWidget(const WidgetInfo& aWidgetInfo, DrawTarget&
   switch (widget) {
     case Widget::eColorFill: {
       sRGBColor color = aWidgetInfo.Params<sRGBColor>();
-      aDrawTarget.FillRect(widgetRect, ColorPattern(ToDeviceColor(color)));
+      aDrawTarget.FillRect(aWidgetRect, ColorPattern(ToDeviceColor(color)));
       break;
     }
     case Widget::eScrollbarThumb: {
       ScrollbarParams params = aWidgetInfo.Params<ScrollbarParams>();
-      ScrollbarDrawingMac::DrawScrollbarThumb(aDrawTarget, widgetRect, params);
+      auto thumb = ScrollbarDrawingMac::GetThumbRect(aWidgetRect, params, aScale);
+      float cornerRadius = (params.horizontal ? thumb.mRect.Height() : thumb.mRect.Width()) / 2.0f;
+      aDrawTarget.FillRoundedRect(RoundedRect(thumb.mRect, RectCornerRadii(cornerRadius)),
+                                  ColorPattern(ToDeviceColor(thumb.mFillColor)));
+      if (thumb.mStrokeColor) {
+        auto strokeRect = thumb.mRect;
+        strokeRect.Inflate(thumb.mStrokeOutset);
+        float strokeRadius = (params.horizontal ? strokeRect.Height() : strokeRect.Width()) / 2.0f;
+        RefPtr<Path> path =
+            MakePathForRoundedRect(aDrawTarget, strokeRect, RectCornerRadii(strokeRadius));
+        aDrawTarget.Stroke(path, ColorPattern(ToDeviceColor(thumb.mStrokeColor)),
+                           StrokeOptions(thumb.mStrokeWidth));
+      }
       break;
     }
     case Widget::eScrollbarTrack: {
       ScrollbarParams params = aWidgetInfo.Params<ScrollbarParams>();
-      ScrollbarDrawingMac::DrawScrollbarTrack(aDrawTarget, widgetRect, params);
+      ScrollbarDrawingMac::ScrollbarTrackRects rects;
+      if (ScrollbarDrawingMac::GetScrollbarTrackRects(aWidgetRect, params, aScale, rects)) {
+        for (const auto& rect : rects) {
+          aDrawTarget.FillRect(rect.mRect, ColorPattern(ToDeviceColor(rect.mColor)));
+        }
+      }
       break;
     }
     case Widget::eScrollCorner: {
       ScrollbarParams params = aWidgetInfo.Params<ScrollbarParams>();
-      ScrollbarDrawingMac::DrawScrollCorner(aDrawTarget, widgetRect, params);
+      ScrollbarDrawingMac::ScrollCornerRects rects;
+      if (ScrollbarDrawingMac::GetScrollCornerRects(aWidgetRect, params, aScale, rects)) {
+        for (const auto& rect : rects) {
+          aDrawTarget.FillRect(rect.mRect, ColorPattern(ToDeviceColor(rect.mColor)));
+        }
+      }
       break;
     }
     default: {
+      gfx::Rect widgetRect = aWidgetRect;
+      dirtyRect.Scale(1.0f / aScale);
+      widgetRect.Scale(1.0f / aScale);
+
       // The remaining widgets require a CGContext.
       CGRect macRect =
           CGRectMake(widgetRect.X(), widgetRect.Y(), widgetRect.Width(), widgetRect.Height());
@@ -2959,13 +2893,13 @@ void nsNativeThemeCocoa::RenderWidget(const WidgetInfo& aWidgetInfo, DrawTarget&
           HIThemeDrawGroupBox(&macRect, &gdi, cgContext, HITHEME_ORIENTATION);
           break;
         }
-        case Widget::eTextBox: {
-          TextBoxParams params = aWidgetInfo.Params<TextBoxParams>();
-          DrawTextBox(cgContext, macRect, params);
+        case Widget::eTextField: {
+          TextFieldParams params = aWidgetInfo.Params<TextFieldParams>();
+          DrawTextField(cgContext, macRect, params);
           break;
         }
         case Widget::eSearchField: {
-          SearchFieldParams params = aWidgetInfo.Params<SearchFieldParams>();
+          TextFieldParams params = aWidgetInfo.Params<TextFieldParams>();
           DrawSearchField(cgContext, macRect, params);
           break;
         }
@@ -3836,16 +3770,6 @@ bool nsNativeThemeCocoa::WidgetAppearanceDependsOnWindowFocus(StyleAppearance aA
   }
 }
 
-bool nsNativeThemeCocoa::IsWindowSheet(nsIFrame* aFrame) {
-  NSWindow* win = NativeWindowForFrame(aFrame);
-  id winDelegate = [win delegate];
-  nsIWidget* widget = [(WindowDelegate*)winDelegate geckoWidget];
-  if (!widget) {
-    return false;
-  }
-  return (widget->WindowType() == eWindowType_sheet);
-}
-
 nsITheme::ThemeGeometryType nsNativeThemeCocoa::ThemeGeometryTypeForWidget(
     nsIFrame* aFrame, StyleAppearance aAppearance) {
   switch (aAppearance) {
@@ -3876,8 +3800,6 @@ nsITheme::ThemeGeometryType nsNativeThemeCocoa::ThemeGeometryTypeForWidget(
       bool isSelected = !isDisabled && CheckBooleanAttr(aFrame, nsGkAtoms::menuactive);
       return isSelected ? eThemeGeometryTypeHighlightedMenuItem : eThemeGeometryTypeMenu;
     }
-    case StyleAppearance::Dialog:
-      return IsWindowSheet(aFrame) ? eThemeGeometryTypeSheet : eThemeGeometryTypeUnknown;
     case StyleAppearance::MozMacSourceList:
       return eThemeGeometryTypeSourceList;
     case StyleAppearance::MozMacSourceListSelection:

@@ -307,16 +307,16 @@ bool RenderCompositorANGLE::CreateSwapChain(nsACString& aError) {
       mUseTripleBuffering = useTripleBuffering;
     } else if (useFlipSequential) {
       gfxCriticalNoteOnce << "FLIP_SEQUENTIAL is not supported. Fallback";
-
-      if (mWidget->AsWindows()->GetCompositorHwnd()) {
-        // Destroy compositor window.
-        mWidget->AsWindows()->DestroyCompositorWindow();
-        hwnd = mWidget->AsWindows()->GetHwnd();
-      }
     }
   }
 
   if (!mSwapChain) {
+    if (mWidget->AsWindows()->GetCompositorHwnd()) {
+      // Destroy compositor window.
+      mWidget->AsWindows()->DestroyCompositorWindow();
+      hwnd = mWidget->AsWindows()->GetHwnd();
+    }
+
     DXGI_SWAP_CHAIN_DESC swapDesc{};
     swapDesc.BufferDesc.Width = 0;
     swapDesc.BufferDesc.Height = 0;
@@ -500,7 +500,7 @@ bool RenderCompositorANGLE::BeginFrame() {
     if (!mSyncObject->Synchronize(/* aFallible */ true)) {
       // It's timeout or other error. Handle the device-reset here.
       RenderThread::Get()->HandleDeviceReset(
-          "SyncObject", nullptr, LOCAL_GL_UNKNOWN_CONTEXT_RESET_ARB);
+          "SyncObject", LOCAL_GL_UNKNOWN_CONTEXT_RESET_ARB);
       return false;
     }
   }
@@ -940,12 +940,9 @@ void RenderCompositorANGLE::AddSurface(
   mDCLayerTree->AddSurface(aId, aTransform, aClipRect, aImageRendering);
 }
 
-CompositorCapabilities RenderCompositorANGLE::GetCompositorCapabilities() {
-  CompositorCapabilities caps;
-
-  caps.virtual_surface_size = VIRTUAL_SURFACE_SIZE;
-
-  return caps;
+void RenderCompositorANGLE::GetCompositorCapabilities(
+    CompositorCapabilities* aCaps) {
+  aCaps->virtual_surface_size = VIRTUAL_SURFACE_SIZE;
 }
 
 void RenderCompositorANGLE::EnableNativeCompositor(bool aEnable) {

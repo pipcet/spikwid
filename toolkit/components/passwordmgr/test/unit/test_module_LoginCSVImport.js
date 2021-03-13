@@ -482,6 +482,38 @@ add_task(async function test_import_from_chrome_csv() {
 });
 
 /**
+ * Imports login data with an item without the username.
+ */
+add_task(async function test_import_login_without_username() {
+  let csvFilePath = await setupCsv([
+    "url,username,password",
+    "https://example.com/login,,secret_password",
+  ]);
+
+  await LoginCSVImport.importFromCSV(csvFilePath);
+
+  LoginTestUtils.checkLogins(
+    [
+      TestData.formLogin({
+        formActionOrigin: "",
+        httpRealm: null,
+        origin: "https://example.com",
+        password: "secret_password",
+        passwordField: "",
+        timesUsed: 1,
+        username: "",
+        usernameField: "",
+      }),
+    ],
+    "Check that a Login is added without an username",
+    (a, e) =>
+      a.equals(e) &&
+      checkMetaInfo(a, e, ["timesUsed"]) &&
+      checkLoginNewlyCreated(a)
+  );
+});
+
+/**
  * Imports login data from a KeepassXC CSV file.
  * `Title` is ignored until bug 1433770.
  */
@@ -637,28 +669,36 @@ add_task(async function test_import_summary_contains_unchanged_login() {
 });
 
 /**
- * Imports login data summary contains logins with errors.
+ * Imports login data summary contains logins with errors in case of missing fields.
  */
-add_task(async function test_import_summary_contains_logins_with_errors() {
-  let csvFilePath = await setupCsv([
-    "url,username,password,httpRealm,formActionOrigin,guid,timeCreated,timeLastUsed,timePasswordChanged",
-    "https://invalid.password.example.com,jane@example.com,,My realm,,{5ec0d12f-e194-4279-ae1b-d7d281bb0002},1589617814635,1589710449871,1589617846802",
-    ",jane@example.com,invalid_origin,My realm,,{5ec0d12f-e194-4279-ae1b-d7d281bb0005},1589617814635,1589710449871,1589617846802",
-  ]);
-  let [invalidPassword, invalidOrigin] = await LoginCSVImport.importFromCSV(
-    csvFilePath
-  );
+add_task(async function test_import_summary_contains_missing_fields_errors() {
+  const missingFieldsToCheck = ["url", "password"];
+  const sourceObject = {
+    url: "https://invalid.password.example.com",
+    username: "jane@example.com",
+    password: "qwerty",
+  };
+  for (const missingField of missingFieldsToCheck) {
+    const clonedUser = { ...sourceObject };
+    clonedUser[missingField] = "";
+    let csvFilePath = await setupCsv([
+      "url,username,password",
+      `${clonedUser.url},${clonedUser.username},${clonedUser.password}`,
+    ]);
 
-  equal(
-    invalidPassword.result,
-    "error_invalid_password",
-    `Check that the invalid password error is reported`
-  );
-  equal(
-    invalidOrigin.result,
-    "error_invalid_origin",
-    `Check that the invalid origin error is reported`
-  );
+    let [importLogin] = await LoginCSVImport.importFromCSV(csvFilePath);
+
+    equal(
+      importLogin.result,
+      "error_missing_field",
+      `Check that the missing field error is reported for ${missingField}`
+    );
+    equal(
+      importLogin.field_name,
+      missingField,
+      `Check that the invalid field name is correctly reported for the ${missingField}`
+    );
+  }
 });
 
 /**

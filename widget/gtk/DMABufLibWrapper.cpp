@@ -10,9 +10,7 @@
 #include "mozilla/StaticPrefs_widget.h"
 #include "mozilla/StaticPrefs_media.h"
 #include "mozilla/gfx/gfxVars.h"
-
-#include <gdk/gdk.h>
-#include <gdk/gdkx.h>
+#include "WidgetUtilsGtk.h"
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -63,6 +61,7 @@ bool nsGbmLib::IsAvailable() {
 
 bool nsGbmLib::Load() {
   if (!sGbmLibHandle && !sLibLoaded) {
+    LOGDMABUF(("Loading DMABuf system library %s ...\n", GBMLIB_NAME));
     sLibLoaded = true;
 
     sGbmLibHandle = dlopen(GBMLIB_NAME, RTLD_LAZY | RTLD_LOCAL);
@@ -170,8 +169,7 @@ nsDMABufDevice::nsDMABufDevice()
       mARGBFormat({true, true, GBM_FORMAT_ARGB8888, nullptr, 0}),
       mGbmDevice(nullptr),
       mGbmFd(-1) {
-  if (gdk_display_get_default() &&
-      !GDK_IS_X11_DISPLAY(gdk_display_get_default())) {
+  if (GdkIsWaylandDisplay()) {
     wl_display* display = WaylandDisplayGetWLDisplay();
     mRegistry = (void*)wl_display_get_registry(display);
     wl_registry_add_listener((wl_registry*)mRegistry, &registry_listener, this);
@@ -188,6 +186,8 @@ nsDMABufDevice::~nsDMABufDevice() {
 }
 
 bool nsDMABufDevice::Configure() {
+  LOGDMABUF(("nsDMABufDevice::Configure()"));
+
   bool isDMABufUsed = (
 #ifdef NIGHTLY_BUILD
       StaticPrefs::widget_dmabuf_textures_enabled() ||
@@ -211,6 +211,7 @@ bool nsDMABufDevice::Configure() {
   if (drm_render_node.IsEmpty()) {
     drm_render_node.Assign(gfx::gfxVars::DrmRenderDevice());
     if (drm_render_node.IsEmpty()) {
+      LOGDMABUF(("Failed: We're missing DRM render device!\n"));
       return false;
     }
   }
@@ -230,7 +231,7 @@ bool nsDMABufDevice::Configure() {
     return false;
   }
 
-  LOGDMABUF(("GBM device initialized"));
+  LOGDMABUF(("DMABuf is enabled, using drm node %s", drm_render_node.get()));
   return true;
 }
 
@@ -248,11 +249,23 @@ bool nsDMABufDevice::IsDMABufTexturesEnabled() {
 bool nsDMABufDevice::IsDMABufTexturesEnabled() { return false; }
 #endif
 bool nsDMABufDevice::IsDMABufVAAPIEnabled() {
-  return gfx::gfxVars::UseEGL() && IsDMABufEnabled() &&
-         StaticPrefs::media_ffmpeg_vaapi_enabled() &&
-         gfx::gfxVars::CanUseHardwareVideoDecoding() && !XRE_IsRDDProcess();
+  LOGDMABUF(
+      ("nsDMABufDevice::IsDMABufVAAPIEnabled: EGL %d DMABufEnabled %d  "
+       "media_ffmpeg_vaapi_enabled %d CanUseHardwareVideoDecoding %d "
+       "!XRE_IsRDDProcess %d\n",
+       gfx::gfxVars::UseEGL(), IsDMABufEnabled(),
+       StaticPrefs::media_ffmpeg_vaapi_enabled(),
+       gfx::gfxVars::CanUseHardwareVideoDecoding(), !XRE_IsRDDProcess()));
+  return StaticPrefs::media_ffmpeg_vaapi_enabled() && !XRE_IsRDDProcess() &&
+         gfx::gfxVars::UseEGL() && IsDMABufEnabled() &&
+         gfx::gfxVars::CanUseHardwareVideoDecoding();
 }
 bool nsDMABufDevice::IsDMABufWebGLEnabled() {
+  LOGDMABUF(
+      ("nsDMABufDevice::IsDMABufWebGLEnabled: EGL %d DMABufEnabled %d  "
+       "widget_dmabuf_webgl_enabled %d\n",
+       gfx::gfxVars::UseEGL(), IsDMABufEnabled(),
+       StaticPrefs::widget_dmabuf_webgl_enabled()));
   return gfx::gfxVars::UseEGL() && IsDMABufEnabled() &&
          StaticPrefs::widget_dmabuf_webgl_enabled();
 }

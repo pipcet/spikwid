@@ -860,7 +860,7 @@ bool AsyncPanZoomController::ArePointerEventsConsumable(
         // In the case of the root APZC with any dynamic toolbar, it
         // shoule be pannable if there is room moving the dynamic
         // toolbar.
-        (IsRootContent() && CanScrollDownwardsWithDynamicToolbar())));
+        (IsRootContent() && CanVerticalScrollWithDynamicToolbar())));
 
   bool pannable;
 
@@ -1543,6 +1543,7 @@ nsEventStatus AsyncPanZoomController::OnScale(const PinchGestureInput& aEvent) {
     MOZ_ASSERT(Metrics().IsRootContent());
     MOZ_ASSERT(Metrics().GetZoom().AreScalesSame());
 
+    // TODO: Need to handle different x-and y-scales.
     CSSToParentLayerScale userZoom = Metrics().GetZoom().ToScaleFactor();
     ParentLayerPoint focusPoint =
         aEvent.mLocalFocusPoint - Metrics().GetCompositionBounds().TopLeft();
@@ -2226,16 +2227,38 @@ bool AsyncPanZoomController::CanScroll(ScrollDirection aDirection) const {
   return false;
 }
 
-bool AsyncPanZoomController::CanScrollDownwardsWithDynamicToolbar() const {
+bool AsyncPanZoomController::CanVerticalScrollWithDynamicToolbar() const {
   MOZ_ASSERT(IsRootContent());
 
   RecursiveMutexAutoLock lock(mRecursiveMutex);
-  return mY.CanScrollDownwardsWithDynamicToolbar();
+  return mY.CanVerticalScrollWithDynamicToolbar();
 }
 
 bool AsyncPanZoomController::CanScrollDownwards() const {
   RecursiveMutexAutoLock lock(mRecursiveMutex);
   return mY.CanScrollTo(eSideBottom);
+}
+
+SideBits AsyncPanZoomController::ScrollableDirections() const {
+  SideBits result;
+  {  // scope lock to respect lock ordering with APZCTreeManager::mTreeLock
+    // which will be acquired in the `GetCompositorFixedLayerMargins` below.
+    RecursiveMutexAutoLock lock(mRecursiveMutex);
+    result = mX.ScrollableDirections() | mY.ScrollableDirections();
+  }
+
+  if (IsRootContent()) {
+    if (APZCTreeManager* treeManagerLocal = GetApzcTreeManager()) {
+      ScreenMargin fixedLayerMargins =
+          treeManagerLocal->GetCompositorFixedLayerMargins();
+      {
+        RecursiveMutexAutoLock lock(mRecursiveMutex);
+        result |= mY.ScrollableDirectionsWithDynamicToolbar(fixedLayerMargins);
+      }
+    }
+  }
+
+  return result;
 }
 
 bool AsyncPanZoomController::IsContentOfHonouredTargetRightToLeft(
@@ -2872,14 +2895,15 @@ nsEventStatus AsyncPanZoomController::OnDoubleTap(
   APZC_LOG("%p got a double-tap in state %d\n", this, mState);
   RefPtr<GeckoContentController> controller = GetGeckoContentController();
   if (controller) {
-    MOZ_ASSERT(GetCurrentTouchBlock());
+    MOZ_ASSERT(!GetCurrentInputBlock() || GetCurrentTouchBlock());
     if (mZoomConstraints.mAllowDoubleTapZoom &&
-        GetCurrentTouchBlock()->TouchActionAllowsDoubleTapZoom()) {
+        (!GetCurrentInputBlock() ||
+         GetCurrentTouchBlock()->TouchActionAllowsDoubleTapZoom())) {
       if (Maybe<LayoutDevicePoint> geckoScreenPoint =
               ConvertToGecko(aEvent.mPoint)) {
-        controller->HandleTap(TapType::eDoubleTap, *geckoScreenPoint,
-                              aEvent.modifiers, GetGuid(),
-                              GetCurrentTouchBlock()->GetBlockId());
+        controller->HandleTap(
+            TapType::eDoubleTap, *geckoScreenPoint, aEvent.modifiers, GetGuid(),
+            GetCurrentTouchBlock() ? GetCurrentTouchBlock()->GetBlockId() : 0);
       }
     }
     return nsEventStatus_eConsumeNoDefault;
@@ -4862,6 +4886,7 @@ void AsyncPanZoomController::NotifyLayersUpdated(
   }
 
   bool scrollOffsetUpdated = false;
+  bool smoothScrollRequested = false;
   for (const auto& scrollUpdate : aScrollMetadata.GetScrollUpdates()) {
     APZC_LOG("%p processing scroll update %s\n", this,
              ToString(scrollUpdate).c_str());
@@ -4885,7 +4910,7 @@ void AsyncPanZoomController::NotifyLayersUpdated(
 
     if (scrollUpdate.GetMode() == ScrollMode::Smooth ||
         scrollUpdate.GetMode() == ScrollMode::SmoothMsd) {
-      scrollOffsetUpdated = true;
+      smoothScrollRequested = true;
 
       // Requests to animate the visual scroll position override requests to
       // simply update the visual scroll offset to a particular point. Since
@@ -5056,6 +5081,12 @@ void AsyncPanZoomController::NotifyLayersUpdated(
     }
   }
 
+  if (smoothScrollRequested && !scrollOffsetUpdated) {
+    mExpectedGeckoMetrics.UpdateFrom(aLayerMetrics);
+    // Need to acknowledge the request.
+    needContentRepaint = true;
+  }
+
   // If `isDefault` is true, this APZC is a "new" one (this is the first time
   // it's getting a NotifyLayersUpdated call). In this case we want to apply the
   // visual scroll offset from the main thread to our scroll offset.
@@ -5224,6 +5255,7 @@ void AsyncPanZoomController::ZoomToRect(CSSRect aRect, const uint32_t aFlags) {
     ParentLayerRect compositionBounds = Metrics().GetCompositionBounds();
     CSSRect cssPageRect = Metrics().GetScrollableRect();
     CSSPoint scrollOffset = Metrics().GetVisualScrollOffset();
+    // TODO: Need to handle different x-and y-scales.
     CSSToParentLayerScale currentZoom = Metrics().GetZoom().ToScaleFactor();
     CSSToParentLayerScale targetZoom;
 
@@ -5548,7 +5580,7 @@ void AsyncPanZoomController::UpdateSharedCompositorFrameMetrics() {
           ? static_cast<FrameMetrics*>(mSharedFrameMetricsBuffer->memory())
           : nullptr;
 
-  if (frame && mSharedLock && StaticPrefs::layers_progressive_paint()) {
+  if (frame && mSharedLock && apz::ShouldUseProgressivePaint()) {
     mSharedLock->Lock();
     *frame = Metrics();
     mSharedLock->Unlock();
@@ -5562,7 +5594,7 @@ void AsyncPanZoomController::ShareCompositorFrameMetrics() {
   // we are using progressive tile painting, and we have a
   // controller to pass the shared memory back to the content process/thread.
   if (!mSharedFrameMetricsBuffer && mMetricsSharingController &&
-      StaticPrefs::layers_progressive_paint()) {
+      apz::ShouldUseProgressivePaint()) {
     // Create shared memory and initialize it with the current FrameMetrics
     // value
     mSharedFrameMetricsBuffer = new ipc::SharedMemoryBasic;

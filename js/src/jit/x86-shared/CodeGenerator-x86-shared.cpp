@@ -292,8 +292,7 @@ void CodeGenerator::visitWasmStackArg(LWasmStackArg* ins) {
       default:
         break;
     }
-    MOZ_MAKE_COMPILER_ASSUME_IS_UNREACHABLE(
-        "unexpected mir type in WasmStackArg");
+    MOZ_CRASH("unexpected mir type in WasmStackArg");
   }
 }
 
@@ -443,7 +442,6 @@ void CodeGeneratorX86Shared::visitOutOfLineLoadTypedArrayOutOfBounds(
 
 void CodeGenerator::visitAsmJSStoreHeap(LAsmJSStoreHeap* ins) {
   const MAsmJSStoreHeap* mir = ins->mir();
-  MOZ_ASSERT(mir->offset() == 0);
 
   const LAllocation* ptr = ins->ptr();
   const LAllocation* value = ins->value();
@@ -3407,8 +3405,6 @@ void CodeGenerator::visitWasmReduceSimd128(LWasmReduceSimd128* ins) {
 
   switch (ins->simdOp()) {
     case wasm::SimdOp::V128AnyTrue:
-    case wasm::SimdOp::I16x8AnyTrue:
-    case wasm::SimdOp::I32x4AnyTrue:
       masm.anyTrueSimd128(src, ToRegister(dest));
       break;
     case wasm::SimdOp::I8x16AllTrue:
@@ -3467,8 +3463,6 @@ void CodeGenerator::visitWasmReduceAndBranchSimd128(
 
   switch (ins->simdOp()) {
     case wasm::SimdOp::V128AnyTrue:
-    case wasm::SimdOp::I16x8AnyTrue:
-    case wasm::SimdOp::I32x4AnyTrue:
       // Set the zero flag if all of the lanes are zero, and branch on that.
       masm.vptest(src, src);
       emitBranch(Assembler::NotEqual, ins->ifTrue(), ins->ifFalse());

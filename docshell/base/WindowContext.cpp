@@ -29,17 +29,21 @@ namespace dom {
 template class syncedcontext::Transaction<WindowContext>;
 
 static LazyLogModule gWindowContextLog("WindowContext");
+static LazyLogModule gWindowContextSyncLog("WindowContextSync");
 
 extern mozilla::LazyLogModule gUserInteractionPRLog;
 
 #define USER_ACTIVATION_LOG(msg, ...) \
   MOZ_LOG(gUserInteractionPRLog, LogLevel::Debug, (msg, ##__VA_ARGS__))
 
-using WindowContextByIdMap = nsDataHashtable<nsUint64HashKey, WindowContext*>;
+using WindowContextByIdMap = nsTHashMap<nsUint64HashKey, WindowContext*>;
 static StaticAutoPtr<WindowContextByIdMap> gWindowContexts;
 
 /* static */
 LogModule* WindowContext::GetLog() { return gWindowContextLog; }
+
+/* static */
+LogModule* WindowContext::GetSyncLog() { return gWindowContextSyncLog; }
 
 /* static */
 already_AddRefed<WindowContext> WindowContext::GetById(
@@ -348,7 +352,7 @@ void WindowContext::Init() {
     gWindowContexts = new WindowContextByIdMap();
     ClearOnShutdown(&gWindowContexts);
   }
-  auto& entry = gWindowContexts->GetOrInsert(mInnerWindowId);
+  auto& entry = gWindowContexts->LookupOrInsert(mInnerWindowId);
   MOZ_RELEASE_ASSERT(!entry, "Duplicate WindowContext for ID!");
   entry = this;
 

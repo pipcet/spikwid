@@ -87,10 +87,6 @@ var PocketPageAction = {
               browser.innerWindowID;
           },
           onIframeHidden(iframe, panel) {
-            if (iframe.getAttribute("itemAdded") == "true") {
-              iframe.ownerGlobal.LibraryUI.triggerLibraryAnimation("pocket");
-            }
-
             if (!PocketPageAction.urlbarNode) {
               return;
             }
@@ -322,6 +318,12 @@ var SaveToPocket = {
     if (enabled) {
       win.document.documentElement.removeAttribute("pocketdisabled");
     } else {
+      // Hide the context menu items to ensure separator logic works.
+      let savePageMenu = win.document.getElementById("context-pocket");
+      let saveLinkMenu = win.document.getElementById(
+        "context-savelinktopocket"
+      );
+      savePageMenu.hidden = saveLinkMenu.hidden = true;
       win.document.documentElement.setAttribute("pocketdisabled", "true");
     }
   },

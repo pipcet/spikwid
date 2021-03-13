@@ -12,7 +12,7 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/Result.h"
 #include "mozilla/dom/ipc/StringTable.h"
-#include "nsDataHashtable.h"
+#include "nsTHashMap.h"
 
 namespace mozilla {
 
@@ -641,7 +641,7 @@ class MOZ_RAII SharedPrefMapBuilder {
       return mDefaultEntries.WithEntryHandle(aDefaultValue, [&](auto&& entry) {
         entry.OrInsertWith([&] { return Entry{index, false, aDefaultValue}; });
 
-        return ValueIdx{entry.Data().mIndex, false};
+        return ValueIdx{entry->mIndex, false};
       });
     }
 
@@ -722,7 +722,7 @@ class MOZ_RAII SharedPrefMapBuilder {
 
     AutoTArray<Entry, 256> mUserEntries;
 
-    nsDataHashtable<HashKey, Entry> mDefaultEntries;
+    nsTHashMap<HashKey, Entry> mDefaultEntries;
   };
 
   // A special-purpose string table builder for keys which are already

@@ -31,6 +31,7 @@
 #include "mozilla/dom/BrowsingContext.h"
 #include "mozilla/dom/CanonicalBrowsingContext.h"
 #include "mozilla/dom/Document.h"
+#include "mozilla/dom/nsHTTPSOnlyUtils.h"
 #include "mozilla/dom/Performance.h"
 #include "mozilla/dom/PerformanceStorage.h"
 #include "mozilla/dom/WindowGlobalParent.h"
@@ -459,6 +460,22 @@ HttpBaseChannel::SetLoadFlags(nsLoadFlags aLoadFlags) {
 
 NS_IMETHODIMP
 HttpBaseChannel::GetTRRMode(nsIRequest::TRRMode* aTRRMode) {
+  if (!LoadIsOCSP()) {
+    return GetTRRModeImpl(aTRRMode);
+  }
+
+  nsCOMPtr<nsIDNSService> dns = do_GetService(NS_DNSSERVICE_CONTRACTID);
+  nsIDNSService::ResolverMode trrMode = nsIDNSService::MODE_NATIVEONLY;
+  // If this is an OCSP channel, and the global TRR mode is TRR_ONLY (3)
+  // then we set the mode for this channel as TRR_DISABLED_MODE.
+  // We do this to prevent a TRR service channel's OCSP validation from
+  // blocking DNS resolution completely.
+  if (dns && NS_SUCCEEDED(dns->GetCurrentTrrMode(&trrMode)) &&
+      trrMode == nsIDNSService::MODE_TRRONLY) {
+    *aTRRMode = nsIRequest::TRR_DISABLED_MODE;
+    return NS_OK;
+  }
+
   return GetTRRModeImpl(aTRRMode);
 }
 
@@ -1823,22 +1840,21 @@ HttpBaseChannel::GetAllowSTS(bool* value) {
 NS_IMETHODIMP
 HttpBaseChannel::SetAllowSTS(bool value) {
   ENSURE_CALLED_BEFORE_CONNECT();
-
-  if (!value) {
-    // The only channels that are allowSTS == false are OCSPRequest
-    // If this is an OCSP channel, and the global TRR mode is TRR_ONLY (3)
-    // then we set the mode for this channel as TRR_FIRST.
-    // We do this to prevent a TRR service channel's OCSP validation from
-    // blocking DNS resolution completely.
-    nsCOMPtr<nsIDNSService> dns = do_GetService(NS_DNSSERVICE_CONTRACTID);
-    nsIDNSService::ResolverMode trrMode = nsIDNSService::MODE_NATIVEONLY;
-    if (dns && NS_SUCCEEDED(dns->GetCurrentTrrMode(&trrMode)) &&
-        trrMode == nsIDNSService::MODE_TRRONLY) {
-      SetTRRMode(nsIRequest::TRR_FIRST_MODE);
-    }
-  }
-
   StoreAllowSTS(value);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+HttpBaseChannel::GetIsOCSP(bool* value) {
+  NS_ENSURE_ARG_POINTER(value);
+  *value = LoadIsOCSP();
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+HttpBaseChannel::SetIsOCSP(bool value) {
+  ENSURE_CALLED_BEFORE_CONNECT();
+  StoreIsOCSP(value);
   return NS_OK;
 }
 
@@ -4275,9 +4291,6 @@ nsresult HttpBaseChannel::SetupReplacementChannel(nsIURI* newURI,
     CallQueryInterface(newChannel, realChannel.StartAssignment());
     if (realChannel) {
       realChannel->SetTopWindowURI(mTopWindowURI);
-
-      realChannel->StoreTaintedOriginFlag(
-          ShouldTaintReplacementChannelOrigin(newURI));
     }
 
     // update the DocumentURI indicator since we are being redirected.
@@ -4358,40 +4371,6 @@ nsresult HttpBaseChannel::SetupReplacementChannel(nsIURI* newURI,
   // This channel has been redirected. Don't report timing info.
   StoreTimingEnabled(false);
   return NS_OK;
-}
-
-bool HttpBaseChannel::ShouldTaintReplacementChannelOrigin(nsIURI* aNewURI) {
-  if (LoadTaintedOriginFlag()) {
-    return true;
-  }
-
-  nsIScriptSecurityManager* ssm = nsContentUtils::GetSecurityManager();
-  if (!ssm) {
-    return true;
-  }
-  bool isPrivateWin = mLoadInfo->GetOriginAttributes().mPrivateBrowsingId > 0;
-  nsresult rv = ssm->CheckSameOriginURI(aNewURI, mURI, false, isPrivateWin);
-  if (NS_SUCCEEDED(rv)) {
-    return false;
-  }
-  // If aNewURI <-> mURI are not same-origin we need to taint unless
-  // mURI <-> mOriginalURI/LoadingPrincipal are same origin.
-
-  if (mLoadInfo->GetLoadingPrincipal()) {
-    bool sameOrigin = false;
-    rv = mLoadInfo->GetLoadingPrincipal()->IsSameOrigin(mURI, isPrivateWin,
-                                                        &sameOrigin);
-    if (NS_FAILED(rv)) {
-      return true;
-    }
-    return !sameOrigin;
-  }
-  if (!mOriginalURI) {
-    return true;
-  }
-
-  rv = ssm->CheckSameOriginURI(mOriginalURI, mURI, false, isPrivateWin);
-  return NS_FAILED(rv);
 }
 
 // Redirect Tracking
@@ -5116,6 +5095,15 @@ nsresult HttpBaseChannel::CheckRedirectLimit(uint32_t aRedirectFlags) const {
 
   if (mRedirectCount >= mRedirectionLimit) {
     LOG(("redirection limit reached!\n"));
+    return NS_ERROR_REDIRECT_LOOP;
+  }
+
+  // in case https-only mode is enabled which upgrades top-level requests to
+  // https and the page answers with a redirect (meta, 302, win.location, ...)
+  // then this method can break the cycle which causes the https-only exception
+  // page to appear.
+  if (nsHTTPSOnlyUtils::IsUpgradeDowngradeEndlessLoop(mURI, mLoadInfo)) {
+    LOG(("upgrade downgrade redirect loop!\n"));
     return NS_ERROR_REDIRECT_LOOP;
   }
 

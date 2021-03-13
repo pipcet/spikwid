@@ -77,6 +77,9 @@ class nsDNSService final : public nsPIDNSService,
 
   bool DNSForbiddenByActiveProxy(const nsACString& aHostname, uint32_t flags);
 
+  // Locks the mutex and returns an addreffed resolver. May return null.
+  already_AddRefed<nsHostResolver> GetResolverLocked();
+
   RefPtr<nsHostResolver> mResolver;
   nsCOMPtr<nsIIDNService> mIDN;
 
@@ -106,5 +109,7 @@ class nsDNSService final : public nsPIDNSService,
   bool mODoHActivated = false;
   nsClassHashtable<nsCStringHashKey, nsTArray<nsCString>> mFailedSVCDomainNames;
 };
+
+already_AddRefed<nsIDNSService> GetOrInitDNSService();
 
 #endif  // nsDNSService2_h__

@@ -15,8 +15,7 @@ var { ExtensionsUI } = ChromeUtils.import(
 XPCOMUtils.defineLazyGetter(this, "Management", () => {
   // eslint-disable-next-line no-shadow
   const { Management } = ChromeUtils.import(
-    "resource://gre/modules/Extension.jsm",
-    null
+    "resource://gre/modules/Extension.jsm"
   );
   return Management;
 });
@@ -183,13 +182,7 @@ function triggerPageOptionsAction(win, action) {
 }
 
 function isDefaultIcon(icon) {
-  // These are basically the same icon, but code within webextensions
-  // generates references to the former and generic add-ons manager code
-  // generates referces to the latter.
-  return (
-    icon == "chrome://browser/content/extension.svg" ||
-    icon == "chrome://mozapps/skin/extensions/extensionGeneric.svg"
-  );
+  return icon == "chrome://mozapps/skin/extensions/extensionGeneric.svg";
 }
 
 /**
@@ -263,17 +256,11 @@ function checkNotification(panel, checkIcon, permissions) {
     `Permissions list has ${permissions.length} entries`
   );
   if (!permissions.length) {
-    ok(BrowserTestUtils.is_hidden(header), "Permissions header is hidden");
-    ok(
-      BrowserTestUtils.is_hidden(learnMoreLink),
-      "Permissions learn more is hidden"
-    );
+    ok(header.hidden, "Permissions header is hidden");
+    ok(learnMoreLink.hidden, "Permissions learn more is hidden");
   } else {
-    ok(BrowserTestUtils.is_visible(header), "Permissions header is visible");
-    ok(
-      BrowserTestUtils.is_visible(learnMoreLink),
-      "Permissions learn more is visible"
-    );
+    ok(!header.hidden, "Permissions header is visible");
+    ok(!learnMoreLink.hidden, "Permissions learn more is visible");
   }
 
   for (let i in permissions) {

@@ -16,10 +16,7 @@ job-defaults:
     test-manifest-loader: null  # don't load tests in the taskgraph
     tier: 3
     fission-tier: 3
-    virtualization:
-        by-test-platform:
-            windows10-64-ccov.*/.*: virtual
-            default: hardware
+    virtualization: hardware
     mozharness:
         script: raptor_script.py
         config:
@@ -28,10 +25,6 @@ job-defaults:
                     - raptor/mac_config.py
                 windows.*:
                     - raptor/windows_config.py
-                windows10-64-ccov.*/.*:
-                    - raptor/windows_vm_config.py
-                linux64-ccov.*/.*:
-                    - raptor/linux64_config_taskcluster.py
                 default:
                     - raptor/linux_config.py
         extra-options:
@@ -96,7 +89,8 @@ browsertime-tp6:
     fission-tier: 2
     fission-run-on-projects:
         by-test-platform:
-            windows7.*: []
+            (linux|windows|macos)(?!.*shippable).*: []
+            windows7.*shippable.*: []
             windows10.*shippable[^-qr].*: []
             default: ["mozilla-central"]
     run-on-projects:
@@ -113,7 +107,7 @@ browsertime-tp6:
         by-app:
             chrome:
                 - linux.*shippable[^-qr].*
-                - macosx1014-64-shippable-qr/opt
+                - macosx1015-64-shippable-qr/opt
                 - windows10.*shippable[^-qr].*
             chromium:
                 # Run on non-QR shippable, but test-platforms.yml doesn't have
@@ -121,7 +115,7 @@ browsertime-tp6:
                 # to run it on shippable-qr, otherwise there's nothing running
                 # this on macosx at all.
                 - .*shippable[^-qr].*
-                - macosx1014-64-shippable-qr/opt
+                - macosx1015-64-shippable-qr/opt
                 - windows10.*shippable[^-qr].*
             default: []
     treeherder-symbol: Btime(tp6)
@@ -129,7 +123,16 @@ browsertime-tp6:
     run-visual-metrics: true
     mozharness:
         extra-options:
-            - --chimera
+            by-test-platform:
+                windows10.*shippable.*-qr.*:
+                    - --chimera
+                    - --browsertime
+                    - --no-conditioned-profile
+                    - --browsertime-no-ffwindowrecorder
+                default:
+                    - --chimera
+                    - --browsertime
+                    - --no-conditioned-profile
 
 browsertime-benchmark:
     description: "Raptor (browsertime) Benchmark tests "
@@ -151,19 +154,17 @@ browsertime-tp6-live:
     tier: 2
     apps: ["firefox"]
     variants: []
-    pageload: "cold"
+    pageload: cold
     treeherder-symbol: Btime-live(tp6)
     run-on-projects:
-        by-pageload:
-            cold:
-                by-test-platform:
-                    windows7-32.*/opt: []
-                    macosx.*64(?:-qr)?/opt: []
-                    (linux|windows10|macos)(?!.*shippable).*: []
-                    default: ["autoland"]
+        by-test-platform:
+            (linux|windows|macos)(?!.*shippable).*: []
+            windows7.*shippable.*: []
+            default: ["autoland"]
     mozharness:
         extra-options:
             - --chimera
+            - --live-sites
 
 browsertime-tp6-profiling:
     description: "Raptor (browsertime) tp6 page-load tests with Gecko Profiling"

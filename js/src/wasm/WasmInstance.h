@@ -22,7 +22,6 @@
 #include "gc/Barrier.h"
 #include "gc/Zone.h"
 #include "vm/SharedMem.h"
-#include "wasm/TypedObject.h"
 #include "wasm/WasmCode.h"
 #include "wasm/WasmDebug.h"
 #include "wasm/WasmFrameIter.h"  // js::wasm::WasmFrameIter
@@ -175,7 +174,7 @@ class Instance {
   // Wasm disassembly support
 
   void disassembleExport(JSContext* cx, uint32_t funcIndex, Tier tier,
-                         PrintCallback callback) const;
+                         PrintCallback printString) const;
 
  public:
   // Functions to be called directly from wasm code.
@@ -221,14 +220,15 @@ class Instance {
   static void postBarrier(Instance* instance, gc::Cell** location);
   static void postBarrierFiltering(Instance* instance, gc::Cell** location);
   static void* structNew(Instance* instance, void* structDescr);
-  static void* structNarrow(Instance* instance, void* outputStructDescr,
-                            void* maybeNullPtr);
 #ifdef ENABLE_WASM_EXCEPTIONS
   static void* exceptionNew(Instance* instance, uint32_t exnIndex,
                             uint32_t nbytes);
   static void* throwException(Instance* instance, JSObject* exn);
   static uint32_t getLocalExceptionIndex(Instance* instance, JSObject* exn);
 #endif
+  static void* arrayNew(Instance* instance, uint32_t length, void* arrayDescr);
+  static int32_t refTest(Instance* instance, void* refPtr, void* rttPtr);
+  static void* rttSub(Instance* instance, void* rttPtr);
 };
 
 using UniqueInstance = UniquePtr<Instance>;

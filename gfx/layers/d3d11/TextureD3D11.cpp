@@ -684,7 +684,7 @@ void DXGIYCbCrTextureData::Deallocate(LayersIPCChannel*) {
 }
 
 TextureFlags DXGIYCbCrTextureData::GetTextureFlags() const {
-  TextureFlags flags = TextureFlags::DEALLOCATE_MAIN_THREAD;
+  TextureFlags flags = TextureFlags::NO_FLAGS;
   // With WebRender, resource open happens asynchronously on RenderThread.
   // During opening the resource on host side, TextureClient needs to be alive.
   // With WAIT_HOST_USAGE_END, keep TextureClient alive during host side usage.
@@ -1012,7 +1012,11 @@ void DXGITextureHostD3D11::PushResourceUpdates(
       MOZ_ASSERT(aImageKeys.length() == 1);
 
       wr::ImageDescriptor descriptor(mSize, GetFormat());
-      auto imageType = gfx::gfxVars::UseSoftwareWebRender()
+      // Prefer TextureExternal unless the backend requires TextureRect.
+      TextureHost::NativeTexturePolicy policy =
+          TextureHost::BackendNativeTexturePolicy(aResources.GetBackendType(),
+                                                  mSize);
+      auto imageType = policy == TextureHost::NativeTexturePolicy::REQUIRE
                            ? wr::ExternalImageType::TextureHandle(
                                  wr::ImageBufferKind::TextureRect)
                            : wr::ExternalImageType::TextureHandle(
@@ -1034,7 +1038,11 @@ void DXGITextureHostD3D11::PushResourceUpdates(
                                       mFormat == gfx::SurfaceFormat::NV12
                                           ? gfx::SurfaceFormat::R8G8
                                           : gfx::SurfaceFormat::R16G16);
-      auto imageType = gfx::gfxVars::UseSoftwareWebRender()
+      // Prefer TextureExternal unless the backend requires TextureRect.
+      TextureHost::NativeTexturePolicy policy =
+          TextureHost::BackendNativeTexturePolicy(aResources.GetBackendType(),
+                                                  mSize);
+      auto imageType = policy == TextureHost::NativeTexturePolicy::REQUIRE
                            ? wr::ExternalImageType::TextureHandle(
                                  wr::ImageBufferKind::TextureRect)
                            : wr::ExternalImageType::TextureHandle(
@@ -1066,11 +1074,11 @@ void DXGITextureHostD3D11::PushDisplayItems(
     case gfx::SurfaceFormat::B8G8R8A8:
     case gfx::SurfaceFormat::B8G8R8X8: {
       MOZ_ASSERT(aImageKeys.length() == 1);
-      aBuilder.PushImage(aBounds, aClip, true, aFilter, aImageKeys[0],
-                         !(mFlags & TextureFlags::NON_PREMULTIPLIED),
-                         wr::ColorF{1.0f, 1.0f, 1.0f, 1.0f},
-                         preferCompositorSurface,
-                         SupportsExternalCompositing());
+      aBuilder.PushImage(
+          aBounds, aClip, true, aFilter, aImageKeys[0],
+          !(mFlags & TextureFlags::NON_PREMULTIPLIED),
+          wr::ColorF{1.0f, 1.0f, 1.0f, 1.0f}, preferCompositorSurface,
+          SupportsExternalCompositing(aBuilder.GetBackendType()));
       break;
     }
     case gfx::SurfaceFormat::P010:
@@ -1083,7 +1091,7 @@ void DXGITextureHostD3D11::PushDisplayItems(
                                                   : wr::ColorDepth::Color16,
           wr::ToWrYuvColorSpace(mYUVColorSpace),
           wr::ToWrColorRange(mColorRange), aFilter, preferCompositorSurface,
-          SupportsExternalCompositing());
+          SupportsExternalCompositing(aBuilder.GetBackendType()));
       break;
     }
     default: {
@@ -1092,8 +1100,9 @@ void DXGITextureHostD3D11::PushDisplayItems(
   }
 }
 
-bool DXGITextureHostD3D11::SupportsExternalCompositing() {
-  if (gfx::gfxVars::UseSoftwareWebRender()) {
+bool DXGITextureHostD3D11::SupportsExternalCompositing(
+    WebRenderBackend aBackend) {
+  if (aBackend == WebRenderBackend::SOFTWARE) {
     return true;
   }
   // XXX Add P010 and P016 support.
@@ -1288,7 +1297,14 @@ void DXGIYCbCrTextureHostD3D11::PushResourceUpdates(
   auto method = aOp == TextureHost::ADD_IMAGE
                     ? &wr::TransactionBuilder::AddExternalImage
                     : &wr::TransactionBuilder::UpdateExternalImage;
-  auto imageType = gfx::gfxVars::UseSoftwareWebRender()
+
+  // Prefer TextureExternal unless the backend requires TextureRect.
+  // Use a size that is the maximum of the Y and CbCr sizes.
+  IntSize textureSize = std::max(mSizeY, mSizeCbCr);
+  TextureHost::NativeTexturePolicy policy =
+      TextureHost::BackendNativeTexturePolicy(aResources.GetBackendType(),
+                                              textureSize);
+  auto imageType = policy == TextureHost::NativeTexturePolicy::REQUIRE
                        ? wr::ExternalImageType::TextureHandle(
                              wr::ImageBufferKind::TextureRect)
                        : wr::ExternalImageType::TextureHandle(
@@ -1319,14 +1335,12 @@ void DXGIYCbCrTextureHostD3D11::PushDisplayItems(
       wr::ToWrColorDepth(mColorDepth), wr::ToWrYuvColorSpace(mYUVColorSpace),
       wr::ToWrColorRange(mColorRange), aFilter,
       aFlags.contains(PushDisplayItemFlag::PREFER_COMPOSITOR_SURFACE),
-      SupportsExternalCompositing());
+      SupportsExternalCompositing(aBuilder.GetBackendType()));
 }
 
-bool DXGIYCbCrTextureHostD3D11::SupportsExternalCompositing() {
-  if (gfx::gfxVars::UseSoftwareWebRender()) {
-    return true;
-  }
-  return false;
+bool DXGIYCbCrTextureHostD3D11::SupportsExternalCompositing(
+    WebRenderBackend aBackend) {
+  return aBackend == WebRenderBackend::SOFTWARE;
 }
 
 bool DXGIYCbCrTextureHostD3D11::AcquireTextureSource(

@@ -782,11 +782,11 @@ void FontList::SetAliases(
   // aAliasTable, then sort them and store into the fontlist.
   nsTArray<Family::InitData> aliasArray;
   aliasArray.SetCapacity(aAliasTable.Count());
-  for (auto i = aAliasTable.Iter(); !i.Done(); i.Next()) {
+  for (const auto& entry : aAliasTable) {
     aliasArray.AppendElement(Family::InitData(
-        i.Key(), i.Data()->mBaseFamily, i.Data()->mIndex, i.Data()->mVisibility,
-        i.Data()->mBundled, i.Data()->mBadUnderline, i.Data()->mForceClassic,
-        true));
+        entry.GetKey(), entry.GetData()->mBaseFamily, entry.GetData()->mIndex,
+        entry.GetData()->mVisibility, entry.GetData()->mBundled,
+        entry.GetData()->mBadUnderline, entry.GetData()->mForceClassic, true));
   }
   aliasArray.Sort();
 
@@ -828,8 +828,7 @@ void FontList::SetAliases(
 }
 
 void FontList::SetLocalNames(
-    nsDataHashtable<nsCStringHashKey, LocalFaceRec::InitData>&
-        aLocalNameTable) {
+    nsTHashMap<nsCStringHashKey, LocalFaceRec::InitData>& aLocalNameTable) {
   MOZ_ASSERT(XRE_IsParentProcess());
   Header& header = GetHeader();
   if (header.mLocalFaceCount > 0) {
@@ -837,7 +836,7 @@ void FontList::SetLocalNames(
   }
   nsTArray<nsCString> faceArray;
   faceArray.SetCapacity(aLocalNameTable.Count());
-  for (auto i = aLocalNameTable.Iter(); !i.Done(); i.Next()) {
+  for (auto i = aLocalNameTable.ConstIter(); !i.Done(); i.Next()) {
     faceArray.AppendElement(i.Key());
   }
   faceArray.Sort();

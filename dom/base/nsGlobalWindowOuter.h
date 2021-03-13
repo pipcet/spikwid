@@ -18,8 +18,7 @@
 // Helper Classes
 #include "nsCOMPtr.h"
 #include "nsWeakReference.h"
-#include "nsDataHashtable.h"
-#include "nsJSThingHashtable.h"
+#include "nsTHashMap.h"
 #include "nsCycleCollectionParticipant.h"
 
 // Interfaces Needed
@@ -166,7 +165,7 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
                                   public nsIInterfaceRequestor,
                                   public PRCListStr {
  public:
-  typedef nsDataHashtable<nsUint64HashKey, nsGlobalWindowOuter*>
+  typedef nsTHashMap<nsUint64HashKey, nsGlobalWindowOuter*>
       OuterWindowByIdTable;
 
   using PrintPreviewResolver =
@@ -1071,7 +1070,6 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
   // close us when the JS stops executing or that we have a close
   // event posted.  If this is set, just ignore window.close() calls.
   bool mHavePendingClose : 1;
-  bool mIsPopupSpam : 1;
 
   // Indicates whether scripts are allowed to close this window.
   bool mBlockScriptedClosingFlag : 1;

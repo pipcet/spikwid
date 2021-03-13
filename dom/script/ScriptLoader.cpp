@@ -29,6 +29,7 @@
 #include "nsCycleCollectionParticipant.h"
 #include "nsIContent.h"
 #include "nsJSUtils.h"
+#include "mozilla/dom/AutoEntryScript.h"
 #include "mozilla/dom/DocGroup.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/JSExecutionContext.h"
@@ -457,8 +458,8 @@ void ScriptLoader::SetModuleFetchStarted(ModuleLoadRequest* aRequest) {
 
   MOZ_ASSERT(aRequest->IsLoading());
   MOZ_ASSERT(!ModuleMapContainsURL(aRequest->mURI));
-  mFetchingModules.Put(aRequest->mURI,
-                       RefPtr<GenericNonExclusivePromise::Private>{});
+  mFetchingModules.InsertOrUpdate(
+      aRequest->mURI, RefPtr<GenericNonExclusivePromise::Private>{});
 }
 
 void ScriptLoader::SetModuleFetchFinishedAndResumeWaitingRequests(
@@ -481,7 +482,7 @@ void ScriptLoader::SetModuleFetchFinishedAndResumeWaitingRequests(
   RefPtr<ModuleScript> moduleScript(aRequest->mModuleScript);
   MOZ_ASSERT(NS_FAILED(aResult) == !moduleScript);
 
-  mFetchedModules.Put(aRequest->mURI, RefPtr{moduleScript});
+  mFetchedModules.InsertOrUpdate(aRequest->mURI, RefPtr{moduleScript});
 
   if (promise) {
     if (moduleScript) {

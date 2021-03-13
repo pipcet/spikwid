@@ -63,6 +63,7 @@ var UrlbarTestUtils = {
       this.Assert = scope.Assert;
       this.EventUtils = scope.EventUtils;
     }
+    // If you add other properties to `this`, null them in uninit().
   },
 
   /**
@@ -72,6 +73,8 @@ var UrlbarTestUtils = {
    */
   uninit() {
     this._testScope = null;
+    this.Assert = null;
+    this.EventUtils = null;
   },
 
   /**
@@ -200,6 +203,7 @@ var UrlbarTestUtils = {
     details.image = element.getElementsByClassName("urlbarView-favicon")[0].src;
     details.title = result.title;
     details.tags = "tags" in result.payload ? result.payload.tags : [];
+    details.isSponsored = result.payload.isSponsored;
     let actions = element.getElementsByClassName("urlbarView-action");
     let urls = element.getElementsByClassName("urlbarView-url");
     let typeIcon = element.querySelector(".urlbarView-type-icon");
@@ -384,6 +388,37 @@ var UrlbarTestUtils = {
         },
       });
     });
+  },
+
+  /**
+   * Open the input field context menu and run a task on it.
+   * @param {nsIWindow} win the current window
+   * @param {function} task a task function to run, gets the contextmenu popup
+   *        as argument.
+   */
+  async withContextMenu(win, task) {
+    let textBox = win.gURLBar.querySelector("moz-input-box");
+    let cxmenu = textBox.menupopup;
+    let openPromise = BrowserTestUtils.waitForEvent(cxmenu, "popupshown");
+    this.EventUtils.synthesizeMouseAtCenter(
+      win.gURLBar.inputField,
+      {
+        type: "contextmenu",
+        button: 2,
+      },
+      win
+    );
+    await openPromise;
+    try {
+      await task(cxmenu);
+    } finally {
+      // Close the context menu if the task didn't pick anything.
+      if (cxmenu.state == "open" || cxmenu.state == "showing") {
+        let closePromise = BrowserTestUtils.waitForEvent(cxmenu, "popuphidden");
+        cxmenu.hidePopup();
+        await closePromise;
+      }
+    }
   },
 
   /**

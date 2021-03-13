@@ -237,7 +237,7 @@ nsresult SubstitutingProtocolHandler::CollectSubstitutions(
     nsTArray<SubstitutionMapping>& aMappings) {
   AutoReadLock lock(mSubstitutionsLock);
   for (auto iter = mSubstitutions.ConstIter(); !iter.Done(); iter.Next()) {
-    SubstitutionEntry& entry = iter.Data();
+    const SubstitutionEntry& entry = iter.Data();
     nsCOMPtr<nsIURI> uri = entry.baseURI;
     SerializedURI serialized;
     if (uri) {
@@ -484,7 +484,7 @@ nsresult SubstitutingProtocolHandler::SetSubstitutionWithFlags(
 
     {
       AutoWriteLock lock(mSubstitutionsLock);
-      mSubstitutions.Put(root, SubstitutionEntry{baseURI, flags});
+      mSubstitutions.InsertOrUpdate(root, SubstitutionEntry{baseURI, flags});
     }
 
     return SendSubstitution(root, baseURI, flags);
@@ -502,7 +502,7 @@ nsresult SubstitutingProtocolHandler::SetSubstitutionWithFlags(
 
   {
     AutoWriteLock lock(mSubstitutionsLock);
-    mSubstitutions.Put(root, SubstitutionEntry{newBaseURI, flags});
+    mSubstitutions.InsertOrUpdate(root, SubstitutionEntry{newBaseURI, flags});
   }
 
   return SendSubstitution(root, newBaseURI, flags);

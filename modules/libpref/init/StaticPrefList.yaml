@@ -243,6 +243,11 @@
 # The apz prefs are explained in AsyncPanZoomController.cpp
 #---------------------------------------------------------------------------
 
+- name: apz.scrollbarbuttonrepeat.enabled
+  type: RelaxedAtomicBool
+  value: true
+  mirror: always
+
 - name: apz.wr.activate_all_scroll_frames
   type: RelaxedAtomicBool
   value: false
@@ -271,6 +276,11 @@
 - name: apz.allow_double_tap_zooming
   type: RelaxedAtomicBool
   value: true
+  mirror: always
+
+- name: apz.mac.enable_double_tap_zoom_touchpad_gesture
+  type: RelaxedAtomicBool
+  value: false
   mirror: always
 
 - name: apz.allow_immediate_handoff
@@ -497,7 +507,7 @@
 
 -   name: apz.gtk.touchpad_pinch.enabled
     type: RelaxedAtomicBool
-    value: false
+    value: true
     mirror: always
 #endif
 
@@ -763,7 +773,7 @@
 
 - name: browser.cache.offline.enable
   type: bool
-  value: true
+  value: @IS_NOT_EARLY_BETA_OR_EARLIER@
   mirror: always
 
 - name: browser.cache.offline.storage.enable
@@ -1695,6 +1705,12 @@
   value: @IS_NOT_ANDROID@
   mirror: always
 
+# Only intended for fuzzing purposes, this will break mozPrintCallback, etc.
+- name: dom.window_print.fuzzing.block_while_printing
+  type: bool
+  value: false
+  mirror: always
+
 - name: dom.element.transform-getters.enabled
   type: bool
   value: false
@@ -1764,7 +1780,7 @@
 # bug 1392460.
 - name: dom.event.wheel-deltaMode-lines.disabled
   type: bool
-  value: @IS_NIGHTLY_BUILD@
+  value: true
   mirror: always
 
 # Mostly for debugging. Whether we should do the same as
@@ -1775,14 +1791,13 @@
   value: false
   mirror: always
 
-# When dom.event.wheel-deltaMode-lines.disabled is true, this is the lines to
-# pixels multiplier that gets used.
-#
-# The value here is taken from PIXELS_PER_LINE_SCALE from pdf.js.
-- name: dom.event.wheel-deltaMode-lines-to-pixel-scale
-  type: uint32_t
-  value: 30
-  mirror: always
+# A blocklist (list of domains) for the
+# dom.event.wheel-deltaMode-lines.disabled behavior, in case potential
+# unforeseen problems with it arrive.
+- name: dom.event.wheel-deltaMode-lines.always-enabled
+  type: String
+  value: ""
+  mirror: never
 
 #if defined(XP_MACOSX)
 # Whether to disable treating ctrl click as right click
@@ -2113,6 +2128,13 @@
   value: 1000
   mirror: always
 
+- name: dom.ipc.processPrelaunch.startupDelayMs
+  type: uint32_t
+# delay starting content processes for a short time after browser start
+# to provide time for the UI to come up
+  value: 1000
+  mirror: always
+
 # Process preallocation cache
 # Only used in fission; in e10s we use 1 always
 - name: dom.ipc.processPrelaunch.fission.number
@@ -2284,7 +2306,7 @@
 
 # Timeout clamp in ms for timeouts we clamp.
 - name: dom.min_timeout_value
-  type: int32_t
+  type: RelaxedAtomicInt32
   value: 4
   mirror: always
 
@@ -2774,6 +2796,13 @@
   value: true
   mirror: always
 
+# If true, tries to break upgrade downgrade cycles where https-only tries
+# to upgrad ethe connection, but the website tries to downgrade again.
+- name: dom.security.https_only_mode_break_upgrade_downgrade_endless_loop
+  type: RelaxedAtomicBool
+  value: true
+  mirror: always
+
 # If true and HTTPS-only mode is enabled, requests
 # to local IP addresses are also upgraded
 - name: dom.security.https_only_mode.upgrade_local
@@ -2800,6 +2829,13 @@
 # for telemetry purposes and allows to reason about retention of
 # the pref dom.security.https_only_mode_pbm from above.
 - name: dom.security.https_only_mode_ever_enabled_pbm
+  type: RelaxedAtomicBool
+  value: false
+  mirror: always
+
+# If true checks for secure www connections when https fails
+# and gives the user suggestions on the error page
+- name: dom.security.https_only_mode_error_page_user_suggestions
   type: RelaxedAtomicBool
   value: false
   mirror: always
@@ -3334,12 +3370,6 @@
   value: @IS_NIGHTLY_BUILD@
   mirror: always
 
-# Is support for Navigator.webdriver enabled?
-- name: dom.webdriver.enabled
-  type: bool
-  value: true
-  mirror: always
-
 # In case Touch API is enabled, this pref controls whether to support
 # ontouch* event handlers, document.createTouch, document.createTouchList and
 # document.createEvent("TouchEvent").
@@ -3479,6 +3509,11 @@
   value: true
   mirror: always
 
+- name: dom.workers.testing.enabled
+  type: RelaxedAtomicBool
+  value: false
+  mirror: always
+
 - name: dom.worklet.enabled
   type: bool
   value: true
@@ -3505,6 +3540,11 @@
 - name: dom.webidl.test2
   type: bool
   value: true
+  mirror: always
+
+- name: dom.webidl.crosscontext_hasinstance.enabled
+  type: RelaxedAtomicBool
+  value: @IS_NOT_NIGHTLY_BUILD@
   mirror: always
 
 # WebShare API - exposes navigator.share()
@@ -3539,19 +3579,28 @@
   value: @IS_ANDROID@
   mirror: always
 
-# The following four prefs control the maximum script run time before slow
+# The following three prefs control the maximum script run time before slow
 # script warning.
+
+# Controls the time that a content script can run before showing a
+# notification.
 - name: dom.max_script_run_time
   type: int32_t
   value: 10
   mirror: always
 
-- name: dom.max_script_run_time_without_important_user_input
-  type: int32_t
-#ifdef NIGHTLY_BUILD
-  value: 20
+# Controls whether we want to wait for user input before surfacing notifying
+# the parent process about a long-running script.
+- name: dom.max_script_run_time.require_critical_input
+  type: bool
+# On desktop, we don't want to annoy the user with a notification if they're
+# not interacting with the browser. On Android however, we automatically
+# terminate long-running scripts, so we want to make sure we don't get in the
+# way of that by waiting for input.
+#if defined(MOZ_WIDGET_ANDROID)
+  value: false
 #else
-  value: 10
+  value: true
 #endif
   mirror: always
 
@@ -3726,6 +3775,13 @@
   type: bool
   value: false
   mirror: once
+  do_not_use_directly: true
+
+# If session history is stored in the parent process, enable bfcache for it.
+- name: fission.bfcacheInParent
+  type: bool
+  value: false
+  mirror: always
   do_not_use_directly: true
 
 # Allow renaming of process names to the origin on nightly
@@ -4344,8 +4400,8 @@
   mirror: once
 
 # Whether to load fonts (e.g. Twemoji Mozilla) bundled with the application:
-#  -1 - Auto behavior based on OS version (currently, disables loading on Win8.1 or later,
-#       or on "low-memory" Android devices)
+#  -1 - Auto behavior based on OS version (currently, disables loading on
+#       "low-memory" Android devices)
 #   0 - Skip loading any bundled fonts
 #   1 - Always load bundled fonts
 - name: gfx.bundled-fonts.activate
@@ -4474,11 +4530,19 @@
   value: false
   mirror: always
 
-# Prefer EGL over GLX if available.
-- name: gfx.prefer-x11-egl
+#ifdef MOZ_X11
+# Whether to force using GLX over EGL.
+- name: gfx.x11-egl.force-disabled
   type: bool
   value: false
   mirror: once
+
+# Whether to force using EGL over GLX.
+- name: gfx.x11-egl.force-enabled
+  type: bool
+  value: false
+  mirror: once
+#endif
 
 - name: gfx.testing.device-fail
   type: RelaxedAtomicBool
@@ -4601,11 +4665,7 @@
 
 - name: gfx.webrender.enable-capture
   type: bool
-#ifdef NIGHTLY_BUILD
-  value: true
-#else
   value: false
-#endif
   mirror: once
 
 - name: gfx.webrender.dl.dump-parent
@@ -4853,9 +4913,32 @@
   value: true
   mirror: once
 
+- name: gfx.webrender.software.opengl
+  type: bool
+#if defined(MOZ_WIDGET_ANDROID)
+  value: true
+#else
+  value: false
+#endif
+  mirror: once
+
 - name: gfx.webrender.software.d3d11.upload-mode
   type: RelaxedAtomicInt32
-  value: 2
+  value: 4
+  mirror: always
+
+# Whether to allow widgets that don't support acceleration to use WebRender
+# software backend
+- name: gfx.webrender.software.unaccelerated-widget.allow
+  type: RelaxedAtomicBool
+  value: @IS_EARLY_BETA_OR_EARLIER@
+  mirror: always
+
+# Whether to force widgets that don't support acceleration to use WebRender
+# software backend
+- name: gfx.webrender.software.unaccelerated-widget.force
+  type: RelaxedAtomicBool
+  value: false
   mirror: always
 
 # Use vsync events generated by hardware
@@ -5153,7 +5236,11 @@
 # Whether we attempt to decode AVIF images or not.
 - name: image.avif.enabled
   type: RelaxedAtomicBool
+#if defined(MOZ_AV1)
   value: true
+#else
+  value: false
+#endif
   mirror: always
 
 # Whether we use dav1d (true) or libaom (false) to decode AVIF image
@@ -5775,6 +5862,7 @@
   type: RelaxedAtomicBool
   value: false
   mirror: always
+  do_not_use_directly: true
 
 # Copy-on-write canvas.
 - name: layers.shared-buffer-provider.enabled
@@ -6080,6 +6168,13 @@
   mirror: always
   rust: true
 
+# Whether the `:-moz-submit-invalid` pseudo-class is exposed to content.
+- name: layout.css.moz-submit-invalid.enabled
+  type: RelaxedAtomicBool
+  value: false
+  mirror: always
+  rust: true
+
 # Whether the `aspect-ratio` in css-sizing-4 is enabled.
 - name: layout.css.aspect-ratio.enabled
   type: bool
@@ -6103,7 +6198,7 @@
 # Is the image-set() function enabled?
 - name: layout.css.image-set.enabled
   type: RelaxedAtomicBool
-  value: @IS_NIGHTLY_BUILD@
+  value: true
   mirror: always
   rust: true
 
@@ -6144,6 +6239,13 @@
 - name: layout.css.cross-fade.enabled
   type: RelaxedAtomicBool
   value: false
+  mirror: always
+  rust: true
+
+# Is support for color-mix on content enabled?
+- name: layout.css.color-mix.enabled
+  type: RelaxedAtomicBool
+  value: @IS_NIGHTLY_BUILD@
   mirror: always
   rust: true
 
@@ -6395,6 +6497,13 @@
   value: false
   mirror: always
 
+# Is ruby-position: alternate enabled?
+- name: layout.css.ruby.position-alternate.enabled
+  type: RelaxedAtomicBool
+  value: true
+  mirror: always
+  rust: true
+
 - name: layout.css.scroll-behavior.damping-ratio
   type: AtomicFloat
   value: 1.0f
@@ -6584,8 +6693,8 @@
   value: -1
   mirror: always
 
-# The time in number of frames that we estimate for a refresh driver
-# to be quiescent.
+# If it has been this many frame periods since a refresh, assume that painting
+# is quiescent (will not happen again soon).
 - name: layout.idle_period.required_quiescent_frames
   type: uint32_t
   value: 2
@@ -6676,7 +6785,7 @@
 # Whether outline should follow the border radius.
 - name: layout.css.outline-follows-border-radius.enabled
   type: bool
-  value: @IS_NIGHTLY_BUILD@
+  value: true
   mirror: always
 
 # Pref to control enabling scroll anchoring.
@@ -7494,6 +7603,11 @@
     mirror: once
 
 #endif  # MOZ_WMF
+
+- name: media.decoder-doctor.testing
+  type: bool
+  value: false
+  mirror: always
 
 - name: media.hardware-video-decoding.force-enabled
   type: bool
@@ -8659,6 +8773,12 @@
   value: 6000
   mirror: always
 
+# The timeout of the TRR confirmation request
+- name: network.trr.confirmation_telemetry_enabled
+  type: RelaxedAtomicBool
+  value: true
+  mirror: always
+
 # Whether to send the Accept-Language header for TRR requests
 - name: network.trr.send_accept-language_headers
   type: RelaxedAtomicBool
@@ -8795,6 +8915,12 @@
   value: ""
   mirror: never
 
+# The minimum ttl of the DNS record that contains ODoHConfigs.
+- name: network.trr.odoh.min_ttl
+  type: RelaxedAtomicUint32
+  value: 60
+  mirror: always
+
 # Allow the network changed event to get sent when a network topology or setup
 # change is noticed while running.
 - name: network.notify.changed
@@ -8869,6 +8995,11 @@
 - name: network.http.http3.enable_qlog
   type: RelaxedAtomicBool
   value: false
+  mirror: always
+
+- name: network.http.http3.enable_0rtt
+  type: RelaxedAtomicBool
+  value: true
   mirror: always
 
 # When a h3 transaction is inserted in the pending queue, the time (ms) we wait
@@ -8953,6 +9084,12 @@
   value: false
   mirror: always
 
+# Whether to record the telemetry event when a JAR channel is failed to load.
+- name: network.jar.record_failure_reason
+  type: RelaxedAtomicBool
+  value: true
+  mirror: always
+
 #---------------------------------------------------------------------------
 # Prefs starting with "nglayout."
 #---------------------------------------------------------------------------
@@ -9003,7 +9140,7 @@
 
 - name: permissions.isolateBy.privateBrowsing
   type: RelaxedAtomicBool
-  value: @IS_EARLY_BETA_OR_EARLIER@
+  value: true
   mirror: always
 
 #---------------------------------------------------------------------------
@@ -9695,7 +9832,7 @@
 #if defined(XP_LINUX) && defined(MOZ_SANDBOX)
   # Run content processes in headless mode and disallow connections to
   # the X server.  Experimental; breaks WebGL and Flash, and requires
-  # `widget.disable-native-theme-for-content` and `widget.remote-look-and-feel`.
+  # `widget.non-native-theme.enabled` and `widget.remote-look-and-feel`.
   # Changing it requires a restart because sandbox policy information dependent
   # on it is cached.  See bug 1640345 for details.
 - name: security.sandbox.content.headless
@@ -9812,12 +9949,6 @@
   value: false
   mirror: always
 
-# Is support for letter-spacing and word-spacing in SVG text enabled?
-- name: svg.text-spacing.enabled
-  type: bool
-  value: true
-  mirror: always
-
 #---------------------------------------------------------------------------
 # Prefs starting with "telemetry."
 #---------------------------------------------------------------------------
@@ -9930,11 +10061,7 @@
 - name: toolkit.shutdown.fastShutdownStage
   type: int32_t
 #if !defined(DEBUG) && !defined(MOZ_ASAN) && !defined(MOZ_TSAN) && !defined(MOZ_CODE_COVERAGE) && !defined(MOZ_VALGRIND) && !defined(MOZ_PROFILE_GENERATE) && !defined(JS_STRUCTURED_SPEW)
-  #ifdef NIGHTLY_BUILD
-  value: 3
-  #else
   value: 1
-  #endif
 #else
   value: 0
 #endif
@@ -10482,48 +10609,44 @@
 #
 # NOTE(emilio): When changing this make sure to update the non_native_theme
 # entry in python/mozbuild/mozbuild/mozinfo.py
-- name: widget.disable-native-theme-for-content
+- name: widget.non-native-theme.enabled
   type: RelaxedAtomicBool
-#if defined(XP_LINUX) && defined(NIGHTLY_BUILD) && !defined(ANDROID)
-  value: true
-#else
-  value: false
-#endif
+  value: @IS_NIGHTLY_BUILD@
   mirror: always
 
 # The size in CSS pixels at full zoom of the minimum scrollbar width.
-- name: widget.gtk.non-native.scrollbar.normal-size
+- name: widget.non-native-theme.gtk.scrollbar.normal-size
   type: uint32_t
   value: 12
   mirror: always
 
 # The size in CSS pixels at full zoom of the "thin" scrollbars.
-- name: widget.gtk.non-native.scrollbar.thin-size
+- name: widget.non-native-theme.gtk.scrollbar.thin-size
   type: uint32_t
   value: 6
   mirror: always
 
 # The amount of space that the thumb should fill the scrollbar, from zero to
 # one.
-- name: widget.gtk.non-native.scrollbar.thumb-size
+- name: widget.non-native-theme.gtk.scrollbar.thumb-size
   type: float
   value: 0.75
   mirror: always
 
 # The minimum size of the scroll thumb, in the scrollbar direction.
-- name: widget.gtk.non-native.scrollbar.thumb-cross-size
+- name: widget.non-native-theme.gtk.scrollbar.thumb-cross-size
   type: uint32_t
   value: 40
   mirror: always
 
 # Whether the thumb should be rounded for the non-native scrollbars.
-- name: widget.gtk.non-native.round-thumb
+- name: widget.non-native-theme.gtk.scrollbar.round-thumb
   type: bool
   value: true
   mirror: always
 
 # Whether buttons shouldn't be suppressed for non-native scrollbars.
-- name: widget.gtk.non-native.scrollbar.allow-buttons
+- name: widget.non-native-theme.gtk.scrollbar.allow-buttons
   type: bool
   value: false
   mirror: always
@@ -10532,13 +10655,19 @@
 #
 # TODO(emilio): This should probably do the right thing in most other
 # platforms, but stick to the standard colors on those.
-- name: widget.non-native.use-theme-accent
+- name: widget.non-native-theme.use-theme-accent
   type: bool
-#ifdef MOZ_WIDGET_GTK
+#if defined(MOZ_WIDGET_GTK) || defined(XP_MACOSX)
   value: true
 #else
   value: false
 #endif
+  mirror: always
+
+# Whether we should try to use WebRender to render widgets.
+- name: widget.non-native-theme.webrender
+  type: bool
+  value: true
   mirror: always
 
 # Preference to disable dark scrollbar implementation.
@@ -10555,6 +10684,13 @@
   type: RelaxedAtomicBool
   value: false
   mirror: always
+
+#ifdef XP_MACOSX
+- name: widget.macos.respect-system-appearance
+  type: RelaxedAtomicBool
+  value: false
+  mirror: always
+#endif
 
 # Whether to allow gtk dark themes in content.
 - name: widget.content.allow-gtk-dark-theme
@@ -10613,11 +10749,7 @@
 # correctly when `security.sandbox.content.headless` is enabled.
 - name: widget.remote-look-and-feel
   type: bool
-#ifdef MOZ_WIDGET_GTK
   value: true
-#else
-  value: false
-#endif
   mirror: once
 
 #---------------------------------------------------------------------------

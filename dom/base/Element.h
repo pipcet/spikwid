@@ -45,7 +45,7 @@
 #include "nsAttrValueInlines.h"
 #include "nsCaseTreatment.h"
 #include "nsChangeHint.h"
-#include "nsDataHashtable.h"
+#include "nsTHashMap.h"
 #include "nsDebug.h"
 #include "nsError.h"
 #include "nsGkAtoms.h"
@@ -132,7 +132,7 @@ template <typename T>
 class Optional;
 enum class CallerType : uint32_t;
 enum class ReferrerPolicy : uint8_t;
-typedef nsDataHashtable<nsRefPtrHashKey<DOMIntersectionObserver>, int32_t>
+typedef nsTHashMap<nsRefPtrHashKey<DOMIntersectionObserver>, int32_t>
     IntersectionObserverList;
 }  // namespace dom
 }  // namespace mozilla
@@ -1038,7 +1038,7 @@ class Element : public FragmentOrElement {
     return GetParsedAttr(nsGkAtoms::_class);
   }
 
-#ifdef DEBUG
+#ifdef MOZ_DOM_LIST
   virtual void List(FILE* out = stdout, int32_t aIndent = 0) const override {
     List(out, aIndent, ""_ns);
   }

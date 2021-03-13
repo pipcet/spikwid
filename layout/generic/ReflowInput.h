@@ -42,6 +42,7 @@ enum class LayoutFrameType : uint8_t;
 struct StyleSizeOverrides {
   Maybe<StyleSize> mStyleISize;
   Maybe<StyleSize> mStyleBSize;
+  Maybe<AspectRatio> mAspectRatio;
 
   bool HasAnyOverrides() const { return mStyleISize || mStyleBSize; }
   bool HasAnyLengthOverrides() const {
@@ -406,8 +407,6 @@ struct ReflowInput : public SizeComputationInput {
   const nsStylePadding* mStylePadding = nullptr;
   const nsStyleText* mStyleText = nullptr;
 
-  bool IsFloating() const;
-
   // a frame (e.g. nsTableCellFrame) which may need to generate a special
   // reflow for percent bsize calculations
   nsIPercentBSizeObserver* mPercentBSizeObserver = nullptr;
@@ -482,10 +481,6 @@ struct ReflowInput : public SizeComputationInput {
     // nsColumnSetFrame to determine whether to give up balancing and create
     // overflow columns.
     bool mColumnSetWrapperHasNoBSizeLeft : 1;
-
-    // nsFlexContainerFrame is reflowing this child to measure its intrinsic
-    // BSize.
-    bool mIsFlexContainerMeasuringBSize : 1;
 
     // If this flag is set, the BSize of this frame should be considered
     // indefinite for the purposes of percent resolution on child frames (we

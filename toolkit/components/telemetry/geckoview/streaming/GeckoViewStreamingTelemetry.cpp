@@ -12,7 +12,7 @@
 #include "mozilla/StaticPtr.h"
 #include "mozilla/StaticPrefs_toolkit.h"
 #include "mozilla/TimeStamp.h"
-#include "nsDataHashtable.h"
+#include "nsTHashMap.h"
 #include "nsIObserver.h"
 #include "nsIObserverService.h"
 #include "nsITimer.h"
@@ -44,15 +44,15 @@ static StaticMutex gMutex;
 // The time the batch began.
 TimeStamp gBatchBegan;
 // The batch of histograms and samples.
-typedef nsDataHashtable<nsCStringHashKey, nsTArray<uint32_t>> HistogramBatch;
+typedef nsTHashMap<nsCStringHashKey, nsTArray<uint32_t>> HistogramBatch;
 HistogramBatch gBatch;
 HistogramBatch gCategoricalBatch;
 // The batches of Scalars and their values.
-typedef nsDataHashtable<nsCStringHashKey, bool> BoolScalarBatch;
+typedef nsTHashMap<nsCStringHashKey, bool> BoolScalarBatch;
 BoolScalarBatch gBoolScalars;
-typedef nsDataHashtable<nsCStringHashKey, nsCString> StringScalarBatch;
+typedef nsTHashMap<nsCStringHashKey, nsCString> StringScalarBatch;
 StringScalarBatch gStringScalars;
-typedef nsDataHashtable<nsCStringHashKey, uint32_t> UintScalarBatch;
+typedef nsTHashMap<nsCStringHashKey, uint32_t> UintScalarBatch;
 UintScalarBatch gUintScalars;
 // The delegate to receive the samples and values.
 StaticRefPtr<StreamingTelemetryDelegate> gDelegate;
@@ -245,10 +245,10 @@ void HistogramAccumulate(const nsCString& aName, bool aIsCategorical,
   StaticMutexAutoLock lock(gMutex);
 
   if (aIsCategorical) {
-    nsTArray<uint32_t>& samples = gCategoricalBatch.GetOrInsert(aName);
+    nsTArray<uint32_t>& samples = gCategoricalBatch.LookupOrInsert(aName);
     samples.AppendElement(aValue);
   } else {
-    nsTArray<uint32_t>& samples = gBatch.GetOrInsert(aName);
+    nsTArray<uint32_t>& samples = gBatch.LookupOrInsert(aName);
     samples.AppendElement(aValue);
   }
 
@@ -258,7 +258,7 @@ void HistogramAccumulate(const nsCString& aName, bool aIsCategorical,
 void BoolScalarSet(const nsCString& aName, bool aValue) {
   StaticMutexAutoLock lock(gMutex);
 
-  gBoolScalars.Put(aName, aValue);
+  gBoolScalars.InsertOrUpdate(aName, aValue);
 
   BatchCheck(lock);
 }
@@ -266,7 +266,7 @@ void BoolScalarSet(const nsCString& aName, bool aValue) {
 void StringScalarSet(const nsCString& aName, const nsCString& aValue) {
   StaticMutexAutoLock lock(gMutex);
 
-  gStringScalars.Put(aName, aValue);
+  gStringScalars.InsertOrUpdate(aName, aValue);
 
   BatchCheck(lock);
 }
@@ -274,7 +274,7 @@ void StringScalarSet(const nsCString& aName, const nsCString& aValue) {
 void UintScalarSet(const nsCString& aName, uint32_t aValue) {
   StaticMutexAutoLock lock(gMutex);
 
-  gUintScalars.Put(aName, aValue);
+  gUintScalars.InsertOrUpdate(aName, aValue);
 
   BatchCheck(lock);
 }

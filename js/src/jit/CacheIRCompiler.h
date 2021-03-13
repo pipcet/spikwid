@@ -830,7 +830,6 @@ class MOZ_RAII CacheIRCompiler {
 
   void emitLoadStubField(StubFieldOffset val, Register dest);
   void emitLoadStubFieldConstant(StubFieldOffset val, Register dest);
-  Address emitAddressFromStubField(StubFieldOffset val, Register base);
 
   uintptr_t readStubWord(uint32_t offset, StubField::Type type) {
     MOZ_ASSERT(stubFieldPolicy_ == StubFieldPolicy::Constant);
@@ -873,10 +872,6 @@ class MOZ_RAII CacheIRCompiler {
   JS::Symbol* symbolStubField(uint32_t offset) {
     MOZ_ASSERT(stubFieldPolicy_ == StubFieldPolicy::Constant);
     return (JS::Symbol*)readStubWord(offset, StubField::Type::Symbol);
-  }
-  ObjectGroup* groupStubField(uint32_t offset) {
-    MOZ_ASSERT(stubFieldPolicy_ == StubFieldPolicy::Constant);
-    return (ObjectGroup*)readStubWord(offset, StubField::Type::ObjectGroup);
   }
   JS::Compartment* compartmentStubField(uint32_t offset) {
     MOZ_ASSERT(stubFieldPolicy_ == StubFieldPolicy::Constant);

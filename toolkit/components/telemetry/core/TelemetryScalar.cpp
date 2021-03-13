@@ -20,7 +20,7 @@
 #include "nsBaseHashtable.h"
 #include "nsClassHashtable.h"
 #include "nsContentUtils.h"
-#include "nsDataHashtable.h"
+#include "nsTHashMap.h"
 #include "nsHashKeys.h"
 #include "nsITelemetry.h"
 #include "nsIVariant.h"
@@ -1131,7 +1131,7 @@ ScalarResult KeyedScalar::GetScalarForKey(const StaticMutexAutoLock& locker,
     return ScalarResult::InvalidType;
   }
 
-  mScalarKeys.Put(utf8Key, UniquePtr<ScalarBase>(scalar));
+  mScalarKeys.InsertOrUpdate(utf8Key, UniquePtr<ScalarBase>(scalar));
 
   *aRet = scalar;
   return ScalarResult::Ok;
@@ -1175,13 +1175,13 @@ typedef nsClassHashtable<ProcessIDHashKey, KeyedScalarStorageMapType>
 typedef mozilla::Tuple<const char*, nsCOMPtr<nsIVariant>, uint32_t>
     ScalarDataTuple;
 typedef nsTArray<ScalarDataTuple> ScalarTupleArray;
-typedef nsDataHashtable<ProcessIDHashKey, ScalarTupleArray> ScalarSnapshotTable;
+typedef nsTHashMap<ProcessIDHashKey, ScalarTupleArray> ScalarSnapshotTable;
 
 typedef mozilla::Tuple<const char*, nsTArray<KeyedScalar::KeyValuePair>,
                        uint32_t>
     KeyedScalarDataTuple;
 typedef nsTArray<KeyedScalarDataTuple> KeyedScalarTupleArray;
-typedef nsDataHashtable<ProcessIDHashKey, KeyedScalarTupleArray>
+typedef nsTHashMap<ProcessIDHashKey, KeyedScalarTupleArray>
     KeyedScalarSnapshotTable;
 
 }  // namespace
@@ -1514,10 +1514,7 @@ nsresult internal_GetScalarByEnum(const StaticMutexAutoLock& lock,
   // Get the process-specific storage or create one if it's not
   // available.
   ScalarStorageMapType* const scalarStorage =
-      processStorage
-          .GetOrInsertWith(storageId,
-                           [] { return MakeUnique<ScalarStorageMapType>(); })
-          .get();
+      processStorage.GetOrInsertNew(storageId);
 
   // Check if the scalar is already allocated in the parent or in the child
   // storage.
@@ -1548,7 +1545,7 @@ nsresult internal_GetScalarByEnum(const StaticMutexAutoLock& lock,
     return NS_ERROR_INVALID_ARG;
   }
 
-  scalarStorage->Put(aId.id, UniquePtr<ScalarBase>(scalar));
+  scalarStorage->InsertOrUpdate(aId.id, UniquePtr<ScalarBase>(scalar));
   *aRet = scalar;
   return NS_OK;
 }
@@ -1798,10 +1795,7 @@ nsresult internal_GetKeyedScalarByEnum(const StaticMutexAutoLock& lock,
   // Get the process-specific storage or create one if it's not
   // available.
   KeyedScalarStorageMapType* const scalarStorage =
-      processStorage
-          .GetOrInsertWith(
-              storageId, [] { return MakeUnique<KeyedScalarStorageMapType>(); })
-          .get();
+      processStorage.GetOrInsertNew(storageId);
 
   if (scalarStorage->Get(aId.id, &scalar)) {
     *aRet = scalar;
@@ -1819,11 +1813,8 @@ nsresult internal_GetKeyedScalarByEnum(const StaticMutexAutoLock& lock,
   }
 
   scalar = new KeyedScalar(info);
-  if (!scalar) {
-    return NS_ERROR_INVALID_ARG;
-  }
 
-  scalarStorage->Put(aId.id, UniquePtr<KeyedScalar>(scalar));
+  scalarStorage->InsertOrUpdate(aId.id, UniquePtr<KeyedScalar>(scalar));
   *aRet = scalar;
   return NS_OK;
 }
@@ -2000,7 +1991,7 @@ nsresult internal_ScalarSnapshotter(const StaticMutexAutoLock& aLock,
   for (auto iter = aProcessStorage.Iter(); !iter.Done(); iter.Next()) {
     ScalarStorageMapType* scalarStorage = iter.UserData();
     ScalarTupleArray& processScalars =
-        aScalarsToReflect.GetOrInsert(iter.Key());
+        aScalarsToReflect.LookupOrInsert(iter.Key());
 
     // Are we in the "Dynamic" process?
     bool isDynamicProcess =
@@ -2060,7 +2051,7 @@ nsresult internal_KeyedScalarSnapshotter(
   for (auto iter = aProcessStorage.Iter(); !iter.Done(); iter.Next()) {
     KeyedScalarStorageMapType* scalarStorage = iter.UserData();
     KeyedScalarTupleArray& processScalars =
-        aScalarsToReflect.GetOrInsert(iter.Key());
+        aScalarsToReflect.LookupOrInsert(iter.Key());
 
     // Are we in the "Dynamic" process?
     bool isDynamicProcess =
@@ -3903,7 +3894,7 @@ nsresult TelemetryScalar::DeserializePersistedScalars(JSContext* aCx,
 
   typedef std::pair<nsCString, nsCOMPtr<nsIVariant>> PersistedScalarPair;
   typedef nsTArray<PersistedScalarPair> PersistedScalarArray;
-  typedef nsDataHashtable<ProcessIDHashKey, PersistedScalarArray>
+  typedef nsTHashMap<ProcessIDHashKey, PersistedScalarArray>
       PeristedScalarStorage;
 
   PeristedScalarStorage scalarsToUpdate;
@@ -4003,7 +3994,7 @@ nsresult TelemetryScalar::DeserializePersistedScalars(JSContext* aCx,
 
       // Add the scalar to the map.
       PersistedScalarArray& processScalars =
-          scalarsToUpdate.GetOrInsert(static_cast<uint32_t>(processID));
+          scalarsToUpdate.LookupOrInsert(static_cast<uint32_t>(processID));
       processScalars.AppendElement(std::make_pair(
           nsCString(NS_ConvertUTF16toUTF8(scalarName)), unpackedVal));
     }
@@ -4014,7 +4005,7 @@ nsresult TelemetryScalar::DeserializePersistedScalars(JSContext* aCx,
     StaticMutexAutoLock lock(gTelemetryScalarsMutex);
 
     for (auto iter = scalarsToUpdate.ConstIter(); !iter.Done(); iter.Next()) {
-      PersistedScalarArray& processScalars = iter.Data();
+      const PersistedScalarArray& processScalars = iter.Data();
       for (PersistedScalarArray::size_type i = 0; i < processScalars.Length();
            i++) {
         mozilla::Unused << internal_UpdateScalar(
@@ -4045,7 +4036,7 @@ nsresult TelemetryScalar::DeserializePersistedKeyedScalars(
   typedef mozilla::Tuple<nsCString, nsString, nsCOMPtr<nsIVariant>>
       PersistedKeyedScalarTuple;
   typedef nsTArray<PersistedKeyedScalarTuple> PersistedKeyedScalarArray;
-  typedef nsDataHashtable<ProcessIDHashKey, PersistedKeyedScalarArray>
+  typedef nsTHashMap<ProcessIDHashKey, PersistedKeyedScalarArray>
       PeristedKeyedScalarStorage;
 
   PeristedKeyedScalarStorage scalarsToUpdate;
@@ -4175,7 +4166,7 @@ nsresult TelemetryScalar::DeserializePersistedKeyedScalars(
 
         // Add the scalar to the map.
         PersistedKeyedScalarArray& processScalars =
-            scalarsToUpdate.GetOrInsert(static_cast<uint32_t>(processID));
+            scalarsToUpdate.LookupOrInsert(static_cast<uint32_t>(processID));
         processScalars.AppendElement(
             mozilla::MakeTuple(nsCString(NS_ConvertUTF16toUTF8(scalarName)),
                                nsString(keyName), unpackedVal));
@@ -4188,7 +4179,7 @@ nsresult TelemetryScalar::DeserializePersistedKeyedScalars(
     StaticMutexAutoLock lock(gTelemetryScalarsMutex);
 
     for (auto iter = scalarsToUpdate.ConstIter(); !iter.Done(); iter.Next()) {
-      PersistedKeyedScalarArray& processScalars = iter.Data();
+      const PersistedKeyedScalarArray& processScalars = iter.Data();
       for (PersistedKeyedScalarArray::size_type i = 0;
            i < processScalars.Length(); i++) {
         mozilla::Unused << internal_UpdateKeyedScalar(

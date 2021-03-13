@@ -29,7 +29,6 @@
 #include "builtin/Boolean.h"
 #include "frontend/BytecodeCompiler.h"
 #include "frontend/ParserAtom.h"
-#include "gc/Marking.h"
 #include "gc/MaybeRooted.h"
 #include "gc/Nursery.h"
 #include "js/CharacterEncoding.h"
@@ -42,6 +41,7 @@
 #include "vm/GeckoProfiler.h"
 #include "vm/ToSource.h"  // js::ValueToSource
 
+#include "gc/Marking-inl.h"
 #include "vm/GeckoProfiler-inl.h"
 #include "vm/JSContext-inl.h"
 #include "vm/JSObject-inl.h"
@@ -704,8 +704,8 @@ JSLinearString* JSRope::flattenInternal(JSContext* maybecx) {
       MOZ_ASSERT(str->isRope());
       while (str != leftMostRope) {
         if (b == WithIncrementalBarrier) {
-          gc::PreWriteBarrier(str->d.s.u2.left);
-          gc::PreWriteBarrier(str->d.s.u3.right);
+          gc::PreWriteBarrierDuringFlattening(str->d.s.u2.left);
+          gc::PreWriteBarrierDuringFlattening(str->d.s.u3.right);
         }
         JSString* child = str->d.s.u2.left;
         // 'child' will be post-barriered during the later traversal.
@@ -715,8 +715,8 @@ JSLinearString* JSRope::flattenInternal(JSContext* maybecx) {
         str = child;
       }
       if (b == WithIncrementalBarrier) {
-        gc::PreWriteBarrier(str->d.s.u2.left);
-        gc::PreWriteBarrier(str->d.s.u3.right);
+        gc::PreWriteBarrierDuringFlattening(str->d.s.u2.left);
+        gc::PreWriteBarrierDuringFlattening(str->d.s.u3.right);
       }
       str->setNonInlineChars(wholeChars);
       uint32_t left_len = left.length();
@@ -763,8 +763,8 @@ JSLinearString* JSRope::flattenInternal(JSContext* maybecx) {
   pos = wholeChars;
 first_visit_node : {
   if (b == WithIncrementalBarrier) {
-    gc::PreWriteBarrier(str->d.s.u2.left);
-    gc::PreWriteBarrier(str->d.s.u3.right);
+    gc::PreWriteBarrierDuringFlattening(str->d.s.u2.left);
+    gc::PreWriteBarrierDuringFlattening(str->d.s.u3.right);
   }
 
   JSString& left = *str->d.s.u2.left;

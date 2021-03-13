@@ -16,7 +16,7 @@
   --proton-shadow-blur-radius: 6px;
   --proton-tab-block-margin: 4px;
   --proton-tab-inline-padding: 2px;
-  --inline-tab-padding: 12.5px;
+  --inline-tab-padding: 8px;
 }
 } /*** END proton ***/
 
@@ -106,18 +106,10 @@
 }
 
 .tabbrowser-tab[first-visible-tab] {
-  padding-inline-start: 0 !important;
-}
-
-:root[sizemode=maximized] .tabbrowser-tab[first-visible-tab] {
   padding-inline-start: calc(2 * var(--proton-tab-inline-padding)) !important;
 }
 
 .tabbrowser-tab[last-visible-tab] {
-  padding-inline-end: 0 !important;
-}
-
-:root[sizemode=maximized] .tabbrowser-tab[last-visible-tab] {
   padding-inline-end: calc(2 * var(--proton-tab-inline-padding)) !important;
 }
 
@@ -142,8 +134,15 @@
 }
 
 :root:not([uidensity=compact]) .tab-content[pinned] {
+  padding: 0 10px;
+}
+
+@supports not -moz-bool-pref("browser.proton.tabs.enabled") {
+:root:not([uidensity=compact]) .tab-content[pinned] {
   padding: 0 12px;
 }
+} /*** END !proton ***/
+
 
 @media (prefers-reduced-motion: no-preference) {
   :root[sessionrestored] .tab-loading-burst {
@@ -458,8 +457,8 @@
 }
 
 .tab-close-button {
-  -moz-context-properties: fill, fill-opacity, stroke-opacity;
-  stroke-opacity: var(--toolbarbutton-icon-fill-opacity);
+  -moz-context-properties: fill, fill-opacity;
+  fill-opacity: var(--toolbarbutton-icon-fill-opacity);
 }
 
 @supports not -moz-bool-pref("browser.proton.tabs.enabled") {
@@ -475,19 +474,20 @@
 
 @supports -moz-bool-pref("browser.proton.tabs.enabled") {
 .tab-close-button {
-  margin-inline-end: 0;
-  width: 16px;
-}
-
-:root[uidensity=touch] .tab-close-button {
-  width: 20px;
+  margin-inline-end: calc(var(--inline-tab-padding) / -2);
+  width: 24px;
+  height: 24px;
+  padding: 5px;
+  border-radius: var(--proton-tab-radius);
 }
 } /*** END proton ***/
 
 @supports not -moz-bool-pref("browser.proton.tabs.enabled") {
 :root[uidensity=touch] .tab-close-button {
-  margin-inline-end: calc(-1 * var(--inline-tab-padding));
-  padding: 10px calc(var(--inline-tab-padding) - 2px);
+  margin-inline-end: calc(var(--inline-tab-padding) / -2);
+  width: 24px;
+  height: 24px;
+  padding: 4px;
 }
 } /*** END !proton ***/
 
@@ -694,11 +694,11 @@
 }
 
 .tabbrowser-tab[visuallyselected=true] > .tab-stack > .tab-background {
-  box-shadow: 0 2px var(--proton-shadow-blur-radius) rgba(58,57,68,.2);
+  box-shadow: 0px 1px 2px rgba(58, 57, 68, 0.1);
 }
 
-.tabbrowser-tab[visuallyselected=true] > .tab-stack > .tab-background:-moz-lwtheme-brighttext {
-  box-shadow: 0 2px var(--proton-shadow-blur-radius) rgba(58,57,68,.1);
+.tabbrowser-tab[visuallyselected=true]:hover > .tab-stack > .tab-background {
+  box-shadow: 0px 2px var(--proton-shadow-blur-radius) rgba(58, 57, 68, 0.2);
 }
 } /*** END proton ***/
 
@@ -820,7 +820,8 @@
   background-position: center bottom -6px;
 }
 
-#tabbrowser-tabs:not([positionpinnedtabs]) > #tabbrowser-arrowscrollbox > .tabbrowser-tab[pinned] + .tabbrowser-tab:not([pinned]) {
+#tabbrowser-tabs[haspinnedtabs]:not([positionpinnedtabs]) > #tabbrowser-arrowscrollbox > .tabbrowser-tab[first-visible-unpinned-tab] {
+  /* Add a gap between the last pinned tab and the first visible tab */
   margin-inline-start: 12px !important; /* .tabbrowser-tab sets margin: 0 !important; */
 }
 } /*** END proton ***/

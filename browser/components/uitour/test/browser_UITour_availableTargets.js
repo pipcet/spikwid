@@ -11,17 +11,15 @@ requestLongerTimeout(2);
 
 function getExpectedTargets() {
   return [
-    "accountStatus",
+    ...(CustomizableUI.protonToolbarEnabled ? [] : ["accountStatus"]),
     "addons",
     "appMenu",
     "backForward",
-    "customize",
     "devtools",
     "help",
-    "home",
+    ...(CustomizableUI.protonToolbarEnabled ? [] : ["home"]),
     "library",
     "logins",
-    "pageActionButton",
     "pageAction-bookmark",
     "pageAction-copyURL",
     "pageAction-emailLink",

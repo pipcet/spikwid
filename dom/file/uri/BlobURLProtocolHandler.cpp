@@ -185,7 +185,7 @@ class BlobURLsReporter final : public nsIMemoryReporter {
       return NS_OK;
     }
 
-    nsDataHashtable<nsPtrHashKey<mozilla::dom::BlobImpl>, uint32_t> refCounts;
+    nsTHashMap<nsPtrHashKey<mozilla::dom::BlobImpl>, uint32_t> refCounts;
 
     // Determine number of URLs per mozilla::dom::BlobImpl, to handle the case
     // where it's > 1.
@@ -197,7 +197,7 @@ class BlobURLsReporter final : public nsIMemoryReporter {
       mozilla::dom::BlobImpl* blobImpl = iter.UserData()->mBlobImpl;
       MOZ_ASSERT(blobImpl);
 
-      refCounts.Put(blobImpl, refCounts.Get(blobImpl) + 1);
+      refCounts.LookupOrInsert(blobImpl, 0) += 1;
     }
 
     for (auto iter = gDataTable->Iter(); !iter.Done(); iter.Next()) {
@@ -535,7 +535,7 @@ static void AddDataEntryInternal(const nsACString& aURI, T aObject,
                                                   aAgentClusterId);
   BlobURLsReporter::GetJSStackForBlob(info.get());
 
-  gDataTable->Put(aURI, std::move(info));
+  gDataTable->InsertOrUpdate(aURI, std::move(info));
 }
 
 void BlobURLProtocolHandler::Init(void) {
@@ -876,9 +876,6 @@ NS_IMETHODIMP
 BlobURLProtocolHandler::NewChannel(nsIURI* aURI, nsILoadInfo* aLoadInfo,
                                    nsIChannel** aResult) {
   auto channel = MakeRefPtr<BlobURLChannel>(aURI, aLoadInfo);
-  if (!channel) {
-    return NS_ERROR_NOT_INITIALIZED;
-  }
   channel.forget(aResult);
   return NS_OK;
 }

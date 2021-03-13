@@ -20,7 +20,7 @@
 #include "mozilla/ipc/BackgroundChild.h"
 #include "mozilla/ipc/BackgroundParent.h"
 #include "mozilla/ipc/PBackgroundChild.h"
-#include "nsDataHashtable.h"
+#include "nsTHashMap.h"
 #include "nsThreadUtils.h"
 
 namespace mozilla {
@@ -48,10 +48,11 @@ void RecvPropagateBackgroundSessionStorageManager(
   if (sManagers) {
     if (RefPtr<BackgroundSessionStorageManager> mgr =
             sManagers->Get(aCurrentTopContextId)) {
-      // Assuming the target top browsing context should haven't been
-      // registered yet.
-      MOZ_DIAGNOSTIC_ASSERT(!sManagers->GetWeak(aTargetTopContextId));
-      sManagers->Put(aTargetTopContextId, std::move(mgr));
+      // Because of bfcache, we may re-register aTargetTopContextId in
+      // CanonicalBrowsingContext::ReplacedBy.
+      // XXXBFCache do we want to tweak this behavior and ensure this is
+      // called only once?
+      sManagers->InsertOrUpdate(aTargetTopContextId, std::move(mgr));
     }
   }
 }
@@ -70,32 +71,29 @@ SessionStorageManagerBase::OriginRecord*
 SessionStorageManagerBase::GetOriginRecord(
     const nsACString& aOriginAttrs, const nsACString& aOriginKey,
     const bool aMakeIfNeeded, SessionStorageCache* const aCloneFrom) {
-  OriginKeyHashTable* table;
-  if (!mOATable.Get(aOriginAttrs, &table)) {
-    if (aMakeIfNeeded) {
-      table =
-          mOATable.Put(aOriginAttrs, MakeUnique<OriginKeyHashTable>()).get();
-    } else {
-      return nullptr;
-    }
+  // XXX It seems aMakeIfNeeded is always known at compile-time, so this could
+  // be split into two functions.
+
+  if (aMakeIfNeeded) {
+    return mOATable.GetOrInsertNew(aOriginAttrs)
+        ->LookupOrInsertWith(
+            aOriginKey,
+            [&] {
+              auto newOriginRecord = MakeUnique<OriginRecord>();
+              if (aCloneFrom) {
+                newOriginRecord->mCache = aCloneFrom->Clone();
+              } else {
+                newOriginRecord->mCache = new SessionStorageCache();
+              }
+              return newOriginRecord;
+            })
+        .get();
   }
 
-  OriginRecord* originRecord;
-  if (!table->Get(aOriginKey, &originRecord)) {
-    if (aMakeIfNeeded) {
-      auto newOriginRecord = MakeUnique<OriginRecord>();
-      if (aCloneFrom) {
-        newOriginRecord->mCache = aCloneFrom->Clone();
-      } else {
-        newOriginRecord->mCache = new SessionStorageCache();
-      }
-      originRecord = table->Put(aOriginKey, std::move(newOriginRecord)).get();
-    } else {
-      return nullptr;
-    }
-  }
+  auto* const table = mOATable.Get(aOriginAttrs);
+  if (!table) return nullptr;
 
-  return originRecord;
+  return table->Get(aOriginKey);
 }
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(SessionStorageManager)
@@ -628,15 +626,14 @@ BackgroundSessionStorageManager* BackgroundSessionStorageManager::GetOrCreate(
                   return;
                 }
               },
-              ShutdownPhase::Shutdown);
+              ShutdownPhase::XPCOMShutdown);
         }));
   }
 
-  return sManagers->WithEntryHandle(aTopContextId, [](auto&& entry) {
-    return entry
-        .OrInsertWith([] { return new BackgroundSessionStorageManager(); })
-        .get();
-  });
+  return sManagers
+      ->LookupOrInsertWith(aTopContextId,
+                           [] { return new BackgroundSessionStorageManager(); })
+      .get();
 }
 
 BackgroundSessionStorageManager::BackgroundSessionStorageManager() {

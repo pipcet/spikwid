@@ -51,9 +51,7 @@
 #include "mozilla/ContentBlockingUserInteraction.h"
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/DataStorage.h"
-#ifdef MOZ_GLEAN
-#  include "mozilla/FOGIPC.h"
-#endif
+#include "mozilla/FOGIPC.h"
 #include "mozilla/GlobalStyleSheetCache.h"
 #include "mozilla/HangDetails.h"
 #include "mozilla/LoginReputationIPC.h"
@@ -601,7 +599,7 @@ ProcessID GetTelemetryProcessID(const nsACString& remoteType) {
 
 }  // anonymous namespace
 
-UniquePtr<nsDataHashtable<nsUint32HashKey, ContentParent*>>
+UniquePtr<nsTHashMap<nsUint32HashKey, ContentParent*>>
     ContentParent::sJSPluginContentParents;
 UniquePtr<nsTArray<ContentParent*>> ContentParent::sPrivateContent;
 UniquePtr<LinkedList<ContentParent>> ContentParent::sContentParents;
@@ -732,7 +730,7 @@ uint32_t ContentParent::GetPoolSize(const nsACString& aContentProcessType) {
         new nsClassHashtable<nsCStringHashKey, nsTArray<ContentParent*>>;
   }
 
-  return *sBrowserContentParents->LookupOrAdd(aContentProcessType);
+  return *sBrowserContentParents->GetOrInsertNew(aContentProcessType);
 }
 
 const nsDependentCSubstring RemoteTypePrefix(
@@ -901,7 +899,10 @@ static already_AddRefed<nsIPrincipal> CreateRemoteTypeIsolationPrincipal(
   nsAutoCString origin(
       Substring(aRemoteType, offset, aRemoteType.Length() - offset));
 
-  return BasePrincipal::CreateContentPrincipal(origin);
+  nsIScriptSecurityManager* ssm = nsContentUtils::GetSecurityManager();
+  nsCOMPtr<nsIPrincipal> principal;
+  ssm->CreateContentPrincipalFromOrigin(origin, getter_AddRefs(principal));
+  return principal.forget();
 }
 
 /*static*/
@@ -1207,7 +1208,7 @@ already_AddRefed<ContentParent> ContentParent::GetNewOrUsedJSPluginProcess(
     p = sJSPluginContentParents->Get(aPluginID);
   } else {
     sJSPluginContentParents =
-        MakeUnique<nsDataHashtable<nsUint32HashKey, ContentParent*>>();
+        MakeUnique<nsTHashMap<nsUint32HashKey, ContentParent*>>();
   }
 
   if (p) {
@@ -1220,7 +1221,7 @@ already_AddRefed<ContentParent> ContentParent::GetNewOrUsedJSPluginProcess(
     return nullptr;
   }
 
-  sJSPluginContentParents->Put(aPluginID, p);
+  sJSPluginContentParents->InsertOrUpdate(aPluginID, p);
 
   return p.forget();
 }
@@ -1429,7 +1430,8 @@ bool ContentParent::ValidatePrincipal(
     return true;
   }
 
-  if (RemoteTypePrefix(mRemoteType) != FISSION_WEB_REMOTE_TYPE) {
+  if (!mRemoteTypeIsolationPrincipal ||
+      RemoteTypePrefix(mRemoteType) != FISSION_WEB_REMOTE_TYPE) {
     return true;
   }
 
@@ -2835,7 +2837,7 @@ bool ContentParent::InitInternal(ProcessPriority aInitialPriority) {
   // can't init the process without it, and since we're going to be canceling
   // whatever load attempt that initiated this process creation anyway, just
   // bail out now if shutdown has already started.
-  if (PastShutdownPhase(ShutdownPhase::Shutdown)) {
+  if (PastShutdownPhase(ShutdownPhase::XPCOMShutdown)) {
     return false;
   }
 
@@ -3876,9 +3878,9 @@ mozilla::ipc::IPCResult ContentParent::RecvCloneDocumentTreeInto(
     return IPC_OK();
   }
 
-  target
-      ->ChangeRemoteness(cp->GetRemoteType(), /* aLoadID = */ 0,
-                         /* aReplaceBC = */ false, /* aSpecificGroupId = */ 0)
+  RemotenessChangeOptions options;
+  options.mRemoteType = cp->GetRemoteType();
+  target->ChangeRemoteness(options, /* aPendingSwitchId = */ 0)
       ->Then(
           GetMainThreadSerialEventTarget(), __func__,
           [source = RefPtr{source}](BrowserParent* aBp) {
@@ -4473,7 +4475,8 @@ mozilla::ipc::IPCResult ContentParent::RecvAccumulateMixedContentHSTS(
 
 mozilla::ipc::IPCResult ContentParent::RecvLoadURIExternal(
     nsIURI* uri, nsIPrincipal* aTriggeringPrincipal,
-    const MaybeDiscarded<BrowsingContext>& aContext) {
+    const MaybeDiscarded<BrowsingContext>& aContext,
+    bool aWasExternallyTriggered) {
   if (aContext.IsDiscarded()) {
     return IPC_OK();
   }
@@ -4489,7 +4492,8 @@ mozilla::ipc::IPCResult ContentParent::RecvLoadURIExternal(
   }
 
   BrowsingContext* bc = aContext.get();
-  extProtService->LoadURI(uri, aTriggeringPrincipal, bc);
+  extProtService->LoadURI(uri, aTriggeringPrincipal, bc,
+                          aWasExternallyTriggered);
   return IPC_OK();
 }
 
@@ -4697,6 +4701,7 @@ mozilla::ipc::IPCResult ContentParent::RecvConsoleMessage(
   }
 
   RefPtr<nsConsoleMessage> msg(new nsConsoleMessage(aMessage.get()));
+  msg->SetIsForwardedFromContentProcess(true);
   consoleService->LogMessageWithMode(msg, nsConsoleService::SuppressLog);
   return IPC_OK();
 }
@@ -5975,7 +5980,7 @@ mozilla::ipc::IPCResult ContentParent::RecvGetFilesRequest(
     return IPC_OK();
   }
 
-  mGetFilesPendingRequests.Put(aUUID, std::move(helper));
+  mGetFilesPendingRequests.InsertOrUpdate(aUUID, std::move(helper));
   return IPC_OK();
 }
 
@@ -6853,26 +6858,34 @@ mozilla::ipc::IPCResult ContentParent::RecvRaiseWindow(
 }
 
 mozilla::ipc::IPCResult ContentParent::RecvAdjustWindowFocus(
-    const MaybeDiscarded<BrowsingContext>& aContext, bool aCheckPermission,
-    bool aIsVisible) {
+    const MaybeDiscarded<BrowsingContext>& aContext, bool aIsVisible,
+    uint64_t aActionId) {
   if (aContext.IsNullOrDiscarded()) {
     MOZ_LOG(
         BrowsingContext::GetLog(), LogLevel::Debug,
         ("ParentIPC: Trying to send a message to dead or detached context"));
     return IPC_OK();
   }
-  CanonicalBrowsingContext* context = aContext.get_canonical();
-  BrowsingContext* parent = context->GetParent();
-  if (!parent) {
-    return IPC_OK();
-  }
-
-  CanonicalBrowsingContext* canonicalParent = parent->Canonical();
+  nsTHashMap<nsPtrHashKey<ContentParent>, bool> processes(2);
+  processes.InsertOrUpdate(this, true);
 
   ContentProcessManager* cpm = ContentProcessManager::GetSingleton();
-  ContentParent* cp = cpm->GetContentProcessById(
-      ContentParentId(canonicalParent->OwnerProcessId()));
-  Unused << cp->SendAdjustWindowFocus(context, aCheckPermission, aIsVisible);
+  CanonicalBrowsingContext* context = aContext.get_canonical();
+  while (context) {
+    BrowsingContext* parent = context->GetParent();
+    if (!parent) {
+      break;
+    }
+
+    CanonicalBrowsingContext* canonicalParent = parent->Canonical();
+    ContentParent* cp = cpm->GetContentProcessById(
+        ContentParentId(canonicalParent->OwnerProcessId()));
+    if (!processes.Get(cp)) {
+      Unused << cp->SendAdjustWindowFocus(context, aIsVisible, aActionId);
+      processes.InsertOrUpdate(cp, true);
+    }
+    context = canonicalParent;
+  }
   return IPC_OK();
 }
 
@@ -6937,7 +6950,8 @@ mozilla::ipc::IPCResult ContentParent::RecvSetActiveBrowsingContext(
          "in parent.",
          context));
     Unused << SendReviseActiveBrowsingContext(
-        fm->GetActiveBrowsingContextInChrome(), aActionId);
+        aActionId, fm->GetActiveBrowsingContextInChrome(),
+        fm->GetActionIdForActiveBrowsingContextInChrome());
     return IPC_OK();
   }
 
@@ -6969,7 +6983,8 @@ mozilla::ipc::IPCResult ContentParent::RecvUnsetActiveBrowsingContext(
          "parent [%p].",
          context));
     Unused << SendReviseActiveBrowsingContext(
-        fm->GetActiveBrowsingContextInChrome(), aActionId);
+        aActionId, fm->GetActiveBrowsingContextInChrome(),
+        fm->GetActionIdForActiveBrowsingContextInChrome());
     return IPC_OK();
   }
 
@@ -7271,24 +7286,6 @@ mozilla::ipc::IPCResult ContentParent::RecvHistoryGo(
   return IPC_OK();
 }
 
-mozilla::ipc::IPCResult ContentParent::RecvSessionHistoryUpdate(
-    const MaybeDiscarded<BrowsingContext>& aContext, const int32_t& aIndex,
-    const int32_t& aLength, const nsID& aChangeID) {
-  if (aContext.IsNullOrDiscarded()) {
-    MOZ_LOG(
-        BrowsingContext::GetLog(), LogLevel::Debug,
-        ("ParentIPC: Trying to send a message to dead or detached context"));
-    return IPC_OK();
-  }
-
-  CanonicalBrowsingContext* context = aContext.get_canonical();
-  context->Group()->EachParent([&](ContentParent* aParent) {
-    Unused << aParent->SendHistoryCommitIndexAndLength(aContext, aIndex,
-                                                       aLength, aChangeID);
-  });
-  return IPC_OK();
-}
-
 mozilla::ipc::IPCResult ContentParent::RecvSynchronizeLayoutHistoryState(
     const MaybeDiscarded<BrowsingContext>& aContext,
     nsILayoutHistoryState* aState) {
@@ -7520,9 +7517,7 @@ already_AddRefed<JSActor> ContentParent::InitJSActor(
 }
 
 IPCResult ContentParent::RecvFOGData(ByteBuf&& buf) {
-#ifdef MOZ_GLEAN
   glean::FOGData(std::move(buf));
-#endif
   return IPC_OK();
 }
 

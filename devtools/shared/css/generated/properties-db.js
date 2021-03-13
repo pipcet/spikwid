@@ -1967,8 +1967,6 @@ exports.CSS_PROPERTIES = {
     "values": [
       "-moz-available",
       "-moz-fit-content",
-      "-moz-max-content",
-      "-moz-min-content",
       "auto",
       "content",
       "inherit",
@@ -1988,8 +1986,6 @@ exports.CSS_PROPERTIES = {
     "values": [
       "-moz-available",
       "-moz-fit-content",
-      "-moz-max-content",
-      "-moz-min-content",
       "auto",
       "content",
       "inherit",
@@ -3803,8 +3799,6 @@ exports.CSS_PROPERTIES = {
     "values": [
       "-moz-available",
       "-moz-fit-content",
-      "-moz-max-content",
-      "-moz-min-content",
       "auto",
       "inherit",
       "initial",
@@ -5737,6 +5731,7 @@ exports.CSS_PROPERTIES = {
       "close-quote",
       "counter",
       "counters",
+      "image-set",
       "inherit",
       "initial",
       "no-close-quote",
@@ -5816,6 +5811,7 @@ exports.CSS_PROPERTIES = {
       "grab",
       "grabbing",
       "help",
+      "image-set",
       "inherit",
       "initial",
       "move",
@@ -6060,8 +6056,6 @@ exports.CSS_PROPERTIES = {
     "values": [
       "-moz-available",
       "-moz-fit-content",
-      "-moz-max-content",
-      "-moz-min-content",
       "auto",
       "content",
       "inherit",
@@ -6081,8 +6075,6 @@ exports.CSS_PROPERTIES = {
     "values": [
       "-moz-available",
       "-moz-fit-content",
-      "-moz-max-content",
-      "-moz-min-content",
       "auto",
       "content",
       "inherit",
@@ -7003,8 +6995,6 @@ exports.CSS_PROPERTIES = {
     "values": [
       "-moz-available",
       "-moz-fit-content",
-      "-moz-max-content",
-      "-moz-min-content",
       "auto",
       "inherit",
       "initial",
@@ -7090,8 +7080,6 @@ exports.CSS_PROPERTIES = {
     "values": [
       "-moz-available",
       "-moz-fit-content",
-      "-moz-max-content",
-      "-moz-min-content",
       "auto",
       "inherit",
       "initial",
@@ -8252,8 +8240,6 @@ exports.CSS_PROPERTIES = {
     "values": [
       "-moz-available",
       "-moz-fit-content",
-      "-moz-max-content",
-      "-moz-min-content",
       "auto",
       "inherit",
       "initial",
@@ -8272,8 +8258,6 @@ exports.CSS_PROPERTIES = {
     "values": [
       "-moz-available",
       "-moz-fit-content",
-      "-moz-max-content",
-      "-moz-min-content",
       "auto",
       "inherit",
       "initial",
@@ -8292,8 +8276,6 @@ exports.CSS_PROPERTIES = {
     "values": [
       "-moz-available",
       "-moz-fit-content",
-      "-moz-max-content",
-      "-moz-min-content",
       "auto",
       "inherit",
       "initial",
@@ -8312,8 +8294,6 @@ exports.CSS_PROPERTIES = {
     "values": [
       "-moz-available",
       "-moz-fit-content",
-      "-moz-max-content",
-      "-moz-min-content",
       "auto",
       "inherit",
       "initial",
@@ -9317,6 +9297,7 @@ exports.CSS_PROPERTIES = {
     ],
     "supports": [],
     "values": [
+      "alternate",
       "inherit",
       "initial",
       "over",
@@ -10823,8 +10804,6 @@ exports.CSS_PROPERTIES = {
     "values": [
       "-moz-available",
       "-moz-fit-content",
-      "-moz-max-content",
-      "-moz-min-content",
       "auto",
       "inherit",
       "initial",

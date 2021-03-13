@@ -15,6 +15,7 @@
 #include "nsCSSColorUtils.h"
 #include "mozilla/FontPropertyTypes.h"
 #include "mozilla/gfx/2D.h"
+#include "mozilla/StaticPrefs_widget.h"
 #include "mozilla/widget/WidgetMessageUtils.h"
 
 #import <Cocoa/Cocoa.h>
@@ -26,6 +27,15 @@
 @interface NSWorkspace (AvailableSinceSierra)
 @property(readonly) BOOL accessibilityDisplayShouldReduceMotion;
 @end
+
+#if !defined(MAC_OS_X_VERSION_10_14) || MAC_OS_X_VERSION_MAX_ALLOWED < MAC_OS_X_VERSION_10_14
+@interface NSApplication (NSApplicationAppearance)
+@property(strong) NSAppearance* appearance NS_AVAILABLE_MAC(10_14);
+@property(readonly, strong) NSAppearance* effectiveAppearance NS_AVAILABLE_MAC(10_14);
+@end
+#endif
+
+static void RegisterRespectSystemAppearancePrefListenerOnce();
 
 nsLookAndFeel::nsLookAndFeel(const LookAndFeelCache* aCache)
     : nsXPLookAndFeel(),
@@ -40,11 +50,9 @@ nsLookAndFeel::nsLookAndFeel(const LookAndFeelCache* aCache)
       mColorTextSelectBackground(0),
       mColorTextSelectBackgroundDisabled(0),
       mColorHighlight(0),
-      mColorMenuHover(0),
       mColorTextSelectForeground(0),
       mColorMenuHoverText(0),
       mColorButtonText(0),
-      mHasColorButtonText(false),
       mColorButtonHoverText(0),
       mColorText(0),
       mColorWindowText(0),
@@ -75,6 +83,7 @@ nsLookAndFeel::nsLookAndFeel(const LookAndFeelCache* aCache)
   if (aCache) {
     DoSetCache(*aCache);
   }
+  RegisterRespectSystemAppearancePrefListenerOnce();
 }
 
 nsLookAndFeel::~nsLookAndFeel() {}
@@ -100,18 +109,17 @@ void nsLookAndFeel::RefreshImpl() {
   nsXPLookAndFeel::RefreshImpl();
 
   // We should only clear the cache if we're in the main browser process.
-  // Otherwise, we should wait for the parent to inform us of new values
-  // to cache via LookAndFeel::SetIntCache.
+  // Otherwise, we should wait for the parent to inform us of new values to
+  // cache via SetCacheImpl.
   if (XRE_IsParentProcess()) {
     mUseOverlayScrollbarsCached = false;
     mAllowOverlayScrollbarsOverlapCached = false;
     mPrefersReducedMotionCached = false;
     mSystemUsesDarkThemeCached = false;
     mUseAccessibilityThemeCached = false;
+    // Fetch colors next time they are requested.
+    mInitialized = false;
   }
-
-  // Fetch colors next time they are requested.
-  mInitialized = false;
 }
 
 // Turns an opaque selection color into a partially transparent selection color,
@@ -159,6 +167,7 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, nscolor& aColor) {
       aColor = NS_RGB(0x00, 0x00, 0x00);
       break;
     case ColorID::WidgetBackground:
+    case ColorID::Infobackground:
       aColor = NS_RGB(0xdd, 0xdd, 0xdd);
       break;
     case ColorID::WidgetForeground:
@@ -192,10 +201,8 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, nscolor& aColor) {
       break;
     case ColorID::Highlight:  // CSS2 color
     case ColorID::MozAccentColor:
-      aColor = mColorHighlight;
-      break;
     case ColorID::MozMenuhover:
-      aColor = mColorMenuHover;
+      aColor = mColorHighlight;
       break;
     case ColorID::TextSelectForeground:
       aColor = mColorTextSelectForeground;
@@ -242,12 +249,8 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, nscolor& aColor) {
       //
     case ColorID::MozMacButtonactivetext:
     case ColorID::MozMacDefaultbuttontext:
-      if (mHasColorButtonText) {
-        aColor = mColorButtonText;
-        break;
-      }
-      // Otherwise fall through and return the regular button text:
-      [[fallthrough]];
+      aColor = mColorButtonText;
+      break;
     case ColorID::Buttontext:
     case ColorID::MozButtonhovertext:
       aColor = mColorButtonHoverText;
@@ -315,9 +318,6 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, nscolor& aColor) {
       break;
     case ColorID::Menu:
       aColor = mColorMenu;
-      break;
-    case ColorID::Infobackground:
-      aColor = NS_RGB(0xFF, 0xFF, 0xC7);
       break;
     case ColorID::Windowframe:
       aColor = mColorWindowFrame;
@@ -581,11 +581,11 @@ nsresult nsLookAndFeel::NativeGetInt(IntID aID, int32_t& aResult) {
       // information, so we get the information only on the parent processes
       // or when it's the initial query on child processes.  Otherwise we will
       // get the info via LookAndFeel::SetIntCache on child processes.
-      if (!mPrefersReducedMotionCached &&
-          [[NSWorkspace sharedWorkspace]
-              respondsToSelector:@selector(accessibilityDisplayShouldReduceMotion)]) {
+      if (!mPrefersReducedMotionCached) {
         mPrefersReducedMotion =
-            [[NSWorkspace sharedWorkspace] accessibilityDisplayShouldReduceMotion] ? 1 : 0;
+            [[NSWorkspace sharedWorkspace]
+                respondsToSelector:@selector(accessibilityDisplayShouldReduceMotion)] &&
+            [[NSWorkspace sharedWorkspace] accessibilityDisplayShouldReduceMotion];
         mPrefersReducedMotionCached = true;
       }
       aResult = mPrefersReducedMotion;
@@ -596,11 +596,11 @@ nsresult nsLookAndFeel::NativeGetInt(IntID aID, int32_t& aResult) {
       // information, so we get the information only on the parent processes
       // or when it's the initial query on child processes.  Otherwise we will
       // get the info via LookAndFeel::SetIntCache on child processes.
-      if (!mUseAccessibilityThemeCached &&
-          [[NSWorkspace sharedWorkspace]
-              respondsToSelector:@selector(accessibilityDisplayShouldIncreaseContrast)]) {
+      if (!mUseAccessibilityThemeCached) {
         mUseAccessibilityTheme =
-            [[NSWorkspace sharedWorkspace] accessibilityDisplayShouldIncreaseContrast] ? 1 : 0;
+            [[NSWorkspace sharedWorkspace]
+                respondsToSelector:@selector(accessibilityDisplayShouldIncreaseContrast)] &&
+            [[NSWorkspace sharedWorkspace] accessibilityDisplayShouldIncreaseContrast];
         mUseAccessibilityThemeCached = true;
       }
       aResult = mUseAccessibilityTheme;
@@ -674,30 +674,54 @@ bool nsLookAndFeel::NativeGetFont(FontID aID, nsString& aFontName, gfxFontStyle&
 mozilla::widget::LookAndFeelCache nsLookAndFeel::GetCacheImpl() {
   LookAndFeelCache cache = nsXPLookAndFeel::GetCacheImpl();
 
-  LookAndFeelInt useOverlayScrollbars;
-  useOverlayScrollbars.id() = IntID::UseOverlayScrollbars;
-  useOverlayScrollbars.value() = GetInt(IntID::UseOverlayScrollbars);
-  cache.mInts().AppendElement(useOverlayScrollbars);
+  constexpr IntID kIntIdsToCache[] = {
+      IntID::UseOverlayScrollbars, IntID::AllowOverlayScrollbarsOverlap,
+      IntID::PrefersReducedMotion, IntID::SystemUsesDarkTheme, IntID::UseAccessibilityTheme};
 
-  LookAndFeelInt allowOverlayScrollbarsOverlap;
-  allowOverlayScrollbarsOverlap.id() = IntID::AllowOverlayScrollbarsOverlap;
-  allowOverlayScrollbarsOverlap.value() = GetInt(IntID::AllowOverlayScrollbarsOverlap);
-  cache.mInts().AppendElement(allowOverlayScrollbarsOverlap);
+  constexpr ColorID kColorIdsToCache[] = {
+      ColorID::Highlight,
+      ColorID::Highlighttext,
+      ColorID::Menutext,
+      ColorID::TextSelectBackground,
+      ColorID::TextSelectBackgroundDisabled,
+      ColorID::TextSelectForeground,
+      ColorID::MozMacDefaultbuttontext,
+      ColorID::MozButtonhovertext,
+      ColorID::Windowtext,
+      ColorID::Activecaption,
+      ColorID::Activeborder,
+      ColorID::Graytext,
+      ColorID::Inactiveborder,
+      ColorID::Inactivecaption,
+      ColorID::Scrollbar,
+      ColorID::Threedhighlight,
+      ColorID::Menu,
+      ColorID::Windowframe,
+      ColorID::Fieldtext,
+      ColorID::MozDialog,
+      ColorID::MozDialogtext,
+      ColorID::MozDragtargetzone,
+      ColorID::MozMacChromeActive,
+      ColorID::MozMacChromeInactive,
+      ColorID::MozMacFocusring,
+      ColorID::MozMacMenutextselect,
+      ColorID::MozMacDisabledtoolbartext,
+      ColorID::MozMacMenuselect,
+      ColorID::MozCellhighlight,
+      ColorID::MozEventreerow,
+      ColorID::MozOddtreerow,
+      ColorID::MozMacActiveMenuitem,
+  };
 
-  LookAndFeelInt prefersReducedMotion;
-  prefersReducedMotion.id() = IntID::PrefersReducedMotion;
-  prefersReducedMotion.value() = GetInt(IntID::PrefersReducedMotion);
-  cache.mInts().AppendElement(prefersReducedMotion);
+  for (IntID id : kIntIdsToCache) {
+    cache.mInts().AppendElement(LookAndFeelInt(id, GetInt(id)));
+  }
 
-  LookAndFeelInt useAccessibilityTheme;
-  useAccessibilityTheme.id() = IntID::UseAccessibilityTheme;
-  useAccessibilityTheme.value() = GetInt(IntID::UseAccessibilityTheme);
-  cache.mInts().AppendElement(useAccessibilityTheme);
-
-  LookAndFeelInt systemUsesDarkTheme;
-  systemUsesDarkTheme.id() = IntID::SystemUsesDarkTheme;
-  systemUsesDarkTheme.value() = GetInt(IntID::SystemUsesDarkTheme);
-  cache.mInts().AppendElement(systemUsesDarkTheme);
+  for (ColorID id : kColorIdsToCache) {
+    nscolor color = 0;
+    NativeGetColor(id, color);
+    cache.mColors().AppendElement(LookAndFeelColor(id, color));
+  }
 
   return cache;
 }
@@ -732,6 +756,81 @@ void nsLookAndFeel::DoSetCache(const LookAndFeelCache& aCache) {
         break;
     }
   }
+  for (const auto& entry : aCache.mColors()) {
+    nscolor& slot = [&]() -> nscolor& {
+      switch (entry.id()) {
+        case ColorID::Highlight:
+          return mColorHighlight;
+        case ColorID::Highlighttext:
+          return mColorMenuHoverText;
+        case ColorID::Menutext:
+          return mColorText;
+        case ColorID::TextSelectBackground:
+          return mColorTextSelectBackground;
+        case ColorID::TextSelectBackgroundDisabled:
+          return mColorTextSelectBackgroundDisabled;
+        case ColorID::TextSelectForeground:
+          return mColorTextSelectForeground;
+        case ColorID::MozMacDefaultbuttontext:
+          return mColorButtonText;
+        case ColorID::MozButtonhovertext:
+          return mColorButtonHoverText;
+        case ColorID::Windowtext:
+          return mColorWindowText;
+        case ColorID::Activecaption:
+          return mColorActiveCaption;
+        case ColorID::Activeborder:
+          return mColorActiveBorder;
+        case ColorID::Graytext:
+          return mColorGrayText;
+        case ColorID::Inactiveborder:
+          return mColorInactiveBorder;
+        case ColorID::Inactivecaption:
+          return mColorInactiveCaption;
+        case ColorID::Scrollbar:
+          return mColorScrollbar;
+        case ColorID::Threedhighlight:
+          return mColorThreeDHighlight;
+        case ColorID::Menu:
+          return mColorMenu;
+        case ColorID::Windowframe:
+          return mColorWindowFrame;
+        case ColorID::Fieldtext:
+          return mColorFieldText;
+        case ColorID::MozDialog:
+          return mColorDialog;
+        case ColorID::MozDialogtext:
+          return mColorDialogText;
+        case ColorID::MozDragtargetzone:
+          return mColorDragTargetZone;
+        case ColorID::MozMacChromeActive:
+          return mColorChromeActive;
+        case ColorID::MozMacChromeInactive:
+          return mColorChromeInactive;
+        case ColorID::MozMacFocusring:
+          return mColorFocusRing;
+        case ColorID::MozMacMenutextselect:
+          return mColorTextSelect;
+        case ColorID::MozMacDisabledtoolbartext:
+          return mColorDisabledToolbarText;
+        case ColorID::MozMacMenuselect:
+          return mColorMenuSelect;
+        case ColorID::MozCellhighlight:
+          return mColorCellHighlight;
+        case ColorID::MozEventreerow:
+          return mColorEvenTreeRow;
+        case ColorID::MozOddtreerow:
+          return mColorOddTreeRow;
+        case ColorID::MozMacActiveMenuitem:
+          return mColorActiveSourceListSelection;
+        default:
+          MOZ_ASSERT_UNREACHABLE("Unknown color in the cache");
+          return mColorOddTreeRow;
+      }
+    }();
+    slot = entry.color();
+  }
+  mInitialized = true;
 }
 
 void nsLookAndFeel::EnsureInit() {
@@ -744,11 +843,20 @@ void nsLookAndFeel::EnsureInit() {
 
   nscolor color;
 
+  if (@available(macOS 10.14, *)) {
+    // Make sure NSColor takes our app's current appearance into account.
+    // NSAppearance.currentAppearance is global state that can be changed at will to influence the
+    // behavior of NSColor and probably others.
+    // NSAppearance.currentAppearance does not update automatically if the user switches between
+    // Light Mode and Dark Mode, but NSApp.effectiveAppearance does (unless NSApp.appearance is set
+    // to a non-nil value, which overrides the system appearance).
+    NSAppearance.currentAppearance = NSApp.effectiveAppearance;
+  }
+
   mColorTextSelectBackground = GetColorFromNSColor([NSColor selectedTextBackgroundColor]);
   mColorTextSelectBackgroundDisabled = GetColorFromNSColor([NSColor secondarySelectedControlColor]);
 
   mColorHighlight = GetColorFromNSColor([NSColor alternateSelectedControlColor]);
-  mColorMenuHover = GetColorFromNSColor([NSColor alternateSelectedControlColor]);
 
   GetColor(ColorID::TextSelectBackground, color);
   if (color == 0x000000) {
@@ -760,8 +868,6 @@ void nsLookAndFeel::EnsureInit() {
   mColorMenuHoverText = GetColorFromNSColor([NSColor alternateSelectedControlTextColor]);
 
   mColorButtonText = NS_RGB(0xFF, 0xFF, 0xFF);
-  mHasColorButtonText = true;
-
   mColorButtonHoverText = GetColorFromNSColor([NSColor controlTextColor]);
   mColorText = GetColorFromNSColor([NSColor textColor]);
   mColorWindowText = GetColorFromNSColor([NSColor windowFrameTextColor]);
@@ -803,4 +909,39 @@ void nsLookAndFeel::EnsureInit() {
   RecordTelemetry();
 
   NS_OBJC_END_TRY_IGNORE_BLOCK
+}
+
+static void RespectSystemAppearancePrefChanged(const char* aPref, void* UserInfo) {
+  MOZ_RELEASE_ASSERT(XRE_IsParentProcess());
+  MOZ_RELEASE_ASSERT(NS_IsMainThread());
+
+  if (@available(macOS 10.14, *)) {
+    if (StaticPrefs::widget_macos_respect_system_appearance()) {
+      // nil means "no override".
+      NSApp.appearance = nil;
+    } else {
+      // Override with aqua.
+      NSApp.appearance = [NSAppearance appearanceNamed:NSAppearanceNameAqua];
+    }
+  }
+
+  // Send a notification that ChildView reacts to. This will cause it to call ThemeChanged and
+  // invalidate LookAndFeel colors.
+  [[NSDistributedNotificationCenter defaultCenter]
+      postNotificationName:@"AppleInterfaceThemeChangedNotification"
+                    object:nil
+                  userInfo:nil
+        deliverImmediately:YES];
+}
+
+static void RegisterRespectSystemAppearancePrefListenerOnce() {
+  static bool sRegistered = false;
+  if (sRegistered || !XRE_IsParentProcess()) {
+    return;
+  }
+
+  sRegistered = true;
+  Preferences::RegisterCallbackAndCall(
+      &RespectSystemAppearancePrefChanged,
+      nsDependentCString(StaticPrefs::GetPrefName_widget_macos_respect_system_appearance()));
 }
