@@ -219,6 +219,8 @@ enum class Op {
   Try = 0x06,
   Catch = 0x07,
   Throw = 0x08,
+  Rethrow = 0x09,
+  Unwind = 0x0a,
 #endif
   End = 0x0b,
   Br = 0x0c,
@@ -229,6 +231,12 @@ enum class Op {
   // Call operators
   Call = 0x10,
   CallIndirect = 0x11,
+
+// Additional exception operators
+#ifdef ENABLE_WASM_EXCEPTIONS
+  Delegate = 0x18,
+  CatchAll = 0x19,
+#endif
 
   // Parametric operators
   Drop = 0x1a,
@@ -575,7 +583,7 @@ enum class SimdOp {
   F64x2PromoteLowF32x4 = 0x5f,
   I8x16Abs = 0x60,
   I8x16Neg = 0x61,
-  // Unused = 0x62
+  I8x16Popcnt = 0x62,
   I8x16AllTrue = 0x63,
   I8x16Bitmask = 0x64,
   I8x16NarrowSI16x8 = 0x65,
@@ -601,10 +609,10 @@ enum class SimdOp {
   I8x16MaxU = 0x79,
   F64x2Trunc = 0x7a,
   I8x16AvgrU = 0x7b,
-  // Unused = 0x7c
-  // Unused = 0x7d
-  // Unused = 0x7e
-  // Unused = 0x7f
+  I16x8ExtAddPairwiseI8x16S = 0x7c,
+  I16x8ExtAddPairwiseI8x16U = 0x7d,
+  I32x4ExtAddPairwiseI16x8S = 0x7e,
+  I32x4ExtAddPairwiseI16x8U = 0x7f,
   I16x8Abs = 0x80,
   I16x8Neg = 0x81,
   I16x8Q15MulrSatS = 0x82,
@@ -669,7 +677,7 @@ enum class SimdOp {
   I32x4ExtMulHighSI16x8 = 0xbd,
   I32x4ExtMulLowUI16x8 = 0xbe,
   I32x4ExtMulHighUI16x8 = 0xbf,
-  // Unused = 0xc0
+  I64x2Abs = 0xc0,
   I64x2Neg = 0xc1,
   // AnyTrue = 0xc2
   I64x2AllTrue = 0xc3,
@@ -693,10 +701,10 @@ enum class SimdOp {
   I64x2Mul = 0xd5,
   I64x2Eq = 0xd6,
   I64x2Ne = 0xd7,
-  // Unused = 0xd8
-  // Unused = 0xd9
-  // Unused = 0xda
-  // Unused = 0xdb
+  I64x2LtS = 0xd8,
+  I64x2GtS = 0xd9,
+  I64x2LeS = 0xda,
+  I64x2GeS = 0xdb,
   I64x2ExtMulLowSI32x4 = 0xdc,
   I64x2ExtMulHighSI32x4 = 0xdd,
   I64x2ExtMulLowUI32x4 = 0xde,
@@ -1003,10 +1011,8 @@ static const unsigned MaxTables = 100000;
 static const unsigned MaxImports = 100000;
 static const unsigned MaxExports = 100000;
 static const unsigned MaxGlobals = 1000000;
-#ifdef ENABLE_WASM_EXCEPTIONS
 static const unsigned MaxEvents =
     1000000;  // TODO: get this into the shared limits spec
-#endif
 static const unsigned MaxDataSegments = 100000;
 static const unsigned MaxDataSegmentLengthPages = 16384;
 static const unsigned MaxElemSegments = 10000000;
@@ -1020,15 +1026,6 @@ static const unsigned MaxParams = 1000;
 static const unsigned MaxResults = 1000;
 static const unsigned MaxStructFields = 1000;
 static const unsigned MaxMemory32LimitField = 65536;
-#ifdef JS_64BIT
-// FIXME (large ArrayBuffer): This should be upped to UINT32_MAX / PageSize
-// initially, then to (size_t(UINT32_MAX) + 1) / PageSize subsequently, see the
-// companion FIXME in WasmMemoryObject::grow() for additional information.
-static const unsigned MaxMemory32Pages = INT32_MAX / PageSize;
-#else
-static const unsigned MaxMemory32Pages = INT32_MAX / PageSize;
-#endif
-static const size_t MaxMemory32Bytes = size_t(MaxMemory32Pages) * PageSize;
 static const unsigned MaxStringBytes = 100000;
 static const unsigned MaxModuleBytes = 1024 * 1024 * 1024;
 static const unsigned MaxFunctionBytes = 7654321;

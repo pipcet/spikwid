@@ -19,13 +19,8 @@
   --toolbarbutton-icon-fill-opacity: .7;
 
   --panel-separator-color: hsla(210,4%,10%,.14);
-  --arrowpanel-dimmed: hsla(0,0%,80%,.3);
-  --arrowpanel-dimmed-further: hsla(0,0%,80%,.5);
-  --arrowpanel-dimmed-even-further: hsla(0,0%,80%,.8);
 
   --arrowpanel-field-background: rgba(249,249,250,.3);
-
-  --urlbar-separator-color: hsla(0,0%,16%,.2);
 
   --chrome-content-separator-color: #e1e1e2;
 }
@@ -36,25 +31,27 @@
 
 :root[lwt-popup-brighttext] {
   --panel-separator-color: rgba(249,249,250,.1);
-
-  --arrowpanel-dimmed: rgba(249,249,250,.1);
-  --arrowpanel-dimmed-further: rgba(249,249,250,.15);
-  --arrowpanel-dimmed-even-further: rgba(249,249,250,.2);
-
   --arrowpanel-field-background: rgba(12,12,13,.3);
 }
 
+@supports not -moz-bool-pref("browser.proton.enabled") {
 #navigator-toolbox {
   appearance: none;
   --tabs-border-color: rgba(0,0,0,.2);
 }
+} /*** end !proton ***/
 
 @supports -moz-bool-pref("browser.proton.enabled") {
+#navigator-toolbox {
+  appearance: none;
+}
+
 #navigator-toolbox:not(:-moz-lwtheme) {
   background-color: #f0f0f4;
 }
-} /* END proton */
+} /*** END proton ***/
 
+@supports not -moz-bool-pref("browser.proton.enabled") {
 #navigator-toolbox:not(:-moz-lwtheme):-moz-window-inactive {
   --tabs-border-color: rgba(0,0,0,.05);
 }
@@ -62,6 +59,7 @@
 #navigator-toolbox:-moz-lwtheme {
   --tabs-border-color: rgba(0,0,0,.3);
 }
+} /*** end !proton ***/
 
 /*
   This is a workaround for Bug 1482157
@@ -80,14 +78,25 @@
   opacity: 0.001;
 }
 
+@supports not -moz-bool-pref("browser.proton.enabled") {
 #tabbrowser-tabs {
   --tab-line-color: -moz-accent-color;
 }
+} /* END !proton */
 
 #navigator-toolbox toolbarbutton:-moz-lwtheme {
   color: inherit;
   text-shadow: inherit;
 }
+
+@supports not -moz-bool-pref("browser.proton.enabled") {
+:root[macOSNativeFullscreen]:not(:-moz-lwtheme) :is(#navigator-toolbox, #sidebar-box) {
+  /* Make the toolbar opaque using this color that simulates the
+  -moz-mac-vibrant-toolbar-dark effect. This hides vibrancy, but it also
+  ensures that we can't see #browser through the transparent toolbar. */
+  background-color: #232323;
+}
+} /*** END !proton ***/
 
 /** Begin titlebar **/
 
@@ -198,14 +207,7 @@
 %include ../shared/toolbarbutton-icons.inc.css
 %include ../shared/menupanel.inc.css
 
-/* Override OSX-specific toolkit findbar button styles */
-.findbar-button {
-  background-image: none !important;
-  box-shadow: none !important;
-  border: none;
-}
-
-@supports not -moz-bool-pref("browser.proton.toolbar.enabled") {
+@supports not -moz-bool-pref("browser.proton.enabled") {
 /* On Mac, native buttons keep their full opacity when they become disabled
  * and only the glyph or text on top of them becomes less opaque. */
 :root:not([customizing]) #back-button[disabled="true"] {
@@ -237,6 +239,14 @@
 
 %include ../shared/urlbar-searchbar.inc.css
 
+@media not (prefers-contrast) {
+  @supports -moz-bool-pref("browser.proton.urlbar.enabled") {
+  :root:not(:-moz-lwtheme) #urlbar:not([focused="true"]) {
+    --urlbar-box-bgcolor: white;
+  }
+  } /*** END proton ***/
+}
+
 #urlbar,
 #searchbar {
   font-size: 1.25em;
@@ -252,6 +262,14 @@
  * even in non-Latin scripts. */
 #urlbar-input {
   line-height: 1.745em;
+}
+
+/* Move the margin to the parent element to properly position the ::after badge */
+moz-input-box > menupopup .context-menu-add-engine > .menu-iconic-left > .menu-iconic-icon {
+  margin-inline: 0;
+}
+moz-input-box > menupopup .context-menu-add-engine > .menu-iconic-left {
+  margin-inline: 0 5px;
 }
 
 %include ../shared/identity-block/identity-block.inc.css
@@ -480,12 +498,6 @@
 
 /* ----- CONTENT ----- */
 
-.browserContainer > findbar {
-  /* Use the default background gradient from findBar.css */
-  background-color: transparent;
-  color: -moz-DialogText;
-}
-
 .openintabs-menuitem {
   list-style-image: none;
 }
@@ -534,7 +546,7 @@
   text-shadow: inherit;
 }
 
-@supports not -moz-bool-pref("browser.proton.tabs.enabled") {
+@supports not -moz-bool-pref("browser.proton.enabled") {
 :is(.keyboard-focused-tab, .tabbrowser-tab:focus:not([aria-activedescendant])) > .tab-stack > .tab-content > .tab-label-container:not([pinned]),
 :is(.keyboard-focused-tab, .tabbrowser-tab:focus:not([aria-activedescendant])) > .tab-stack > .tab-content > .tab-icon-image[pinned],
 :is(.keyboard-focused-tab, .tabbrowser-tab:focus:not([aria-activedescendant])) > .tab-stack > .tab-content > .tab-throbber[pinned] {
@@ -647,14 +659,8 @@
   margin-top: -14px;
 }
 
-%include ../shared/contextmenu.inc.css
-
-#context-navigation > .menuitem-iconic {
-  padding-inline: 0;
-}
-
 .cui-widget-panelview[id^=PanelUI-webext-] {
-  border-radius: 3.5px;
+  border-radius: var(--arrowpanel-border-radius);
 }
 
 .webextension-popup-browser,

@@ -64,6 +64,9 @@ pub struct FrameBuilderConfig {
     pub gpu_supports_advanced_blend: bool,
     pub advanced_blend_is_coherent: bool,
     pub gpu_supports_render_target_partial_update: bool,
+    /// Whether ImageBufferKind::TextureExternal images must first be copied
+    /// to a regular texture before rendering.
+    pub external_images_require_copy: bool,
     pub batch_lookback_count: usize,
     pub background_color: Option<ColorF>,
     pub compositor_kind: CompositorKind,
@@ -279,7 +282,6 @@ impl<'a> FrameBuildingState<'a> {
 pub struct PictureContext {
     pub pic_index: PictureIndex,
     pub apply_local_clip_rect: bool,
-    pub is_passthrough: bool,
     pub surface_spatial_node_index: SpatialNodeIndex,
     pub raster_spatial_node_index: SpatialNodeIndex,
     /// The surface that this picture will render on.
@@ -855,7 +857,7 @@ pub fn build_render_pass(
                         TextureCacheRenderTarget::new(target_kind)
                     );
                 for task_id in &sub_pass.task_ids {
-                    texture.add_task(*task_id, render_tasks);
+                    texture.add_task(*task_id, render_tasks, gpu_cache);
                 }
             }
             SubPassSurface::Persistent { surface: StaticRenderTaskSurface::ReadOnly { .. } } => {
@@ -914,8 +916,8 @@ pub fn build_render_pass(
         let mut batchers = Vec::new();
         for task_id in &task_ids {
             let task_id = *task_id;
-            let vis_mask = match render_tasks[task_id].kind {
-                RenderTaskKind::Picture(ref info) => info.vis_mask,
+            let dirty_rect = match render_tasks[task_id].kind {
+                RenderTaskKind::Picture(ref info) => info.dirty_rect,
                 _ => unreachable!(),
             };
             batchers.push(AlphaBatchBuilder::new(
@@ -924,7 +926,7 @@ pub fn build_render_pass(
                 ctx.batch_lookback_count,
                 task_id,
                 task_id.into(),
-                vis_mask,
+                dirty_rect,
                 0,
             ));
         }

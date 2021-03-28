@@ -629,6 +629,7 @@ TypeHostRecord::GetAllRecordsWithEchConfig(
 NS_IMETHODIMP
 TypeHostRecord::GetHasIPAddresses(bool* aResult) {
   NS_ENSURE_ARG(aResult);
+  MutexAutoLock lock(mResultsLock);
 
   if (!mResults.is<TypeRecordHTTPSSVC>()) {
     return NS_ERROR_NOT_AVAILABLE;
@@ -642,6 +643,7 @@ TypeHostRecord::GetHasIPAddresses(bool* aResult) {
 NS_IMETHODIMP
 TypeHostRecord::GetAllRecordsExcluded(bool* aResult) {
   NS_ENSURE_ARG(aResult);
+  MutexAutoLock lock(mResultsLock);
 
   if (!mResults.is<TypeRecordHTTPSSVC>()) {
     return NS_ERROR_NOT_AVAILABLE;
@@ -861,8 +863,8 @@ void nsHostResolver::Shutdown() {
       mIdleTaskCV.NotifyAll();
     }
 
-    for (auto iter = mRecordDB.Iter(); !iter.Done(); iter.Next()) {
-      iter.UserData()->Cancel();
+    for (const auto& data : mRecordDB.Values()) {
+      data->Cancel();
     }
     // empty host database
     mRecordDB.Clear();
@@ -2185,8 +2187,7 @@ size_t nsHostResolver::SizeOfIncludingThis(MallocSizeOf mallocSizeOf) const {
   size_t n = mallocSizeOf(this);
 
   n += mRecordDB.ShallowSizeOfExcludingThis(mallocSizeOf);
-  for (auto iter = mRecordDB.ConstIter(); !iter.Done(); iter.Next()) {
-    auto* entry = iter.UserData();
+  for (const auto& entry : mRecordDB.Values()) {
     n += entry->SizeOfIncludingThis(mallocSizeOf);
   }
 
@@ -2305,10 +2306,10 @@ nsresult nsHostResolver::Create(uint32_t maxCacheEntries,
 
 void nsHostResolver::GetDNSCacheEntries(nsTArray<DNSCacheEntries>* args) {
   MutexAutoLock lock(mLock);
-  for (auto iter = mRecordDB.Iter(); !iter.Done(); iter.Next()) {
+  for (const auto& recordEntry : mRecordDB) {
     // We don't pay attention to address literals, only resolved domains.
     // Also require a host.
-    nsHostRecord* rec = iter.UserData();
+    nsHostRecord* rec = recordEntry.GetWeak();
     MOZ_ASSERT(rec, "rec should never be null here!");
 
     if (!rec) {
@@ -2347,7 +2348,7 @@ void nsHostResolver::GetDNSCacheEntries(nsTArray<DNSCacheEntries>* args) {
       info.TRR = addrRec->addr_info->IsTRROrODoH();
     }
 
-    info.originAttributesSuffix = iter.Key().originSuffix;
+    info.originAttributesSuffix = recordEntry.GetKey().originSuffix;
 
     args->AppendElement(std::move(info));
   }

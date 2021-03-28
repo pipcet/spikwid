@@ -547,6 +547,25 @@ template void js::TraceManuallyBarrieredCrossCompartmentEdge<JSObject*>(
 template void js::TraceManuallyBarrieredCrossCompartmentEdge<BaseScript*>(
     JSTracer*, JSObject*, BaseScript**, const char*);
 
+class MOZ_RAII AutoDisableCompartmentCheckTracer {
+#ifdef DEBUG
+  JSContext* cx_;
+  bool prev_;
+
+ public:
+  AutoDisableCompartmentCheckTracer()
+      : cx_(TlsContext.get()), prev_(cx_->disableCompartmentCheckTracer) {
+    cx_->disableCompartmentCheckTracer = true;
+  }
+  ~AutoDisableCompartmentCheckTracer() {
+    cx_->disableCompartmentCheckTracer = prev_;
+  }
+#else
+ public:
+  AutoDisableCompartmentCheckTracer(){};
+#endif
+};
+
 template <typename T>
 void js::TraceSameZoneCrossCompartmentEdge(JSTracer* trc,
                                            const WriteBarriered<T>* dst,
@@ -564,6 +583,7 @@ void js::TraceSameZoneCrossCompartmentEdge(JSTracer* trc,
 
   // Clear expected compartment for cross-compartment edge.
   AutoClearTracingSource acts(trc);
+  AutoDisableCompartmentCheckTracer adcct;
   TraceEdgeInternal(trc, ConvertToBase(dst->unbarrieredAddress()), name);
 }
 template void js::TraceSameZoneCrossCompartmentEdge(
@@ -4147,6 +4167,7 @@ void BarrierTracer::performBarrier(JS::GCCellPtr cell) {
   MOZ_ASSERT(CurrentThreadCanAccessRuntime(runtime()));
   MOZ_ASSERT(!runtime()->gc.isBackgroundMarking());
   MOZ_ASSERT(!cell.asCell()->isForwarded());
+  MOZ_ASSERT(!cell.asCell()->hasTempHeaderData());
 
   // Mark the cell here to prevent us recording it again.
   if (!cell.asCell()->asTenured().markIfUnmarked()) {
@@ -4199,14 +4220,21 @@ void GCMarker::traceBarrieredCell(JS::GCCellPtr cell) {
   MOZ_ASSERT(!cell.asCell()->isForwarded());
 
   ApplyGCThingTyped(cell, [this](auto thing) {
-    if (!ShouldMark(this, thing)) {
-      return;
+    MOZ_ASSERT(ShouldMark(this, thing));
+    MOZ_ASSERT(thing->isMarkedBlack());
+
+    if constexpr (std::is_same_v<decltype(thing), JSString*>) {
+      if (thing->isBeingFlattened()) {
+        // This string is an interior node of a rope that is currently being
+        // flattened. The flattening process invokes the barrier on all nodes in
+        // the tree, so interior nodes need not be traversed.
+        return;
+      }
     }
 
     CheckTracedThing(this, thing);
     AutoClearTracingSource acts(this);
 
-    MOZ_ASSERT(thing->isMarkedBlack());
     traverse(thing);
   });
 }

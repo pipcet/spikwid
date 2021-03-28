@@ -17,13 +17,12 @@ use crate::gpu_types::{TransformPalette, ZBufferIdGenerator};
 use crate::internal_types::{FastHashMap, TextureSource, CacheTextureId};
 use crate::picture::{SliceId, SurfaceInfo, ResolvedSurfaceTexture, TileCacheInstance};
 use crate::prim_store::{PrimitiveStore, DeferredResolve, PrimitiveScratchBuffer};
-use crate::prim_store::gradient::FastLinearGradientInstance;
+use crate::prim_store::gradient::{FastLinearGradientInstance, RadialGradientInstance, ConicGradientInstance};
 use crate::render_backend::DataStores;
 use crate::render_task::{RenderTaskKind, RenderTaskAddress};
 use crate::render_task::{RenderTask, ScalingTask, SvgFilterInfo};
 use crate::render_task_graph::{RenderTaskGraph, RenderTaskId};
 use crate::resource_cache::ResourceCache;
-use crate::visibility::PrimitiveVisibilityMask;
 
 const STYLE_SOLID: i32 = ((BorderStyle::Solid as i32) << 8) | ((BorderStyle::Solid as i32) << 16);
 const STYLE_MASK: i32 = 0x00FF_FF00;
@@ -305,7 +304,7 @@ impl RenderTarget for ColorRenderTarget {
                         ctx.batch_lookback_count,
                         *task_id,
                         (*task_id).into(),
-                        PrimitiveVisibilityMask::all(),
+                        None,
                         prealloc_batch_count,
                     );
 
@@ -404,6 +403,8 @@ impl RenderTarget for ColorRenderTarget {
             RenderTaskKind::Border(..) |
             RenderTaskKind::CacheMask(..) |
             RenderTaskKind::FastLinearGradient(..) |
+            RenderTaskKind::RadialGradient(..) |
+            RenderTaskKind::ConicGradient(..) |
             RenderTaskKind::LineDecoration(..) => {
                 panic!("Should not be added to color target!");
             }
@@ -497,6 +498,8 @@ impl RenderTarget for AlphaRenderTarget {
             RenderTaskKind::Border(..) |
             RenderTaskKind::LineDecoration(..) |
             RenderTaskKind::FastLinearGradient(..) |
+            RenderTaskKind::RadialGradient(..) |
+            RenderTaskKind::ConicGradient(..) |
             RenderTaskKind::SvgFilter(..) => {
                 panic!("BUG: should not be added to alpha target!");
             }
@@ -598,6 +601,8 @@ pub struct TextureCacheRenderTarget {
     pub clears: Vec<DeviceIntRect>,
     pub line_decorations: Vec<LineDecorationJob>,
     pub fast_linear_gradients: Vec<FastLinearGradientInstance>,
+    pub radial_gradients: Vec<RadialGradientInstance>,
+    pub conic_gradients: Vec<ConicGradientInstance>,
 }
 
 impl TextureCacheRenderTarget {
@@ -611,6 +616,8 @@ impl TextureCacheRenderTarget {
             clears: vec![],
             line_decorations: vec![],
             fast_linear_gradients: vec![],
+            radial_gradients: vec![],
+            conic_gradients: vec![],
         }
     }
 
@@ -618,6 +625,7 @@ impl TextureCacheRenderTarget {
         &mut self,
         task_id: RenderTaskId,
         render_tasks: &RenderTaskGraph,
+        gpu_cache: &mut GpuCache,
     ) {
         profile_scope!("add_task");
         let task_address = task_id.into();
@@ -680,6 +688,12 @@ impl TextureCacheRenderTarget {
             RenderTaskKind::FastLinearGradient(ref task_info) => {
                 self.fast_linear_gradients.push(task_info.to_instance(&target_rect));
             }
+            RenderTaskKind::RadialGradient(ref task_info) => {
+                self.radial_gradients.push(task_info.to_instance(&target_rect, gpu_cache));
+            }
+            RenderTaskKind::ConicGradient(ref task_info) => {
+                self.conic_gradients.push(task_info.to_instance(&target_rect, gpu_cache));
+            }
             RenderTaskKind::Image(..) |
             RenderTaskKind::Cached(..) |
             RenderTaskKind::VerticalBlur(..) |
@@ -731,7 +745,7 @@ fn add_scaling_instances(
 
     let source = source_task.unwrap().get_texture_source();
 
-    let source_rect = source_task.unwrap().get_target_rect();
+    let source_rect = source_task.unwrap().get_target_rect().to_f32();
 
     instances
         .entry(source)

@@ -2,9 +2,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 /* eslint max-len: ["error", 80] */
-/* exported initializeView, showView */
 /* import-globals-from aboutaddonsCommon.js */
 /* import-globals-from abuse-reports.js */
+/* import-globals-from view-controller.js */
 /* global MozXULElement, MessageBarStackElement, windowRoot */
 
 "use strict";
@@ -13,7 +13,6 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   AddonManager: "resource://gre/modules/AddonManager.jsm",
   AddonRepository: "resource://gre/modules/addons/AddonRepository.jsm",
   AMTelemetry: "resource://gre/modules/AddonManager.jsm",
-  AppConstants: "resource://gre/modules/AppConstants.jsm",
   ClientID: "resource://gre/modules/ClientID.jsm",
   DeferredTask: "resource://gre/modules/DeferredTask.jsm",
   E10SUtils: "resource://gre/modules/E10SUtils.jsm",
@@ -82,7 +81,7 @@ XPCOMUtils.defineLazyPreferenceGetter(
   false
 );
 
-const PLUGIN_ICON_URL = "chrome://global/skin/plugins/plugin.svg";
+const PLUGIN_ICON_URL = "chrome://global/skin/icons/plugin.svg";
 const EXTENSION_ICON_URL =
   "chrome://mozapps/skin/extensions/extensionGeneric.svg";
 const BUILTIN_THEME_PREVIEWS = new Map([
@@ -103,20 +102,6 @@ const BUILTIN_THEME_PREVIEWS = new Map([
     "chrome://mozapps/content/extensions/firefox-alpenglow.svg",
   ],
 ]);
-
-if (
-  AppConstants.NIGHTLY_BUILD &&
-  Services.prefs.getBoolPref("browser.proton.enabled", false)
-) {
-  BUILTIN_THEME_PREVIEWS.set(
-    "firefox-compact-proton-dark@mozilla.org",
-    "chrome://mozapps/content/extensions/firefox-compact-dark.svg"
-  );
-  BUILTIN_THEME_PREVIEWS.set(
-    "firefox-compact-proton-light@mozilla.org",
-    "chrome://mozapps/content/extensions/firefox-compact-light.svg"
-  );
-}
 
 const PERMISSION_MASKS = {
   "ask-to-activate": AddonManager.PERM_CAN_ASK_TO_ACTIVATE,
@@ -430,7 +415,7 @@ async function checkForUpdates() {
   let addons = await AddonManager.getAddonsByTypes(null);
   addons = addons.filter(addon => hasPermission(addon, "upgrade"));
   let updates = await Promise.all(addons.map(addon => checkForUpdate(addon)));
-  Services.obs.notifyObservers(null, "EM-update-check-finished");
+  gViewController.notifyEMUpdateCheckFinished();
   return updates.reduce(
     (counts, update) => ({
       installed: counts.installed + (update.installed ? 1 : 0),
@@ -480,22 +465,6 @@ async function isAddonOptionsUIAllowed(addon) {
     isAllowedInPrivateBrowsing(addon)
   );
 }
-
-/**
- * This function is set in initialize() by the parent about:addons window. It
- * is a helper for gViewController.loadView().
- *
- * @param {string} type The view type to load.
- * @param {string} param The (optional) param for the view.
- */
-let loadViewFn;
-
-/**
- * This function is set in initialize() by the parent about:addons window. It
- * is a helper for gViewController.resetView(). This should be
- * used to reset the view if we try to load an invalid view.
- */
-let replaceWithDefaultViewFn;
 
 let _templates = {};
 
@@ -1379,6 +1348,7 @@ class AddonPageHeader extends HTMLElement {
         this.getAttribute("page-options-id")
       );
     }
+    document.addEventListener("view-selected", this);
     this.addEventListener("click", this);
     this.addEventListener("mousedown", this);
     // Use capture since the event is actually triggered on the internal
@@ -1388,6 +1358,7 @@ class AddonPageHeader extends HTMLElement {
   }
 
   disconnectedCallback() {
+    document.removeEventListener("view-selected", this);
     this.removeEventListener("click", this);
     this.removeEventListener("mousedown", this);
     this.pageOptionsMenu.removeEventListener("shown", this, true);
@@ -1437,6 +1408,9 @@ class AddonPageHeader extends HTMLElement {
         "aria-expanded",
         this.pageOptionsMenu.open
       );
+    } else if (e.target == document && e.type == "view-selected") {
+      const { type, param } = e.detail;
+      this.setViewInfo({ type, param });
     }
   }
 }
@@ -1462,7 +1436,7 @@ class AddonUpdatesMessage extends HTMLElement {
     this.button = document.createElement("button");
     this.button.addEventListener("click", e => {
       if (e.button === 0) {
-        loadViewFn("updates/available");
+        gViewController.loadView("updates/available");
       }
     });
     this.button.hidden = true;
@@ -1558,7 +1532,7 @@ class AddonPageOptions extends HTMLElement {
         await this.checkForUpdates();
         break;
       case "view-recent-updates":
-        loadViewFn("updates/recent");
+        gViewController.loadView("updates/recent");
         break;
       case "install-from-file":
         if (XPINSTALL_ENABLED) {
@@ -1582,7 +1556,7 @@ class AddonPageOptions extends HTMLElement {
         await this.resetAutomaticUpdates();
         break;
       case "manage-shortcuts":
-        loadViewFn("shortcuts/shortcuts");
+        gViewController.loadView("shortcuts/shortcuts");
         break;
     }
   }
@@ -1715,7 +1689,7 @@ class CategoryButton extends HTMLButtonElement {
   }
 
   load() {
-    loadViewFn(this.viewId);
+    gViewController.loadView(this.viewId);
   }
 
   get isVisible() {
@@ -1781,6 +1755,38 @@ class CategoriesBox extends customElements.get("button-group") {
     });
   }
 
+  handleEvent(e) {
+    if (e.target == document && e.type == "view-selected") {
+      const { type, param } = e.detail;
+      this.select(`addons://${type}/${param}`);
+      return;
+    }
+
+    if (e.target == this && e.type == "button-group:key-selected") {
+      this.activeChild.load();
+      return;
+    }
+
+    if (e.type == "click") {
+      const button = e.target.closest("[viewid]");
+      if (button) {
+        button.load();
+        return;
+      }
+    }
+
+    // Forward the unhandled events to the button-group custom element.
+    super.handleEvent(e);
+  }
+
+  disconnectedCallback() {
+    document.removeEventListener("view-selected", this);
+    this.removeEventListener("button-group:key-selected", this);
+    this.removeEventListener("click", this);
+    AddonManagerListenerHandler.removeListener(this);
+    super.disconnectedCallback();
+  }
+
   async initialize() {
     let addonTypesObjects = AddonManager.addonTypes;
     let addonTypes = new Set();
@@ -1807,37 +1813,13 @@ class CategoriesBox extends customElements.get("button-group") {
 
     this.updateAvailableCount();
 
-    this.addEventListener("click", e => {
-      let button = e.target.closest("[viewid]");
-      if (button) {
-        button.load();
-      }
-    });
-    this.addEventListener("button-group:key-selected", e => {
-      this.activeChild.load();
-    });
-
+    document.addEventListener("view-selected", this);
+    this.addEventListener("button-group:key-selected", this);
+    this.addEventListener("click", this);
     AddonManagerListenerHandler.addListener(this);
 
     this._resolveRendered();
     await hiddenUpdated;
-  }
-
-  get initialViewId() {
-    let viewId = Services.prefs.getStringPref(PREF_UI_LASTCATEGORY, "");
-    // If the pref value is a valid top-level view then use that viewId.
-    if (this.getButtonByViewId(viewId)) {
-      return viewId;
-    }
-    // Otherwise, use the first viewId that can be shown.
-    for (let button of this.children) {
-      if (!button.defaultHidden && !button.hidden && button.isVisible) {
-        return button.viewId;
-      }
-    }
-    // If there aren't any available views then there's nothing to load. This
-    // shouldn't happen though since the extension list should always be valid.
-    throw new Error("Couldn't find initial view to load");
   }
 
   shouldHideCategory(name) {
@@ -1850,10 +1832,6 @@ class CategoriesBox extends customElements.get("button-group") {
 
   getButtonByName(name) {
     return this.querySelector(`[name="${name}"]`);
-  }
-
-  getButtonByViewId(id) {
-    return this.querySelector(`[viewid="${id}"]`);
   }
 
   get selectedChild() {
@@ -1957,7 +1935,7 @@ class CategoriesBox extends customElements.get("button-group") {
       let button = this.getButtonByName(type);
       if (button.selected) {
         // Cancel the load if this view should be hidden.
-        replaceWithDefaultViewFn();
+        gViewController.resetState();
       }
       this.setShouldHideCategory(type, true);
       button.hidden = true;
@@ -1980,8 +1958,8 @@ class SidebarFooter extends HTMLElement {
         link.id = "preferencesButton";
         return link;
       },
-      titleL10nId: "sidebar-preferences-button-title",
-      labelL10nId: "preferences",
+      titleL10nId: "sidebar-settings-button-title",
+      labelL10nId: "addons-settings-button",
       onClick: e => {
         e.preventDefault();
         AMTelemetry.recordLinkEvent({
@@ -3110,7 +3088,7 @@ class AddonCard extends HTMLElement {
             openOptionsInTab(addon.optionsURL);
           } else if (getOptionsType(addon) == "inline") {
             this.recordActionEvent("preferences", "inline");
-            loadViewFn(`detail/${this.addon.id}/preferences`);
+            gViewController.loadView(`detail/${this.addon.id}/preferences`);
           }
           break;
         case "remove":
@@ -3137,7 +3115,7 @@ class AddonCard extends HTMLElement {
           }
           break;
         case "expand":
-          loadViewFn(`detail/${this.addon.id}`);
+          gViewController.loadView(`detail/${this.addon.id}`);
           break;
         case "more-options":
           // Open panel on click from the keyboard.
@@ -3164,7 +3142,7 @@ class AddonCard extends HTMLElement {
             (e.target === this.addonNameEl || !e.target.closest("a"))
           ) {
             e.preventDefault();
-            loadViewFn(`detail/${this.addon.id}`);
+            gViewController.loadView(`detail/${this.addon.id}`);
           } else if (
             e.target.localName == "a" &&
             e.target.getAttribute("data-telemetry-name")
@@ -3707,7 +3685,7 @@ class RecommendedAddonCard extends HTMLElement {
           action: "manage",
           addon: this.discoAddon,
         });
-        loadViewFn(`detail/${this.addonId}`);
+        gViewController.loadView(`detail/${this.addonId}`);
         break;
       default:
         if (event.target.matches(".disco-addon-author a[href]")) {
@@ -4541,160 +4519,138 @@ class DiscoveryPane extends RecommendedSection {
 }
 customElements.define("discovery-pane", DiscoveryPane);
 
-class ListView {
-  constructor({ param, root }) {
-    this.type = param;
-    this.root = root;
+// Define views
+gViewController.defineView("list", async type => {
+  if (!(type in AddonManager.addonTypes)) {
+    return null;
   }
 
-  async render() {
-    if (!(this.type in AddonManager.addonTypes)) {
-      replaceWithDefaultViewFn();
-      return;
-    }
+  let frag = document.createDocumentFragment();
 
-    let frag = document.createDocumentFragment();
+  let list = document.createElement("addon-list");
+  list.type = type;
+  list.setSections([
+    {
+      headingId: type + "-enabled-heading",
+      filterFn: addon =>
+        !addon.hidden && addon.isActive && !isPending(addon, "uninstall"),
+    },
+    {
+      headingId: type + "-disabled-heading",
+      filterFn: addon =>
+        !addon.hidden && !addon.isActive && !isPending(addon, "uninstall"),
+    },
+  ]);
+  frag.appendChild(list);
 
-    let list = document.createElement("addon-list");
-    list.type = this.type;
+  // Show recommendations for themes and extensions.
+  if (
+    LIST_RECOMMENDATIONS_ENABLED &&
+    (type == "extension" || type == "theme")
+  ) {
+    let elementName =
+      type == "extension"
+        ? "recommended-extensions-section"
+        : "recommended-themes-section";
+    let recommendations = document.createElement(elementName);
+    // Start loading the recommendations. This can finish after the view load
+    // event is sent.
+    recommendations.render();
+    frag.appendChild(recommendations);
+  }
+
+  await list.render();
+
+  return frag;
+});
+
+gViewController.defineView("detail", async param => {
+  let [id, selectedTab] = param.split("/");
+  let addon = await AddonManager.getAddonByID(id);
+
+  if (!addon) {
+    return null;
+  }
+
+  let card = document.createElement("addon-card");
+
+  // Ensure the category for this add-on type is selected.
+  document.querySelector("categories-box").selectType(addon.type);
+
+  // Go back to the list view when the add-on is removed.
+  card.addEventListener("remove", () =>
+    gViewController.loadView(`list/${addon.type}`)
+  );
+
+  card.setAddon(addon);
+  card.expand();
+  await card.render();
+  if (selectedTab === "preferences" && (await isAddonOptionsUIAllowed(addon))) {
+    card.showPrefs();
+  }
+
+  return card;
+});
+
+gViewController.defineView("updates", async param => {
+  let list = document.createElement("addon-list");
+  list.type = "all";
+  if (param == "available") {
     list.setSections([
       {
-        headingId: this.type + "-enabled-heading",
-        filterFn: addon =>
-          !addon.hidden && addon.isActive && !isPending(addon, "uninstall"),
-      },
-      {
-        headingId: this.type + "-disabled-heading",
-        filterFn: addon =>
-          !addon.hidden && !addon.isActive && !isPending(addon, "uninstall"),
+        headingId: "available-updates-heading",
+        filterFn: addon => {
+          // Filter the addons visible in the updates view using the same
+          // criteria that is being used to compute the counter on the
+          // available updates category button badge.
+          const install = getUpdateInstall(addon);
+          return install && isManualUpdate(install) && !install.installed;
+        },
       },
     ]);
-    frag.appendChild(list);
-
-    // Show recommendations for themes and extensions.
-    if (
-      LIST_RECOMMENDATIONS_ENABLED &&
-      (this.type == "extension" || this.type == "theme")
-    ) {
-      let elementName =
-        this.type == "extension"
-          ? "recommended-extensions-section"
-          : "recommended-themes-section";
-      let recommendations = document.createElement(elementName);
-      // Start loading the recommendations. This can finish after the view load
-      // event is sent.
-      recommendations.render();
-      frag.appendChild(recommendations);
-    }
-
-    await list.render();
-
-    this.root.textContent = "";
-    this.root.appendChild(frag);
-  }
-}
-
-class DetailView {
-  constructor({ param, root }) {
-    let [id, selectedTab] = param.split("/");
-    this.id = id;
-    this.selectedTab = selectedTab;
-    this.root = root;
+  } else if (param == "recent") {
+    list.sortByFn = (a, b) => {
+      if (a.updateDate > b.updateDate) {
+        return -1;
+      }
+      if (a.updateDate < b.updateDate) {
+        return 1;
+      }
+      return 0;
+    };
+    let updateLimit = new Date() - UPDATES_RECENT_TIMESPAN;
+    list.setSections([
+      {
+        headingId: "recent-updates-heading",
+        filterFn: addon =>
+          !addon.hidden && addon.updateDate && addon.updateDate > updateLimit,
+      },
+    ]);
+  } else {
+    throw new Error(`Unknown updates view ${param}`);
   }
 
-  async render() {
-    let addon = await AddonManager.getAddonByID(this.id);
+  await list.render();
+  return list;
+});
 
-    if (!addon) {
-      replaceWithDefaultViewFn();
-      return;
-    }
+gViewController.defineView("discover", async () => {
+  let discopane = document.createElement("discovery-pane");
+  discopane.render();
+  await document.l10n.translateFragment(discopane);
+  return discopane;
+});
 
-    let card = document.createElement("addon-card");
+gViewController.defineView("shortcuts", async () => {
+  // Force the extension category to be selected, in the case of a reload,
+  // restart, or if the view was opened from another category's page.
+  document.querySelector("categories-box").selectType("extension");
 
-    // Ensure the category for this add-on type is selected.
-    categoriesBox.selectType(addon.type);
-
-    // Go back to the list view when the add-on is removed.
-    card.addEventListener("remove", () => loadViewFn(`list/${addon.type}`));
-
-    card.setAddon(addon);
-    card.expand();
-    await card.render();
-    if (
-      this.selectedTab === "preferences" &&
-      (await isAddonOptionsUIAllowed(addon))
-    ) {
-      card.showPrefs();
-    }
-
-    this.root.textContent = "";
-    this.root.appendChild(card);
-  }
-}
-
-class UpdatesView {
-  constructor({ param, root }) {
-    this.root = root;
-    this.param = param;
-  }
-
-  async render() {
-    let list = document.createElement("addon-list");
-    list.type = "all";
-    if (this.param == "available") {
-      list.setSections([
-        {
-          headingId: "available-updates-heading",
-          filterFn: addon => {
-            // Filter the addons visible in the updates view using the same
-            // criteria that is being used to compute the counter on the
-            // available updates category button badge.
-            const install = getUpdateInstall(addon);
-            return install && isManualUpdate(install) && !install.installed;
-          },
-        },
-      ]);
-    } else if (this.param == "recent") {
-      list.sortByFn = (a, b) => {
-        if (a.updateDate > b.updateDate) {
-          return -1;
-        }
-        if (a.updateDate < b.updateDate) {
-          return 1;
-        }
-        return 0;
-      };
-      let updateLimit = new Date() - UPDATES_RECENT_TIMESPAN;
-      list.setSections([
-        {
-          headingId: "recent-updates-heading",
-          filterFn: addon =>
-            !addon.hidden && addon.updateDate && addon.updateDate > updateLimit,
-        },
-      ]);
-    } else {
-      throw new Error(`Unknown updates view ${this.param}`);
-    }
-
-    await list.render();
-    this.root.textContent = "";
-    this.root.appendChild(list);
-  }
-}
-
-class DiscoveryView {
-  render() {
-    let discopane = document.createElement("discovery-pane");
-    discopane.render();
-    return discopane;
-  }
-}
-
-// Generic view management.
-let mainEl = null;
-let addonPageHeader = null;
-let categoriesBox = null;
+  let view = document.createElement("addon-shortcuts");
+  await view.render();
+  await document.l10n.translateFragment(view);
+  return view;
+});
 
 /**
  * The name of the view for an element, used for telemetry.
@@ -4729,54 +4685,9 @@ function openAmoInTab(el) {
 }
 
 /**
- * Helper for saving and restoring the scroll offsets when a previously loaded
- * view is accessed again.
+ * Called when about:addons is loaded.
  */
-var ScrollOffsets = {
-  _key: null,
-  _offsets: new Map(),
-  canRestore: true,
-
-  setView(historyEntryId) {
-    this._key = historyEntryId;
-    this.canRestore = true;
-  },
-
-  getPosition() {
-    if (!this.canRestore) {
-      return { top: 0, left: 0 };
-    }
-    let { scrollTop: top, scrollLeft: left } = document.documentElement;
-    return { top, left };
-  },
-
-  save() {
-    if (this._key) {
-      this._offsets.set(this._key, this.getPosition());
-    }
-  },
-
-  restore() {
-    let { top = 0, left = 0 } = this._offsets.get(this._key) || {};
-    window.scrollTo({ top, left, behavior: "auto" });
-  },
-};
-
-/**
- * Called automatically when about:addons is loading by view-controller.js.
- */
-async function initializeView(opts) {
-  mainEl = document.getElementById("main");
-  addonPageHeader = document.getElementById("page-header");
-  categoriesBox = document.querySelector("categories-box");
-
-  loadViewFn = opts.loadViewFn;
-  replaceWithDefaultViewFn = opts.replaceWithDefaultViewFn;
-
-  categoriesBox.initialize();
-
-  AddonManagerListenerHandler.startup();
-
+async function initialize() {
   window.addEventListener(
     "unload",
     () => {
@@ -4787,58 +4698,39 @@ async function initializeView(opts) {
     },
     { once: true }
   );
-}
 
-/**
- * Called from extensions.js to load a view. The view's render method should
- * resolve once the view has been updated to conform with other about:addons
- * views.
- */
-async function showView(type, param, { historyEntryId }) {
-  let container = document.createElement("div");
-  container.setAttribute("current-view", type);
-  addonPageHeader.setViewInfo({ type, param });
-  categoriesBox.select(`addons://${type}/${param}`);
-  if (type == "list") {
-    await new ListView({ param, root: container }).render();
-  } else if (type == "detail") {
-    await new DetailView({
-      param,
-      root: container,
-    }).render();
-  } else if (type == "discover") {
-    let discoverView = new DiscoveryView();
-    let elem = discoverView.render();
-    await document.l10n.translateFragment(elem);
-    container.append(elem);
-  } else if (type == "updates") {
-    await new UpdatesView({ param, root: container }).render();
-  } else if (type == "shortcuts") {
-    // Force the extension category to be selected, in the case of a reload,
-    // restart, or if the view was opened from another category's page.
-    categoriesBox.selectType("extension");
-    let view = document.createElement("addon-shortcuts");
-    await view.render();
-    await document.l10n.translateFragment(view);
-    container.appendChild(view);
-  } else {
-    console.warn(`No view for ${type} ${param}, switching to default`);
-    replaceWithDefaultViewFn();
+  // Init UI and view management
+  gViewController.initialize(document.getElementById("main"));
+
+  document.querySelector("categories-box").initialize();
+  AddonManagerListenerHandler.startup();
+
+  // browser.js may call loadView here if it expects an EM-loaded notification
+  gViewController.notifyEMLoaded();
+
+  // Select an initial view if no listener has set one so far
+  if (!gViewController.currentViewId) {
+    if (history.state) {
+      // If there is a history state to restore then use that
+      await gViewController.renderState(history.state);
+    } else {
+      // Fallback to the last category or first valid category view otherwise.
+      await gViewController.loadView(
+        Services.prefs.getStringPref(
+          PREF_UI_LASTCATEGORY,
+          gViewController.defaultViewId
+        )
+      );
+    }
   }
-
-  ScrollOffsets.save();
-  ScrollOffsets.setView(historyEntryId);
-  mainEl.textContent = "";
-  mainEl.appendChild(container);
-
-  // Most content has been rendered at this point. The only exception are
-  // recommendations in the discovery pane and extension/theme list, because
-  // they rely on remote data. If loaded before, then these may be rendered
-  // within one tick, so wait a frame before restoring scroll offsets.
-  return new Promise(resolve => {
-    window.requestAnimationFrame(() => {
-      ScrollOffsets.restore();
-      resolve();
-    });
-  });
 }
+
+window.promiseInitialized = new Promise(resolve => {
+  window.addEventListener(
+    "load",
+    () => {
+      initialize().then(resolve);
+    },
+    { once: true }
+  );
+});

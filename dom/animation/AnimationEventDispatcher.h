@@ -51,7 +51,8 @@ struct AnimationEventInfo {
     event.mPseudoElement =
         nsCSSPseudoElements::PseudoTypeAsString(aTarget.mPseudoType);
 
-    if (aMessage == eAnimationCancel && profiler_can_accept_markers()) {
+    if ((aMessage == eAnimationCancel || aMessage == eAnimationEnd) &&
+        profiler_can_accept_markers()) {
       nsCString markerText;
       aAnimationName->ToUTF8String(markerText);
       PROFILER_MARKER_TEXT(

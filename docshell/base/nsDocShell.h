@@ -819,7 +819,8 @@ class nsDocShell final : public nsDocLoader,
   // FireOnLocationChange is called.
   // In all other cases false is returned.
   bool SetCurrentURI(nsIURI* aURI, nsIRequest* aRequest,
-                     bool aFireOnLocationChange, uint32_t aLocationFlags);
+                     bool aFireOnLocationChange, bool aIsInitialAboutBlank,
+                     uint32_t aLocationFlags);
 
   // The following methods deal with saving and restoring content viewers
   // in session history.
@@ -967,6 +968,7 @@ class nsDocShell final : public nsDocLoader,
   nsresult EnsureFind();
   nsresult EnsureCommandHandler();
   nsresult RefreshURIFromQueue();
+  void RefreshURIToQueue();
   nsresult Embed(nsIContentViewer* aContentViewer,
                  mozilla::dom::WindowGlobalChild* aWindowActor,
                  bool aIsTransientAboutBlank, bool aPersist);
@@ -1038,6 +1040,8 @@ class nsDocShell final : public nsDocLoader,
   nsresult HandleSameDocumentNavigation(nsDocShellLoadState* aLoadState,
                                         SameDocumentNavigationState& aState);
 
+  uint32_t GetSameDocumentNavigationFlags(nsIURI* aNewURI);
+
   // Called when the Private Browsing state of a nsDocShell changes.
   void NotifyPrivateBrowsingChanged();
 
@@ -1084,8 +1088,15 @@ class nsDocShell final : public nsDocLoader,
   RefPtr<nsDSURIContentListener> mContentListener;
   RefPtr<nsGlobalWindowOuter> mScriptGlobal;
   nsCOMPtr<nsIPrincipal> mParentCharsetPrincipal;
+  // The following 3 lists contain either nsITimer or nsRefreshTimer objects.
+  // URIs to refresh are collected to mRefreshURIList.
   nsCOMPtr<nsIMutableArray> mRefreshURIList;
+  // mSavedRefreshURIList is used to move the entries from mRefreshURIList to
+  // mOSHE.
   nsCOMPtr<nsIMutableArray> mSavedRefreshURIList;
+  // BFCache-in-parent implementation caches the entries in
+  // mBFCachedRefreshURIList.
+  nsCOMPtr<nsIMutableArray> mBFCachedRefreshURIList;
   uint64_t mContentWindowID;
   nsCOMPtr<nsIContentViewer> mContentViewer;
   nsCOMPtr<nsIWidget> mParentWidget;
@@ -1192,10 +1203,6 @@ class nsDocShell final : public nsDocLoader,
   // root docshell's indices can differ from child docshells'.
   int32_t mPreviousEntryIndex;
   int32_t mLoadedEntryIndex;
-
-  // Offset in the parent's child list.
-  // -1 if the docshell is added dynamically to the parent shell.
-  int32_t mChildOffset;
 
   BusyFlags mBusyFlags;
   AppType mAppType;

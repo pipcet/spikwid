@@ -3932,8 +3932,7 @@ static void IntersectionObserverPropertyDtor(void* aObject,
                                              void* aData) {
   auto* element = static_cast<Element*>(aObject);
   auto* observers = static_cast<IntersectionObserverList*>(aPropertyValue);
-  for (const auto& entry : *observers) {
-    DOMIntersectionObserver* observer = entry.GetKey();
+  for (DOMIntersectionObserver* observer : observers->Keys()) {
     observer->UnlinkTarget(*element);
   }
   delete observers;
@@ -4476,6 +4475,27 @@ nsAtom* Element::GetEventNameForAttr(nsAtom* aAttr) {
     return nsGkAtoms::onwebkitTransitionEnd;
   }
   return aAttr;
+}
+
+void Element::RegUnRegAccessKey(bool aDoReg) {
+  // first check to see if we have an access key
+  nsAutoString accessKey;
+  GetAttr(kNameSpaceID_None, nsGkAtoms::accesskey, accessKey);
+  if (accessKey.IsEmpty()) {
+    return;
+  }
+
+  // We have an access key, so get the ESM from the pres context.
+  if (nsPresContext* presContext = GetPresContext(eForUncomposedDoc)) {
+    EventStateManager* esm = presContext->EventStateManager();
+
+    // Register or unregister as appropriate.
+    if (aDoReg) {
+      esm->RegisterAccessKey(this, (uint32_t)accessKey.First());
+    } else {
+      esm->UnregisterAccessKey(this, (uint32_t)accessKey.First());
+    }
+  }
 }
 
 }  // namespace mozilla::dom

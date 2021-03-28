@@ -68,6 +68,7 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   RFPHelper: "resource://gre/modules/RFPHelper.jsm",
   SafeBrowsing: "resource://gre/modules/SafeBrowsing.jsm",
   Sanitizer: "resource:///modules/Sanitizer.jsm",
+  SaveToPocket: "chrome://pocket/content/SaveToPocket.jsm",
   SessionStartup: "resource:///modules/sessionstore/SessionStartup.jsm",
   SessionStore: "resource:///modules/sessionstore/SessionStore.jsm",
   ShortcutUtils: "resource://gre/modules/ShortcutUtils.jsm",
@@ -236,7 +237,7 @@ XPCOMUtils.defineLazyScriptGetter(
 XPCOMUtils.defineLazyScriptGetter(
   this,
   "pktUI",
-  "chrome://pocket/content/main.js"
+  "chrome://pocket/content/pktUI.js"
 );
 XPCOMUtils.defineLazyScriptGetter(
   this,
@@ -437,22 +438,11 @@ XPCOMUtils.defineLazyGetter(this, "PopupNotifications", () => {
     "resource://gre/modules/PopupNotifications.jsm"
   );
   try {
-    // Hide all notifications while the URL is being edited and the address bar
-    // has focus, including the virtual focus in the results popup.
-    // We also have to hide notifications explicitly when the window is
-    // minimized because of the effects of the "noautohide" attribute on Linux.
-    // This can be removed once bug 545265 and bug 1320361 are fixed.
-    // Hide popup notifications when system tab prompts are shown so they
-    // don't cover up the prompt.
-    let shouldSuppress = () => {
-      return (
-        window.windowState == window.STATE_MINIMIZED ||
-        (gURLBar.getAttribute("pageproxystate") != "valid" &&
-          gURLBar.focused) ||
-        gBrowser?.selectedBrowser.hasAttribute("tabmodalChromePromptShowing") ||
-        gBrowser?.selectedBrowser.hasAttribute("tabDialogShowing")
-      );
-    };
+    // Hide all PopupNotifications while the URL is being edited and the
+    // address bar has focus, including the virtual focus in the results popup.
+    let shouldSuppress = () =>
+      (gURLBar.getAttribute("pageproxystate") != "valid" && gURLBar.focused) ||
+      shouldSuppressPopupNotifications();
     return new PopupNotifications(
       gBrowser,
       document.getElementById("notification-popup"),
@@ -558,7 +548,7 @@ XPCOMUtils.defineLazyPreferenceGetter(
   this,
   "gFxaMonitorLoginUrl",
   "identity.fxaccounts.service.monitorLoginUrl",
-  false,
+  null,
   (aPref, aOldVal, aNewVal) => {
     updateFxaToolbarMenu(gFxaToolbarEnabled);
   }
@@ -581,23 +571,20 @@ XPCOMUtils.defineLazyPreferenceGetter(
   false
 );
 
+/* Work around the pref callback being run after the document has been unlinked.
+   See bug 1543537. */
+var docWeak = Cu.getWeakReference(document);
 XPCOMUtils.defineLazyPreferenceGetter(
   this,
   "gProton",
   "browser.proton.enabled",
   false,
   (pref, oldValue, newValue) => {
-    document.documentElement.toggleAttribute("proton", newValue);
+    let doc = docWeak.get();
+    if (doc) {
+      doc.documentElement.toggleAttribute("proton", newValue);
+    }
   }
-);
-
-/* Temporary pref while we settle some questions around new tab design.
-   This will eventually be removed and browser.proton.enabled will be used instead. */
-XPCOMUtils.defineLazyPreferenceGetter(
-  this,
-  "gProtonTabs",
-  "browser.proton.tabs.enabled",
-  false
 );
 
 /* Temporary pref while the dust settles around the updated tooltip design
@@ -684,6 +671,20 @@ Object.defineProperty(this, "gFindBarPromise", {
     return gBrowser.getFindBar();
   },
 });
+
+function shouldSuppressPopupNotifications() {
+  // We have to hide notifications explicitly when the window is
+  // minimized because of the effects of the "noautohide" attribute on Linux.
+  // This can be removed once bug 545265 and bug 1320361 are fixed.
+  // Hide popup notifications when system tab prompts are shown so they
+  // don't cover up the prompt.
+  return (
+    window.windowState == window.STATE_MINIMIZED ||
+    gBrowser?.selectedBrowser.hasAttribute("tabmodalChromePromptShowing") ||
+    gBrowser?.selectedBrowser.hasAttribute("tabDialogShowing") ||
+    gDialogBox?.isOpen
+  );
+}
 
 async function gLazyFindCommand(cmd, ...args) {
   let fb = await gFindBarPromise;
@@ -1014,7 +1015,9 @@ const gStoragePressureObserver = {
       Services.prefs.getIntPref(
         "browser.storageManager.pressureNotification.usageThresholdGB"
       );
-    let msg = "";
+    let messageFragment = document.createDocumentFragment();
+    let message = document.createElement("span");
+
     let buttons = [{ supportPage: "storage-permissions" }];
     let usage = subject.QueryInterface(Ci.nsISupportsPRUint64).data;
     if (usage < USAGE_THRESHOLD_BYTES) {
@@ -1022,17 +1025,13 @@ const gStoragePressureObserver = {
       // This is because this usage is small and not the main cause for space issue.
       // In order to avoid the bad and wrong impression among users that
       // firefox eats disk space a lot, indicate users to clean up other disk space.
-      [msg] = await document.l10n.formatValues([
-        { id: "space-alert-under-5gb-message" },
-      ]);
+      document.l10n.setAttributes(message, "space-alert-under-5gb-message2");
     } else {
       // The firefox-used space >= 5GB, then guide users to about:preferences
       // to clear some data stored on firefox by websites.
-      [msg] = await document.l10n.formatValues([
-        { id: "space-alert-over-5gb-message" },
-      ]);
+      document.l10n.setAttributes(message, "space-alert-over-5gb-message2");
       buttons.push({
-        "l10n-id": "space-alert-over-5gb-pref-button",
+        "l10n-id": "space-alert-over-5gb-settings-button",
         callback(notificationBar, button) {
           // The advanced subpanes are only supported in the old organization, which will
           // be removed by bug 1349689.
@@ -1040,9 +1039,10 @@ const gStoragePressureObserver = {
         },
       });
     }
+    messageFragment.appendChild(message);
 
     gHighPriorityNotificationBox.appendNotification(
-      msg,
+      messageFragment,
       NOTIFICATION_VALUE,
       null,
       gHighPriorityNotificationBox.PRIORITY_WARNING_HIGH,
@@ -1127,7 +1127,7 @@ var gPopupBlockerObserver = {
             },
           ];
 
-          const priority = notificationBox.PRIORITY_WARNING_MEDIUM;
+          const priority = notificationBox.PRIORITY_INFO_MEDIUM;
           notificationBox.appendNotification(
             message,
             "popup-blocked",
@@ -1971,7 +1971,7 @@ var gBrowserInit = {
     // We do this before the session restore service gets initialized so we can
     // apply full zoom settings to tabs restored by the session restore service.
     FullZoom.init();
-    PanelUI.init();
+    PanelUI.init(shouldSuppressPopupNotifications);
 
     UpdateUrlbarSearchSplitterState();
 
@@ -3351,16 +3351,19 @@ function UpdateUrlbarSearchSplitterState() {
 }
 
 function UpdatePopupNotificationsVisibility() {
-  // Only need to do something if the PopupNotifications object for this window
-  // has already been initialized (i.e. its getter no longer exists).
-  if (Object.getOwnPropertyDescriptor(window, "PopupNotifications").get) {
-    return;
+  // Only need to update PopupNotifications if it has already been initialized
+  // for this window (i.e. its getter no longer exists).
+  if (!Object.getOwnPropertyDescriptor(window, "PopupNotifications").get) {
+    // Notify PopupNotifications that the visible anchors may have changed. This
+    // also checks the suppression state according to the "shouldSuppress"
+    // function defined earlier in this file.
+    PopupNotifications.anchorVisibilityChange();
   }
 
-  // Notify PopupNotifications that the visible anchors may have changed. This
-  // also checks the suppression state according to the "shouldSuppress"
-  // function defined earlier in this file.
-  PopupNotifications.anchorVisibilityChange();
+  // This is similar to the above, but for notifications attached to the
+  // hamburger menu icon (such as update notifications and add-on install
+  // notifications.)
+  PanelUI?.updateNotifications();
 }
 
 function PageProxyClickHandler(aEvent) {
@@ -4305,9 +4308,8 @@ const BrowserSearch = {
    *        The principal to use for a new window or tab.
    * @param csp
    *        The content security policy to use for a new window or tab.
-   * @param flipLoadInBackground [optional]
-   *        If a modifier/middle mouse button is used:
-   *        Flip preference to load search in background tab.
+   * @param inBackground [optional]
+   *        Set to true for the tab to be loaded in the background, default false.
    * @param engine [optional]
    *        The search engine to use for the search.
    * @param tab [optional]
@@ -4323,7 +4325,7 @@ const BrowserSearch = {
     purpose,
     triggeringPrincipal,
     csp,
-    flipLoadInBackground = false,
+    inBackground = false,
     engine = null,
     tab = null
   ) {
@@ -4349,14 +4351,10 @@ const BrowserSearch = {
       return null;
     }
 
-    let inBackground = Services.prefs.getBoolPref(
-      "browser.search.context.loadInBackground"
-    );
-
     openLinkIn(submission.uri.spec, where || "current", {
       private: usePrivate && !PrivateBrowsingUtils.isWindowPrivate(window),
       postData: submission.postData,
-      inBackground: flipLoadInBackground ? !inBackground : inBackground,
+      inBackground,
       relatedToCurrent: true,
       triggeringPrincipal,
       csp,
@@ -4388,7 +4386,12 @@ const BrowserSearch = {
     if (usePrivate && !PrivateBrowsingUtils.isWindowPrivate(window)) {
       where = "window";
     }
-    let flipLoadInBackground = event.button == 1 || event.ctrlKey;
+    let inBackground = Services.prefs.getBoolPref(
+      "browser.search.context.loadInBackground"
+    );
+    if (event.button == 1 || event.ctrlKey) {
+      inBackground = !inBackground;
+    }
 
     let { engine, url } = await BrowserSearch._loadSearch(
       terms,
@@ -4399,7 +4402,7 @@ const BrowserSearch = {
         triggeringPrincipal.originAttributes
       ),
       csp,
-      flipLoadInBackground
+      inBackground
     );
 
     if (engine) {
@@ -5261,6 +5264,15 @@ var XULBrowserWindow = {
       );
     }
 
+    // About pages other than about:reader are not currently supported by
+    // screenshots (see Bug 1620992).
+    Services.obs.notifyObservers(
+      null,
+      "toggle-screenshot-disable",
+      aLocationURI.scheme == "about" &&
+        !aLocationURI.spec.startsWith("about:reader")
+    );
+
     gPermissionPanel.onLocationChange();
 
     gProtectionsHandler.onLocationChange();
@@ -5268,6 +5280,8 @@ var XULBrowserWindow = {
     BrowserPageActions.onLocationChange();
 
     SafeBrowsingNotificationBox.onLocationChange(aLocationURI);
+
+    SaveToPocket.onLocationChange(window);
 
     UrlbarProviderSearchTips.onLocationChange(
       window,
@@ -5652,9 +5666,7 @@ var CombinedStopReload = {
         if (
           event.target.classList.contains("toolbarbutton-animatable-image") &&
           (event.animationName == "reload-to-stop" ||
-            event.animationName == "stop-to-reload" ||
-            event.animationName == "reload-to-stop-rtl" ||
-            event.animationName == "stop-to-reload-rtl")
+            event.animationName == "stop-to-reload")
         ) {
           this.stopReloadContainer.removeAttribute("animate");
         }
@@ -8920,7 +8932,7 @@ const SafeBrowsingNotificationBox = {
     let notification = notificationBox.appendNotification(
       title,
       value,
-      "chrome://global/skin/icons/blocklist_favicon.png",
+      "chrome://global/skin/icons/blocked.svg",
       notificationBox.PRIORITY_CRITICAL_HIGH,
       buttons
     );
@@ -9283,9 +9295,9 @@ TabModalPromptBox.prototype = {
       !browser.hasAttribute("tabmodalChromePromptShowing")
     ) {
       browser.setAttribute("tabmodalChromePromptShowing", true);
-      // Notify PopupNotifications of the UI change so it hides the notification
-      // panel.
-      PopupNotifications.anchorVisibilityChange();
+      // Notify popup notifications of the UI change so they hide their
+      // notification panels.
+      UpdatePopupNotificationsVisibility();
     }
 
     let prompts = this.listPrompts(args.modalType);
@@ -9353,9 +9365,9 @@ TabModalPromptBox.prototype = {
       // If we remove the last tab chrome prompt, also remove the browser
       // attribute.
       browser.removeAttribute("tabmodalChromePromptShowing");
-      // Notify PopupNotifications of the UI change so it shows the notification
-      // panel again.
-      PopupNotifications.anchorVisibilityChange();
+      // Notify popup notifications of the UI change so they show notification
+      // panels again.
+      UpdatePopupNotificationsVisibility();
     }
     // Check if all prompts are closed
     if (!this._hasPrompts()) {
@@ -9469,6 +9481,10 @@ var gDialogBox = {
     let haveClosedPromise = new Promise(resolve => {
       this._didCloseHTMLDialog = resolve;
     });
+
+    // Bring the window to the front in case we're minimized or occluded:
+    window.focus();
+
     try {
       await this._open(uri, args);
     } catch (ex) {
@@ -9491,6 +9507,7 @@ var gDialogBox = {
       dialog.removeEventListener("close", this);
       this._updateMenuAndCommandState(true /* to enable */);
       this._dialog = null;
+      UpdatePopupNotificationsVisibility();
     }
     if (this._queued.length) {
       setTimeout(() => this._openNextDialog(), 0);
@@ -9568,6 +9585,7 @@ var gDialogBox = {
       },
       args
     );
+    UpdatePopupNotificationsVisibility();
     return closedPromise;
   },
 
@@ -9633,7 +9651,7 @@ var ConfirmationHint = {
    * Shows a transient, non-interactive confirmation hint anchored to an
    * element, usually used in response to a user action to reaffirm that it was
    * successful and potentially provide extra context. Examples for such hints:
-   * - "Saved to Library!" after bookmarking a page
+   * - "Saved to bookmarks" after bookmarking a page
    * - "Sent!" after sending a tab to another device
    * - "Queued (offline)" when attempting to send a tab to another device
    *   while offline

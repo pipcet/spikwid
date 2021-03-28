@@ -246,24 +246,18 @@ void StackShape::trace(JSTracer* trc) {
   }
 }
 
-void StackBaseShape::trace(JSTracer* trc) {
-  proto.trace(trc);
-}
+void StackBaseShape::trace(JSTracer* trc) { proto.trace(trc); }
 
 void PropertyDescriptor::trace(JSTracer* trc) {
   if (obj) {
     TraceRoot(trc, &obj, "Descriptor::obj");
   }
   TraceRoot(trc, &value, "Descriptor::value");
-  if ((attrs & JSPROP_GETTER) && getter) {
-    JSObject* tmp = JS_FUNC_TO_DATA_PTR(JSObject*, getter);
-    TraceRoot(trc, &tmp, "Descriptor::get");
-    getter = JS_DATA_TO_FUNC_PTR(JSGetterOp, tmp);
+  if (getter) {
+    TraceRoot(trc, &getter, "Descriptor::getter");
   }
-  if ((attrs & JSPROP_SETTER) && setter) {
-    JSObject* tmp = JS_FUNC_TO_DATA_PTR(JSObject*, setter);
-    TraceRoot(trc, &tmp, "Descriptor::set");
-    setter = JS_DATA_TO_FUNC_PTR(JSSetterOp, tmp);
+  if (setter) {
+    TraceRoot(trc, &setter, "Descriptor::setter");
   }
 }
 

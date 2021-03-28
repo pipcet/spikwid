@@ -180,7 +180,7 @@
                    onpopupshowing="gSync.populateSendTabToDevicesMenu(event.target, TabContextMenu.contextTab.linkedBrowser.currentURI.spec, TabContextMenu.contextTab.linkedBrowser.contentTitle, TabContextMenu.contextTab.multiselected);"/>
       </menu>
       <menu id="context_reopenInContainer"
-            data-lazy-l10n-id="tab-context-open-in-container"
+            data-lazy-l10n-id="tab-context-open-in-new-container-tab"
             hidden="true">
         <menupopup oncommand="TabContextMenu.reopenInContainer(event);"
                    onpopupshowing="TabContextMenu.createReopenInContainerMenu(event);"/>
@@ -607,7 +607,7 @@
                 oncommand="BrowserPageActions.togglePinningForContextAction();"
                 data-l10n-id="page-action-remove-from-urlbar"/>
       <menuseparator class="pageActionContextMenuItem extensionPinned extensionUnpinned"/>
-      <menuitem class="pageActionContextMenuItem extensionPinned extensionUnpinned"
+      <menuitem class="pageActionContextMenuItem extensionPinned extensionUnpinned manageExtensionItem"
                 oncommand="BrowserPageActions.openAboutAddonsForContextAction();"
                 data-l10n-id="page-action-manage-extension"/>
       <menuitem class="pageActionContextMenuItem extensionPinned extensionUnpinned removeExtensionItem"
@@ -753,12 +753,8 @@
       <vbox class="panel-subview-body">
         <vbox id="appMenu-addon-banners"/>
         <toolbarbutton id="appMenu-update-banner" class="panel-banner-item"
-                       data-l10n-id="appmenuitem-update-banner"
-                       data-l10n-attrs="label-update-downloading"
-                       label-update-available="&updateAvailable.panelUI.label;"
-                       label-update-manual="&updateManual.panelUI.label;"
-                       label-update-unsupported="&updateUnsupported.panelUI.label;"
-                       label-update-restart="&updateRestart.panelUI.label2;"
+                       data-l10n-id="appmenuitem-update-banner2"
+                       data-l10n-attrs="label-update-downloading, label-update-available, label-update-manual, label-update-unsupported, label-update-restart"
                        oncommand="PanelUI._onBannerItemSelected(event)"
                        wrap="true"
                        hidden="true"/>
@@ -876,7 +872,7 @@
                        />
         <toolbarbutton id="appMenu-addons-button"
                        class="subviewbutton subviewbutton-iconic"
-                       label="&addons.label;"
+                       data-l10n-id="appmenuitem-addons-and-themes"
                        key="key_openAddons"
                        command="Tools:Addons"
                        />
@@ -969,21 +965,17 @@
       <vbox class="panel-subview-body">
         <vbox id="appMenu-proton-addon-banners"/>
         <toolbarbutton id="appMenu-proton-update-banner" class="panel-banner-item"
-                       data-l10n-id="appmenuitem-update-banner"
-                       data-l10n-attrs="label-update-downloading"
-                       label-update-available="&updateAvailable.panelUI.label;"
-                       label-update-manual="&updateManual.panelUI.label;"
-                       label-update-unsupported="&updateUnsupported.panelUI.label;"
-                       label-update-restart="&updateRestart.panelUI.label2;"
+                       data-l10n-id="appmenuitem-update-banner2"
+                       data-l10n-attrs="label-update-downloading, label-update-available, label-update-manual, label-update-unsupported, label-update-restart"
                        oncommand="PanelUI._onBannerItemSelected(event)"
                        wrap="true"
                        hidden="true"/>
         <toolbaritem id="appMenu-fxa-status2"
+                     closemenu="none"
                      class="subviewbutton toolbaritem-combined-buttons">
           <label id="appMenu-fxa-text" class="toolbarbutton-text" data-l10n-id="appmenu-fxa-sync-and-save-data"/>
           <toolbarbutton id="appMenu-fxa-label2"
                         class="subviewbutton"
-                        closemenu="none"
                         oncommand="gSync.toggleAccountPanel(this, event)"/>
         </toolbaritem>
         <toolbarseparator id="appMenu-fxa-separator" class="proton-zap"/>
@@ -1025,7 +1017,7 @@
                        />
         <toolbarbutton id="appMenu-extensions-themes-button"
                        class="subviewbutton"
-                       data-l10n-id="appmenuitem-extensions-and-themes"
+                       data-l10n-id="appmenuitem-addons-and-themes"
                        key="key_openAddons"
                        command="Tools:Addons"
                        />
@@ -1097,7 +1089,7 @@
         <toolbarseparator/>
         <toolbarbutton id="appMenu-quit-button2"
                        class="subviewbutton"
-                       data-l10n-id="appmenuitem-exit"
+                       data-l10n-id="appmenuitem-exit2"
                        key="key_quitApplication"
                        command="cmd_quitApplication"/>
 #endif
@@ -1332,6 +1324,10 @@
 
     <panelview id="appMenu-moreView" title="&moreMenu.label;" class="PanelUI-subView">
       <vbox class="panel-subview-body">
+        <toolbarbutton id="appMenu-taskmanager-button"
+                       class="subviewbutton subviewbutton-iconic"
+                       data-l10n-id="appmenu-taskmanager"
+                       oncommand="switchToTabHavingURI('about:performance', true)"/>
         <toolbarbutton id="appMenu-characterencoding-button"
                        class="subviewbutton subviewbutton-nav"
                        label="&charsetMenu2.label;"
@@ -1364,6 +1360,11 @@
       </vbox>
     </panelview>
 
+    <panelview id="PanelUI-savetopocket" flex="1" class="PanelUI-subView">
+      <vbox class="PanelUI-savetopocket-container">
+      </vbox>
+    </panelview>
+
     <panelview id="PanelUI-remotetabs" flex="1" class="PanelUI-subView"
                descriptionheightworkaround="true">
       <vbox class="panel-subview-body">
@@ -1371,18 +1372,6 @@
         <!-- When Sync is ready to sync -->
         <vbox id="PanelUI-remotetabs-main" hidden="true">
           <vbox id="PanelUI-remotetabs-buttons">
-            <toolbarbutton id="PanelUI-remotetabs-view-sidebar"
-                           class="subviewbutton subviewbutton-iconic"
-                           label="&appMenuRemoteTabs.sidebar.label;"
-                           label-checked="&appMenuRemoteTabs.hidesidebar.label;"
-                           label-unchecked="&appMenuRemoteTabs.sidebar.label;"
-                           oncommand="SidebarUI.toggle('viewTabsSidebar', this);"/>
-            <toolbarbutton id="PanelUI-remotetabs-view-managedevices"
-                           class="subviewbutton subviewbutton-iconic"
-                           label="&appMenuRemoteTabs.managedevices.label;"
-                           oncommand="gSync.openDevicesManagementPage('syncedtabs-menupanel');">
-                           <observes element="sidebar-box" attribute="positionend"/>
-            </toolbarbutton>
             <toolbarbutton id="PanelUI-remotetabs-syncnow"
                            align="center"
                            class="subviewbutton subviewbutton-iconic"
@@ -1392,9 +1381,17 @@
               <hbox flex="1">
                 <image class="syncNowBtn"/>
                 <label class="syncnow-label"
-                       data-l10n-id="appmenuitem-fxa-toolbar-sync-now2"
+                       data-l10n-id="remote-tabs-sync-now"
+                       sync-now-data-l10n-id="remote-tabs-sync-now"
+                       syncing-data-l10n-id="fxa-toolbar-sync-syncing2"
                        crop="end"/>
               </hbox>
+            </toolbarbutton>
+            <toolbarbutton id="PanelUI-remotetabs-view-managedevices"
+                           class="subviewbutton subviewbutton-iconic"
+                           data-l10n-id="remote-tabs-manage-account"
+                           oncommand="gSync.openDevicesManagementPage('syncedtabs-menupanel');">
+                           <observes element="sidebar-box" attribute="positionend"/>
             </toolbarbutton>
             <toolbarseparator id="PanelUI-remotetabs-separator"/>
           </vbox>
@@ -1530,6 +1527,8 @@
                    class="syncNowBtn"/>
             <label class="syncnow-label"
                    data-l10n-id="appmenuitem-fxa-toolbar-sync-now2"
+                   sync-now-data-l10n-id="appmenuitem-fxa-toolbar-sync-now2"
+                   syncing-data-l10n-id="fxa-toolbar-sync-syncing2"
                    crop="end"/>
           </hbox>
         </toolbarbutton>
@@ -1814,17 +1813,6 @@
             </box>
           </toolbarbutton>
         </toolbaritem>
-        <toolbarbutton id="home-button" class="toolbarbutton-1 chromeclass-toolbar-additional"
-                       removable="true"
-                       label="&homeButton.label;"
-                       ondragover="homeButtonObserver.onDragOver(event)"
-                       ondragenter="homeButtonObserver.onDragOver(event)"
-                       ondrop="homeButtonObserver.onDrop(event)"
-                       ondragexit="homeButtonObserver.onDragExit(event)"
-                       key="goHome"
-                       onclick="BrowserHome(event);"
-                       cui-areatype="toolbar"
-                       tooltiptext="&homeButton.defaultPage.tooltip;"/>
         <toolbarspring cui-areatype="toolbar" class="chromeclass-toolbar-additional"/>
         <toolbaritem id="urlbar-container" flex="400" persist="width"
                      removable="false"
@@ -2024,12 +2012,6 @@
                        data-l10n-id="urlbar-page-action-button"
                        onmousedown="BrowserPageActions.mainButtonClicked(event);"
                        onkeypress="BrowserPageActions.mainButtonClicked(event);"/>
-                <image id="pocket-button"
-                       class="urlbar-icon urlbar-page-action"
-                       data-l10n-id="urlbar-pocket-button"
-                       role="button"
-                       hidden="true"
-                       onclick="BrowserPageActions.doCommandForAction(PageActions.actionForID('pocket'), event, this);"/>
                 <hbox id="star-button-box"
                       hidden="true"
                       class="urlbar-icon-wrapper urlbar-page-action"
@@ -2081,15 +2063,6 @@
               </stack>
             </stack>
           </toolbarbutton>
-
-        <toolbarbutton id="library-button" class="toolbarbutton-1 chromeclass-toolbar-additional subviewbutton-nav"
-                       removable="true"
-                       onmousedown="PanelUI.showSubView('appMenu-libraryView', this, event);"
-                       onkeypress="PanelUI.showSubView('appMenu-libraryView', this, event);"
-                       closemenu="none"
-                       cui-areatype="toolbar"
-                       tooltiptext="&libraryButton.tooltip;"
-                       label="&places.library.title;"/>
 
         <toolbarbutton id="fxa-toolbar-menu-button" class="toolbarbutton-1 chromeclass-toolbar-additional subviewbutton-nav"
                        badged="true"
@@ -2292,7 +2265,7 @@
           <!-- NB: temporary solution for bug 985024, this should go away soon. -->
           <menuitem id="BMB_bookmarksShowAllTop"
                     class="menuitem-iconic subviewbutton"
-                    data-l10n-id="bookmarks-show-all-bookmarks"
+                    data-l10n-id="bookmarks-manage-bookmarks"
                     command="Browser:ShowAllBookmarks"
                     key="manBookmarkKb"/>
           <menuseparator/>
@@ -2348,8 +2321,8 @@
           <menuseparator/>
           <!-- Bookmarks menu items will go here -->
           <menuitem id="BMB_bookmarksShowAll"
-                    class="subviewbutton panel-subview-footer"
-                    data-l10n-id="bookmarks-show-all-bookmarks"
+                    class="subviewbutton panel-subview-footer-button"
+                    data-l10n-id="bookmarks-manage-bookmarks"
                     command="Browser:ShowAllBookmarks"
                     key="manBookmarkKb"/>
         </menupopup>
@@ -2365,6 +2338,27 @@
         <searchbar id="searchbar" flex="1"/>
         <toolbartabstop/>
       </toolbaritem>
+
+      <toolbarbutton id="home-button" class="toolbarbutton-1 chromeclass-toolbar-additional"
+                     removable="true"
+                     label="&homeButton.label;"
+                     ondragover="homeButtonObserver.onDragOver(event)"
+                     ondragenter="homeButtonObserver.onDragOver(event)"
+                     ondrop="homeButtonObserver.onDrop(event)"
+                     ondragexit="homeButtonObserver.onDragExit(event)"
+                     key="goHome"
+                     onclick="BrowserHome(event);"
+                     cui-areatype="toolbar"
+                     tooltiptext="&homeButton.defaultPage.tooltip;"/>
+
+      <toolbarbutton id="library-button" class="toolbarbutton-1 chromeclass-toolbar-additional subviewbutton-nav"
+                     removable="true"
+                     onmousedown="PanelUI.showSubView('appMenu-libraryView', this, event);"
+                     onkeypress="PanelUI.showSubView('appMenu-libraryView', this, event);"
+                     closemenu="none"
+                     cui-areatype="toolbar"
+                     tooltiptext="&libraryButton.tooltip;"
+                     label="&places.library.title;"/>
     </html:template>
   </toolbox>
   </box>

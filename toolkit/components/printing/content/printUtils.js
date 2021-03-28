@@ -235,9 +235,11 @@ var PrintUtils = {
       let sourceActor = aBrowsingContext.currentWindowGlobal.getActor(
         "PrintingSelection"
       );
-      hasSelection = await sourceActor.sendQuery(
-        "PrintingSelection:HasSelection"
-      );
+      try {
+        hasSelection = await sourceActor.sendQuery(
+          "PrintingSelection:HasSelection"
+        );
+      } catch (ex) {}
     }
 
     let sourceBrowser = aBrowsingContext.top.embedderElement;
@@ -338,7 +340,12 @@ var PrintUtils = {
         printInitiationTime,
         printSelectionOnly,
         printFrameOnly
-      ).catch(() => {});
+      ).catch(e => {
+        Cu.reportError(e);
+        if (browser) {
+          browser.remove();
+        }
+      });
       return browser;
     }
 

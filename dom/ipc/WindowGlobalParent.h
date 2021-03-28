@@ -11,6 +11,7 @@
 #include "mozilla/ContentBlockingNotifier.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/RefPtr.h"
+#include "mozilla/UniquePtr.h"
 #include "mozilla/dom/ClientInfo.h"
 #include "mozilla/dom/ClientIPCTypes.h"
 #include "mozilla/dom/DOMRect.h"
@@ -43,6 +44,8 @@ class WindowGlobalChild;
 class JSWindowActorParent;
 class JSActorMessageMeta;
 struct PageUseCounters;
+class WindowSessionStoreState;
+struct WindowSessionStoreUpdate;
 
 /**
  * A handle in the parent process to a specific nsGlobalWindowInner object.
@@ -79,6 +82,8 @@ class WindowGlobalParent final : public WindowContext,
   CanonicalBrowsingContext* GetBrowsingContext() {
     return CanonicalBrowsingContext::Cast(WindowContext::GetBrowsingContext());
   }
+
+  Element* GetRootOwnerElement();
 
   // Has this actor been shut down
   bool IsClosed() { return !CanSend(); }
@@ -153,7 +158,7 @@ class WindowGlobalParent final : public WindowContext,
   already_AddRefed<Promise> GetSecurityInfo(ErrorResult& aRv);
 
   static already_AddRefed<WindowGlobalParent> CreateDisconnected(
-      const WindowGlobalInit& aInit, bool aInProcess = false);
+      const WindowGlobalInit& aInit);
 
   // Initialize the mFrameLoader fields for a created WindowGlobalParent. Must
   // be called after setting the Manager actor.
@@ -201,6 +206,10 @@ class WindowGlobalParent final : public WindowContext,
   nsITransportSecurityInfo* GetSecurityInfo() { return mSecurityInfo; }
 
   const nsACString& GetRemoteType() override;
+
+  nsresult UpdateSessionStore(const Maybe<FormData>& aFormData,
+                              const Maybe<nsPoint>& aScrollPosition,
+                              uint32_t aEpoch);
 
  protected:
   already_AddRefed<JSActor> InitJSActor(JS::HandleObject aMaybeActor,
@@ -261,15 +270,25 @@ class WindowGlobalParent final : public WindowContext,
   mozilla::ipc::IPCResult RecvAccumulatePageUseCounters(
       const UseCounters& aUseCounters);
 
+  mozilla::ipc::IPCResult RecvRequestRestoreTabContent();
+
+  mozilla::ipc::IPCResult RecvUpdateSessionStore(
+      const Maybe<FormData>& aFormData, const Maybe<nsPoint>& aScrollPosition,
+      uint32_t aEpoch);
+
+  mozilla::ipc::IPCResult RecvResetSessionStore(uint32_t aEpoch);
+
  private:
   WindowGlobalParent(CanonicalBrowsingContext* aBrowsingContext,
                      uint64_t aInnerWindowId, uint64_t aOuterWindowId,
-                     bool aInProcess, FieldValues&& aInit);
+                     FieldValues&& aInit);
 
   ~WindowGlobalParent();
 
   bool ShouldTrackSiteOriginTelemetry();
   void FinishAccumulatingPageUseCounters();
+
+  nsresult ResetSessionStore(uint32_t aEpoch);
 
   // NOTE: This document principal doesn't reflect possible |document.domain|
   // mutations which may have been made in the actual document.

@@ -1564,6 +1564,12 @@ HttpBaseChannel::GetSupportsHTTP3(bool* aSupportsHTTP3) {
 }
 
 NS_IMETHODIMP
+HttpBaseChannel::GetHasHTTPSRR(bool* aHasHTTPSRR) {
+  *aHasHTTPSRR = LoadHasHTTPSRR();
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 HttpBaseChannel::GetRequestMethod(nsACString& aMethod) {
   mRequestHead.Method(aMethod);
   return NS_OK;
@@ -4345,8 +4351,8 @@ nsresult HttpBaseChannel::SetupReplacementChannel(nsIURI* newURI,
   // transfer any properties
   nsCOMPtr<nsIWritablePropertyBag> bag(do_QueryInterface(newChannel));
   if (bag) {
-    for (auto iter = mPropertyHash.Iter(); !iter.Done(); iter.Next()) {
-      bag->SetProperty(iter.Key(), iter.UserData());
+    for (const auto& entry : mPropertyHash) {
+      bag->SetProperty(entry.GetKey(), entry.GetWeak());
     }
   }
 

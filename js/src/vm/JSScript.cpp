@@ -720,6 +720,10 @@ size_t JSScript::numAlwaysLiveFixedSlots() const {
   if (bodyScope()->is<js::ModuleScope>()) {
     return bodyScope()->as<js::ModuleScope>().nextFrameSlot();
   }
+  if (bodyScope()->is<js::EvalScope>() &&
+      bodyScope()->kind() == ScopeKind::StrictEval) {
+    return bodyScope()->as<js::EvalScope>().nextFrameSlot();
+  }
   return 0;
 }
 
@@ -1515,20 +1519,6 @@ uint64_t JSScript::getHitCount(jsbytecode* pc) {
     count -= throwCount->numExec();
     targetOffset = throwCount->pcOffset() - 1;
   } while (true);
-}
-
-void JSScript::incHitCount(jsbytecode* pc) {
-  MOZ_ASSERT(containsPC(pc));
-  if (pc < main()) {
-    pc = main();
-  }
-
-  ScriptCounts& sc = getScriptCounts();
-  js::PCCounts* baseCount = sc.getImmediatePrecedingPCCounts(pcToOffset(pc));
-  if (!baseCount) {
-    return;
-  }
-  baseCount->numExec()++;
 }
 
 void JSScript::addIonCounts(jit::IonScriptCounts* ionCounts) {
@@ -4835,8 +4825,10 @@ bool JSScript::formalIsAliased(unsigned argSlot) {
   MOZ_CRASH("Argument slot not found");
 }
 
-bool JSScript::anyFormalIsAliased() {
-  if (functionHasParameterExprs()) {
+// Returns true if any formal argument is mapped by the arguments
+// object, but lives in the call object.
+bool JSScript::anyFormalIsForwarded() {
+  if (!argsObjAliasesFormals()) {
     return false;
   }
 

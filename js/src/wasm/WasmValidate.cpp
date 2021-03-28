@@ -317,12 +317,12 @@ rewind:
   return true;
 }
 
-bool Decoder::finishNameSubsection(uint32_t expected) {
+bool Decoder::finishNameSubsection(uint32_t endOffset) {
   uint32_t actual = currentOffset();
-  if (expected != actual) {
-    return failf("bad name subsection length (expected: %" PRIu32
+  if (endOffset != actual) {
+    return failf("bad name subsection length (endOffset: %" PRIu32
                  ", actual: %" PRIu32 ")",
-                 expected, actual);
+                 endOffset, actual);
   }
 
   return true;
@@ -522,7 +522,7 @@ static bool DecodeFunctionBodyExprs(const ModuleEnvironment& env,
     }
 
     Nothing nothing;
-    NothingVector nothings;
+    NothingVector nothings{};
     ResultType unusedType;
 
     switch (op.b0) {
@@ -543,12 +543,12 @@ static bool DecodeFunctionBodyExprs(const ModuleEnvironment& env,
         CHECK(iter.readDrop());
       case uint16_t(Op::Call): {
         uint32_t unusedIndex;
-        NothingVector unusedArgs;
+        NothingVector unusedArgs{};
         CHECK(iter.readCall(&unusedIndex, &unusedArgs));
       }
       case uint16_t(Op::CallIndirect): {
         uint32_t unusedIndex, unusedIndex2;
-        NothingVector unusedArgs;
+        NothingVector unusedArgs{};
         CHECK(iter.readCallIndirect(&unusedIndex, &unusedIndex2, &nothing,
                                     &unusedArgs));
       }
@@ -887,7 +887,7 @@ static bool DecodeFunctionBodyExprs(const ModuleEnvironment& env,
         switch (op.b1) {
           case uint32_t(GcOp::StructNewWithRtt): {
             uint32_t unusedUint;
-            NothingVector unusedArgs;
+            NothingVector unusedArgs{};
             CHECK(
                 iter.readStructNewWithRtt(&unusedUint, &nothing, &unusedArgs));
           }
@@ -974,7 +974,7 @@ static bool DecodeFunctionBodyExprs(const ModuleEnvironment& env,
             uint32_t unusedRttDepth;
             CHECK(iter.readBrOnCast(&unusedRelativeDepth, &nothing,
                                     &unusedRttTypeIndex, &unusedRttDepth,
-                                    &nothings, &unusedType));
+                                    &unusedType, &nothings));
           }
           default:
             return iter.unrecognizedOpcode(&op);
@@ -1078,6 +1078,10 @@ static bool DecodeFunctionBodyExprs(const ModuleEnvironment& env,
           case uint32_t(SimdOp::I32x4GeU):
           case uint32_t(SimdOp::I64x2Eq):
           case uint32_t(SimdOp::I64x2Ne):
+          case uint32_t(SimdOp::I64x2LtS):
+          case uint32_t(SimdOp::I64x2GtS):
+          case uint32_t(SimdOp::I64x2LeS):
+          case uint32_t(SimdOp::I64x2GeS):
           case uint32_t(SimdOp::F32x4Eq):
           case uint32_t(SimdOp::F32x4Ne):
           case uint32_t(SimdOp::F32x4Lt):
@@ -1191,9 +1195,11 @@ static bool DecodeFunctionBodyExprs(const ModuleEnvironment& env,
           case uint32_t(SimdOp::F64x2Neg):
           case uint32_t(SimdOp::F64x2Sqrt):
           case uint32_t(SimdOp::V128Not):
+          case uint32_t(SimdOp::I8x16Popcnt):
           case uint32_t(SimdOp::I8x16Abs):
           case uint32_t(SimdOp::I16x8Abs):
           case uint32_t(SimdOp::I32x4Abs):
+          case uint32_t(SimdOp::I64x2Abs):
           case uint32_t(SimdOp::F32x4Ceil):
           case uint32_t(SimdOp::F32x4Floor):
           case uint32_t(SimdOp::F32x4Trunc):
@@ -1208,6 +1214,10 @@ static bool DecodeFunctionBodyExprs(const ModuleEnvironment& env,
           case uint32_t(SimdOp::F64x2ConvertLowI32x4U):
           case uint32_t(SimdOp::I32x4TruncSatF64x2SZero):
           case uint32_t(SimdOp::I32x4TruncSatF64x2UZero):
+          case uint32_t(SimdOp::I16x8ExtAddPairwiseI8x16S):
+          case uint32_t(SimdOp::I16x8ExtAddPairwiseI8x16U):
+          case uint32_t(SimdOp::I32x4ExtAddPairwiseI16x8S):
+          case uint32_t(SimdOp::I32x4ExtAddPairwiseI16x8U):
             CHECK(iter.readUnary(ValType::V128, &nothing));
 
           case uint32_t(SimdOp::I8x16Shl):
@@ -1481,12 +1491,43 @@ static bool DecodeFunctionBodyExprs(const ModuleEnvironment& env,
         CHECK(iter.readCatch(&unusedKind, &unusedIndex, &unusedType,
                              &unusedType, &nothings));
       }
+      case uint16_t(Op::CatchAll): {
+        if (!env.exceptionsEnabled()) {
+          return iter.unrecognizedOpcode(&op);
+        }
+        LabelKind unusedKind;
+        CHECK(iter.readCatchAll(&unusedKind, &unusedType, &unusedType,
+                                &nothings));
+      }
+      case uint16_t(Op::Delegate): {
+        if (!env.exceptionsEnabled()) {
+          return iter.unrecognizedOpcode(&op);
+        }
+        uint32_t unusedDepth;
+        if (!iter.readDelegate(&unusedDepth, &unusedType, &nothings)) {
+          return false;
+        }
+        iter.popDelegate();
+        break;
+      }
+      case uint16_t(Op::Unwind):
+        if (!env.exceptionsEnabled()) {
+          return iter.unrecognizedOpcode(&op);
+        }
+        CHECK(iter.readUnwind(&unusedType, &nothings));
       case uint16_t(Op::Throw): {
         if (!env.exceptionsEnabled()) {
           return iter.unrecognizedOpcode(&op);
         }
         uint32_t unusedIndex;
         CHECK(iter.readThrow(&unusedIndex, &nothings));
+      }
+      case uint16_t(Op::Rethrow): {
+        if (!env.exceptionsEnabled()) {
+          return iter.unrecognizedOpcode(&op);
+        }
+        uint32_t unusedDepth;
+        CHECK(iter.readRethrow(&unusedDepth));
       }
 #endif
       case uint16_t(Op::ThreadPrefix): {
@@ -1725,7 +1766,7 @@ static bool DecodePreamble(Decoder& d) {
 
 enum class TypeState { None, Gc, ForwardGc, Func };
 
-typedef Vector<TypeState, 0, SystemAllocPolicy> TypeStateVector;
+using TypeStateVector = Vector<TypeState, 0, SystemAllocPolicy>;
 
 template <class T>
 static bool ValidateTypeState(Decoder& d, TypeStateVector* typeState, T type) {
@@ -2205,8 +2246,8 @@ static bool DecodeMemoryLimits(Decoder& d, ModuleEnvironment* env) {
 
 #ifdef ENABLE_WASM_EXCEPTIONS
 static bool EventIsJSCompatible(Decoder& d, const ValTypeVector& type) {
-  for (uint32_t i = 0; i < type.length(); i++) {
-    if (type[i].isTypeIndex()) {
+  for (auto t : type) {
+    if (t.isTypeIndex()) {
       return d.fail("cannot expose indexed reference type");
     }
   }
@@ -2710,8 +2751,8 @@ static bool DecodeEventSection(Decoder& d, ModuleEnvironment* env) {
 }
 #endif
 
-typedef HashSet<const char*, mozilla::CStringHasher, SystemAllocPolicy>
-    CStringSet;
+using CStringSet =
+    HashSet<const char*, mozilla::CStringHasher, SystemAllocPolicy>;
 
 static UniqueChars DecodeExportName(Decoder& d, CStringSet* dupSet) {
   UniqueChars exportName = DecodeName(d);
@@ -3257,11 +3298,7 @@ static bool DecodeFunctionBody(Decoder& d, const ModuleEnvironment& env,
     return d.fail("function body length too big");
   }
 
-  if (!ValidateFunctionBody(env, funcIndex, bodySize, d)) {
-    return false;
-  }
-
-  return true;
+  return ValidateFunctionBody(env, funcIndex, bodySize, d);
 }
 
 static bool DecodeCodeSection(Decoder& d, ModuleEnvironment* env) {

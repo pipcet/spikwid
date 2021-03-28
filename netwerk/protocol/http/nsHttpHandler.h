@@ -26,6 +26,7 @@
 #include "nsIObserver.h"
 #include "nsISpeculativeConnect.h"
 #include "nsTHashMap.h"
+#include "nsTHashSet.h"
 #ifdef DEBUG
 #  include "nsIOService.h"
 #endif
@@ -58,7 +59,7 @@ class HttpBaseChannel;
 class HttpHandlerInitArgs;
 class HttpTransactionShell;
 class AltSvcMapping;
-class TRR;
+class DNSUtils;
 class TRRServiceChannel;
 class SocketProcessChild;
 
@@ -530,9 +531,10 @@ class nsHttpHandler final : public nsIHttpProtocolHandler,
   // thread. Updates mSpeculativeConnectEnabled when done.
   void MaybeEnableSpeculativeConnect();
 
-  // We only allow TRR and TRRServiceChannel itself to create TRRServiceChannel.
+  // We only allow DNSUtils and TRRServiceChannel itself to create
+  // TRRServiceChannel.
   friend class TRRServiceChannel;
-  friend class TRR;
+  friend class DNSUtils;
   nsresult CreateTRRServiceChannel(nsIURI* uri, nsIProxyInfo* givenProxyInfo,
                                    uint32_t proxyResolveFlags, nsIURI* proxyURI,
                                    nsILoadInfo* aLoadInfo, nsIChannel** result);
@@ -832,10 +834,10 @@ class nsHttpHandler final : public nsIHttpProtocolHandler,
   [[nodiscard]] bool IsHostExcludedForHTTPSRR(const nsACString& aHost);
 
  private:
-  nsTHashtable<nsCStringHashKey> mExcludedHttp2Origins;
-  nsTHashtable<nsCStringHashKey> mExcludedHttp3Origins;
+  nsTHashSet<nsCString> mExcludedHttp2Origins;
+  nsTHashSet<nsCString> mExcludedHttp3Origins;
   // A set of hosts that we should not upgrade to HTTPS with HTTPS RR.
-  nsTHashtable<nsCStringHashKey> mExcludedHostsForHTTPSRRUpgrade;
+  nsTHashSet<nsCString> mExcludedHostsForHTTPSRRUpgrade;
 
   Atomic<bool, Relaxed> mThroughCaptivePortal;
 

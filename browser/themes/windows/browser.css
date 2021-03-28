@@ -19,28 +19,22 @@
   --toolbarbutton-icon-fill-opacity: 1;
 
   --panel-separator-color: ThreeDLightShadow;
-  --arrowpanel-dimmed: hsla(0,0%,80%,.3);
-  --arrowpanel-dimmed-further: hsla(0,0%,80%,.5);
-  --arrowpanel-dimmed-even-further: hsla(0,0%,80%,.8);
-
-  --urlbar-separator-color: ThreeDLightShadow;
 
   --chrome-content-separator-color: ThreeDShadow;
+  --tabs-border-color: threedshadow;
 }
 
-@supports not -moz-bool-pref("browser.proton.toolbar.enabled") {
+@supports not -moz-bool-pref("browser.proton.enabled") {
 :root {
   --toolbarbutton-border-radius: 2px;
 }
 } /* END !proton */
 
-#navigator-toolbox {
-  --tabs-border-color: threedshadow;
-}
-
+@supports not -moz-bool-pref("browser.proton.enabled") {
 #tabbrowser-tabs {
   --tab-line-color: highlight;
 }
+} /* end !proton */
 
 @media (-moz-windows-default-theme) {
   :root {
@@ -57,6 +51,7 @@
     --toolbar-field-non-lwt-bgcolor: #f0f0f4;
   }
 
+  @supports not -moz-bool-pref("browser.proton.enabled") {
   #navigator-toolbox {
     --tabs-border-color: rgba(0,0,0,.3);
   }
@@ -64,6 +59,7 @@
   #tabbrowser-tabs {
     --tab-line-color: #0a84ff;
   }
+  } /* END !proton */
 }
 
 :root:-moz-lwtheme {
@@ -74,15 +70,13 @@
 
 :root[lwt-popup-brighttext] {
   --panel-separator-color: rgba(249,249,250,.1);
-
-  --arrowpanel-dimmed: rgba(249,249,250,.1);
-  --arrowpanel-dimmed-further: rgba(249,249,250,.15);
-  --arrowpanel-dimmed-even-further: rgba(249,249,250,.2);
 }
 
+@supports not -moz-bool-pref("browser.proton.enabled") {
 #navigator-toolbox:-moz-lwtheme {
   --tabs-border-color: rgba(0,0,0,.3);
 }
+} /* END !proton */
 
 #menubar-items {
   -moz-box-orient: vertical; /* for flex hack */
@@ -148,6 +142,18 @@
   color: var(--toolbar-color);
 }
 
+@supports -moz-bool-pref("browser.proton.enabled") {
+/* Add a fog for background tabs to be visible on Windows 7 glass window background */
+@media (-moz-os-version: windows-win7) {
+  @media (-moz-windows-default-theme) {
+    #TabsToolbar:not(:-moz-lwtheme) {
+      background-image: radial-gradient(ellipse at bottom, rgba(255,255,255,0.8), rgba(255,255,255,0.5) 80%, transparent);
+    }
+  }
+}
+} /*** END proton ***/
+
+@supports not -moz-bool-pref("browser.proton.enabled") {
 /*
  * Windows 7 draws the chrome background color as the tab background
  * instead of in the tabs toolbar.
@@ -193,6 +199,7 @@
     }
   }
 }
+} /*** END !proton ***/
 
 @media (-moz-windows-compositor: 0),
        (-moz-windows-default-theme: 0) {
@@ -527,6 +534,14 @@ menuitem.bookmark-item {
 
 %include ../shared/urlbar-searchbar.inc.css
 
+@media not (prefers-contrast) {
+  @supports -moz-bool-pref("browser.proton.urlbar.enabled") {
+  :root:not(:-moz-lwtheme) #urlbar:not([focused="true"]) {
+    --urlbar-box-bgcolor: white;
+  }
+  } /*** END proton ***/
+}
+
 #urlbar,
 #searchbar {
   font-size: 1.15em;
@@ -560,7 +575,6 @@ menuitem.bookmark-item {
 
 @media (-moz-windows-default-theme: 0) {
   :root:not(:-moz-lwtheme) {
-    --urlbar-popup-url-color: -moz-nativehyperlinktext;
     --urlbar-popup-action-color: -moz-nativehyperlinktext;
 
     --urlbarView-button-text: buttontext;
@@ -574,6 +588,12 @@ menuitem.bookmark-item {
     --urlbarView-primary-button-background-active: highlight;
   }
 }
+
+@supports not -moz-bool-pref("browser.proton.urlbar.enabled") {
+:root:not(:-moz-lwtheme) {
+  --urlbar-popup-url-color: -moz-nativehyperlinktext;
+}
+} /*** END !proton ***/
 
 /* Autocomplete */
 
@@ -612,7 +632,7 @@ menuitem.bookmark-item {
   }
 }
 
-@supports not -moz-bool-pref("browser.proton.tabs.enabled") {
+@supports not -moz-bool-pref("browser.proton.enabled") {
 /* tabbrowser-tab focus ring */
 .keyboard-focused-tab > .tab-stack > .tab-content,
 .tabbrowser-tab:focus:not([aria-activedescendant]) > .tab-stack > .tab-content {
@@ -794,10 +814,16 @@ panel[touchmode] .PanelUI-subView #appMenu-zoom-controls > .subviewbutton-iconic
 
 %include browser-aero.css
 
+.cui-widget-panelview[id^=PanelUI-webext-] {
+  border-radius: var(--arrowpanel-border-radius);
+}
+
+@supports not -moz-bool-pref("browser.proton.enabled") {
 @media (-moz-os-version: windows-win7) {
   .cui-widget-panelview[id^=PanelUI-webext-] {
     border-radius: 4px;
   }
+}
 }
 
 .webextension-popup-browser,

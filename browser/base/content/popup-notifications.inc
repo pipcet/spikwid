@@ -16,7 +16,7 @@
                control="webRTC-selectCamera-menulist"/>
         <html:div class="webRTC-selectDevice-selector-container">
           <xul:image id="webRTC-selectCamera-icon" class="webRTC-selectDevice-icon" data-l10n-id="popup-select-camera-icon"/>
-          <menulist id="webRTC-selectCamera-menulist" aria-labelledby="webRTC-selectCamera-icon">
+          <menulist id="webRTC-selectCamera-menulist" aria-labelledby="webRTC-selectCamera-icon" size="large">
             <menupopup id="webRTC-selectCamera-menupopup"/>
           </menulist>
           <label id="webRTC-selectCamera-single-device-label" class="webRTC-selectDevice-label"></label>
@@ -27,7 +27,8 @@
         <label id="webRTC-selectWindow-label"
                control="webRTC-selectWindow-menulist"/>
         <menulist id="webRTC-selectWindow-menulist"
-                  oncommand="webrtcUI.updateWarningLabel(this);">
+                  oncommand="webrtcUI.updateWarningLabel(this);"
+                  size="large">
           <menupopup id="webRTC-selectWindow-menupopup"/>
         </menulist>
         <description id="webRTC-all-windows-shared" hidden="true" data-l10n-id="popup-all-windows-shared"></description>
@@ -47,7 +48,7 @@
                control="webRTC-selectMicrophone-menulist"/>
         <html:div class="webRTC-selectDevice-selector-container">
           <xul:image id="webRTC-selectMicrophone-icon" data-l10n-id="popup-select-microphone-icon" class="webRTC-selectDevice-icon"/>
-          <menulist id="webRTC-selectMicrophone-menulist" aria-labelledby="webRTC-selectMicrophone-icon">
+          <menulist id="webRTC-selectMicrophone-menulist" aria-labelledby="webRTC-selectMicrophone-icon" size="large">
             <menupopup id="webRTC-selectMicrophone-menupopup"/>
           </menulist>
           <label id="webRTC-selectMicrophone-single-device-label" class="webRTC-selectDevice-label"></label>
@@ -63,9 +64,10 @@
 
     <popupnotification id="password-notification" hidden="true">
       <popupnotificationcontent orient="vertical">
-        <label data-l10n-id="panel-save-update-username" control="password-notification-username"></label>
+        <label data-l10n-id="panel-save-update-username" control="password-notification-username" class="password-notification-label"></label>
         <stack>
           <html:input id="password-notification-username" 
+                      type="text"
                       class="ac-has-end-icon"
                       autocompletesearch="login-doorhanger-username"
                       autocompletepopup="PopupAutoComplete"
@@ -75,7 +77,7 @@
           <dropmarker id="password-notification-username-dropmarker"
                       class="ac-dropmarker"/>
         </stack>
-        <label data-l10n-id="panel-save-update-password" control="password-notification-password"></label>
+        <label data-l10n-id="panel-save-update-password" control="password-notification-password" class="password-notification-label"></label>
         <stack>
           <html:input id="password-notification-password" type="password"/>
           <dropmarker id="password-notification-password-dropmarker"
@@ -101,6 +103,7 @@
       <popupnotificationcontent class="addon-webext-perm-notification-content" orient="vertical">
         <description id="addon-webext-perm-text" class="addon-webext-perm-text"/>
         <label id="addon-webext-perm-intro" class="addon-webext-perm-text"/>
+        <label id="addon-webext-perm-single-entry" class="addon-webext-perm-single-entry"/>
         <html:ul id="addon-webext-perm-list" class="addon-webext-perm-list"/>
         <hbox>
           <label id="addon-webext-perm-info" is="text-link" class="popup-notification-learnmore-link"/>

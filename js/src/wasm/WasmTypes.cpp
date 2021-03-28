@@ -62,8 +62,14 @@ static_assert((MaxMemoryAccessSize & (MaxMemoryAccessSize - 1)) == 0,
               "MaxMemoryAccessSize is not a power of two");
 
 #if defined(WASM_SUPPORTS_HUGE_MEMORY)
-static_assert(HugeMappedSize > MaxMemory32Bytes,
-              "Normal array buffer could be confused with huge memory");
+// TODO: We want this static_assert back, but it reqires MaxMemory32Bytes to be
+// a constant or constexpr function, not a regular function as now.
+//
+// The assert is also present in WasmMemoryObject::isHuge and
+// WasmMemoryObject::grow, so it's OK to comment out here for now.
+
+// static_assert(MaxMemory32Bytes < HugeMappedSize(),
+//               "Normal array buffer could be confused with huge memory");
 #endif
 
 Val::Val(const LitVal& val) {
@@ -515,9 +521,9 @@ WasmValueBox* WasmValueBox::create(JSContext* cx, HandleValue val) {
   return obj;
 }
 
-bool wasm::BoxAnyRef(JSContext* cx, HandleValue val, MutableHandleAnyRef addr) {
+bool wasm::BoxAnyRef(JSContext* cx, HandleValue val, MutableHandleAnyRef result) {
   if (val.isNull()) {
-    addr.set(AnyRef::null());
+    result.set(AnyRef::null());
     return true;
   }
 
@@ -525,13 +531,13 @@ bool wasm::BoxAnyRef(JSContext* cx, HandleValue val, MutableHandleAnyRef addr) {
     JSObject* obj = &val.toObject();
     MOZ_ASSERT(!obj->is<WasmValueBox>());
     MOZ_ASSERT(obj->compartment() == cx->compartment());
-    addr.set(AnyRef::fromJSObject(obj));
+    result.set(AnyRef::fromJSObject(obj));
     return true;
   }
 
   WasmValueBox* box = WasmValueBox::create(cx, val);
   if (!box) return false;
-  addr.set(AnyRef::fromJSObject(box));
+  result.set(AnyRef::fromJSObject(box));
   return true;
 }
 

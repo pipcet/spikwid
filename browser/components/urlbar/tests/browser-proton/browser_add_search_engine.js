@@ -1,6 +1,9 @@
 /* Any copyright is dedicated to the Public Domain.
  * https://creativecommons.org/publicdomain/zero/1.0/ */
+
 "use strict";
+
+// Test adding engines through the Address Bar context menu.
 
 const { PromptTestUtils } = ChromeUtils.import(
   "resource://testing-common/PromptTestUtils.jsm"
@@ -243,6 +246,48 @@ add_task(async function context_many() {
         Assert.equal(elt.parentNode, menu.menupopup);
         Assert.ok(BrowserTestUtils.is_visible(elt));
       }
+    });
+  });
+});
+
+add_task(async function context_after_customize() {
+  info("Checks the context menu after customization.");
+  let url = getRootDirectory(gTestPath) + "add_search_engine_one.html";
+  await BrowserTestUtils.withNewTab(url, async () => {
+    await UrlbarTestUtils.withContextMenu(window, async popup => {
+      info("The separator and the add engine item should be present.");
+      let elt = popup.parentNode.getMenuItem("add-engine-separator");
+      Assert.ok(BrowserTestUtils.is_visible(elt));
+
+      Assert.ok(!popup.parentNode.getMenuItem("add-engine-menu"));
+      Assert.ok(!popup.parentNode.getMenuItem("add-engine-1"));
+
+      elt = popup.parentNode.getMenuItem("add-engine-0");
+      Assert.ok(BrowserTestUtils.is_visible(elt));
+      Assert.ok(elt.label.includes("add_search_engine_0"));
+    });
+
+    let promise = BrowserTestUtils.waitForEvent(
+      gNavToolbox,
+      "customizationready"
+    );
+    gCustomizeMode.enter();
+    await promise;
+    promise = BrowserTestUtils.waitForEvent(gNavToolbox, "aftercustomization");
+    gCustomizeMode.exit();
+    await promise;
+
+    await UrlbarTestUtils.withContextMenu(window, async popup => {
+      info("The separator and the add engine item should be present.");
+      let elt = popup.parentNode.getMenuItem("add-engine-separator");
+      Assert.ok(BrowserTestUtils.is_visible(elt));
+
+      Assert.ok(!popup.parentNode.getMenuItem("add-engine-menu"));
+      Assert.ok(!popup.parentNode.getMenuItem("add-engine-1"));
+
+      elt = popup.parentNode.getMenuItem("add-engine-0");
+      Assert.ok(BrowserTestUtils.is_visible(elt));
+      Assert.ok(elt.label.includes("add_search_engine_0"));
     });
   });
 });

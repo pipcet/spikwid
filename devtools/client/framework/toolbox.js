@@ -39,6 +39,7 @@ var Startup = Cc["@mozilla.org/devtools/startup-clh;1"].getService(
 const {
   ResourceWatcher,
 } = require("devtools/shared/resources/resource-watcher");
+const { createCommandsDictionary } = require("devtools/shared/commands/index");
 
 const { BrowserLoader } = ChromeUtils.import(
   "resource://devtools/client/shared/browser-loader.js"
@@ -778,7 +779,8 @@ Toolbox.prototype = {
       // It exposes commands modules listed in devtools/shared/commands/index.js
       // which are an abstraction on top of RDP methods.
       // See devtools/shared/commands/README.md
-      this.commands = await this.descriptorFront.getCommands();
+      // Bug 1700909 will make the commands be instantiated by gDevTools instead of the Toolbox.
+      this.commands = await createCommandsDictionary(this.descriptorFront);
 
       //TODO: complete the renaming of targetList everywhere
       // But for now, still expose this name on Toolbox
@@ -3800,7 +3802,7 @@ Toolbox.prototype = {
 
     // Finish all outstanding tasks (which means finish destroying panels and
     // then destroying the host, successfully or not) before destroying the
-    // target.
+    // target descriptor.
     const onceDestroyed = new Promise(resolve => {
       resolve(
         settleAll(outstanding)
@@ -3836,7 +3838,7 @@ Toolbox.prototype = {
             // will lead to destroy frame targets which can temporarily make
             // some fronts unresponsive and block the cleanup.
             this.commands.targetCommand.destroy();
-            return this.target.destroy();
+            return this.descriptorFront.destroy();
           }, console.error)
           .then(() => {
             this.emit("destroyed");

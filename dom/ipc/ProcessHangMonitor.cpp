@@ -449,9 +449,7 @@ bool HangMonitorChild::InterruptCallback() {
     if (NS_SUCCEEDED(rv) && canCancel) {
       // Don't add this page to the BF cache, since we're cancelling its JS.
       if (Document* doc = win->GetExtantDoc()) {
-        if (Document* topLevelDoc = doc->GetTopLevelContentDocument()) {
-          topLevelDoc->DisallowBFCaching();
-        }
+        doc->DisallowBFCaching();
       }
 
       return false;
@@ -719,8 +717,7 @@ HangMonitorParent::HangMonitorParent(ProcessHangMonitor* aMonitor)
 HangMonitorParent::~HangMonitorParent() {
   MutexAutoLock lock(mBrowserCrashDumpHashLock);
 
-  for (auto iter = mBrowserCrashDumpIds.Iter(); !iter.Done(); iter.Next()) {
-    nsString crashId = iter.UserData();
+  for (const auto& crashId : mBrowserCrashDumpIds.Values()) {
     if (!crashId.IsEmpty()) {
       CrashReporter::DeleteMinidumpFilesForID(crashId);
     }

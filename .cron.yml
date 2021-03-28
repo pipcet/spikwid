@@ -96,17 +96,6 @@ jobs:
           by-project:
               mozilla-central: [{hour: 10, minute: 0}]
 
-    - name: tp6m-fennec-v68
-      job:
-          type: decision-task
-          treeherder-symbol: f68
-          target-tasks-method: fennec_v68
-          include-push-tasks: true
-      run-on-projects:
-          - mozilla-central
-      when:
-          - {weekday: 'Saturday', hour: 5, minute: 0}
-
     - name: live-site-perf-testing
       job:
           type: decision-task
@@ -172,6 +161,19 @@ jobs:
           - mozilla-central
       when:
           - {hour: 10, minute: 0}
+
+    - name: updatebot-cron-job
+      job:
+          type: decision-task
+          treeherder-symbol: updatebot
+          target-tasks-method: updatebot_cron
+      run-on-projects:
+          - mozilla-central
+      when:
+          - {hour: 0, minute: 0}
+          - {hour: 6, minute: 0}
+          - {hour: 12, minute: 0}
+          - {hour: 18, minute: 0}
 
     - name: customv8-update
       job:

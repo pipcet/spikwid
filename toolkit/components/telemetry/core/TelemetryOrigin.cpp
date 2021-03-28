@@ -163,12 +163,10 @@ const char* GetNameForMetricID(OriginMetricID aId) {
 // an encoded snapshot right now.
 uint32_t PrioDataCount(const StaticMutexAutoLock& lock) {
   uint32_t count = 0;
-  auto iter = gMetricToOriginBag->ConstIter();
-  for (; !iter.Done(); iter.Next()) {
-    auto originIt = iter.Data().ConstIter();
+  for (const auto& origins : gMetricToOriginBag->Values()) {
     uint32_t maxOriginCount = 0;
-    for (; !originIt.Done(); originIt.Next()) {
-      maxOriginCount = std::max(maxOriginCount, originIt.Data());
+    for (const auto& data : origins.Values()) {
+      maxOriginCount = std::max(maxOriginCount, data);
     }
     count += gPrioDatasPerMetric * maxOriginCount;
   }
@@ -187,10 +185,9 @@ uint32_t PrioDataCount(const StaticMutexAutoLock& lock) {
 // [(metric1, [[1], [1]]), (metric1, [[0], [1]])]
 nsresult AppEncodeTo(const StaticMutexAutoLock& lock,
                      IdBoolsPairArray& aResult) {
-  auto iter = gMetricToOriginBag->ConstIter();
-  for (; !iter.Done(); iter.Next()) {
-    OriginMetricID id = iter.Key();
-    const OriginBag& bag = iter.Data();
+  for (const auto& bagEntry : *gMetricToOriginBag) {
+    OriginMetricID id = bagEntry.GetKey();
+    const OriginBag& bag = bagEntry.GetData();
 
     uint32_t generation = 1;
     uint32_t maxGeneration = 1;
@@ -211,13 +208,12 @@ nsresult AppEncodeTo(const StaticMutexAutoLock& lock,
         metricDatum = false;
       }
 
-      auto originIt = bag.ConstIter();
-      for (; !originIt.Done(); originIt.Next()) {
-        uint32_t originCount = originIt.Data();
+      for (const auto& originEntry : bag) {
+        uint32_t originCount = originEntry.GetData();
         if (originCount >= generation) {
           maxGeneration = std::max(maxGeneration, originCount);
 
-          const nsACString& origin = originIt.Key();
+          const nsACString& origin = originEntry.GetKey();
           size_t index;
           if (!gOriginToIndexMap->Get(origin, &index)) {
             return NS_ERROR_FAILURE;
@@ -426,13 +422,8 @@ nsresult TelemetryOrigin::GetOriginSnapshot(bool aClear, JSContext* aCx,
 
       gMetricToOriginBag->SwapElements(copy);
     } else {
-      auto iter = gMetricToOriginBag->ConstIter();
-      for (; !iter.Done(); iter.Next()) {
-        OriginBag& bag = copy.LookupOrInsert(iter.Key());
-        auto originIt = iter.Data().ConstIter();
-        for (; !originIt.Done(); originIt.Next()) {
-          bag.InsertOrUpdate(originIt.Key(), originIt.Data());
-        }
+      for (const auto& entry : *gMetricToOriginBag) {
+        copy.InsertOrUpdate(entry.GetKey(), entry.GetData().Clone());
       }
     }
   }
@@ -443,22 +434,21 @@ nsresult TelemetryOrigin::GetOriginSnapshot(bool aClear, JSContext* aCx,
     return NS_ERROR_FAILURE;
   }
   aResult.setObject(*rootObj);
-  for (auto iter = copy.ConstIter(); !iter.Done(); iter.Next()) {
+  for (const auto& entry : copy) {
     JS::RootedObject originsObj(aCx, JS_NewPlainObject(aCx));
     if (NS_WARN_IF(!originsObj)) {
       return NS_ERROR_FAILURE;
     }
-    if (!JS_DefineProperty(aCx, rootObj, GetNameForMetricID(iter.Key()),
+    if (!JS_DefineProperty(aCx, rootObj, GetNameForMetricID(entry.GetKey()),
                            originsObj, JSPROP_ENUMERATE)) {
       NS_WARNING("Failed to define property in origin snapshot.");
       return NS_ERROR_FAILURE;
     }
 
-    auto originIt = iter.Data().ConstIter();
-    for (; !originIt.Done(); originIt.Next()) {
+    for (const auto& originEntry : entry.GetData()) {
       if (!JS_DefineProperty(aCx, originsObj,
-                             nsPromiseFlatCString(originIt.Key()).get(),
-                             originIt.Data(), JSPROP_ENUMERATE)) {
+                             nsPromiseFlatCString(originEntry.GetKey()).get(),
+                             originEntry.GetData(), JSPROP_ENUMERATE)) {
         NS_WARNING("Failed to define origin and count in snapshot.");
         return NS_ERROR_FAILURE;
       }
@@ -611,10 +601,9 @@ size_t TelemetryOrigin::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) {
   }
 
   n += gMetricToOriginBag->ShallowSizeOfIncludingThis(aMallocSizeOf);
-  auto iter = gMetricToOriginBag->ConstIter();
-  for (; !iter.Done(); iter.Next()) {
+  for (const auto& origins : gMetricToOriginBag->Values()) {
     // The string hashkey and count should both be contained by the hashtable.
-    n += iter.Data().ShallowSizeOfIncludingThis(aMallocSizeOf);
+    n += origins.ShallowSizeOfIncludingThis(aMallocSizeOf);
   }
 
   // The string hashkey and ID should both be contained within the hashtable.

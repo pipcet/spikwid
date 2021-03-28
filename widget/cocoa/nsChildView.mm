@@ -1101,6 +1101,8 @@ void nsChildView::PostHandleKeyEvent(mozilla::WidgetKeyboardEvent* aEvent) {
 nsresult nsChildView::ActivateNativeMenuItemAt(const nsAString& indexString) {
   NS_OBJC_BEGIN_TRY_BLOCK_RETURN;
 
+  nsMenuUtilsX::CheckNativeMenuConsistency([NSApp mainMenu]);
+
   NSString* locationString =
       [NSString stringWithCharacters:reinterpret_cast<const unichar*>(indexString.BeginReading())
                               length:indexString.Length()];
@@ -1690,7 +1692,8 @@ void nsChildView::UpdateThemeGeometries(const nsTArray<ThemeGeometry>& aThemeGeo
   int32_t toolboxBottom = FindFirstRectOfType(aThemeGeometries, eThemeGeometryTypeToolbox).YMost();
 
   ToolbarWindow* win = (ToolbarWindow*)[mView window];
-  int32_t titlebarHeight = CocoaPointsToDevPixels([win titlebarHeight]);
+  int32_t titlebarHeight =
+      [win drawsContentsIntoWindowFrame] ? 0 : CocoaPointsToDevPixels([win titlebarHeight]);
   int32_t devUnifiedHeight = titlebarHeight + unifiedToolbarBottom;
   [win setUnifiedToolbarHeight:DevPixelsToCocoaPoints(devUnifiedHeight)];
 
@@ -1708,12 +1711,10 @@ void nsChildView::UpdateThemeGeometries(const nsTArray<ThemeGeometry>& aThemeGeo
 static Maybe<VibrancyType> ThemeGeometryTypeToVibrancyType(
     nsITheme::ThemeGeometryType aThemeGeometryType) {
   switch (aThemeGeometryType) {
-    case eThemeGeometryTypeVibrancyLight:
     case eThemeGeometryTypeVibrantTitlebarLight:
-      return Some(VibrancyType::LIGHT);
-    case eThemeGeometryTypeVibrancyDark:
+      return Some(VibrancyType::TITLEBAR_LIGHT);
     case eThemeGeometryTypeVibrantTitlebarDark:
-      return Some(VibrancyType::DARK);
+      return Some(VibrancyType::TITLEBAR_DARK);
     case eThemeGeometryTypeTooltip:
       return Some(VibrancyType::TOOLTIP);
     case eThemeGeometryTypeMenu:
@@ -1763,10 +1764,10 @@ static void MakeRegionsNonOverlapping(Region& aFirst, Regions&... aRest) {
 }
 
 void nsChildView::UpdateVibrancy(const nsTArray<ThemeGeometry>& aThemeGeometries) {
-  LayoutDeviceIntRegion vibrantLightRegion =
-      GatherVibrantRegion(aThemeGeometries, VibrancyType::LIGHT);
-  LayoutDeviceIntRegion vibrantDarkRegion =
-      GatherVibrantRegion(aThemeGeometries, VibrancyType::DARK);
+  LayoutDeviceIntRegion vibrantTitlebarLightRegion =
+      GatherVibrantRegion(aThemeGeometries, VibrancyType::TITLEBAR_LIGHT);
+  LayoutDeviceIntRegion vibrantTitlebarDarkRegion =
+      GatherVibrantRegion(aThemeGeometries, VibrancyType::TITLEBAR_DARK);
   LayoutDeviceIntRegion menuRegion = GatherVibrantRegion(aThemeGeometries, VibrancyType::MENU);
   LayoutDeviceIntRegion tooltipRegion =
       GatherVibrantRegion(aThemeGeometries, VibrancyType::TOOLTIP);
@@ -1779,14 +1780,14 @@ void nsChildView::UpdateVibrancy(const nsTArray<ThemeGeometry>& aThemeGeometries
   LayoutDeviceIntRegion activeSourceListSelectionRegion =
       GatherVibrantRegion(aThemeGeometries, VibrancyType::ACTIVE_SOURCE_LIST_SELECTION);
 
-  MakeRegionsNonOverlapping(vibrantLightRegion, vibrantDarkRegion, menuRegion, tooltipRegion,
-                            highlightedMenuItemRegion, sourceListRegion, sourceListSelectionRegion,
-                            activeSourceListSelectionRegion);
+  MakeRegionsNonOverlapping(vibrantTitlebarLightRegion, vibrantTitlebarDarkRegion, menuRegion,
+                            tooltipRegion, highlightedMenuItemRegion, sourceListRegion,
+                            sourceListSelectionRegion, activeSourceListSelectionRegion);
 
   auto& vm = EnsureVibrancyManager();
   bool changed = false;
-  changed |= vm.UpdateVibrantRegion(VibrancyType::LIGHT, vibrantLightRegion);
-  changed |= vm.UpdateVibrantRegion(VibrancyType::DARK, vibrantDarkRegion);
+  changed |= vm.UpdateVibrantRegion(VibrancyType::TITLEBAR_LIGHT, vibrantTitlebarLightRegion);
+  changed |= vm.UpdateVibrantRegion(VibrancyType::TITLEBAR_DARK, vibrantTitlebarDarkRegion);
   changed |= vm.UpdateVibrantRegion(VibrancyType::MENU, menuRegion);
   changed |= vm.UpdateVibrantRegion(VibrancyType::TOOLTIP, tooltipRegion);
   changed |= vm.UpdateVibrantRegion(VibrancyType::HIGHLIGHTED_MENUITEM, highlightedMenuItemRegion);
@@ -2597,7 +2598,8 @@ NSEvent* gLastDragMouseDownEvent = nil;  // [strong]
       bool shouldRollup = true;
 
       // check to see if scroll/zoom events should roll up the popup
-      if ([theEvent type] == NSEventTypeScrollWheel || [theEvent type] == NSEventTypeMagnify) {
+      if ([theEvent type] == NSEventTypeScrollWheel || [theEvent type] == NSEventTypeMagnify ||
+          [theEvent type] == NSEventTypeSmartMagnify) {
         shouldRollup = rollupListener->ShouldRollupOnMouseWheelEvent();
         // consume scroll events that aren't over the popup
         // unless the popup is an arrow panel
@@ -2758,6 +2760,10 @@ NSEvent* gLastDragMouseDownEvent = nil;  // [strong]
   NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
 
   if (!anEvent || !mGeckoChild || [self beginOrEndGestureForEventPhase:anEvent]) {
+    return;
+  }
+
+  if ([self maybeRollup:anEvent]) {
     return;
   }
 

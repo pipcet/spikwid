@@ -27,6 +27,7 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   ASRouterNewTabHook: "resource://activity-stream/lib/ASRouterNewTabHook.jsm",
   ASRouter: "resource://activity-stream/lib/ASRouter.jsm",
   AsyncShutdown: "resource://gre/modules/AsyncShutdown.jsm",
+  BackgroundUpdate: "resource://gre/modules/BackgroundUpdate.jsm",
   Blocklist: "resource://gre/modules/Blocklist.jsm",
   BookmarkHTMLUtils: "resource://gre/modules/BookmarkHTMLUtils.jsm",
   BookmarkJSONUtils: "resource://gre/modules/BookmarkJSONUtils.jsm",
@@ -1359,53 +1360,18 @@ BrowserGlue.prototype = {
 
     AddonManager.maybeInstallBuiltinAddon(
       "firefox-compact-light@mozilla.org",
-      "1.1",
+      "1.2",
       "resource://builtin-themes/light/"
     );
     AddonManager.maybeInstallBuiltinAddon(
       "firefox-compact-dark@mozilla.org",
-      "1.1",
+      "1.2",
       "resource://builtin-themes/dark/"
     );
 
-    if (
-      AppConstants.NIGHTLY_BUILD &&
-      Services.prefs.getBoolPref("browser.proton.enabled", false)
-    ) {
-      // Temporarily install a fork of the light & dark themes to do development on for
-      // Proton. We only make this available if `browser.proton.enabled` is set
-      // to true, and we make sure to uninstall it again during shutdown.
-      const kProtonDarkThemeID = "firefox-compact-proton-dark@mozilla.org";
-      AddonManager.maybeInstallBuiltinAddon(
-        kProtonDarkThemeID,
-        "1.0",
-        "resource://builtin-themes/proton-dark/"
-      );
-
-      const kProtonLightThemeID = "firefox-compact-proton-light@mozilla.org";
-      AddonManager.maybeInstallBuiltinAddon(
-        kProtonLightThemeID,
-        "1.0",
-        "resource://builtin-themes/proton-light/"
-      );
-      AsyncShutdown.profileChangeTeardown.addBlocker(
-        "Uninstall Proton themes",
-        async () => {
-          for (let themeID of [kProtonDarkThemeID, kProtonLightThemeID]) {
-            try {
-              let addon = await AddonManager.getAddonByID(themeID);
-              await addon.uninstall();
-            } catch (e) {
-              Cu.reportError(`Failed to uninstall ${themeID} on shutdown`);
-            }
-          }
-        }
-      );
-    }
-
     AddonManager.maybeInstallBuiltinAddon(
       "firefox-alpenglow@mozilla.org",
-      "1.2",
+      "1.4",
       "resource://builtin-themes/alpenglow/"
     );
 
@@ -1558,7 +1524,7 @@ BrowserGlue.prototype = {
     win.gNotificationBox.appendNotification(
       message,
       "reset-profile-notification",
-      "chrome://global/skin/icons/question-64.png",
+      "chrome://global/skin/icons/help.svg",
       win.gNotificationBox.PRIORITY_INFO_LOW,
       buttons
     );
@@ -1631,26 +1597,6 @@ BrowserGlue.prototype = {
     } catch (ex) {
       Cu.reportError(ex);
     }
-  },
-
-  _collectFirstPartyIsolationTelemetry() {
-    let update = aIsFirstPartyIsolated => {
-      Services.telemetry.scalarSet(
-        "privacy.feature.first_party_isolation_enabled",
-        aIsFirstPartyIsolated
-      );
-    };
-
-    XPCOMUtils.defineLazyPreferenceGetter(
-      this,
-      "_firstPartyIsolated",
-      "privacy.firstparty.isolate",
-      false,
-      (_data, _previous, latest) => {
-        update(latest);
-      }
-    );
-    update(this._firstPartyIsolated);
   },
 
   // the first browser window has finished initializing
@@ -1746,8 +1692,6 @@ BrowserGlue.prototype = {
     this._firstWindowLoaded();
 
     this._collectStartupConditionsTelemetry();
-
-    this._collectFirstPartyIsolationTelemetry();
 
     if (!this._placesTelemetryGathered && TelemetryUtils.isTelemetryEnabled) {
       this._placesTelemetryGathered = true;
@@ -2579,6 +2523,25 @@ BrowserGlue.prototype = {
         },
       },
 
+      {
+        condition:
+          AppConstants.MOZ_BACKGROUNDTASKS && AppConstants.MOZ_UPDATE_AGENT,
+        task: () => {
+          // Never in automation!  This is close to
+          // `UpdateService.disabledForTesting`, but without creating the
+          // service, which can perform a good deal of I/O in order to log its
+          // state.  Since this is in the startup path, we avoid all of that.
+          // We also don't test for Marionette and Remote Agent since they are
+          // not yet initialized.
+          let disabledForTesting =
+            Cu.isInAutomation &&
+            Services.prefs.getBoolPref("app.update.disabledForTesting", false);
+          if (!disabledForTesting) {
+            BackgroundUpdate.maybeScheduleBackgroundUpdateTask();
+          }
+        },
+      },
+
       // Marionette needs to be initialized as very last step
       {
         task: () => {
@@ -3189,7 +3152,7 @@ BrowserGlue.prototype = {
   _migrateUI: function BG__migrateUI() {
     // Use an increasing number to keep track of the current migration state.
     // Completely unrelated to the current Firefox release number.
-    const UI_VERSION = 107;
+    const UI_VERSION = 108;
     const BROWSER_DOCURL = AppConstants.BROWSER_CHROME_URL;
 
     if (!Services.prefs.prefHasUserValue("browser.migration.version")) {
@@ -3761,6 +3724,29 @@ BrowserGlue.prototype = {
         .filter(x => !!x);
       migrations.push("secure-mail");
       Services.prefs.setCharPref(kPref, migrations.join(","));
+    }
+
+    if (currentUIVersion < 108) {
+      // Migrate old ctrlTab pref to new ctrlTab pref
+      let defaultValue = false;
+      let oldPrefName = "browser.ctrlTab.recentlyUsedOrder";
+      // Use old pref value if the user used Ctrl+Tab before, elsewise use new default value
+      if (Services.prefs.getBoolPref("browser.engagement.ctrlTab.has-used")) {
+        let newPrefValue = Services.prefs.getBoolPref(
+          oldPrefName,
+          defaultValue
+        );
+        Services.prefs.setBoolPref(
+          "browser.ctrlTab.sortByRecentlyUsed",
+          newPrefValue
+        );
+      } else {
+        Services.prefs.setBoolPref(
+          "browser.ctrlTab.sortByRecentlyUsed",
+          defaultValue
+        );
+      }
+      Services.prefs.clearUserPref(oldPrefName);
     }
 
     // Update the migration version.

@@ -587,6 +587,24 @@ TEST(Hashtable, Move)
   EXPECT_FALSE(table.Contains(kPtr));
 }
 
+TEST(Hashtable, Keys)
+{
+  static constexpr uint64_t count = 10;
+
+  nsTHashtable<nsUint64HashKey> table;
+  for (uint64_t i = 0; i < count; i++) {
+    table.PutEntry(i);
+  }
+
+  nsTArray<uint64_t> keys;
+  for (const uint64_t& key : table.Keys()) {
+    keys.AppendElement(key);
+  }
+  keys.Sort();
+
+  EXPECT_EQ((nsTArray<uint64_t>{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}), keys);
+}
+
 template <typename TypeParam>
 class BaseHashtableTest : public ::testing::Test {};
 
@@ -1530,4 +1548,70 @@ TEST(Hashtables, RefPtrHashtable)
     count++;
   }
   ASSERT_EQ(count, uint32_t(0));
+}
+
+TEST(Hashtables, RefPtrHashtable_Clone)
+{
+  // check a RefPtr-hashtable
+  nsRefPtrHashtable<nsCStringHashKey, TestUniCharRefCounted> EntToUniClass(
+      ENTITY_COUNT);
+
+  for (auto& entity : gEntities) {
+    EntToUniClass.InsertOrUpdate(
+        nsDependentCString(entity.mStr),
+        MakeRefPtr<TestUniCharRefCounted>(entity.mUnicode));
+  }
+
+  auto clone = EntToUniClass.Clone();
+  static_assert(std::is_same_v<decltype(clone), decltype(EntToUniClass)>);
+
+  EXPECT_EQ(clone.Count(), EntToUniClass.Count());
+
+  for (const auto& entry : EntToUniClass) {
+    auto cloneEntry = clone.Lookup(entry.GetKey());
+
+    EXPECT_TRUE(cloneEntry);
+    EXPECT_EQ(cloneEntry.Data(), entry.GetWeak());
+  }
+}
+
+TEST(Hashtables, Clone)
+{
+  static constexpr uint64_t count = 10;
+
+  nsTHashMap<nsUint64HashKey, uint64_t> table;
+  for (uint64_t i = 0; i < count; i++) {
+    table.InsertOrUpdate(42 + i, i);
+  }
+
+  auto clone = table.Clone();
+
+  static_assert(std::is_same_v<decltype(clone), decltype(table)>);
+
+  EXPECT_EQ(clone.Count(), table.Count());
+
+  for (const auto& entry : table) {
+    auto cloneEntry = clone.Lookup(entry.GetKey());
+
+    EXPECT_TRUE(cloneEntry);
+    EXPECT_EQ(cloneEntry.Data(), entry.GetData());
+  }
+}
+
+TEST(Hashtables, Values)
+{
+  static constexpr uint64_t count = 10;
+
+  nsTHashMap<nsUint64HashKey, uint64_t> table;
+  for (uint64_t i = 0; i < count; i++) {
+    table.InsertOrUpdate(42 + i, i);
+  }
+
+  nsTArray<uint64_t> values;
+  for (const uint64_t& value : table.Values()) {
+    values.AppendElement(value);
+  }
+  values.Sort();
+
+  EXPECT_EQ((nsTArray<uint64_t>{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}), values);
 }

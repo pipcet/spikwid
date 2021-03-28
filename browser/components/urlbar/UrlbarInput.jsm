@@ -2805,6 +2805,10 @@ class UrlbarInput {
   }
 
   _on_contextmenu(event) {
+    if (UrlbarPrefs.get("browser.proton.urlbar.enabled")) {
+      this.addSearchEngineHelper.refreshContextMenu(event);
+    }
+
     // Context menu opened via keyboard shortcut.
     if (!event.button) {
       return;
@@ -3540,33 +3544,19 @@ class CopyCutController {
 
 /**
  * Manages the Add Search Engine contextual menu entries.
+ *
+ * @note setEnginesFromBrowser must be invoked from the outside when the
+ *       page provided engines list changes.
+ *       refreshContextMenu must be invoked when the context menu is opened.
  */
 class AddSearchEngineHelper {
   constructor(input) {
-    this.document = input.document;
-    let contextMenu = input.querySelector("moz-input-box").menupopup;
-    this.separator = this.document.createXULElement("menuseparator");
-    this.separator.setAttribute("anonid", "add-engine-separator");
-    this.separator.classList.add("menuseparator-add-engine");
-    this.separator.collapsed = true;
-    contextMenu.appendChild(this.separator);
-
-    // Since the contextual menu is not opened often, compared to the urlbar
-    // results panel, we update it just before showing it, instead of spending
-    // time on every page load.
-    contextMenu.addEventListener("popupshowing", event => {
-      // Ignore sub-menus.
-      if (event.target == event.currentTarget) {
-        this._refreshContextMenu();
-      }
-    });
+    this.input = input;
+    this.shortcutButtons = input.view.oneOffSearchButtons;
 
     XPCOMUtils.defineLazyGetter(this, "_bundle", () =>
       Services.strings.createBundle("chrome://browser/locale/search.properties")
     );
-
-    // Note: setEnginesFromBrowser must be invoked from the outside when the
-    // page provided engines list changes.
   }
 
   /**
@@ -3577,13 +3567,68 @@ class AddSearchEngineHelper {
     return 3;
   }
 
+  /**
+   * Invoked by browser when the list of available engines changes.
+   * @param {object} browser The invoking browser.
+   */
   setEnginesFromBrowser(browser) {
-    this.engines = browser.engines;
     this.browsingContext = browser.browsingContext;
+    // Make a copy of the array for state comparison.
+    let engines = browser.engines?.slice() || [];
+    if (!this._sameEngines(this.engines, engines)) {
+      this.engines = engines;
+
+      // Update shortcut buttons. We only add `maxInlineEngines` engines, to
+      // cover the most common cases, others can be added from the context menu.
+      this.shortcutButtons.updateWebEngines(
+        engines.slice(0, this.maxInlineEngines).map(e => ({
+          name: e.title,
+          tooltip: this._bundle.formatStringFromName("cmd_addFoundEngine", [
+            e.title,
+          ]),
+          uri: e.uri,
+          get icon() {
+            // The icon is actually the browser favicon, that may not be in
+            // place yet, it will be fetched from the browser when the ui
+            // element is built.
+            return e.icon;
+          },
+        }))
+      );
+    }
+  }
+
+  /**
+   * Adds an OpenSearch engine.
+   * @param {string} uri The engine url.
+   * @param {string} icon The engine icon url.
+   * @returns {Promise} resolved once the addition is complete.
+   * @resolves {boolean} whether the engine was added.
+   * @rejects never
+   */
+  addSearchEngine({ uri, icon }) {
+    return SearchUIUtils.addOpenSearchEngine(
+      uri,
+      icon,
+      this.browsingContext
+    ).catch(ex => {
+      console.error(ex);
+      return false;
+    });
+  }
+
+  _sameEngines(engines1, engines2) {
+    if (engines1?.length != engines2?.length) {
+      return false;
+    }
+    return ObjectUtils.deepEqual(
+      engines1.map(e => e.title),
+      engines2.map(e => e.title)
+    );
   }
 
   _createMenuitem(engine, index) {
-    let elt = this.document.createXULElement("menuitem");
+    let elt = this.input.document.createXULElement("menuitem");
     elt.setAttribute("anonid", `add-engine-${index}`);
     elt.classList.add("menuitem-iconic");
     elt.classList.add("context-menu-add-engine");
@@ -3602,7 +3647,7 @@ class AddSearchEngineHelper {
   }
 
   _createMenu(engine) {
-    let elt = this.document.createXULElement("menu");
+    let elt = this.input.document.createXULElement("menu");
     elt.setAttribute("anonid", "add-engine-menu");
     elt.classList.add("menu-iconic");
     elt.classList.add("context-menu-add-engine");
@@ -3613,15 +3658,29 @@ class AddSearchEngineHelper {
     if (engine.icon) {
       elt.setAttribute("image", engine.icon);
     }
-    let popup = this.document.createXULElement("menupopup");
+    let popup = this.input.document.createXULElement("menupopup");
     elt.appendChild(popup);
     return elt;
   }
 
-  _refreshContextMenu() {
-    let engines = this.engines || [];
-    this.separator.collapsed = !engines.length;
-    let curElt = this.separator;
+  refreshContextMenu() {
+    let engines = this.engines;
+
+    // Certain operations, like customization, destroy and recreate widgets,
+    // so we cannot rely on cached elements.
+    if (!this.input.querySelector(".menuseparator-add-engine")) {
+      this.contextSeparator = this.input.document.createXULElement(
+        "menuseparator"
+      );
+      this.contextSeparator.setAttribute("anonid", "add-engine-separator");
+      this.contextSeparator.classList.add("menuseparator-add-engine");
+      this.contextSeparator.collapsed = true;
+      let contextMenu = this.input.querySelector("moz-input-box").menupopup;
+      contextMenu.appendChild(this.contextSeparator);
+    }
+
+    this.contextSeparator.collapsed = !engines.length;
+    let curElt = this.contextSeparator;
     // Remove the previous items, if any.
     for (let elt = curElt.nextElementSibling; elt; ) {
       let nextElementSibling = elt.nextElementSibling;
@@ -3636,7 +3695,7 @@ class AddSearchEngineHelper {
       // offered engines may have differing images, so there's no perfect
       // choice here.
       let elt = this._createMenu(engines[0]);
-      this.separator.insertAdjacentElement("afterend", elt);
+      this.contextSeparator.insertAdjacentElement("afterend", elt);
       curElt = elt.lastElementChild;
     }
 
@@ -3653,16 +3712,15 @@ class AddSearchEngineHelper {
   }
 
   _onCommand(event) {
-    let uri = event.target.getAttribute("uri");
-    let image = event.target.getAttribute("image");
-    SearchUIUtils.addOpenSearchEngine(uri, image, this.browsingContext)
-      .then(added => {
-        if (added) {
-          // Remove the offered engine from the list. The browser updated the
-          // engines list at this point, so we just have to refresh the menu.)
-          this._refreshContextMenu();
-        }
-      })
-      .catch(console.error);
+    this.addSearchEngine({
+      uri: event.target.getAttribute("uri"),
+      icon: event.target.getAttribute("image"),
+    }).then(added => {
+      if (added) {
+        // Remove the offered engine from the list. The browser updated the
+        // engines list at this point, so we just have to refresh the menu.)
+        this.refreshContextMenu();
+      }
+    });
   }
 }

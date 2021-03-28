@@ -10,6 +10,7 @@ include protocol PCompositorManager;
 include protocol PContentPermissionRequest;
 include protocol PCycleCollectWithLogs;
 include protocol PDocumentChannel;
+include protocol PExtensions;
 include protocol PExternalHelperApp;
 include protocol PHandlerService;
 include protocol PFileDescriptorSet;
@@ -38,7 +39,6 @@ include protocol PRemoteSpellcheckEngine;
 include protocol PWebBrowserPersistDocument;
 include protocol PWebrtcGlobal;
 include protocol PWindowGlobal;
-include protocol PPresentation;
 include protocol PURLClassifier;
 include protocol PURLClassifierLocal;
 include protocol PVRManager;
@@ -407,6 +407,7 @@ nested(upto inside_cpow) sync protocol PContent
     manages PBrowser;
     manages PContentPermissionRequest;
     manages PCycleCollectWithLogs;
+    manages PExtensions;
     manages PExternalHelperApp;
     manages PFileDescriptorSet;
     manages PHal;
@@ -426,7 +427,6 @@ nested(upto inside_cpow) sync protocol PContent
     manages PRemoteSpellcheckEngine;
     manages PWebBrowserPersistDocument;
     manages PWebrtcGlobal;
-    manages PPresentation;
     manages PURLClassifier;
     manages PURLClassifierLocal;
     manages PScriptCache;
@@ -471,6 +471,8 @@ parent:
     // this should be enough...
     async CloneDocumentTreeInto(MaybeDiscardedBrowsingContext aSourceBc,
                                 MaybeDiscardedBrowsingContext aTargetBc);
+
+    async PExtensions();
 
 child:
     async ConstructBrowser(ManagedEndpoint<PBrowserChild> browserEp,
@@ -738,18 +740,6 @@ child:
     async UpdateWindow(uintptr_t aChildId);
 
     /**
-     * Notify the child that presentation receiver has been launched with the
-     * correspondent iframe.
-     */
-    async NotifyPresentationReceiverLaunched(PBrowser aIframe, nsString aSessionId);
-
-    /**
-     * Notify the child that the info about a presentation receiver needs to be
-     * cleaned up.
-     */
-    async NotifyPresentationReceiverCleanUp(nsString aSessionId);
-
-    /**
      * Notify the child that cache is emptied.
      */
     async NotifyEmptyHTTPCache();
@@ -952,7 +942,11 @@ child:
   // Update the cached list of codec supported in the given process.
   async UpdateMediaCodecsSupported(RemoteDecodeIn aLocation, MediaCodecsSupported aSupported);
 
+  async FlushTabState(MaybeDiscardedBrowsingContext aBrowsingContext)
+      returns(bool aHadContext);
+
 parent:
+
 
     async SynchronizeLayoutHistoryState(MaybeDiscardedBrowsingContext aContext,
                                         nsILayoutHistoryState aState);
@@ -971,6 +965,8 @@ parent:
 
     async GetLoadingSessionHistoryInfoFromParent(MaybeDiscardedBrowsingContext aContext)
         returns (LoadingSessionHistoryInfo? aLoadingInfo, int32_t aRequestedIndex, int32_t aLength);
+
+    async RemoveFromBFCache(MaybeDiscardedBrowsingContext aContext);
 
     async InitBackground(Endpoint<PBackgroundParent> aEndpoint);
 
@@ -1024,8 +1020,6 @@ parent:
     async PMedia();
 
     async PWebrtcGlobal();
-
-    async PPresentation();
 
     async CreateAudioIPCConnection() returns (FileDescOrError fd);
 

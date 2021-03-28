@@ -542,7 +542,7 @@ void MacroAssembler::branchTestObjClass(Condition cond, Register obj,
   branchPtr(cond, Address(scratch, BaseShape::offsetOfClasp()), ImmPtr(clasp),
             label);
 
-  if (JitOptions.spectreObjectMitigationsMisc) {
+  if (JitOptions.spectreObjectMitigations) {
     spectreZeroRegister(cond, scratch, spectreRegToZero);
   }
 }
@@ -568,7 +568,7 @@ void MacroAssembler::branchTestObjClass(Condition cond, Register obj,
   loadPtr(Address(scratch, BaseShape::offsetOfClasp()), scratch);
   branchPtr(cond, clasp, scratch, label);
 
-  if (JitOptions.spectreObjectMitigationsMisc) {
+  if (JitOptions.spectreObjectMitigations) {
     spectreZeroRegister(cond, scratch, spectreRegToZero);
   }
 }
@@ -595,7 +595,7 @@ void MacroAssembler::branchTestObjClass(Condition cond, Register obj,
   loadPtr(Address(scratch, BaseShape::offsetOfClasp()), scratch);
   branchPtr(cond, clasp, scratch, label);
 
-  if (JitOptions.spectreObjectMitigationsMisc) {
+  if (JitOptions.spectreObjectMitigations) {
     spectreZeroRegister(cond, scratch, spectreRegToZero);
   }
 }
@@ -607,14 +607,14 @@ void MacroAssembler::branchTestObjShape(Condition cond, Register obj,
   MOZ_ASSERT(obj != scratch);
   MOZ_ASSERT(spectreRegToZero != scratch);
 
-  if (JitOptions.spectreObjectMitigationsMisc) {
+  if (JitOptions.spectreObjectMitigations) {
     move32(Imm32(0), scratch);
   }
 
   branchPtr(cond, Address(obj, JSObject::offsetOfShape()), ImmGCPtr(shape),
             label);
 
-  if (JitOptions.spectreObjectMitigationsMisc) {
+  if (JitOptions.spectreObjectMitigations) {
     spectreMovePtr(cond, scratch, spectreRegToZero);
   }
 }
@@ -635,13 +635,13 @@ void MacroAssembler::branchTestObjShape(Condition cond, Register obj,
   MOZ_ASSERT(obj != shape);
   MOZ_ASSERT(spectreRegToZero != scratch);
 
-  if (JitOptions.spectreObjectMitigationsMisc) {
+  if (JitOptions.spectreObjectMitigations) {
     move32(Imm32(0), scratch);
   }
 
   branchPtr(cond, Address(obj, JSObject::offsetOfShape()), shape, label);
 
-  if (JitOptions.spectreObjectMitigationsMisc) {
+  if (JitOptions.spectreObjectMitigations) {
     spectreMovePtr(cond, scratch, spectreRegToZero);
   }
 }
@@ -994,6 +994,21 @@ void MacroAssembler::storeCallResultValue(TypedOrValueRegister dest) {
     storeCallResultValue(dest.typedReg(), ValueTypeFromMIRType(dest.type()));
   }
 }
+
+#ifdef JS_64BIT
+void MacroAssembler::assertCanonicalInt32(Register r) {
+#  ifdef DEBUG
+#    if defined(JS_CODEGEN_X64) || defined(JS_CODEGEN_ARM64)
+  Label ok;
+  branchPtr(Assembler::BelowOrEqual, r, ImmWord(UINT32_MAX), &ok);
+  breakpoint();
+  bind(&ok);
+#    else
+  MOZ_CRASH("IMPLEMENT ME");
+#    endif
+#  endif
+}
+#endif
 
 }  // namespace jit
 }  // namespace js

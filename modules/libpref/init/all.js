@@ -337,11 +337,7 @@ pref("browser.triple_click_selects_paragraph", true);
 pref("pdfjs.renderInteractiveForms", true);
 
 // Enable JavaScript support in the PDF viewer.
-#ifdef NIGHTLY_BUILD
-  pref("pdfjs.enableScripting", true);
-#else
-  pref("pdfjs.enableScripting", false);
-#endif
+pref("pdfjs.enableScripting", true);
 
 // Disable support for MathML
 pref("mathml.disabled",    false);
@@ -724,7 +720,6 @@ pref("accessibility.force_disabled", 0);
 pref("focusmanager.testmode", false);
 
 pref("accessibility.usetexttospeech", "");
-pref("accessibility.mouse_focuses_formcontrol", false);
 
 // Type Ahead Find
 pref("accessibility.typeaheadfind", true);
@@ -860,8 +855,8 @@ pref("devtools.performance.recording.duration.remote", 0);
 // explanations. Remote profiling also includes the java feature by default.
 // If the remote debuggee isn't an Android phone, then this feature will
 // be ignored.
-pref("devtools.performance.recording.features", "[\"js\",\"leaf\",\"stackwalk\",\"screenshots\"]");
-pref("devtools.performance.recording.features.remote", "[\"js\",\"leaf\",\"stackwalk\",\"screenshots\",\"java\"]");
+pref("devtools.performance.recording.features", "[\"js\",\"leaf\",\"stackwalk\",\"cpu\",\"screenshots\"]");
+pref("devtools.performance.recording.features.remote", "[\"js\",\"leaf\",\"stackwalk\",\"cpu\",\"screenshots\",\"java\"]");
 // Threads to be captured by the profiler.
 pref("devtools.performance.recording.threads", "[\"GeckoMain\",\"Compositor\",\"Renderer\"]");
 pref("devtools.performance.recording.threads.remote", "[\"GeckoMain\",\"Compositor\",\"Renderer\"]");
@@ -1087,17 +1082,6 @@ pref("dom.event.contextmenu.enabled",       true);
 pref("dom.event.coalesce_mouse_move",       true);
 
 pref("javascript.enabled",                  true);
-pref("javascript.options.blinterp",         true);
-// Duplicated in JitOptions - ensure both match.
-pref("javascript.options.blinterp.threshold", 10);
-pref("javascript.options.baselinejit",      true);
-// Duplicated in JitOptions - ensure both match.
-pref("javascript.options.baselinejit.threshold", 100);
-pref("javascript.options.ion",              true);
-// Duplicated in JitOptions - ensure both match.
-pref("javascript.options.ion.threshold",    1500);
-// Duplicated in JitOptions - ensure both match.
-pref("javascript.options.ion.frequent_bailout_threshold", 10);
 pref("javascript.options.asmjs",                  true);
 pref("javascript.options.wasm",                   true);
 pref("javascript.options.wasm_trustedprincipals", true);
@@ -1111,7 +1095,6 @@ pref("javascript.options.wasm_baselinejit",       true);
 #ifdef ENABLE_WASM_MULTI_VALUE
   pref("javascript.options.wasm_multi_value",     true);
 #endif
-pref("javascript.options.native_regexp",    true);
 pref("javascript.options.parallel_parsing", true);
 pref("javascript.options.source_pragmas",    true);
 
@@ -1121,10 +1104,6 @@ pref("javascript.options.asyncstack", true);
 pref("javascript.options.asyncstack_capture_debuggee_only", true);
 
 pref("javascript.options.throw_on_asmjs_validation_failure", false);
-pref("javascript.options.ion.offthread_compilation", true);
-#ifdef DEBUG
-  pref("javascript.options.jit.full_debug_checks", false);
-#endif
 // This preference instructs the JS engine to discard the
 // source of any privileged JS after compilation. This saves
 // memory, but makes things like Function.prototype.toSource()
@@ -1199,29 +1178,10 @@ pref("javascript.options.mem.gc_helper_thread_ratio", 50);
 // JSGC_MAX_HELPER_THREADS
 pref("javascript.options.mem.gc_max_helper_threads", 8);
 
-pref("javascript.options.showInConsole", false);
-
 pref("javascript.options.shared_memory", true);
 
 pref("javascript.options.throw_on_debuggee_would_run", false);
 pref("javascript.options.dump_stack_on_debuggee_would_run", false);
-
-// Spectre security vulnerability mitigations.
-#if defined(JS_CODEGEN_MIPS32) || defined(JS_CODEGEN_MIPS64)
-  pref("javascript.options.spectre.index_masking", false);
-  pref("javascript.options.spectre.object_mitigations.barriers", false);
-  pref("javascript.options.spectre.object_mitigations.misc", false);
-  pref("javascript.options.spectre.string_mitigations", false);
-  pref("javascript.options.spectre.value_masking", false);
-  pref("javascript.options.spectre.jit_to_C++_calls", false);
-#else
-  pref("javascript.options.spectre.index_masking", true);
-  pref("javascript.options.spectre.object_mitigations.barriers", true);
-  pref("javascript.options.spectre.object_mitigations.misc", true);
-  pref("javascript.options.spectre.string_mitigations", true);
-  pref("javascript.options.spectre.value_masking", true);
-  pref("javascript.options.spectre.jit_to_C++_calls", true);
-#endif
 
 // Dynamic module import.
 pref("javascript.options.dynamicImport", true);
@@ -1448,7 +1408,11 @@ pref("network.http.spdy.websockets", true);
 pref("network.http.spdy.enable-hpack-dump", false);
 
 // Http3 parameters
+#if defined(EARLY_BETA_OR_EARLIER) && !defined(ANDROID)
+pref("network.http.http3.enabled", true);
+#else
 pref("network.http.http3.enabled", false);
+#endif
 
 // Http3 qpack table size.
 pref("network.http.http3.default-qpack-table-size", 65536); // 64k
@@ -3141,7 +3105,7 @@ pref("font.size.monospace.x-math", 13);
 
   pref("font.name-list.serif.ja", "Hiragino Mincho ProN, Hiragino Mincho Pro");
   pref("font.name-list.sans-serif.ja", "Hiragino Kaku Gothic ProN, Hiragino Kaku Gothic Pro, Hiragino Sans");
-  pref("font.name-list.monospace.ja", "Osaka-Mono");
+  pref("font.name-list.monospace.ja", "Osaka-Mono, Hiragino Kaku Gothic ProN, Hiragino Sans");
 
   pref("font.name-list.serif.ko", "AppleMyungjo");
   pref("font.name-list.sans-serif.ko", "Apple SD Gothic Neo, AppleGothic");
@@ -3696,6 +3660,7 @@ pref("signon.autofillForms.http",           false);
 pref("signon.autologin.proxy",              false);
 pref("signon.capture.inputChanges.enabled", true);
 pref("signon.formlessCapture.enabled",      true);
+pref("signon.formRemovalCapture.enabled",   true);
 pref("signon.generation.available",               true);
 pref("signon.backup.enabled",               true);
 pref("signon.generation.confidenceThreshold",     "0.75");
@@ -3707,6 +3672,7 @@ pref("signon.userInputRequiredToCapture.enabled", true);
 pref("signon.debug",                        false);
 pref("signon.recipes.path", "resource://app/defaults/settings/main/password-recipes.json");
 pref("signon.recipes.remoteRecipesEnabled", true);
+pref("signon.relatedRealms.enabled", false);
 
 pref("signon.schemeUpgrades",                     true);
 pref("signon.includeOtherSubdomainsInLookup",     true);
@@ -3911,6 +3877,9 @@ pref("alerts.showFavicons", false);
 #ifdef XP_MACOSX
   // Whether to use macOS native full screen for Fullscreen API
   pref("full-screen-api.macos-native-full-screen", false);
+  // Whether the toolbar should slide down with the menubar when the user mouses
+  // to the top of the screen in fullscreen mode.
+  pref("full-screen-api.macos.shiftToolbar", false);
 #endif
 // whether to prevent the top level widget from going fullscreen
 pref("full-screen-api.ignore-widgets", false);
@@ -4101,15 +4070,6 @@ pref("snav.enabled", false);
 // Wakelock is disabled by default.
 pref("dom.wakelock.enabled", false);
 
-// Presentation Device
-pref("dom.presentation.tcp_server.debug", false);
-pref("dom.presentation.discovery.enabled", false);
-pref("dom.presentation.discovery.timeout_ms", 10000);
-pref("dom.presentation.discoverable", false);
-pref("dom.presentation.discoverable.encrypted", true);
-pref("dom.presentation.discoverable.retry_ms", 5000);
-pref("dom.presentation.session_transport.data_channel.enable", false);
-
 #ifdef XP_MACOSX
   #if !defined(RELEASE_OR_BETA) || defined(DEBUG)
     // In non-release builds we crash by default on insecure text input (when a
@@ -4177,10 +4137,6 @@ pref("reader.parse-on-load.enabled", true);
 // After what size document we don't bother running Readability on it
 // because it'd slow things down too much
 pref("reader.parse-node-limit", 3000);
-
-// Force-enables reader mode parsing, even on low-memory platforms, where it
-// is disabled by default.
-pref("reader.parse-on-load.force-enabled", false);
 
 // Whether we include full URLs in browser console errors. This is disabled
 // by default because some platforms will persist these, leading to privacy issues.

@@ -3,6 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "HeadlessWidget.h"
+#include "ErrorList.h"
 #include "HeadlessCompositorWidget.h"
 #include "Layers.h"
 #include "BasicLayers.h"
@@ -524,7 +525,6 @@ nsresult HeadlessWidget::SynthesizeNativeTouchPadPinch(
       pinchGestureType = PinchGestureInput::PINCHGESTURE_START;
       CurrentSpan = aScale;
       PreviousSpan = 0.999;
-      mLastPinchSpan = aScale;
       break;
 
     case PHASE_UPDATE:
@@ -534,7 +534,6 @@ nsresult HeadlessWidget::SynthesizeNativeTouchPadPinch(
       }
       CurrentSpan = aScale;
       PreviousSpan = mLastPinchSpan;
-      mLastPinchSpan = aScale;
       break;
 
     case PHASE_END:
@@ -546,6 +545,7 @@ nsresult HeadlessWidget::SynthesizeNativeTouchPadPinch(
     default:
       return NS_ERROR_INVALID_ARG;
   }
+
   LayoutDeviceIntPoint touchpadPoint = aPoint - WidgetToScreenOffset();
   // The headless widget does not support modifiers.
   // Do not pass `aModifierFlags` because it contains native modifier values.
@@ -556,6 +556,12 @@ nsresult HeadlessWidget::SynthesizeNativeTouchPadPinch(
       100.0 * ((aEventPhase == PHASE_END) ? ScreenCoord(1.f) : CurrentSpan),
       100.0 * ((aEventPhase == PHASE_END) ? ScreenCoord(1.f) : PreviousSpan),
       0);
+
+  if (!inputToDispatch.SetLineOrPageDeltaY(this)) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  mLastPinchSpan = aScale;
   DispatchPinchGestureInput(inputToDispatch);
   return NS_OK;
 }

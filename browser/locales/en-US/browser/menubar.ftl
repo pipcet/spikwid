@@ -9,6 +9,8 @@
 
 ## Application Menu (macOS only)
 
+menu-application-preferences =
+    .label = Preferences
 menu-application-services =
     .label = Services
 menu-application-hide-this =
@@ -240,9 +242,9 @@ menu-tools =
 menu-tools-downloads =
     .label = Downloads
     .accesskey = D
-menu-tools-extensions =
-    .label = Extensions and Themes
-    .accesskey = E
+menu-tools-addons-and-themes =
+    .label = Add-ons and Themes
+    .accesskey = A
 menu-tools-fxa-sign-in2 =
     .label = Sign In
     .accesskey = g
@@ -255,9 +257,12 @@ menu-tools-sync-now =
 menu-tools-fxa-re-auth =
     .label = Reconnect to { -brand-product-name }…
     .accesskey = R
-menu-tools-web-developer =
-    .label = Web Developer
-    .accesskey = W
+menu-tools-browser-tools =
+    .label = Browser Tools
+    .accesskey = B
+menu-tools-task-manager =
+    .label = Task Manager
+    .accesskey = M
 menu-tools-page-source =
     .label = Page Source
     .accesskey = o
@@ -269,6 +274,17 @@ menu-settings =
     .accesskey =
         { PLATFORM() ->
             [windows] S
+           *[other] n
+        }
+menu-preferences =
+    .label =
+        { PLATFORM() ->
+            [windows] Options
+           *[other] Preferences
+        }
+    .accesskey =
+        { PLATFORM() ->
+            [windows] O
            *[other] n
         }
 menu-tools-layout-debugger =
@@ -301,15 +317,13 @@ menu-get-help =
 menu-help-more-troubleshooting-info =
     .label = More Troubleshooting Information
     .accesskey = T
-menu-help-taskmanager =
-    .label = Task Manager
 menu-help-report-site-issue =
     .label = Report Site Issue…
 menu-help-feedback-page =
     .label = Submit Feedback…
     .accesskey = S
-menu-help-enter-troubleshoot-mode =
-    .label = Troubleshoot Mode
+menu-help-enter-troubleshoot-mode2 =
+    .label = Troubleshoot Mode…
     .accesskey = M
 menu-help-exit-troubleshoot-mode =
     .label = Turn Troubleshoot Mode Off

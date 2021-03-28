@@ -591,6 +591,11 @@ bool shell::enableWasm = false;
 bool shell::enableSharedMemory = SHARED_MEMORY_DEFAULT;
 bool shell::enableWasmBaseline = false;
 bool shell::enableWasmOptimizing = false;
+#ifdef JS_CODEGEN_ARM64
+// Cranelift->Ion transition.  The right value for fuzzing-but-not-enabled is
+// 'false'; when we land for phase 2, we remove this flag.
+bool shell::forceWasmIon = false;
+#endif
 bool shell::enableWasmReftypes = true;
 #ifdef ENABLE_WASM_FUNCTION_REFERENCES
 bool shell::enableWasmFunctionReferences = false;
@@ -10856,6 +10861,9 @@ static bool SetContextOptions(JSContext* cx, const OptionParser& op) {
   enableWasmBaseline = true;
   enableWasmOptimizing = true;
 
+  bool commandLineRequestedWasmIon = false;
+  bool commandLineRequestedWasmCranelift = false;
+
   if (const char* str = op.getStringOption("wasm-compiler")) {
     if (strcmp(str, "none") == 0) {
       enableWasm = false;
@@ -10874,17 +10882,20 @@ static bool SetContextOptions(JSContext* cx, const OptionParser& op) {
     } else if (strcmp(str, "cranelift") == 0) {
       enableWasmBaseline = false;
       enableWasmOptimizing = true;
+      commandLineRequestedWasmCranelift = true;
     } else if (strcmp(str, "baseline+cranelift") == 0) {
       MOZ_ASSERT(enableWasmBaseline);
       enableWasmOptimizing = true;
-#else
+      commandLineRequestedWasmCranelift = true;
+#endif
     } else if (strcmp(str, "ion") == 0) {
       enableWasmBaseline = false;
       enableWasmOptimizing = true;
+      commandLineRequestedWasmIon = true;
     } else if (strcmp(str, "baseline+ion") == 0) {
       MOZ_ASSERT(enableWasmBaseline);
       enableWasmOptimizing = true;
-#endif
+      commandLineRequestedWasmIon = true;
     } else {
       return OptionFailure("wasm-compiler", str);
     }
@@ -10931,13 +10942,35 @@ static bool SetContextOptions(JSContext* cx, const OptionParser& op) {
   enableTopLevelAwait = op.getBoolOption("enable-top-level-await");
   useOffThreadParseGlobal = op.getBoolOption("off-thread-parse-global");
 
+  // ifdeffing the defs and uses of these two so as to avoid unused-variable
+  // complaints on all targets is difficult.  Simpler just to create fake uses.
+  mozilla::Unused << commandLineRequestedWasmIon;
+  mozilla::Unused << commandLineRequestedWasmCranelift;
+#ifdef JS_CODEGEN_ARM64
+  // Cranelift->Ion transition.  When we land for phase 1, this becomes
+  // wasm-force-ion (be sure to update below around line 11500), and the default
+  // value of the flag is flipped to false, see comments above.  When we land
+  // for phase 2, this goes away.
+  MOZ_ASSERT(
+      !(commandLineRequestedWasmIon && commandLineRequestedWasmCranelift));
+  if (commandLineRequestedWasmIon) {
+    forceWasmIon = true;
+  } else if (commandLineRequestedWasmCranelift) {
+    forceWasmIon = false;
+  } else {
+    forceWasmIon = op.getBoolOption("wasm-force-ion");
+  }
+#endif
+
   JS::ContextOptionsRef(cx)
       .setAsmJS(enableAsmJS)
       .setWasm(enableWasm)
       .setWasmForTrustedPrinciples(enableWasm)
       .setWasmBaseline(enableWasmBaseline)
-#ifdef ENABLE_WASM_CRANELIFT
-      .setWasmCranelift(enableWasmOptimizing)
+#if defined(ENABLE_WASM_CRANELIFT) && defined(JS_CODEGEN_ARM64)
+      // Cranelift->Ion transition
+      .setWasmCranelift(enableWasmOptimizing && !forceWasmIon)
+      .setWasmIon(enableWasmOptimizing && forceWasmIon)
 #else
       .setWasmIon(enableWasmOptimizing)
 #endif
@@ -10994,15 +11027,13 @@ static bool SetContextOptions(JSContext* cx, const OptionParser& op) {
   if (const char* str = op.getStringOption("spectre-mitigations")) {
     if (strcmp(str, "on") == 0) {
       jit::JitOptions.spectreIndexMasking = true;
-      jit::JitOptions.spectreObjectMitigationsBarriers = true;
-      jit::JitOptions.spectreObjectMitigationsMisc = true;
+      jit::JitOptions.spectreObjectMitigations = true;
       jit::JitOptions.spectreStringMitigations = true;
       jit::JitOptions.spectreValueMasking = true;
       jit::JitOptions.spectreJitToCxxCalls = true;
     } else if (strcmp(str, "off") == 0) {
       jit::JitOptions.spectreIndexMasking = false;
-      jit::JitOptions.spectreObjectMitigationsBarriers = false;
-      jit::JitOptions.spectreObjectMitigationsMisc = false;
+      jit::JitOptions.spectreObjectMitigations = false;
       jit::JitOptions.spectreStringMitigations = false;
       jit::JitOptions.spectreValueMasking = false;
       jit::JitOptions.spectreJitToCxxCalls = false;
@@ -11056,13 +11087,13 @@ static bool SetContextOptions(JSContext* cx, const OptionParser& op) {
     }
   }
 
-  if (const char* str = op.getStringOption("ion-pgo")) {
+  if (const char* str = op.getStringOption("ion-pruning")) {
     if (strcmp(str, "on") == 0) {
-      jit::JitOptions.disablePgo = false;
+      jit::JitOptions.disablePruning = false;
     } else if (strcmp(str, "off") == 0) {
-      jit::JitOptions.disablePgo = true;
+      jit::JitOptions.disablePruning = true;
     } else {
-      return OptionFailure("ion-pgo", str);
+      return OptionFailure("ion-pruning", str);
     }
   }
 
@@ -11344,8 +11375,10 @@ static void SetWorkerContextOptions(JSContext* cx) {
       .setAsmJS(enableAsmJS)
       .setWasm(enableWasm)
       .setWasmBaseline(enableWasmBaseline)
-#ifdef ENABLE_WASM_CRANELIFT
-      .setWasmCranelift(enableWasmOptimizing)
+#if defined(ENABLE_WASM_CRANELIFT) && defined(JS_CODEGEN_ARM64)
+      // Cranelift->Ion transition
+      .setWasmCranelift(enableWasmOptimizing && !forceWasmIon)
+      .setWasmIon(enableWasmOptimizing && forceWasmIon)
 #else
       .setWasmIon(enableWasmOptimizing)
 #endif
@@ -11898,7 +11931,13 @@ int main(int argc, char** argv, char** envp) {
 #else
       !op.addBoolOption('\0', "wasm-exceptions", "No-op") ||
 #endif
-
+#ifdef JS_CODEGEN_ARM64
+      // Cranelift->Ion transition.  This disappears at Phase 2 of the landing.
+      // See sundry comments above.
+      !op.addBoolOption(
+          '\0', "wasm-force-ion",
+          "Temporary: Force Ion in builds with both Cranelift and Ion") ||
+#endif
       !op.addBoolOption('\0', "no-native-regexp",
                         "Disable native regexp compilation") ||
       !op.addIntOption(
@@ -11973,9 +12012,8 @@ int main(int argc, char** argv, char** envp) {
       !op.addStringOption('\0', "ion-edgecase-analysis", "on/off",
                           "Find edge cases where Ion can avoid bailouts "
                           "(default: on, off to disable)") ||
-      !op.addStringOption(
-          '\0', "ion-pgo", "on/off",
-          "Profile guided optimization (default: on, off to disable)") ||
+      !op.addStringOption('\0', "ion-pruning", "on/off",
+                          "Branch pruning (default: on, off to disable)") ||
       !op.addStringOption('\0', "ion-range-analysis", "on/off",
                           "Range analysis (default: on, off to disable)") ||
       !op.addStringOption('\0', "ion-sink", "on/off",
@@ -12234,43 +12272,6 @@ int main(int argc, char** argv, char** envp) {
   OOM_printAllocationCount = op.getBoolOption('O');
 #endif
 
-#if defined(JS_CODEGEN_X86) || defined(JS_CODEGEN_X64)
-  if (op.getBoolOption("no-sse3")) {
-    js::jit::CPUInfo::SetSSE3Disabled();
-    if (!sCompilerProcessFlags.append("--no-sse3")) {
-      return EXIT_FAILURE;
-    }
-  }
-  if (op.getBoolOption("no-ssse3")) {
-    js::jit::CPUInfo::SetSSSE3Disabled();
-    if (!sCompilerProcessFlags.append("--no-ssse3")) {
-      return EXIT_FAILURE;
-    }
-  }
-  if (op.getBoolOption("no-sse4") || op.getBoolOption("no-sse41")) {
-    js::jit::CPUInfo::SetSSE41Disabled();
-    if (!sCompilerProcessFlags.append("--no-sse41")) {
-      return EXIT_FAILURE;
-    }
-  }
-  if (op.getBoolOption("no-sse42")) {
-    js::jit::CPUInfo::SetSSE42Disabled();
-    if (!sCompilerProcessFlags.append("--no-sse42")) {
-      return EXIT_FAILURE;
-    }
-  }
-  if (op.getBoolOption("enable-avx")) {
-    js::jit::CPUInfo::SetAVXEnabled();
-    if (!sCompilerProcessFlags.append("--enable-avx")) {
-      return EXIT_FAILURE;
-    }
-    // Disable AVX completely for now.  We're not supporting AVX and things
-    // break easily if asking for AVX.
-    fprintf(stderr, "Error: AVX encodings are currently disabled\n");
-    return EXIT_FAILURE;
-  }
-#endif
-
   if (op.getBoolOption("no-threads")) {
     js::DisableExtraThreads();
   }
@@ -12344,6 +12345,12 @@ int main(int argc, char** argv, char** envp) {
   }
 
   size_t nurseryBytes = op.getIntOption("nursery-size") * 1024L * 1024L;
+  if (nurseryBytes == 0) {
+    fprintf(stderr, "Error: --nursery-size parameter must be non-zero.\n");
+    fprintf(stderr,
+            "The nursery can be disabled by passing the --no-ggc option.\n");
+    return EXIT_FAILURE;
+  }
   JS_SetGCParameter(cx, JSGC_MAX_NURSERY_BYTES, nurseryBytes);
 
   auto destroyCx = MakeScopeExit([cx] { JS_DestroyContext(cx); });
@@ -12474,12 +12481,109 @@ int main(int argc, char** argv, char** envp) {
   js::SetPreserveWrapperCallbacks(cx, DummyPreserveWrapperCallback,
                                   DummyHasReleasedWrapperCallback);
 
+  // Fish around in `op` for various important compiler-configuration flags
+  // and make sure they get handed on to any child processes we might create.
+  // See bug 1700900.  Semantically speaking, this is all rather dubious:
+  //
+  // * What set of flags need to be propagated in order to guarantee that the
+  //   child produces code that is "compatible" (in whatever sense) with that
+  //   produced by the parent?  This isn't always easy to determine.
+  //
+  // * There's nothing that ensures that flags given to the child are
+  //   presented in the same order that they exist in the parent's `argv[]`.
+  //   That could be a problem in the case where two flags with contradictory
+  //   meanings are given, and they are presented to the child in the opposite
+  //   order.  For example: --wasm-compiler=cranelift --wasm-force-ion.
+
+#if defined(JS_CODEGEN_X86) || defined(JS_CODEGEN_X64)
+  if (op.getBoolOption("no-sse3")) {
+    js::jit::CPUInfo::SetSSE3Disabled();
+    if (!sCompilerProcessFlags.append("--no-sse3")) {
+      return EXIT_FAILURE;
+    }
+  }
+  if (op.getBoolOption("no-ssse3")) {
+    js::jit::CPUInfo::SetSSSE3Disabled();
+    if (!sCompilerProcessFlags.append("--no-ssse3")) {
+      return EXIT_FAILURE;
+    }
+  }
+  if (op.getBoolOption("no-sse4") || op.getBoolOption("no-sse41")) {
+    js::jit::CPUInfo::SetSSE41Disabled();
+    if (!sCompilerProcessFlags.append("--no-sse41")) {
+      return EXIT_FAILURE;
+    }
+  }
+  if (op.getBoolOption("no-sse42")) {
+    js::jit::CPUInfo::SetSSE42Disabled();
+    if (!sCompilerProcessFlags.append("--no-sse42")) {
+      return EXIT_FAILURE;
+    }
+  }
+  if (op.getBoolOption("enable-avx")) {
+    js::jit::CPUInfo::SetAVXEnabled();
+    if (!sCompilerProcessFlags.append("--enable-avx")) {
+      return EXIT_FAILURE;
+    }
+    // Disable AVX completely for now.  We're not supporting AVX and things
+    // break easily if asking for AVX.
+    fprintf(stderr, "Error: AVX encodings are currently disabled\n");
+    return EXIT_FAILURE;
+  }
+#endif
+
+  // --disable-wasm-huge-memory needs to be propagated.  See bug 1518210.
   if (op.getBoolOption("disable-wasm-huge-memory")) {
     if (!sCompilerProcessFlags.append("--disable-wasm-huge-memory")) {
       return EXIT_FAILURE;
     }
     bool disabledHugeMemory = JS::DisableWasmHugeMemory();
     MOZ_RELEASE_ASSERT(disabledHugeMemory);
+  }
+
+  // Also the following are to be propagated.
+  const char* to_propagate[] = {
+      // Feature selection options
+      "--wasm-gc", "--wasm-simd-wormhole", "--wasm-exceptions",
+      "--wasm-function-references", "--no-wasm-simd", "--no-wasm-reftypes",
+      "--no-wasm-multi-value",
+      // Compiler selection options
+      "--test-wasm-await-tier2",
+#ifdef JS_CODEGEN_ARM64
+      "--wasm-force-ion",
+#endif
+      NULL};
+  for (const char** p = &to_propagate[0]; *p; p++) {
+    if (op.getBoolOption(&(*p)[2] /* 2 => skip the leading '--' */)) {
+      if (!sCompilerProcessFlags.append(*p)) {
+        return EXIT_FAILURE;
+      }
+    }
+  }
+
+  // Also --wasm-compiler= is to be propagated.  This is tricky because it is
+  // necessary to reconstitute the --wasm-compiler=<whatever> string from its
+  // pieces, without causing a leak.  Hence it is copied into a static buffer.
+  // This is thread-unsafe, but we're in `main()` and on the process' root
+  // thread.  Also, we do this only once -- it wouldn't work properly if we
+  // handled multiple --wasm-compiler= flags in a loop.
+  const char* wasm_compiler = op.getStringOption("wasm-compiler");
+  if (wasm_compiler) {
+    size_t n_needed =
+        2 + strlen("wasm-compiler") + 1 + strlen(wasm_compiler) + 1;
+    const size_t n_avail = 128;
+    static char buf[n_avail];
+    // `n_needed` depends on the compiler name specified.  However, it can't
+    // be arbitrarily long, since previous flag-checking should have limited
+    // it to a set of known possibilities: "baseline", "ion", "cranelift",
+    // "baseline+ion", "baseline+cranelift", etc.  Still, assert this for
+    // safety.
+    MOZ_RELEASE_ASSERT(n_needed < n_avail);
+    memset(buf, 0, sizeof(buf));
+    SprintfBuf(buf, n_avail, "--%s=%s", "wasm-compiler", wasm_compiler);
+    if (!sCompilerProcessFlags.append(buf)) {
+      return EXIT_FAILURE;
+    }
   }
 
   result = Shell(cx, &op, envp);

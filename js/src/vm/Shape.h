@@ -34,7 +34,6 @@
 #include "js/UbiNode.h"
 #include "util/EnumFlags.h"
 #include "vm/JSAtom.h"
-#include "vm/ObjectGroup.h"
 #include "vm/Printer.h"
 #include "vm/StringType.h"
 #include "vm/SymbolType.h"
@@ -261,8 +260,12 @@ class PropertyTree {
 
 class TenuringTracer;
 
-using GetterOp = JSGetterOp;
-using SetterOp = JSSetterOp;
+// GetterOp and SetterOp are used to implement the special ArrayObject
+// length-property and ArgumentsObject properties.
+using GetterOp = bool (*)(JSContext* cx, JS::HandleObject obj, JS::HandleId id,
+                          JS::MutableHandleValue vp);
+using SetterOp = bool (*)(JSContext* cx, JS::HandleObject obj, JS::HandleId id,
+                          JS::HandleValue v, JS::ObjectOpResult& result);
 
 /* Limit on the number of slotful properties in an object. */
 static const uint32_t SHAPE_INVALID_SLOT = Bit(24) - 1;
@@ -657,6 +660,19 @@ enum class ObjectFlag : uint16_t {
 
   // See JSObject::isQualifiedVarObj().
   QualifiedVarObj = 1 << 8,
+
+  // If set, the object may have a non-writable property or an accessor
+  // property.
+  //
+  // * This is only set for PlainObjects because we only need it for these
+  //   objects and setting it for other objects confuses insertInitialShape.
+  //
+  // * This flag does not account for properties named "__proto__". This is
+  //   because |Object.prototype| has a "__proto__" accessor property and we
+  //   don't want to include it because it would result in the flag being set on
+  //   most proto chains. Code using this flag must check for "__proto__"
+  //   property names separately.
+  HasNonWritableOrAccessorPropExclProto = 1 << 9,
 };
 
 using ObjectFlags = EnumFlags<ObjectFlag>;
@@ -1173,16 +1189,15 @@ class Shape : public gc::CellWithTenuredGCPointer<gc::TenuredCell, BaseShape> {
     return JSID_IS_EMPTY(propid_);
   }
 
-  uint32_t slotSpan(const JSClass* clasp) const {
+  uint32_t slotSpan() const {
     MOZ_ASSERT(!inDictionary());
-    // Proxy classes have reserved slots, but proxies manage their own slot
-    // layout. This means all non-native object shapes have nfixed == 0 and
-    // slotSpan == 0.
-    uint32_t free = clasp->isProxyObject() ? 0 : JSSLOT_FREE(clasp);
+    // slotSpan is only defined for native objects. Proxy classes have reserved
+    // slots, but proxies manage their own slot layout.
+    const JSClass* clasp = getObjectClass();
+    MOZ_ASSERT(clasp->isNativeObject());
+    uint32_t free = JSSLOT_FREE(clasp);
     return hasMissingSlot() ? free : std::max(free, maybeSlot() + 1);
   }
-
-  uint32_t slotSpan() const { return slotSpan(getObjectClass()); }
 
   void setSlot(uint32_t slot) {
     MOZ_ASSERT(slot <= SHAPE_INVALID_SLOT);

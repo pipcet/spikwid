@@ -50,6 +50,7 @@
 #include "mozilla/dom/ImageBitmapSource.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/dom/BrowsingContext.h"
+#include "X11UndefineNone.h"
 
 class nsDocShell;
 class nsIArray;
@@ -307,7 +308,7 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
   virtual bool IsSuspended() const override;
   virtual bool IsFrozen() const override;
 
-  virtual nsresult FireDelayedDOMEvents() override;
+  virtual nsresult FireDelayedDOMEvents(bool aIncludeSubWindows) override;
 
   // Outer windows only.
   bool WouldReuseInnerWindow(Document* aNewDocument);
@@ -349,6 +350,8 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
   void FullscreenWillChange(bool aIsFullscreen) final;
   void FinishFullscreenChange(bool aIsFullscreen) final;
   void ForceFullScreenInWidget() final;
+  void MacFullscreenMenubarOverlapChanged(
+      mozilla::DesktopCoord aOverlapAmount) final;
   bool SetWidgetFullscreen(FullscreenReason aReason, bool aIsFullscreen,
                            nsIWidget* aWidget, nsIScreen* aScreen);
   bool Fullscreen() const;
@@ -457,10 +460,6 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
   }
 
   bool IsCleanedUp() const { return mCleanedUp; }
-
-  bool HadOriginalOpener() const {
-    return GetBrowsingContext()->HadOriginalOpener();
-  }
 
   virtual void FirePopupBlockedEvent(
       Document* aDoc, nsIURI* aPopupURI, const nsAString& aPopupWindowName,
@@ -895,8 +894,8 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
                                            nsIBaseWindow* aWindow);
 
   void SetFocusedElement(mozilla::dom::Element* aElement,
-                         uint32_t aFocusMethod = 0, bool aNeedsFocus = false,
-                         bool aWillShowOutline = false) override;
+                         uint32_t aFocusMethod = 0,
+                         bool aNeedsFocus = false) override;
 
   uint32_t GetFocusMethod() override;
 

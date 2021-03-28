@@ -79,10 +79,9 @@ using namespace mozilla::layout;
 
 // Function that cancels all the image requests in our cache.
 void nsTreeBodyFrame::CancelImageRequests() {
-  for (auto iter = mImageCache.Iter(); !iter.Done(); iter.Next()) {
+  for (nsTreeImageCacheEntry entry : mImageCache.Values()) {
     // If our imgIRequest object was registered with the refresh driver
     // then we need to deregister it.
-    nsTreeImageCacheEntry entry = iter.UserData();
     nsLayoutUtils::DeregisterImageRequest(PresContext(), entry.request,
                                           nullptr);
     entry.request->UnlockImage();
@@ -1908,9 +1907,7 @@ nsresult nsTreeBodyFrame::GetImage(int32_t aRowIndex, nsTreeColumn* aCol,
     nsTreeImageListener* listener = new nsTreeImageListener(this);
     if (!listener) return NS_ERROR_OUT_OF_MEMORY;
 
-    if (!mCreatedListeners.PutEntry(listener)) {
-      return NS_ERROR_FAILURE;
-    }
+    mCreatedListeners.Insert(listener);
 
     listener->AddCell(aRowIndex, aCol);
     nsCOMPtr<imgINotificationObserver> imgNotificationObserver = listener;
@@ -2547,7 +2544,7 @@ class nsDisplayTreeBody final : public nsPaintedDisplayItem {
 #ifdef XP_MACOSX
 static bool IsInSourceList(nsIFrame* aFrame) {
   for (nsIFrame* frame = aFrame; frame;
-       frame = nsLayoutUtils::GetCrossDocParentFrame(frame)) {
+       frame = nsLayoutUtils::GetCrossDocParentFrameInProcess(frame)) {
     if (frame->StyleDisplay()->EffectiveAppearance() ==
         StyleAppearance::MozMacSourceList) {
       return true;
@@ -4225,7 +4222,7 @@ void nsTreeBodyFrame::DetachImageListeners() { mCreatedListeners.Clear(); }
 
 void nsTreeBodyFrame::RemoveTreeImageListener(nsTreeImageListener* aListener) {
   if (aListener) {
-    mCreatedListeners.RemoveEntry(aListener);
+    mCreatedListeners.Remove(aListener);
   }
 }
 

@@ -2712,7 +2712,7 @@ struct Stk {
   }
 };
 
-typedef Vector<Stk, 0, SystemAllocPolicy> StkVector;
+using StkVector = Vector<Stk, 0, SystemAllocPolicy>;
 
 // MachineStackTracker, used for stack-slot pointerness tracking.
 
@@ -3156,6 +3156,9 @@ class BaseCompiler final : public BaseCompilerInterface {
     uint32_t eventIndex;      // Index for the associated exception.
     NonAssertingLabel label;  // The entry label for the handler.
 
+    static const uint32_t CATCH_ALL_INDEX = UINT32_MAX;
+    static_assert(CATCH_ALL_INDEX > MaxEvents);
+
     explicit CatchInfo(uint32_t eventIndex_) : eventIndex(eventIndex_) {}
   };
 
@@ -3166,6 +3169,7 @@ class BaseCompiler final : public BaseCompilerInterface {
   struct Control {
     NonAssertingLabel label;       // The "exit" label
     NonAssertingLabel otherLabel;  // Used for the "else" branch of if-then-else
+                                   // and to allow delegate to jump to catches.
     StackHeight stackHeight;       // From BaseStackFrame
     uint32_t stackSize;            // Value stack height
     BCESet bceSafeOnEntry;         // Bounds check info flowing into the item
@@ -3314,7 +3318,7 @@ class BaseCompiler final : public BaseCompilerInterface {
  public:
   BaseCompiler(const ModuleEnvironment& moduleEnv,
                const CompilerEnvironment& compilerEnv,
-               const FuncCompileInput& input, const ValTypeVector& locals,
+               const FuncCompileInput& func, const ValTypeVector& locals,
                const MachineState& trapExitLayout,
                size_t trapExitLayoutNumWords, Decoder& decoder,
                StkVector& stkSource, TempAllocator* alloc, MacroAssembler* masm,
@@ -3356,8 +3360,7 @@ class BaseCompiler final : public BaseCompilerInterface {
   }
 
   [[nodiscard]] bool generateOutOfLineCode() {
-    for (uint32_t i = 0; i < outOfLine_.length(); i++) {
-      OutOfLineCode* ool = outOfLine_[i];
+    for (auto ool : outOfLine_) {
       ool->bind(&fr, &masm);
       ool->generate(&masm);
     }
@@ -4084,6 +4087,13 @@ class BaseCompiler final : public BaseCompilerInterface {
     }
   }
 
+  // Duplicate the reference at the specified depth and load it into a register.
+  void dupRefAt(uint32_t depth, RegRef dest) {
+    MOZ_ASSERT(depth < stk_.length());
+    Stk& src = peek(stk_.length() - depth - 1);
+    loadRef(src, dest);
+  }
+
   // Flush all local and register value stack elements to memory.
   //
   // TODO / OPTIMIZE: As this is fairly expensive and causes worse
@@ -4788,7 +4798,7 @@ class BaseCompiler final : public BaseCompilerInterface {
 #endif
   }
 
-  MOZ_MUST_USE RegPtr popPtr() {
+  [[nodiscard]] RegPtr popPtr() {
 #ifdef JS_64BIT
     return RegPtr(popI64().reg);
 #else
@@ -5197,6 +5207,31 @@ class BaseCompiler final : public BaseCompilerInterface {
     }
   }
 
+#ifdef ENABLE_WASM_EXCEPTIONS
+  // This function is similar to popBlockResults, but additionally handles the
+  // implicit exception pointer that is pushed to the value stack on entry to
+  // a catch handler by dropping it appropriately.
+  void popCatchResults(ResultType type, StackHeight stackBase) {
+    if (!type.empty()) {
+      ABIResultIter iter(type);
+      popRegisterResults(iter);
+      if (!iter.done()) {
+        popStackResults(iter, stackBase);
+        // Since popStackResults clobbers the stack, we only need to free the
+        // exception off of the value stack.
+        popValueStackBy(1);
+      } else {
+        // If there are no stack results, we have to adjust the stack by
+        // dropping the exception reference that's now on the stack.
+        dropValue();
+      }
+    } else {
+      dropValue();
+    }
+    fr.popStackBeforeBranch(stackBase, type);
+  }
+#endif
+
   Stk captureStackResult(const ABIResult& result, StackHeight resultsBase,
                          uint32_t stackResultBytes) {
     MOZ_ASSERT(result.onStack());
@@ -5443,8 +5478,7 @@ class BaseCompiler final : public BaseCompilerInterface {
   // Call this between opcodes.
   void performRegisterLeakCheck() {
     BaseRegAlloc::LeakCheck check(ra);
-    for (size_t i = 0; i < stk_.length(); i++) {
-      Stk& item = stk_[i];
+    for (auto& item : stk_) {
       switch (item.kind_) {
         case Stk::RegisterI32:
           check.addKnownI32(item.i32reg());
@@ -6014,7 +6048,7 @@ class BaseCompiler final : public BaseCompilerInterface {
     fr.allocArgArea(adjustment);
   }
 
-  const ABIArg reservePointerArgument(FunctionCall* call) {
+  ABIArg reservePointerArgument(FunctionCall* call) {
     return call->abi.next(MIRType::Pointer);
   }
 
@@ -6261,7 +6295,8 @@ class BaseCompiler final : public BaseCompilerInterface {
 
   // The compiler depends on moveImm32() clearing the high bits of a 64-bit
   // register on 64-bit systems except MIPS64 where high bits are sign extended
-  // from lower bits.
+  // from lower bits, see doc block "64-bit GPRs carrying 32-bit values" in
+  // MacroAssembler.h.
 
   void moveImm32(int32_t v, RegI32 dest) { masm.move32(Imm32(v), dest); }
 
@@ -6291,10 +6326,10 @@ class BaseCompiler final : public BaseCompilerInterface {
 #endif
     masm.bind(theTable);
 
-    for (uint32_t i = 0; i < labels.length(); i++) {
+    for (const auto& label : labels) {
       CodeLabel cl;
       masm.writeCodePointer(&cl);
-      cl.target()->bind(labels[i].offset());
+      cl.target()->bind(label.offset());
       masm.addCodeLabel(cl);
     }
   }
@@ -6902,9 +6937,53 @@ class BaseCompiler final : public BaseCompilerInterface {
 
     if (!moduleEnv_.hugeMemoryEnabled() && !check->omitBoundsCheck) {
       Label ok;
-      masm.wasmBoundsCheck32(
-          Assembler::Below, ptr,
-          Address(tls, offsetof(TlsData, boundsCheckLimit32)), &ok);
+#ifdef JS_64BIT
+      // If the bounds check uses the full 64 bits of the bounds check limit,
+      // then the index must be zero-extended to 64 bits before checking and
+      // wrapped back to 32-bits after Spectre masking.  (And it's important
+      // that the value we end up with has flowed through the Spectre mask.)
+      //
+      // If the memory's max size is known to be smaller than 64K pages exactly,
+      // we can use a 32-bit check and avoid extension and wrapping.
+      if ((moduleEnv_.maxMemoryLength.isNothing() ||
+           moduleEnv_.maxMemoryLength.value() >= 0x100000000) &&
+          ArrayBufferObject::maxBufferByteLength() >= 0x100000000) {
+        // Note, ptr and ptr64 are the same register.
+        RegI64 ptr64 = fromI32(ptr);
+
+        // In principle there may be non-zero bits in the upper bits of the
+        // register; clear them.
+#  if defined(JS_CODEGEN_X64) || defined(JS_CODEGEN_ARM64)
+        // The canonical value is zero-extended (see comment block "64-bit GPRs
+        // carrying 32-bit values" in MacroAssembler.h); we already have that.
+        masm.assertCanonicalInt32(ptr);
+#  else
+        MOZ_CRASH("Platform code needed here");
+#  endif
+
+        // Any Spectre mitigation will appear to update the ptr64 register.
+        masm.wasmBoundsCheck64(
+            Assembler::Below, ptr64,
+            Address(tls, offsetof(TlsData, boundsCheckLimit)), &ok);
+
+        // Restore the value to the canonical form for a 32-bit value in a
+        // 64-bit register and/or the appropriate form for further use in the
+        // indexing instruction.
+#  if defined(JS_CODEGEN_X64) || defined(JS_CODEGEN_ARM64)
+        // The canonical value is zero-extended; we already have that.
+#  else
+        MOZ_CRASH("Platform code needed here");
+#  endif
+      } else {
+        masm.wasmBoundsCheck32(
+            Assembler::Below, ptr,
+            Address(tls, offsetof(TlsData, boundsCheckLimit)), &ok);
+      }
+#else
+      masm.wasmBoundsCheck32(Assembler::Below, ptr,
+                             Address(tls, offsetof(TlsData, boundsCheckLimit)),
+                             &ok);
+#endif
       masm.wasmTrap(Trap::OutOfBounds, bytecodeOffset());
       masm.bind(&ok);
     }
@@ -8120,7 +8199,6 @@ class BaseCompiler final : public BaseCompilerInterface {
       return false;
     }
     freeRef(popRef());
-    deadCode_ = true;
 
     return true;
   }
@@ -8391,10 +8469,17 @@ class BaseCompiler final : public BaseCompilerInterface {
   // Used for common setup for catch and catch_all.
   void emitCatchSetup(LabelKind kind, Control& tryCatch,
                       const ResultType& resultType);
+  // Helper function used to generate landing pad code for the special
+  // case in which `delegate` jumps to a function's body block.
+  [[nodiscard]] bool emitBodyDelegateThrowPad();
 
   [[nodiscard]] bool emitTry();
   [[nodiscard]] bool emitCatch();
+  [[nodiscard]] bool emitCatchAll();
+  [[nodiscard]] bool emitDelegate();
+  [[nodiscard]] bool emitUnwind();
   [[nodiscard]] bool emitThrow();
+  [[nodiscard]] bool emitRethrow();
 #endif
   [[nodiscard]] bool emitEnd();
   [[nodiscard]] bool emitBr();
@@ -8414,7 +8499,7 @@ class BaseCompiler final : public BaseCompilerInterface {
     False
   };
 
-  [[nodiscard]] bool emitCallArgs(const ValTypeVector& args,
+  [[nodiscard]] bool emitCallArgs(const ValTypeVector& argTypes,
                                   const StackResultsLoc& results,
                                   FunctionCall* baselineCall,
                                   CalleeOnStack calleeOnStack);
@@ -8447,6 +8532,7 @@ class BaseCompiler final : public BaseCompilerInterface {
   [[nodiscard]] bool endIfThenElse(ResultType type);
 #ifdef ENABLE_WASM_EXCEPTIONS
   [[nodiscard]] bool endTryCatch(ResultType type);
+  [[nodiscard]] bool endTryUnwind(ResultType type);
 #endif
 
   void doReturn(ContinuationKind kind);
@@ -10204,7 +10290,7 @@ bool BaseCompiler::endIfThen(ResultType type) {
 
 bool BaseCompiler::emitElse() {
   ResultType params, results;
-  NothingVector unused_thenValues;
+  NothingVector unused_thenValues{};
 
   if (!iter_.readElse(&params, &results, &unused_thenValues)) {
     return false;
@@ -10311,7 +10397,7 @@ bool BaseCompiler::endIfThenElse(ResultType type) {
 bool BaseCompiler::emitEnd() {
   LabelKind kind;
   ResultType type;
-  NothingVector unused_values;
+  NothingVector unused_values{};
   if (!iter_.readEnd(&kind, &type, &unused_values, &unused_values)) {
     return false;
   }
@@ -10322,6 +10408,14 @@ bool BaseCompiler::emitEnd() {
         return false;
       }
       doReturn(ContinuationKind::Fallthrough);
+      // This is emitted here after `doReturn` to avoid being executed in the
+      // normal return path of a function, and instead only when a `delegate`
+      // jumps to it.
+#ifdef ENABLE_WASM_EXCEPTIONS
+      if (!emitBodyDelegateThrowPad()) {
+        return false;
+      }
+#endif
       iter_.popEnd();
       MOZ_ASSERT(iter_.controlStackEmpty());
       return iter_.readFunctionEnd(iter_.end());
@@ -10349,7 +10443,13 @@ bool BaseCompiler::emitEnd() {
       MOZ_CRASH("Try-catch block cannot end without catch.");
       break;
     case LabelKind::Catch:
+    case LabelKind::CatchAll:
       if (!endTryCatch(type)) {
+        return false;
+      }
+      break;
+    case LabelKind::Unwind:
+      if (!endTryUnwind(type)) {
         return false;
       }
       break;
@@ -10364,7 +10464,7 @@ bool BaseCompiler::emitEnd() {
 bool BaseCompiler::emitBr() {
   uint32_t relativeDepth;
   ResultType type;
-  NothingVector unused_values;
+  NothingVector unused_values{};
   if (!iter_.readBr(&relativeDepth, &type, &unused_values)) {
     return false;
   }
@@ -10395,7 +10495,7 @@ bool BaseCompiler::emitBr() {
 bool BaseCompiler::emitBrIf() {
   uint32_t relativeDepth;
   ResultType type;
-  NothingVector unused_values;
+  NothingVector unused_values{};
   Nothing unused_condition;
   if (!iter_.readBrIf(&relativeDepth, &type, &unused_values,
                       &unused_condition)) {
@@ -10421,7 +10521,7 @@ bool BaseCompiler::emitBrOnNull() {
 
   uint32_t relativeDepth;
   ResultType type;
-  NothingVector unused_values;
+  NothingVector unused_values{};
   Nothing unused_condition;
   if (!iter_.readBrOnNull(&relativeDepth, &type, &unused_values,
                           &unused_condition)) {
@@ -10457,7 +10557,7 @@ bool BaseCompiler::emitBrTable() {
   Uint32Vector depths;
   uint32_t defaultDepth;
   ResultType branchParams;
-  NothingVector unused_values;
+  NothingVector unused_values{};
   Nothing unused_index;
   // N.B., `branchParams' gets set to the type of the default branch target.  In
   // the presence of subtyping, it could be that the different branch targets
@@ -10570,9 +10670,17 @@ void BaseCompiler::emitCatchSetup(LabelKind kind, Control& tryCatch,
     fr.resetStackHeight(tryCatch.stackHeight, resultType);
     popValueStackTo(tryCatch.stackSize);
   } else {
-    MOZ_ASSERT(stk_.length() == tryCatch.stackSize + resultType.length());
+    // If the previous block is a catch, we need to handle the extra exception
+    // reference on the stack (for rethrow) and thus the stack size is 1 more.
+    MOZ_ASSERT(stk_.length() == tryCatch.stackSize + resultType.length() +
+                                    (kind == LabelKind::Try ? 0 : 1));
     // Try jumps to the end of the try-catch block unless a throw is done.
-    popBlockResults(resultType, tryCatch.stackHeight, ContinuationKind::Jump);
+    if (kind == LabelKind::Try) {
+      popBlockResults(resultType, tryCatch.stackHeight, ContinuationKind::Jump);
+    } else {
+      popCatchResults(resultType, tryCatch.stackHeight);
+    }
+    MOZ_ASSERT(stk_.length() == tryCatch.stackSize);
     freeResultRegisters(resultType);
     MOZ_ASSERT(!tryCatch.deadOnArrival);
   }
@@ -10606,7 +10714,7 @@ bool BaseCompiler::emitCatch() {
   LabelKind kind;
   uint32_t eventIndex;
   ResultType paramType, resultType;
-  NothingVector unused_tryValues;
+  NothingVector unused_tryValues{};
 
   if (!iter_.readCatch(&kind, &eventIndex, &paramType, &resultType,
                        &unused_tryValues)) {
@@ -10632,6 +10740,13 @@ bool BaseCompiler::emitCatch() {
   // Extract the arguments in the exception package and push them.
   const ResultType params = moduleEnv_.events[eventIndex].resultType();
 
+  uint32_t refCount = 0;
+  for (uint32_t i = 0; i < params.length(); i++) {
+    if (params[i].isReference()) {
+      refCount++;
+    }
+  }
+
   const uint32_t dataOffset =
       NativeObject::getFixedSlotOffset(ArrayBufferObject::DATA_SLOT);
 
@@ -10639,57 +10754,260 @@ bool BaseCompiler::emitCatch() {
   // is live in this register.
   RegRef exn = RegRef(WasmExceptionReg);
   needRef(exn);
-  RegRef scratch = needRef();
+  RegRef values = needRef();
+  RegRef refs = needRef();
 
   masm.unboxObject(Address(exn, WasmRuntimeExceptionObject::offsetOfValues()),
-                   scratch);
-  freeRef(exn);
+                   values);
+  masm.unboxObject(Address(exn, WasmRuntimeExceptionObject::offsetOfRefs()),
+                   refs);
 
-  masm.loadPtr(Address(scratch, dataOffset), scratch);
+#  ifdef DEBUG
+  Label ok;
+  RegI32 scratch = needI32();
+  masm.load32(Address(refs, NativeObject::offsetOfFixedElements() +
+                                ObjectElements::offsetOfLength()),
+              scratch);
+  masm.branch32(Assembler::Equal, scratch, Imm32(refCount), &ok);
+  masm.assumeUnreachable("Array length should be equal to exn ref count.");
+  masm.bind(&ok);
+  freeI32(scratch);
+#  endif
+  masm.loadPtr(Address(refs, NativeObject::offsetOfElements()), refs);
+
+  // This reference is pushed onto the stack because a potential rethrow
+  // may need to access it. It is always popped at the end of the block.
+  pushRef(exn);
+
+  masm.loadPtr(Address(values, dataOffset), values);
   size_t argOffset = 0;
+  // The ref values have been pushed into the ArrayObject in a stacklike
+  // fashion so we need to load them starting from the last element.
+  int32_t refIndex = refCount - 1;
   for (uint32_t i = 0; i < params.length(); i++) {
     switch (params[i].kind()) {
       case ValType::I32: {
         RegI32 reg = needI32();
-        masm.load32(Address(scratch, argOffset), reg);
+        masm.load32(Address(values, argOffset), reg);
         pushI32(reg);
         break;
       }
       case ValType::I64: {
         RegI64 reg = needI64();
-        masm.load64(Address(scratch, argOffset), reg);
+        masm.load64(Address(values, argOffset), reg);
         pushI64(reg);
         break;
       }
       case ValType::F32: {
         RegF32 reg = needF32();
-        masm.loadFloat32(Address(scratch, argOffset), reg);
+        masm.loadFloat32(Address(values, argOffset), reg);
         pushF32(reg);
         break;
       }
       case ValType::F64: {
         RegF64 reg = needF64();
-        masm.loadDouble(Address(scratch, argOffset), reg);
+        masm.loadDouble(Address(values, argOffset), reg);
         pushF64(reg);
         break;
       }
       case ValType::V128: {
 #  ifdef ENABLE_WASM_SIMD
         RegV128 reg = needV128();
-        masm.loadUnalignedSimd128(Address(scratch, argOffset), reg);
+        masm.loadUnalignedSimd128(Address(values, argOffset), reg);
         pushV128(reg);
         break;
 #  else
         MOZ_CRASH("No SIMD support");
 #  endif
       }
-      case ValType::Ref:
       case ValType::Rtt:
-        MOZ_CRASH("NYI - no reftype support");
+      case ValType::Ref: {
+        // TODO/AnyRef-boxing: With boxed immediates and strings, this may need
+        // to handle other kinds of values.
+        ASSERT_ANYREF_IS_JSOBJECT;
+
+        RegRef reg = needRef();
+        NativeObject::elementsSizeMustNotOverflow();
+        uint32_t offset = refIndex * sizeof(Value);
+        masm.unboxObjectOrNull(Address(refs, offset), reg);
+        pushRef(reg);
+        refIndex--;
+        break;
+      }
     }
-    argOffset += SizeOf(params[i]);
+    if (!params[i].isReference()) {
+      argOffset += SizeOf(params[i]);
+    }
   }
-  freeRef(scratch);
+  MOZ_ASSERT(refIndex == -1);
+  freeRef(values);
+  freeRef(refs);
+
+  return true;
+}
+
+bool BaseCompiler::emitCatchAll() {
+  LabelKind kind;
+  ResultType paramType, resultType;
+  NothingVector unused_tryValues;
+
+  if (!iter_.readCatchAll(&kind, &paramType, &resultType, &unused_tryValues)) {
+    return false;
+  }
+
+  Control& tryCatch = controlItem();
+
+  emitCatchSetup(kind, tryCatch, resultType);
+
+  if (deadCode_) {
+    return true;
+  }
+
+  CatchInfo catchInfo(CatchInfo::CATCH_ALL_INDEX);
+  if (!tryCatch.catchInfos.emplaceBack(catchInfo)) {
+    return false;
+  }
+
+  masm.bind(&tryCatch.catchInfos.back().label);
+
+  // The code in the landing pad guarantees us that the exception reference
+  // is live in this register.
+  RegRef exn = RegRef(WasmExceptionReg);
+  needRef(exn);
+  // This reference is pushed onto the stack because a potential rethrow
+  // may need to access it. It is always popped at the end of the block.
+  pushRef(exn);
+
+  return true;
+}
+
+bool BaseCompiler::emitBodyDelegateThrowPad() {
+  Control& block = controlItem();
+
+  // Only emit a landing pad if a `delegate` has generated a jump to here.
+  if (block.otherLabel.used()) {
+    StackHeight savedHeight = fr.stackHeight();
+    fr.setStackHeight(block.stackHeight);
+    masm.bind(&block.otherLabel);
+
+    // We can assume this is live because `delegate` received it from a throw.
+    RegRef exn = RegRef(WasmExceptionReg);
+    needRef(exn);
+    if (!throwFrom(exn, readCallSiteLineOrBytecode())) {
+      return false;
+    }
+    fr.setStackHeight(savedHeight);
+  }
+
+  return true;
+}
+
+bool BaseCompiler::emitDelegate() {
+  uint32_t relativeDepth;
+  ResultType resultType;
+  NothingVector unused_tryValues;
+
+  if (!iter_.readDelegate(&relativeDepth, &resultType, &unused_tryValues)) {
+    return false;
+  }
+
+  Control& tryDelegate = controlItem();
+  Control& target = controlItem(relativeDepth);
+
+  // End the try branch like a plain catch block without exception ref handling.
+  if (deadCode_) {
+    fr.resetStackHeight(tryDelegate.stackHeight, resultType);
+    popValueStackTo(tryDelegate.stackSize);
+  } else {
+    MOZ_ASSERT(stk_.length() == tryDelegate.stackSize + resultType.length());
+    popBlockResults(resultType, tryDelegate.stackHeight,
+                    ContinuationKind::Jump);
+    freeResultRegisters(resultType);
+    masm.jump(&tryDelegate.label);
+    MOZ_ASSERT(!tryDelegate.deadOnArrival);
+  }
+
+  deadCode_ = tryDelegate.deadOnArrival;
+
+  if (deadCode_) {
+    return true;
+  }
+
+  // Create an exception landing pad that immediately branches to the landing
+  // pad of the delegated try block.
+  masm.bind(&tryDelegate.otherLabel);
+
+  StackHeight savedHeight = fr.stackHeight();
+  fr.setStackHeight(tryDelegate.stackHeight);
+
+  WasmTryNoteVector& tryNotes = masm.tryNotes();
+  WasmTryNote& tryNote = tryNotes[controlItem().tryNoteIndex];
+  tryNote.end = masm.currentOffset();
+  tryNote.entryPoint = tryNote.end;
+  tryNote.framePushed = masm.framePushed();
+
+  masm.jump(&target.otherLabel);
+
+  fr.setStackHeight(savedHeight);
+
+  // Where the try branch jumps to, if it's not dead.
+  if (tryDelegate.label.used()) {
+    masm.bind(&tryDelegate.label);
+  }
+
+  captureResultRegisters(resultType);
+  bceSafe_ = tryDelegate.bceSafeOnExit;
+
+  return pushBlockResults(resultType);
+}
+
+bool BaseCompiler::emitUnwind() {
+  ResultType resultType;
+  NothingVector unused_tryValues;
+
+  if (!iter_.readUnwind(&resultType, &unused_tryValues)) {
+    return false;
+  }
+
+  Control& tryUnwind = controlItem();
+
+  // End the try branch like the first catch block in a try-catch.
+  if (deadCode_) {
+    fr.resetStackHeight(tryUnwind.stackHeight, resultType);
+    popValueStackTo(tryUnwind.stackSize);
+  } else {
+    MOZ_ASSERT(stk_.length() == tryUnwind.stackSize + resultType.length());
+    popBlockResults(resultType, tryUnwind.stackHeight, ContinuationKind::Jump);
+    freeResultRegisters(resultType);
+    masm.jump(&tryUnwind.label);
+    MOZ_ASSERT(!tryUnwind.bceSafeOnExit);
+    MOZ_ASSERT(!tryUnwind.deadOnArrival);
+  }
+
+  deadCode_ = tryUnwind.deadOnArrival;
+
+  if (deadCode_) {
+    return true;
+  }
+
+  bceSafe_ = 0;
+
+  // Create an exception landing pad for the unwind instructions.
+  //
+  // We bind otherLabel so that `delegate` can jump here as well.
+  masm.bind(&tryUnwind.otherLabel);
+  fr.setStackHeight(tryUnwind.stackHeight);
+
+  // Push the exception reference so that the end of the `unwind` can throw.
+  RegRef exn = RegRef(WasmExceptionReg);
+  needRef(exn);
+  pushRef(exn);
+
+  WasmTryNoteVector& tryNotes = masm.tryNotes();
+  WasmTryNote& tryNote = tryNotes[tryUnwind.tryNoteIndex];
+  tryNote.end = masm.currentOffset();
+  tryNote.entryPoint = tryNote.end;
+  tryNote.framePushed = masm.framePushed();
 
   return true;
 }
@@ -10703,10 +11021,13 @@ bool BaseCompiler::endTryCatch(ResultType type) {
     fr.resetStackHeight(tryCatch.stackHeight, type);
     popValueStackTo(tryCatch.stackSize);
   } else {
-    MOZ_ASSERT(stk_.length() == tryCatch.stackSize + type.length());
+    // Since the previous block is a catch, we must handle the extra exception
+    // reference on the stack (for rethrow) and thus the stack size is 1 more.
+    MOZ_ASSERT(stk_.length() == tryCatch.stackSize + type.length() + 1);
     // Assume we have a control join, so place results in block result
     // allocations and also handle the implicit exception reference.
-    popBlockResults(type, tryCatch.stackHeight, ContinuationKind::Jump);
+    popCatchResults(type, tryCatch.stackHeight);
+    MOZ_ASSERT(stk_.length() == tryCatch.stackSize);
     // Since we will emit a landing pad after this and jump over it to get to
     // the control join, we free these here and re-capture at the join.
     freeResultRegisters(type);
@@ -10762,13 +11083,25 @@ bool BaseCompiler::endTryCatch(ResultType type) {
   // Ensure that the exception is materialized before branching.
   exn = popRef(RegRef(WasmExceptionReg));
 
+  bool hasCatchAll = false;
   for (CatchInfo& info : tryCatch.catchInfos) {
-    masm.branch32(Assembler::Equal, index, Imm32(info.eventIndex), &info.label);
+    if (info.eventIndex != CatchInfo::CATCH_ALL_INDEX) {
+      MOZ_ASSERT(!hasCatchAll);
+      masm.branch32(Assembler::Equal, index, Imm32(info.eventIndex),
+                    &info.label);
+    } else {
+      masm.jump(&info.label);
+      hasCatchAll = true;
+      // `catch_all` must be the last clause and we won't call throwFrom
+      // below due to the catch_all, so we can free exn here.
+      freeRef(exn);
+    }
   }
   freeI32(index);
 
-  // If none of the tag checks succeed, then we rethrow the exception.
-  if (!throwFrom(exn, lineOrBytecode)) {
+  // If none of the tag checks succeed and there is no catch_all,
+  // then we rethrow the exception.
+  if (!hasCatchAll && !throwFrom(exn, lineOrBytecode)) {
     return false;
   }
 
@@ -10787,10 +11120,49 @@ bool BaseCompiler::endTryCatch(ResultType type) {
   return pushBlockResults(type);
 }
 
+bool BaseCompiler::endTryUnwind(ResultType type) {
+  uint32_t lineOrBytecode = readCallSiteLineOrBytecode();
+  Control& tryUnwind = controlItem();
+
+  if (deadCode_) {
+    fr.resetStackHeight(tryUnwind.stackHeight, type);
+    popValueStackTo(tryUnwind.stackSize);
+  } else {
+    // An unwind should have no results so only the exception reference will
+    // remain here on top of the original stack.
+    MOZ_ASSERT(stk_.length() == tryUnwind.stackSize + 1);
+
+    RegRef exn = popRef();
+
+    if (!throwFrom(exn, lineOrBytecode)) {
+      return false;
+    }
+    MOZ_ASSERT(stk_.length() == tryUnwind.stackSize);
+    MOZ_ASSERT(!tryUnwind.bceSafeOnExit);
+    MOZ_ASSERT(!tryUnwind.deadOnArrival);
+  }
+
+  deadCode_ = tryUnwind.deadOnArrival;
+
+  if (deadCode_) {
+    return true;
+  }
+
+  // The try branch may jump here.
+  if (tryUnwind.label.used()) {
+    masm.bind(&tryUnwind.label);
+  }
+
+  captureResultRegisters(type);
+  bceSafe_ = tryUnwind.bceSafeOnExit;
+
+  return pushBlockResults(type);
+}
+
 bool BaseCompiler::emitThrow() {
   uint32_t lineOrBytecode = readCallSiteLineOrBytecode();
   uint32_t exnIndex;
-  NothingVector unused_argValues;
+  NothingVector unused_argValues{};
 
   if (!iter_.readThrow(&exnIndex, &unused_argValues)) {
     return false;
@@ -10805,7 +11177,9 @@ bool BaseCompiler::emitThrow() {
   // Measure space we need for all the args to put in the exception.
   uint32_t exnBytes = 0;
   for (size_t i = 0; i < params.length(); i++) {
-    exnBytes += SizeOf(params[i]);
+    if (!params[i].isReference()) {
+      exnBytes += SizeOf(params[i]);
+    }
   }
 
   // Create the new exception object that we will throw.
@@ -10821,13 +11195,15 @@ bool BaseCompiler::emitThrow() {
   const uint32_t dataOffset =
       NativeObject::getFixedSlotOffset(ArrayBufferObject::DATA_SLOT);
 
-  masm.unboxObject(Address(exn, WasmRuntimeExceptionObject::offsetOfValues()),
-                   scratch);
+  Address exnValuesAddress(exn, WasmRuntimeExceptionObject::offsetOfValues());
+  masm.unboxObject(exnValuesAddress, scratch);
   masm.loadPtr(Address(scratch, dataOffset), scratch);
 
   size_t argOffset = exnBytes;
   for (int32_t i = params.length() - 1; i >= 0; i--) {
-    argOffset -= SizeOf(params[i]);
+    if (!params[i].isReference()) {
+      argOffset -= SizeOf(params[i]);
+    }
     switch (params[i].kind()) {
       case ValType::I32: {
         RegI32 reg = popI32();
@@ -10863,12 +11239,59 @@ bool BaseCompiler::emitThrow() {
         MOZ_CRASH("No SIMD support");
 #  endif
       }
-      case ValType::Ref:
       case ValType::Rtt:
-        MOZ_CRASH("NYI - no reftype support");
+      case ValType::Ref: {
+        RegRef refArg = popRef();
+
+        // Keep exn on the stack to preserve it across the call.
+        RegRef tmp = needRef();
+        moveRef(exn, tmp);
+        pushRef(tmp);
+
+        // Arguments to the instance call start here.
+        pushRef(exn);
+        pushRef(refArg);
+
+        if (!emitInstanceCall(lineOrBytecode, SASigPushRefIntoExn)) {
+          return false;
+        }
+
+        // The call result is checked by the instance call failure handling,
+        // so we do not need to use the result here.
+        freeI32(popI32());
+
+        exn = popRef();
+
+        // Restore scratch register contents that got clobbered.
+        masm.unboxObject(exnValuesAddress, scratch);
+        masm.loadPtr(Address(scratch, dataOffset), scratch);
+        break;
+      }
     }
   }
+  MOZ_ASSERT(argOffset == 0);
   freeRef(scratch);
+
+  deadCode_ = true;
+
+  return throwFrom(exn, lineOrBytecode);
+}
+
+bool BaseCompiler::emitRethrow() {
+  uint32_t lineOrBytecode = readCallSiteLineOrBytecode();
+
+  uint32_t relativeDepth;
+  if (!iter_.readRethrow(&relativeDepth)) {
+    return false;
+  }
+
+  if (deadCode_) {
+    return true;
+  }
+
+  Control& tryCatch = controlItem(relativeDepth);
+  RegRef exn = needRef();
+  dupRefAt(tryCatch.stackSize, exn);
 
   return throwFrom(exn, lineOrBytecode);
 }
@@ -10900,7 +11323,7 @@ void BaseCompiler::doReturn(ContinuationKind kind) {
 }
 
 bool BaseCompiler::emitReturn() {
-  NothingVector unused_values;
+  NothingVector unused_values{};
   if (!iter_.readReturn(&unused_values)) {
     return false;
   }
@@ -11079,7 +11502,7 @@ bool BaseCompiler::emitCall() {
   uint32_t lineOrBytecode = readCallSiteLineOrBytecode();
 
   uint32_t funcIndex;
-  NothingVector args_;
+  NothingVector args_{};
   if (!iter_.readCall(&funcIndex, &args_)) {
     return false;
   }
@@ -11139,7 +11562,7 @@ bool BaseCompiler::emitCallIndirect() {
   uint32_t funcTypeIndex;
   uint32_t tableIndex;
   Nothing callee_;
-  NothingVector args_;
+  NothingVector args_{};
   if (!iter_.readCallIndirect(&funcTypeIndex, &tableIndex, &callee_, &args_)) {
     return false;
   }
@@ -12441,7 +12864,7 @@ bool BaseCompiler::emitRefAsNonNull() {
 
 bool BaseCompiler::emitAtomicCmpXchg(ValType type, Scalar::Type viewType) {
   LinearMemoryAddress<Nothing> addr;
-  Nothing unused;
+  Nothing unused{};
 
   if (!iter_.readAtomicCmpXchg(&addr, type, Scalar::byteSize(viewType), &unused,
                                &unused)) {
@@ -12829,9 +13252,10 @@ bool BaseCompiler::emitMemCopy() {
 
 bool BaseCompiler::emitMemCopyCall(uint32_t lineOrBytecode) {
   pushHeapBase();
-  if (!emitInstanceCall(lineOrBytecode,
-                        usesSharedMemory() ? SASigMemCopyShared : SASigMemCopy,
-                        /*pushReturnedValue=*/false)) {
+  if (!emitInstanceCall(
+          lineOrBytecode,
+          usesSharedMemory() ? SASigMemCopyShared32 : SASigMemCopy32,
+          /*pushReturnedValue=*/false)) {
     return false;
   }
 
@@ -13088,7 +13512,8 @@ bool BaseCompiler::emitMemFill() {
 bool BaseCompiler::emitMemFillCall(uint32_t lineOrBytecode) {
   pushHeapBase();
   return emitInstanceCall(
-      lineOrBytecode, usesSharedMemory() ? SASigMemFillShared : SASigMemFill,
+      lineOrBytecode,
+      usesSharedMemory() ? SASigMemFillShared32 : SASigMemFill32,
       /*pushReturnedValue=*/false);
 }
 
@@ -13227,7 +13652,7 @@ bool BaseCompiler::emitMemOrTableInit(bool isMem) {
 
   pushI32(int32_t(segIndex));
   if (isMem) {
-    if (!emitInstanceCall(lineOrBytecode, SASigMemInit,
+    if (!emitInstanceCall(lineOrBytecode, SASigMemInit32,
                           /*pushReturnedValue=*/false)) {
       return false;
     }
@@ -13571,7 +13996,7 @@ bool BaseCompiler::emitStructNewWithRtt() {
 
   uint32_t typeIndex;
   Nothing rtt;
-  NothingVector args;
+  NothingVector args{};
   if (!iter_.readStructNewWithRtt(&typeIndex, &rtt, &args)) {
     return false;
   }
@@ -14045,6 +14470,8 @@ bool BaseCompiler::emitRttSub() {
     return true;
   }
 
+  // rttSub builtin has same signature as rtt.sub instruction, stack is
+  // guaranteed to be in the right condition due to validation.
   if (!emitInstanceCall(lineOrBytecode, SASigRttSub)) {
     return false;
   }
@@ -14064,6 +14491,9 @@ bool BaseCompiler::emitRefTest() {
   if (deadCode_) {
     return true;
   }
+
+  // refTest builtin has same signature as ref.test instruction, stack is
+  // guaranteed to be in the right condition due to validation.
   return emitInstanceCall(lineOrBytecode, SASigRefTest);
 }
 
@@ -14083,16 +14513,20 @@ bool BaseCompiler::emitRefCast() {
 
   RegRef rttPtr = popRef();
   RegRef refPtr = popRef();
+
+  // 1. duplicate and shuffle from [ref, rtt] to [ref, ref, rtt]
   RegRef castedPtr = needRef();
   moveRef(refPtr, castedPtr);
   pushRef(castedPtr);
   pushRef(refPtr);
   pushRef(rttPtr);
 
+  // 2. ref.test : [ref, rtt] -> [i32]
   if (!emitInstanceCall(lineOrBytecode, SASigRefTest)) {
     return false;
   }
 
+  // 3. trap if result is zero, leaving [ref] as result
   RegI32 result = popI32();
   Label nonZero;
   masm.branchTest32(Assembler::NonZero, result, result, &nonZero);
@@ -14108,13 +14542,13 @@ bool BaseCompiler::emitBrOnCast() {
 
   uint32_t lineOrBytecode = readCallSiteLineOrBytecode();
   uint32_t relativeDepth;
-  Nothing unused;
-  NothingVector unused_values;
+  Nothing unused{};
+  NothingVector unused_values{};
   uint32_t rttTypeIndex;
   uint32_t rttDepth;
-  ResultType type;
+  ResultType branchTargetType;
   if (!iter_.readBrOnCast(&relativeDepth, &unused, &rttTypeIndex, &rttDepth,
-                          &unused_values, &type)) {
+                          &branchTargetType, &unused_values)) {
     return false;
   }
 
@@ -14127,17 +14561,22 @@ bool BaseCompiler::emitBrOnCast() {
 
   RegRef rttPtr = popRef();
   RegRef refPtr = popRef();
+
+  // 1. duplicate and shuffle from [T*, ref, rtt] to [T*, ref, ref, rtt]
   RegRef castedPtr = needRef();
   moveRef(refPtr, castedPtr);
   pushRef(castedPtr);
   pushRef(refPtr);
   pushRef(rttPtr);
 
+  // 2. ref.test : [ref, rtt] -> [i32]
   if (!emitInstanceCall(lineOrBytecode, SASigRefTest)) {
     return false;
   }
 
-  BranchState b(&target.label, target.stackHeight, InvertBranch(false), type);
+  // 3. br_if $l : [T*, ref, i32] -> [T*, ref]
+  BranchState b(&target.label, target.stackHeight, InvertBranch(false),
+                branchTargetType);
   if (b.hasBlockResults()) {
     needResultRegisters(b.resultType);
   }
@@ -14266,7 +14705,7 @@ static void MulF32x4(MacroAssembler& masm, RegV128 rs, RegV128 rsd) {
 #  if defined(JS_CODEGEN_X86) || defined(JS_CODEGEN_X64)
 static void MulI64x2(MacroAssembler& masm, RegV128 rs, RegV128 rsd,
                      RegV128 temp) {
-  masm.mulInt64x2(rs, rsd, temp);
+  masm.mulInt64x2(rsd, rs, rsd, temp);
 }
 #  endif
 
@@ -14427,10 +14866,23 @@ static void CmpI32x4(MacroAssembler& masm, Assembler::Condition cond,
   masm.compareInt32x4(cond, rs, rsd);
 }
 
-static void CmpI64x2(MacroAssembler& masm, Assembler::Condition cond,
-                     RegV128 rs, RegV128 rsd) {
-  masm.compareInt64x2(cond, rs, rsd);
+#  if defined(JS_CODEGEN_X86) || defined(JS_CODEGEN_X64)
+static void CmpI64x2ForEquality(MacroAssembler& masm, Assembler::Condition cond,
+                                RegV128 rs, RegV128 rsd) {
+  masm.compareForEqualityInt64x2(cond, rs, rsd);
 }
+
+static void CmpI64x2ForOrdering(MacroAssembler& masm, Assembler::Condition cond,
+                                RegV128 rs, RegV128 rsd, RegV128 temp1,
+                                RegV128 temp2) {
+  masm.compareForOrderingInt64x2(cond, rs, rsd, temp1, temp2);
+}
+#  else
+static void CmpI64x2(MacroAssembler& masm, Assembler::Condition cond,
+                     RegV128 rs, RegV128 rsd, RegV128 temp1, RegV128 temp2) {
+  masm.compareInt64x2(cond, rs, rsd, temp1, temp2);
+}
+#  endif  // JS_CODEGEN_X86 || JS_CODEGEN_X64
 
 #  if defined(JS_CODEGEN_X86) || defined(JS_CODEGEN_X64)
 static void CmpUI8x16(MacroAssembler& masm, Assembler::Condition cond,
@@ -14548,6 +15000,24 @@ static void NearestF64x2(MacroAssembler& masm, RegV128 rs, RegV128 rd) {
 
 static void NotV128(MacroAssembler& masm, RegV128 rs, RegV128 rd) {
   masm.bitwiseNotSimd128(rs, rd);
+}
+
+static void ExtAddPairwiseI8x16(MacroAssembler& masm, RegV128 rs, RegV128 rsd) {
+  masm.extAddPairwiseInt8x16(rs, rsd);
+}
+
+static void ExtAddPairwiseUI8x16(MacroAssembler& masm, RegV128 rs,
+                                 RegV128 rsd) {
+  masm.unsignedExtAddPairwiseInt8x16(rs, rsd);
+}
+
+static void ExtAddPairwiseI16x8(MacroAssembler& masm, RegV128 rs, RegV128 rsd) {
+  masm.extAddPairwiseInt16x8(rs, rsd);
+}
+
+static void ExtAddPairwiseUI16x8(MacroAssembler& masm, RegV128 rs,
+                                 RegV128 rsd) {
+  masm.unsignedExtAddPairwiseInt16x8(rs, rsd);
 }
 
 #  if defined(JS_CODEGEN_X86) || defined(JS_CODEGEN_X64)
@@ -14773,6 +15243,17 @@ static void WidenHighUI32x4(MacroAssembler& masm, RegV128 rs, RegV128 rd) {
   masm.unsignedWidenHighInt32x4(rs, rd);
 }
 
+#  if defined(JS_CODEGEN_ARM64)
+static void PopcntI8x16(MacroAssembler& masm, RegV128 rs, RegV128 rd) {
+  masm.popcntInt8x16(rs, rd);
+}
+#  else
+static void PopcntI8x16(MacroAssembler& masm, RegV128 rs, RegV128 rd,
+                        RegV128 temp) {
+  masm.popcntInt8x16(rs, rd, temp);
+}
+#  endif  // JS_CODEGEN_ARM64
+
 static void AbsI8x16(MacroAssembler& masm, RegV128 rs, RegV128 rd) {
   masm.absInt8x16(rs, rd);
 }
@@ -14783,6 +15264,10 @@ static void AbsI16x8(MacroAssembler& masm, RegV128 rs, RegV128 rd) {
 
 static void AbsI32x4(MacroAssembler& masm, RegV128 rs, RegV128 rd) {
   masm.absInt32x4(rs, rd);
+}
+
+static void AbsI64x2(MacroAssembler& masm, RegV128 rs, RegV128 rd) {
+  masm.absInt64x2(rs, rd);
 }
 
 static void ExtractLaneI8x16(MacroAssembler& masm, uint32_t laneIndex,
@@ -14916,11 +15401,6 @@ static void BitmaskI32x4(MacroAssembler& masm, RegV128 rs, RegI32 rd) {
 static void BitmaskI64x2(MacroAssembler& masm, RegV128 rs, RegI32 rd) {
   masm.bitmaskInt64x2(rs, rd);
 }
-
-static void Swizzle(MacroAssembler& masm, RegV128 rs, RegV128 rsd,
-                    RegV128 temp) {
-  masm.swizzleInt8x16(rs, rsd, temp);
-}
 #  elif defined(JS_CODEGEN_ARM64)
 static void BitmaskI8x16(MacroAssembler& masm, RegV128 rs, RegI32 rd,
                          RegV128 temp) {
@@ -14941,11 +15421,11 @@ static void BitmaskI64x2(MacroAssembler& masm, RegV128 rs, RegI32 rd,
                          RegV128 temp) {
   masm.bitmaskInt64x2(rs, rd, temp);
 }
+#  endif
 
 static void Swizzle(MacroAssembler& masm, RegV128 rs, RegV128 rsd) {
   masm.swizzleInt8x16(rs, rsd);
 }
-#  endif
 
 static void ConvertI32x4ToF32x4(MacroAssembler& masm, RegV128 rs, RegV128 rd) {
   masm.convertInt32x4ToFloat32x4(rs, rd);
@@ -14959,10 +15439,16 @@ static void ConvertF32x4ToI32x4(MacroAssembler& masm, RegV128 rs, RegV128 rd) {
   masm.truncSatFloat32x4ToInt32x4(rs, rd);
 }
 
+#  if defined(JS_CODEGEN_ARM64)
+static void ConvertF32x4ToUI32x4(MacroAssembler& masm, RegV128 rs, RegV128 rd) {
+  masm.unsignedTruncSatFloat32x4ToInt32x4(rs, rd);
+}
+#  else
 static void ConvertF32x4ToUI32x4(MacroAssembler& masm, RegV128 rs, RegV128 rd,
                                  RegV128 temp) {
   masm.unsignedTruncSatFloat32x4ToInt32x4(rs, rd, temp);
 }
+#  endif  // JS_CODEGEN_ARM64
 
 static void ConvertI32x4ToF64x2(MacroAssembler& masm, RegV128 rs, RegV128 rd) {
   masm.convertInt32x4ToFloat64x2(rs, rd);
@@ -15689,11 +16175,33 @@ bool BaseCompiler::emitBody() {
           return iter_.unrecognizedOpcode(&op);
         }
         CHECK_NEXT(emitCatch());
+      case uint16_t(Op::CatchAll):
+        if (!moduleEnv_.exceptionsEnabled()) {
+          return iter_.unrecognizedOpcode(&op);
+        }
+        CHECK_NEXT(emitCatchAll());
+      case uint16_t(Op::Delegate):
+        if (!moduleEnv_.exceptionsEnabled()) {
+          return iter_.unrecognizedOpcode(&op);
+        }
+        CHECK(emitDelegate());
+        iter_.popDelegate();
+        NEXT();
+      case uint16_t(Op::Unwind):
+        if (!moduleEnv_.exceptionsEnabled()) {
+          return iter_.unrecognizedOpcode(&op);
+        }
+        CHECK_NEXT(emitUnwind());
       case uint16_t(Op::Throw):
         if (!moduleEnv_.exceptionsEnabled()) {
           return iter_.unrecognizedOpcode(&op);
         }
         CHECK_NEXT(emitThrow());
+      case uint16_t(Op::Rethrow):
+        if (!moduleEnv_.exceptionsEnabled()) {
+          return iter_.unrecognizedOpcode(&op);
+        }
+        CHECK_NEXT(emitRethrow());
 #endif
       case uint16_t(Op::Br):
         CHECK_NEXT(emitBr());
@@ -16464,10 +16972,42 @@ bool BaseCompiler::emitBody() {
           case uint32_t(SimdOp::I32x4GeU):
             CHECK_NEXT(
                 dispatchVectorComparison(CmpUI32x4, Assembler::AboveOrEqual));
+#  if defined(JS_CODEGEN_X86) || defined(JS_CODEGEN_X64)
+          case uint32_t(SimdOp::I64x2Eq):
+            CHECK_NEXT(dispatchVectorComparison(CmpI64x2ForEquality,
+                                                Assembler::Equal));
+          case uint32_t(SimdOp::I64x2Ne):
+            CHECK_NEXT(dispatchVectorComparison(CmpI64x2ForEquality,
+                                                Assembler::NotEqual));
+          case uint32_t(SimdOp::I64x2LtS):
+            CHECK_NEXT(dispatchVectorComparison(CmpI64x2ForOrdering,
+                                                Assembler::LessThan));
+          case uint32_t(SimdOp::I64x2GtS):
+            CHECK_NEXT(dispatchVectorComparison(CmpI64x2ForOrdering,
+                                                Assembler::GreaterThan));
+          case uint32_t(SimdOp::I64x2LeS):
+            CHECK_NEXT(dispatchVectorComparison(CmpI64x2ForOrdering,
+                                                Assembler::LessThanOrEqual));
+          case uint32_t(SimdOp::I64x2GeS):
+            CHECK_NEXT(dispatchVectorComparison(CmpI64x2ForOrdering,
+                                                Assembler::GreaterThanOrEqual));
+#  else
           case uint32_t(SimdOp::I64x2Eq):
             CHECK_NEXT(dispatchVectorComparison(CmpI64x2, Assembler::Equal));
           case uint32_t(SimdOp::I64x2Ne):
             CHECK_NEXT(dispatchVectorComparison(CmpI64x2, Assembler::NotEqual));
+          case uint32_t(SimdOp::I64x2LtS):
+            CHECK_NEXT(dispatchVectorComparison(CmpI64x2, Assembler::LessThan));
+          case uint32_t(SimdOp::I64x2GtS):
+            CHECK_NEXT(
+                dispatchVectorComparison(CmpI64x2, Assembler::GreaterThan));
+          case uint32_t(SimdOp::I64x2LeS):
+            CHECK_NEXT(
+                dispatchVectorComparison(CmpI64x2, Assembler::LessThanOrEqual));
+          case uint32_t(SimdOp::I64x2GeS):
+            CHECK_NEXT(dispatchVectorComparison(CmpI64x2,
+                                                Assembler::GreaterThanOrEqual));
+#  endif  // JS_CODEGEN_X86 || JS_CODEGEN_X64
           case uint32_t(SimdOp::F32x4Eq):
             CHECK_NEXT(dispatchVectorComparison(CmpF32x4, Assembler::Equal));
           case uint32_t(SimdOp::F32x4Ne):
@@ -16708,12 +17248,16 @@ bool BaseCompiler::emitBody() {
             CHECK_NEXT(dispatchVectorUnary(SqrtF64x2));
           case uint32_t(SimdOp::V128Not):
             CHECK_NEXT(dispatchVectorUnary(NotV128));
+          case uint32_t(SimdOp::I8x16Popcnt):
+            CHECK_NEXT(dispatchVectorUnary(PopcntI8x16));
           case uint32_t(SimdOp::I8x16Abs):
             CHECK_NEXT(dispatchVectorUnary(AbsI8x16));
           case uint32_t(SimdOp::I16x8Abs):
             CHECK_NEXT(dispatchVectorUnary(AbsI16x8));
           case uint32_t(SimdOp::I32x4Abs):
             CHECK_NEXT(dispatchVectorUnary(AbsI32x4));
+          case uint32_t(SimdOp::I64x2Abs):
+            CHECK_NEXT(dispatchVectorUnary(AbsI64x2));
           case uint32_t(SimdOp::F32x4Ceil):
             CHECK_NEXT(dispatchVectorUnary(CeilF32x4));
           case uint32_t(SimdOp::F32x4Floor):
@@ -16730,6 +17274,14 @@ bool BaseCompiler::emitBody() {
             CHECK_NEXT(dispatchVectorUnary(TruncF64x2));
           case uint32_t(SimdOp::F64x2Nearest):
             CHECK_NEXT(dispatchVectorUnary(NearestF64x2));
+          case uint32_t(SimdOp::I16x8ExtAddPairwiseI8x16S):
+            CHECK_NEXT(dispatchVectorUnary(ExtAddPairwiseI8x16));
+          case uint32_t(SimdOp::I16x8ExtAddPairwiseI8x16U):
+            CHECK_NEXT(dispatchVectorUnary(ExtAddPairwiseUI8x16));
+          case uint32_t(SimdOp::I32x4ExtAddPairwiseI16x8S):
+            CHECK_NEXT(dispatchVectorUnary(ExtAddPairwiseI16x8));
+          case uint32_t(SimdOp::I32x4ExtAddPairwiseI16x8U):
+            CHECK_NEXT(dispatchVectorUnary(ExtAddPairwiseUI16x8));
           case uint32_t(SimdOp::I8x16Shl):
             CHECK_NEXT(dispatchVectorVariableShift(ShiftLeftI8x16));
           case uint32_t(SimdOp::I8x16ShrS):
@@ -17207,12 +17759,8 @@ bool BaseCompiler::init() {
   }
 
   ArgTypeVector args(funcType());
-  if (!fr.setupLocals(locals_, args, compilerEnv_.debugEnabled(),
-                      &localInfo_)) {
-    return false;
-  }
-
-  return true;
+  return fr.setupLocals(locals_, args, compilerEnv_.debugEnabled(),
+                        &localInfo_);
 }
 
 FuncOffsets BaseCompiler::finish() {
@@ -17352,6 +17900,10 @@ bool js::wasm::IsValidStackMapKey(bool debugEnabled, const uint8_t* nextPC) {
           (insn[-1] & 0xfc000000) == 0x94000000 ||    // bl simm26
           (debugEnabled && insn[-1] == 0xd503201f));  // nop
 
+#  elif defined(JS_CODEGEN_MIPS64)
+  // TODO (bug 1699696): Implement this.  As for the platforms above, we need to
+  // enumerate all code sequences that can precede the stack map location.
+  return true;
 #  else
   MOZ_CRASH("IsValidStackMapKey: requires implementation on this platform");
 #  endif

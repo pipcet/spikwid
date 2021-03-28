@@ -485,8 +485,6 @@ void nsXULElement::OpenMenu(bool aOpenFlag) {
 
 bool nsXULElement::PerformAccesskey(bool aKeyCausesActivation,
                                     bool aIsTrustedEvent) {
-  RefPtr<Element> content(this);
-
   if (IsXULElement(nsGkAtoms::label)) {
     nsAutoString control;
     GetAttr(kNameSpaceID_None, nsGkAtoms::control, control);
@@ -495,59 +493,64 @@ bool nsXULElement::PerformAccesskey(bool aKeyCausesActivation,
     }
 
     // XXXsmaug Should we use ShadowRoot::GetElementById in case
-    //         content is in Shadow DOM?
-    nsCOMPtr<Document> document = content->GetUncomposedDoc();
+    //          element is in Shadow DOM?
+    RefPtr<Document> document = GetUncomposedDoc();
     if (!document) {
       return false;
     }
 
-    content = document->GetElementById(control);
-    if (!content) {
+    RefPtr<Element> element = document->GetElementById(control);
+    if (!element) {
       return false;
     }
+
+    // XXXedgar, This is mainly for HTMLElement which doesn't do visible
+    // check in PerformAccesskey. We probably should always do visible
+    // check on HTMLElement even if the PerformAccesskey is not redirected from
+    // label XULelement per spec.
+    nsIFrame* frame = element->GetPrimaryFrame();
+    if (!frame || !frame->IsVisibleConsideringAncestors()) {
+      return false;
+    }
+
+    return element->PerformAccesskey(aKeyCausesActivation, aIsTrustedEvent);
   }
 
-  nsIFrame* frame = content->GetPrimaryFrame();
+  nsIFrame* frame = GetPrimaryFrame();
   if (!frame || !frame->IsVisibleConsideringAncestors()) {
     return false;
   }
 
   bool focused = false;
-  nsXULElement* elm = FromNode(content);
-  if (elm) {
-    // Define behavior for each type of XUL element.
-    if (!content->IsXULElement(nsGkAtoms::toolbarbutton)) {
-      if (RefPtr<nsFocusManager> fm = nsFocusManager::GetFocusManager()) {
-        nsCOMPtr<Element> elementToFocus;
-        // for radio buttons, focus the radiogroup instead
-        if (content->IsXULElement(nsGkAtoms::radio)) {
-          nsCOMPtr<nsIDOMXULSelectControlItemElement> controlItem =
-              content->AsXULSelectControlItem();
-          if (controlItem) {
-            bool disabled;
-            controlItem->GetDisabled(&disabled);
-            if (!disabled) {
-              controlItem->GetControl(getter_AddRefs(elementToFocus));
-            }
+  // Define behavior for each type of XUL element.
+  if (!IsXULElement(nsGkAtoms::toolbarbutton)) {
+    if (RefPtr<nsFocusManager> fm = nsFocusManager::GetFocusManager()) {
+      RefPtr<Element> elementToFocus = this;
+      // for radio buttons, focus the radiogroup instead
+      if (IsXULElement(nsGkAtoms::radio)) {
+        if (nsCOMPtr<nsIDOMXULSelectControlItemElement> controlItem =
+                AsXULSelectControlItem()) {
+          bool disabled;
+          controlItem->GetDisabled(&disabled);
+          if (!disabled) {
+            controlItem->GetControl(getter_AddRefs(elementToFocus));
           }
-        } else {
-          elementToFocus = content;
-        }
-        if (elementToFocus) {
-          fm->SetFocus(elementToFocus, nsIFocusManager::FLAG_BYKEY);
-
-          // Return true if the element became focused.
-          nsPIDOMWindowOuter* window = OwnerDoc()->GetWindow();
-          focused = (window && window->GetFocusedElement());
         }
       }
+
+      if (elementToFocus) {
+        fm->SetFocus(elementToFocus, nsIFocusManager::FLAG_BYKEY);
+
+        // Return true if the element became focused.
+        nsPIDOMWindowOuter* window = OwnerDoc()->GetWindow();
+        focused = (window && window->GetFocusedElement() == elementToFocus);
+      }
     }
-    if (aKeyCausesActivation && !content->IsXULElement(nsGkAtoms::menulist)) {
-      elm->ClickWithInputSource(MouseEvent_Binding::MOZ_SOURCE_KEYBOARD,
-                                aIsTrustedEvent);
-    }
-  } else {
-    return content->PerformAccesskey(aKeyCausesActivation, aIsTrustedEvent);
+  }
+
+  if (aKeyCausesActivation && !IsXULElement(nsGkAtoms::menulist)) {
+    ClickWithInputSource(MouseEvent_Binding::MOZ_SOURCE_KEYBOARD,
+                         aIsTrustedEvent);
   }
 
   return focused;
@@ -743,31 +746,13 @@ void nsXULElement::DoneAddingChildren(bool aHaveNotified) {
   }
 }
 
-// XXX(ntim): Unify with nsGenericHTMLElement.cpp
 void nsXULElement::RegUnRegAccessKey(bool aDoReg) {
   // Don't try to register for unsupported elements
   if (!SupportsAccessKey()) {
     return;
   }
 
-  // first check to see if we have an access key
-  nsAutoString accessKey;
-  GetAttr(nsGkAtoms::accesskey, accessKey);
-  if (accessKey.IsEmpty()) {
-    return;
-  }
-
-  // We have an access key, so get the ESM from the pres context.
-  if (nsPresContext* presContext = GetPresContext(eForUncomposedDoc)) {
-    EventStateManager* esm = presContext->EventStateManager();
-
-    // Register or unregister as appropriate.
-    if (aDoReg) {
-      esm->RegisterAccessKey(this, (uint32_t)accessKey.First());
-    } else {
-      esm->UnregisterAccessKey(this, (uint32_t)accessKey.First());
-    }
-  }
+  nsStyledElement::RegUnRegAccessKey(aDoReg);
 }
 
 bool nsXULElement::SupportsAccessKey() const {

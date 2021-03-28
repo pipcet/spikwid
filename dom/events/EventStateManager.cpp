@@ -761,7 +761,7 @@ nsresult EventStateManager::PreHandleEvent(nsPresContext* aPresContext,
         // back to this process.  So, only when this process receives a reply
         // eKeyPress event in BrowserParent, we should handle accesskey in this
         // process.
-        if (IsTopLevelRemoteTarget(GetFocusedContent())) {
+        if (IsTopLevelRemoteTarget(GetFocusedElement())) {
           // However, if there is no accesskey target for the key combination,
           // we don't need to wait reply from the remote process.  Otherwise,
           // Mark the event as waiting reply from remote process and stop
@@ -793,8 +793,10 @@ nsresult EventStateManager::PreHandleEvent(nsPresContext* aPresContext,
       }
       [[fallthrough]];
     case eKeyUp: {
-      nsIContent* content = GetFocusedContent();
-      if (content) mCurrentTargetContent = content;
+      Element* element = GetFocusedElement();
+      if (element) {
+        mCurrentTargetContent = element;
+      }
 
       // NOTE: Don't refer TextComposition::IsComposing() since UI Events
       //       defines that KeyboardEvent.isComposing is true when it's
@@ -815,7 +817,7 @@ nsresult EventStateManager::PreHandleEvent(nsPresContext* aPresContext,
       // because PresShell needs to check if it's marked as so before
       // dispatching events into the DOM tree.
       if (aEvent->IsWaitingReplyFromRemoteProcess() &&
-          !aEvent->PropagationStopped() && !IsTopLevelRemoteTarget(content)) {
+          !aEvent->PropagationStopped() && !IsTopLevelRemoteTarget(element)) {
         aEvent->ResetWaitingReplyFromRemoteProcessState();
       }
     } break;
@@ -826,9 +828,8 @@ nsresult EventStateManager::PreHandleEvent(nsPresContext* aPresContext,
                    "Untrusted wheel event shouldn't be here");
       using DeltaModeCheckingState = WidgetWheelEvent::DeltaModeCheckingState;
 
-      nsIContent* content = GetFocusedContent();
-      if (content) {
-        mCurrentTargetContent = content;
+      if (Element* element = GetFocusedElement()) {
+        mCurrentTargetContent = element;
       }
 
       if (aEvent->mMessage != eWheel) {
@@ -859,8 +860,8 @@ nsresult EventStateManager::PreHandleEvent(nsPresContext* aPresContext,
                                                            wheelEvent);
     } break;
     case eSetSelection: {
-      nsCOMPtr<nsIContent> focusedContent = GetFocusedContent();
-      IMEStateManager::HandleSelectionEvent(aPresContext, focusedContent,
+      RefPtr<Element> focuedElement = GetFocusedElement();
+      IMEStateManager::HandleSelectionEvent(aPresContext, focuedElement,
                                             aEvent->AsSelectionEvent());
       break;
     }
@@ -1018,34 +1019,43 @@ static AccessKeyType GetAccessKeyTypeFor(nsISupports* aDocShell) {
   }
 }
 
-static bool IsAccessKeyTarget(nsIContent* aContent, nsIFrame* aFrame,
-                              nsAString& aKey) {
+static bool IsAccessKeyTarget(Element* aElement, nsAString& aKey) {
   // Use GetAttr because we want Unicode case=insensitive matching
   // XXXbz shouldn't this be case-sensitive, per spec?
   nsString contentKey;
-  if (!aContent->IsElement() ||
-      !aContent->AsElement()->GetAttr(kNameSpaceID_None, nsGkAtoms::accesskey,
-                                      contentKey) ||
-      !contentKey.Equals(aKey, nsCaseInsensitiveStringComparator))
+  if (!aElement ||
+      !aElement->GetAttr(kNameSpaceID_None, nsGkAtoms::accesskey, contentKey) ||
+      !contentKey.Equals(aKey, nsCaseInsensitiveStringComparator)) {
     return false;
+  }
 
-  if (!aContent->IsXULElement()) return true;
+  if (!aElement->IsXULElement()) {
+    return true;
+  }
 
   // For XUL we do visibility checks.
-  if (!aFrame) return false;
+  nsIFrame* frame = aElement->GetPrimaryFrame();
+  if (!frame) {
+    return false;
+  }
 
-  if (aFrame->IsFocusable()) return true;
+  if (frame->IsFocusable()) {
+    return true;
+  }
 
-  if (!aFrame->IsVisibleConsideringAncestors()) return false;
+  if (!frame->IsVisibleConsideringAncestors()) {
+    return false;
+  }
 
   // XUL controls can be activated.
-  nsCOMPtr<nsIDOMXULControlElement> control =
-      aContent->AsElement()->AsXULControl();
-  if (control) return true;
+  nsCOMPtr<nsIDOMXULControlElement> control = aElement->AsXULControl();
+  if (control) {
+    return true;
+  }
 
   // XUL label elements are never focusable, so we need to check for them
   // explicitly before giving up.
-  if (aContent->IsXULElement(nsGkAtoms::label)) {
+  if (aElement->IsXULElement(nsGkAtoms::label)) {
     return true;
   }
 
@@ -1065,15 +1075,14 @@ bool EventStateManager::LookForAccessKeyAndExecute(
     nsTArray<uint32_t>& aAccessCharCodes, bool aIsTrustedEvent, bool aIsRepeat,
     bool aExecute) {
   int32_t count, start = -1;
-  if (nsIContent* focusedContent = GetFocusedContent()) {
-    start = mAccessKeys.IndexOf(focusedContent);
-    if (start == -1 && focusedContent->IsInNativeAnonymousSubtree()) {
-      start = mAccessKeys.IndexOf(
-          focusedContent->GetClosestNativeAnonymousSubtreeRootParent());
+  if (Element* focusedElement = GetFocusedElement()) {
+    start = mAccessKeys.IndexOf(focusedElement);
+    if (start == -1 && focusedElement->IsInNativeAnonymousSubtree()) {
+      start = mAccessKeys.IndexOf(Element::FromNodeOrNull(
+          focusedElement->GetClosestNativeAnonymousSubtreeRootParent()));
     }
   }
   RefPtr<Element> element;
-  nsIFrame* frame;
   int32_t length = mAccessKeys.Count();
   for (uint32_t i = 0; i < aAccessCharCodes.Length(); ++i) {
     uint32_t ch = aAccessCharCodes[i];
@@ -1081,9 +1090,8 @@ bool EventStateManager::LookForAccessKeyAndExecute(
     AppendUCS4ToUTF16(ch, accessKey);
     for (count = 1; count <= length; ++count) {
       // mAccessKeys always stores Element instances.
-      element = mAccessKeys[(start + count) % length]->AsElement();
-      frame = element->GetPrimaryFrame();
-      if (IsAccessKeyTarget(element, frame, accessKey)) {
+      element = mAccessKeys[(start + count) % length];
+      if (IsAccessKeyTarget(element, accessKey)) {
         if (!aExecute) {
           return true;
         }
@@ -1094,35 +1102,31 @@ bool EventStateManager::LookForAccessKeyAndExecute(
           shouldActivate = false;
         }
 
-        while (shouldActivate && ++count <= length) {
-          nsIContent* oc = mAccessKeys[(start + count) % length];
-          nsIFrame* of = oc->GetPrimaryFrame();
-          if (IsAccessKeyTarget(oc, of, accessKey)) shouldActivate = false;
-        }
-
-        bool focusChanged = false;
-        if (shouldActivate) {
-          focusChanged =
-              element->PerformAccesskey(shouldActivate, aIsTrustedEvent);
-        } else if (RefPtr<nsFocusManager> fm =
-                       nsFocusManager::GetFocusManager()) {
-          fm->SetFocus(element, nsIFocusManager::FLAG_BYKEY);
-          focusChanged = true;
-        }
-
-        if (focusChanged && aIsTrustedEvent) {
-          // If this is a child process, inform the parent that we want the
-          // focus, but pass false since we don't want to change the window
-          // order.
-          nsIDocShell* docShell = mPresContext->GetDocShell();
-          nsCOMPtr<nsIBrowserChild> child =
-              docShell ? docShell->GetBrowserChild() : nullptr;
-          if (child) {
-            child->SendRequestFocus(false, CallerType::System);
+        // XXXedgar, Bug 1700646, maybe we could use other data structure to
+        // make searching target with same accesskey easier, and current setup
+        // could not ensure we cycle the target with tree order.
+        int32_t j = 0;
+        while (shouldActivate && ++j < length) {
+          Element* el = mAccessKeys[(start + count + j) % length];
+          if (IsAccessKeyTarget(el, accessKey)) {
+            shouldActivate = false;
           }
         }
 
-        return true;
+        if (element->PerformAccesskey(shouldActivate, aIsTrustedEvent)) {
+          if (aIsTrustedEvent) {
+            // If this is a child process, inform the parent that we want the
+            // focus, but pass false since we don't want to change the window
+            // order.
+            nsIDocShell* docShell = mPresContext->GetDocShell();
+            nsCOMPtr<nsIBrowserChild> child =
+                docShell ? docShell->GetBrowserChild() : nullptr;
+            if (child) {
+              child->SendRequestFocus(false, CallerType::System);
+            }
+          }
+          return true;
+        }
       }
     }
   }
@@ -1271,7 +1275,7 @@ bool EventStateManager::WalkESMTreeToHandleAccessKey(
     // If the focus is currently on a node with a BrowserParent, the key event
     // should've gotten forwarded to the child process and HandleAccessKey
     // called from there.
-    if (BrowserParent::GetFrom(GetFocusedContent())) {
+    if (BrowserParent::GetFrom(GetFocusedElement())) {
       // If access key may be only in remote contents, this method won't handle
       // access key synchronously.  In this case, only reply event should reach
       // here.
@@ -2511,8 +2515,12 @@ void EventStateManager::SendLineScrollEvent(nsIFrame* aTargetFrame,
                                             EventState& aState, int32_t aDelta,
                                             DeltaDirection aDeltaDirection) {
   nsCOMPtr<nsIContent> targetContent = aTargetFrame->GetContent();
-  if (!targetContent) targetContent = GetFocusedContent();
-  if (!targetContent) return;
+  if (!targetContent) {
+    targetContent = GetFocusedElement();
+    if (!targetContent) {
+      return;
+    }
+  }
 
   while (targetContent->IsText()) {
     targetContent = targetContent->GetFlattenedTreeParent();
@@ -2546,8 +2554,10 @@ void EventStateManager::SendPixelScrollEvent(nsIFrame* aTargetFrame,
                                              DeltaDirection aDeltaDirection) {
   nsCOMPtr<nsIContent> targetContent = aTargetFrame->GetContent();
   if (!targetContent) {
-    targetContent = GetFocusedContent();
-    if (!targetContent) return;
+    targetContent = GetFocusedElement();
+    if (!targetContent) {
+      return;
+    }
   }
 
   while (targetContent->IsText()) {
@@ -3063,6 +3073,22 @@ void EventStateManager::DecideGestureEvent(WidgetGestureNotifyEvent* aEvent,
 }
 
 #ifdef XP_MACOSX
+static nsINode* GetCrossDocParentNode(nsINode* aChild) {
+  MOZ_ASSERT(aChild, "The child is null!");
+  MOZ_ASSERT(XRE_IsParentProcess());
+
+  nsINode* parent = aChild->GetParentNode();
+  if (parent && parent->IsContent() && aChild->IsContent()) {
+    parent = aChild->AsContent()->GetFlattenedTreeParent();
+  }
+
+  if (parent || !aChild->IsDocument()) {
+    return parent;
+  }
+
+  return aChild->AsDocument()->GetEmbedderElement();
+}
+
 static bool NodeAllowsClickThrough(nsINode* aNode) {
   while (aNode) {
     if (aNode->IsXULElement(nsGkAtoms::browser)) {
@@ -3080,7 +3106,7 @@ static bool NodeAllowsClickThrough(nsINode* aNode) {
           return false;
       }
     }
-    aNode = nsContentUtils::GetCrossDocParentNode(aNode);
+    aNode = GetCrossDocParentNode(aNode);
   }
   return true;
 }
@@ -3250,6 +3276,30 @@ nsresult EventStateManager::PostHandleEvent(nsPresContext* aPresContext,
         }
       }
 
+      // If MouseEvent::PreventClickEvent() was called by chrome script,
+      // we need to forget the clicking content and click count for the
+      // following eMouseUp event.
+      if (mouseEvent->mClickEventPrevented) {
+        RefPtr<EventStateManager> esm =
+            ESMFromContentOrThis(aOverrideClickTarget);
+        switch (mouseEvent->mButton) {
+          case MouseButton::ePrimary:
+            esm->mLastLeftMouseDownContent = nullptr;
+            esm->mLClickCount = 0;
+            break;
+          case MouseButton::eSecondary:
+            esm->mLastMiddleMouseDownContent = nullptr;
+            esm->mMClickCount = 0;
+            break;
+          case MouseButton::eMiddle:
+            esm->mLastRightMouseDownContent = nullptr;
+            esm->mRClickCount = 0;
+            break;
+          default:
+            break;
+        }
+      }
+
       nsCOMPtr<nsIContent> activeContent;
       // When content calls PreventDefault on pointerdown, we also call
       // PreventDefault on the subsequent mouse events to suppress default
@@ -3343,7 +3393,7 @@ nsresult EventStateManager::PostHandleEvent(nsPresContext* aPresContext,
           // element that was clicked doesn't have -moz-user-focus: ignore,
           // clear the existing focus. For -moz-user-focus: ignore, the focus
           // is just left as is.
-          // Another effect of mouse clicking, handled in nsSelection, is that
+          // Another effect of mouse clicking, handled in Selection, is that
           // it should update the caret position to where the mouse was
           // clicked. Because the focus is cleared when clicking on a
           // non-focusable node, the next press of the tab key will cause
@@ -3369,7 +3419,17 @@ nsresult EventStateManager::PostHandleEvent(nsPresContext* aPresContext,
               if (!activeContent || !activeContent->IsXULElement())
 #endif
                 fm->ClearFocus(mDocument->GetWindow());
-              fm->SetFocusedWindow(mDocument->GetWindow());
+              // Prevent switch frame if we're already not in the foreground tab
+              // and we're in a content process.
+              // TODO: If we were inactive frame in this tab, and now in
+              //       background tab, we shouldn't make the tab foreground, but
+              //       we should set focus to clicked document in the background
+              //       tab.  However, nsFocusManager does not have proper method
+              //       for doing this.  Therefore, we should skip setting focus
+              //       to clicked document for now.
+              if (XRE_IsParentProcess() || IsInActiveTab(mDocument)) {
+                fm->SetFocusedWindow(mDocument->GetWindow());
+              }
             }
           }
         }
@@ -3392,6 +3452,8 @@ nsresult EventStateManager::PostHandleEvent(nsPresContext* aPresContext,
         // any of our own processing of a drag. Workaround for bug 43258.
         StopTrackingDragGesture(true);
       }
+      // XXX Why do we always set this is active?  Active window may be changed
+      //     by a mousedown event listener.
       SetActiveManager(this, activeContent);
     } break;
     case ePointerCancel:
@@ -3811,8 +3873,10 @@ BrowserParent* EventStateManager::GetCrossProcessTarget() {
 bool EventStateManager::IsTargetCrossProcess(WidgetGUIEvent* aEvent) {
   // Check to see if there is a focused, editable content in chrome,
   // in that case, do not forward IME events to content
-  nsIContent* focusedContent = GetFocusedContent();
-  if (focusedContent && focusedContent->IsEditable()) return false;
+  Element* focusedElement = GetFocusedElement();
+  if (focusedElement && focusedElement->IsEditable()) {
+    return false;
+  }
   return IMEStateManager::GetActiveBrowserParent() != nullptr;
 }
 
@@ -4933,11 +4997,14 @@ nsresult EventStateManager::SetClickCount(WidgetMouseEvent* aEvent,
   switch (aEvent->mButton) {
     case MouseButton::ePrimary:
       if (aEvent->mMessage == eMouseDown) {
-        mLastLeftMouseDownContent = mouseContent;
+        mLastLeftMouseDownContent =
+            !aEvent->mClickEventPrevented ? mouseContent : nullptr;
       } else if (aEvent->mMessage == eMouseUp) {
         aEvent->mClickTarget =
-            nsContentUtils::GetCommonAncestorUnderInteractiveContent(
-                mouseContent, mLastLeftMouseDownContent);
+            !aEvent->mClickEventPrevented
+                ? nsContentUtils::GetCommonAncestorUnderInteractiveContent(
+                      mouseContent, mLastLeftMouseDownContent)
+                : nullptr;
         if (aEvent->mClickTarget) {
           aEvent->mClickCount = mLClickCount;
           mLClickCount = 0;
@@ -4950,11 +5017,14 @@ nsresult EventStateManager::SetClickCount(WidgetMouseEvent* aEvent,
 
     case MouseButton::eMiddle:
       if (aEvent->mMessage == eMouseDown) {
-        mLastMiddleMouseDownContent = mouseContent;
+        mLastMiddleMouseDownContent =
+            !aEvent->mClickEventPrevented ? mouseContent : nullptr;
       } else if (aEvent->mMessage == eMouseUp) {
         aEvent->mClickTarget =
-            nsContentUtils::GetCommonAncestorUnderInteractiveContent(
-                mouseContent, mLastMiddleMouseDownContent);
+            !aEvent->mClickEventPrevented
+                ? nsContentUtils::GetCommonAncestorUnderInteractiveContent(
+                      mouseContent, mLastMiddleMouseDownContent)
+                : nullptr;
         if (aEvent->mClickTarget) {
           aEvent->mClickCount = mMClickCount;
           mMClickCount = 0;
@@ -4967,11 +5037,14 @@ nsresult EventStateManager::SetClickCount(WidgetMouseEvent* aEvent,
 
     case MouseButton::eSecondary:
       if (aEvent->mMessage == eMouseDown) {
-        mLastRightMouseDownContent = mouseContent;
+        mLastRightMouseDownContent =
+            !aEvent->mClickEventPrevented ? mouseContent : nullptr;
       } else if (aEvent->mMessage == eMouseUp) {
         aEvent->mClickTarget =
-            nsContentUtils::GetCommonAncestorUnderInteractiveContent(
-                mouseContent, mLastRightMouseDownContent);
+            !aEvent->mClickEventPrevented
+                ? nsContentUtils::GetCommonAncestorUnderInteractiveContent(
+                      mouseContent, mLastRightMouseDownContent)
+                : nullptr;
         if (aEvent->mClickTarget) {
           aEvent->mClickCount = mRClickCount;
           mRClickCount = 0;
@@ -5000,6 +5073,10 @@ bool EventStateManager::EventCausesClickEvents(
   // If mouse is still over same element, clickcount will be > 1.
   // If it has moved it will be zero, so no click.
   if (!aMouseEvent.mClickCount || !aMouseEvent.mClickTarget) {
+    return false;
+  }
+  // If click event was explicitly prevented, we shouldn't dispatch it.
+  if (aMouseEvent.mClickEventPrevented) {
     return false;
   }
   // Check that the window isn't disabled before firing a click
@@ -5214,20 +5291,8 @@ nsresult EventStateManager::HandleMiddleClickPaste(
     }
   }
 
-  // Move selection to the clicked point.
-  nsCOMPtr<nsIContent> container;
-  int32_t offset;
-  nsLayoutUtils::GetContainerAndOffsetAtEvent(
-      aPresShell, aMouseEvent, getter_AddRefs(container), &offset);
-  if (container) {
-    // XXX If readonly or disabled <input> or <textarea> in contenteditable
-    //     designMode editor is clicked, the point is in the editor.
-    //     However, outer HTMLEditor and Selection should handle it.
-    //     So, in such case, Selection::Collapse() will fail.
-    DebugOnly<nsresult> rv = selection->CollapseInLimiter(container, offset);
-    NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                         "Failed to collapse Selection at middle clicked");
-  }
+  // Don't modify selection here because we've already set caret to the point
+  // at "mousedown" event.
 
   int32_t clipboardType = nsIClipboard::kGlobalClipboard;
   nsresult rv = NS_OK;
@@ -5312,7 +5377,7 @@ nsIFrame* EventStateManager::GetEventTarget() {
 already_AddRefed<nsIContent> EventStateManager::GetEventTargetContent(
     WidgetEvent* aEvent) {
   if (aEvent && (aEvent->mMessage == eFocus || aEvent->mMessage == eBlur)) {
-    nsCOMPtr<nsIContent> content = GetFocusedContent();
+    nsCOMPtr<nsIContent> content = GetFocusedElement();
     return content.forget();
   }
 
@@ -5543,7 +5608,7 @@ bool EventStateManager::SetContentState(nsIContent* aContent,
 }
 
 void EventStateManager::ResetLastOverForContent(
-    const uint32_t& aIdx, RefPtr<OverOutElementsWrapper>& aElemWrapper,
+    const uint32_t& aIdx, const RefPtr<OverOutElementsWrapper>& aElemWrapper,
     nsIContent* aContent) {
   if (aElemWrapper && aElemWrapper->mLastOverElement &&
       nsContentUtils::ContentIsFlattenedTreeDescendantOf(
@@ -5649,9 +5714,8 @@ void EventStateManager::ContentRemoved(Document* aDocument,
 
   // See bug 292146 for why we want to null this out
   ResetLastOverForContent(0, mMouseEnterLeaveHelper, aContent);
-  for (auto iter = mPointersEnterLeaveHelper.Iter(); !iter.Done();
-       iter.Next()) {
-    ResetLastOverForContent(iter.Key(), iter.Data(), aContent);
+  for (const auto& entry : mPointersEnterLeaveHelper) {
+    ResetLastOverForContent(entry.GetKey(), entry.GetData(), aContent);
   }
 }
 
@@ -5665,18 +5729,23 @@ bool EventStateManager::EventStatusOK(WidgetGUIEvent* aEvent) {
 // Access Key Registration
 //-------------------------------------------
 void EventStateManager::RegisterAccessKey(Element* aElement, uint32_t aKey) {
-  if (aElement && mAccessKeys.IndexOf(aElement) == -1)
+  if (aElement && !mAccessKeys.Contains(aElement)) {
     mAccessKeys.AppendObject(aElement);
+  }
 }
 
 void EventStateManager::UnregisterAccessKey(Element* aElement, uint32_t aKey) {
-  if (aElement) mAccessKeys.RemoveObject(aElement);
+  if (aElement) {
+    mAccessKeys.RemoveObject(aElement);
+  }
 }
 
 uint32_t EventStateManager::GetRegisteredAccessKey(Element* aElement) {
   MOZ_ASSERT(aElement);
 
-  if (mAccessKeys.IndexOf(aElement) == -1) return 0;
+  if (!mAccessKeys.Contains(aElement)) {
+    return 0;
+  }
 
   nsAutoString accessKey;
   aElement->GetAttr(kNameSpaceID_None, nsGkAtoms::accesskey, accessKey);
@@ -5694,10 +5763,12 @@ void EventStateManager::FlushLayout(nsPresContext* aPresContext) {
   }
 }
 
-nsIContent* EventStateManager::GetFocusedContent() {
+Element* EventStateManager::GetFocusedElement() {
   nsFocusManager* fm = nsFocusManager::GetFocusManager();
   EnsureDocument(mPresContext);
-  if (!fm || !mDocument) return nullptr;
+  if (!fm || !mDocument) {
+    return nullptr;
+  }
 
   nsCOMPtr<nsPIDOMWindowOuter> focusedWindow;
   return nsFocusManager::GetFocusedDescendant(

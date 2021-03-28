@@ -164,7 +164,9 @@ raptor-fetch-chromium:
 
 browsertime:
     - browsertime-tp6
+    - browsertime-tp6-essential
     - browsertime-tp6-live
+    - browsertime-tp6-live-sheriffed
     - browsertime-benchmark
     - browsertime-tp6-profiling
 
@@ -397,9 +399,15 @@ macosx1100-64-qr-failures-tests:
     - mochitest-media-apple-silicon
     - mochitest-browser-chrome-apple-silicon
 
+macosx1015-64-qr-tests:
+    - reftest
+
+# debug only
+macosx1015-64-tests:
+    - reftest
+
 macosx1014-64-tests:
     - crashtest
-    - reftest
     - web-platform-tests-reftest
 
 macosx1014-64-qr-tests:
@@ -425,7 +433,6 @@ macosx1014-64-qr-tests:
     - mochitest-webgl2-core
     - mochitest-webgl2-ext
     - mochitest-webgpu
-    - reftest
     - telemetry-tests-client
     - test-verify
     - test-verify-gpu

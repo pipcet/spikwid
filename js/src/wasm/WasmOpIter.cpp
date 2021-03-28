@@ -273,8 +273,16 @@ OpKind wasm::Classify(OpBytes op) {
 #  ifdef ENABLE_WASM_EXCEPTIONS
     case Op::Catch:
       WASM_EXN_OP(OpKind::Catch);
+    case Op::CatchAll:
+      WASM_EXN_OP(OpKind::CatchAll);
+    case Op::Delegate:
+      WASM_EXN_OP(OpKind::Delegate);
+    case Op::Unwind:
+      WASM_EXN_OP(OpKind::Unwind);
     case Op::Throw:
       WASM_EXN_OP(OpKind::Throw);
+    case Op::Rethrow:
+      WASM_EXN_OP(OpKind::Rethrow);
     case Op::Try:
       WASM_EXN_OP(OpKind::Try);
 #  endif
@@ -403,6 +411,10 @@ OpKind wasm::Classify(OpBytes op) {
         case SimdOp::I32x4GeU:
         case SimdOp::I64x2Eq:
         case SimdOp::I64x2Ne:
+        case SimdOp::I64x2LtS:
+        case SimdOp::I64x2GtS:
+        case SimdOp::I64x2LeS:
+        case SimdOp::I64x2GeS:
         case SimdOp::F32x4Eq:
         case SimdOp::F32x4Ne:
         case SimdOp::F32x4Lt:
@@ -515,9 +527,11 @@ OpKind wasm::Classify(OpBytes op) {
         case SimdOp::F64x2Neg:
         case SimdOp::F64x2Sqrt:
         case SimdOp::V128Not:
+        case SimdOp::I8x16Popcnt:
         case SimdOp::I8x16Abs:
         case SimdOp::I16x8Abs:
         case SimdOp::I32x4Abs:
+        case SimdOp::I64x2Abs:
         case SimdOp::F32x4Ceil:
         case SimdOp::F32x4Floor:
         case SimdOp::F32x4Trunc:
@@ -532,6 +546,10 @@ OpKind wasm::Classify(OpBytes op) {
         case SimdOp::F64x2ConvertLowI32x4U:
         case SimdOp::I32x4TruncSatF64x2SZero:
         case SimdOp::I32x4TruncSatF64x2UZero:
+        case SimdOp::I16x8ExtAddPairwiseI8x16S:
+        case SimdOp::I16x8ExtAddPairwiseI8x16U:
+        case SimdOp::I32x4ExtAddPairwiseI16x8S:
+        case SimdOp::I32x4ExtAddPairwiseI16x8U:
           WASM_SIMD_OP(OpKind::Unary);
         case SimdOp::I8x16Shl:
         case SimdOp::I8x16ShrS:

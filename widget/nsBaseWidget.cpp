@@ -1223,7 +1223,8 @@ already_AddRefed<LayerManager> nsBaseWidget::CreateCompositorSession(
     bool supportsAcceleration = WidgetTypeSupportsAcceleration();
     bool enableWR;
     bool enableSWWR;
-    if (supportsAcceleration) {
+    if (supportsAcceleration ||
+        StaticPrefs::gfx_webrender_unaccelerated_widget_force()) {
       enableWR = gfx::gfxVars::UseWebRender();
       enableSWWR = gfx::gfxVars::UseSoftwareWebRender();
     } else if (WidgetTypePrefersSoftwareWebRender()) {
@@ -2154,9 +2155,9 @@ void nsIWidget::UpdateRegisteredPluginWindowVisibility(
   // Our visible list is associated with a compositor which is associated with
   // a specific top level window. We use the parent widget during iteration
   // to skip the plugin widgets owned by other top level windows.
-  for (auto iter = sPluginWidgetList->Iter(); !iter.Done(); iter.Next()) {
-    const void* windowId = iter.Key();
-    nsIWidget* widget = iter.UserData();
+  for (const auto& entry : *sPluginWidgetList) {
+    const void* windowId = entry.GetKey();
+    nsIWidget* widget = entry.GetWeak();
 
     MOZ_ASSERT(windowId);
     MOZ_ASSERT(widget);
@@ -2179,9 +2180,9 @@ void nsIWidget::CaptureRegisteredPlugins(uintptr_t aOwnerWidget) {
   // Our visible list is associated with a compositor which is associated with
   // a specific top level window. We use the parent widget during iteration
   // to skip the plugin widgets owned by other top level windows.
-  for (auto iter = sPluginWidgetList->Iter(); !iter.Done(); iter.Next()) {
-    DebugOnly<const void*> windowId = iter.Key();
-    nsIWidget* widget = iter.UserData();
+  for (const auto& entry : *sPluginWidgetList) {
+    DebugOnly<const void*> windowId = entry.GetKey();
+    nsIWidget* widget = entry.GetWeak();
 
     MOZ_ASSERT(windowId);
     MOZ_ASSERT(widget);

@@ -234,9 +234,7 @@ void Http3Session::Shutdown() {
     gHttpHandler->ExcludeHttp3(mConnInfo);
   }
 
-  for (auto iter = mStreamTransactionHash.Iter(); !iter.Done(); iter.Next()) {
-    RefPtr<Http3Stream> stream = iter.Data();
-
+  for (const auto& stream : mStreamTransactionHash.Values()) {
     if (mBeforeConnectedError) {
       // We have an error before we were connected, just restart transactions.
       // The transaction restart code path will remove AltSvc mapping and the
@@ -610,8 +608,8 @@ nsresult Http3Session::ProcessOutput(nsIUDPSocket* socket) {
     nsAutoCString remoteAddrStr;
     uint16_t port = 0;
     uint64_t timeout = 0;
-    if (!mHttp3Connection->ProcessOutput(&remoteAddrStr, &port,
-                                         packetToSend, &timeout)) {
+    if (!mHttp3Connection->ProcessOutput(&remoteAddrStr, &port, packetToSend,
+                                         &timeout)) {
       SetupTimer(timeout);
       break;
     }
@@ -1400,8 +1398,8 @@ void Http3Session::TopLevelOuterContentWindowIdChanged(uint64_t windowId) {
 
   mCurrentForegroundTabOuterContentWindowId = windowId;
 
-  for (auto iter = mStreamTransactionHash.Iter(); !iter.Done(); iter.Next()) {
-    iter.Data()->TopLevelOuterContentWindowIdChanged(windowId);
+  for (const auto& stream : mStreamTransactionHash.Values()) {
+    stream->TopLevelOuterContentWindowIdChanged(windowId);
   }
 }
 
@@ -1654,20 +1652,19 @@ const uint32_t HTTP3_TELEMETRY_TRANSPORT_CRYPTO_UNKNOWN = 18;
 const uint32_t HTTP3_TELEMETRY_CRYPTO_ERROR = 19;
 
 uint64_t GetCryptoAlertCode(nsCString& key, uint64_t error) {
-  uint64_t cryptoErrorCode = error - 0x100;
-  if (cryptoErrorCode < 100) {
+  if (error < 100) {
     key.Append("_a"_ns);
-    return cryptoErrorCode;
+    return error;
   }
-  if (cryptoErrorCode < 200) {
-    cryptoErrorCode -= 100;
+  if (error < 200) {
+    error -= 100;
     key.Append("_b"_ns);
-    return cryptoErrorCode;
+    return error;
   }
-  if (cryptoErrorCode < 256) {
-    cryptoErrorCode -= 200;
+  if (error < 256) {
+    error -= 200;
     key.Append("_c"_ns);
-    return cryptoErrorCode;
+    return error;
   }
   return HTTP3_TELEMETRY_TRANSPORT_CRYPTO_UNKNOWN;
 }
@@ -1680,7 +1677,7 @@ uint64_t GetTransportErrorCodeForTelemetry(nsCString& key, uint64_t error) {
     return HTTP3_TELEMETRY_TRANSPORT_UNKNOWN;
   }
 
-  return GetCryptoAlertCode(key, error);
+  return GetCryptoAlertCode(key, error - 0x100);
 }
 
 // Http3 error codes are 0x100-0x110.

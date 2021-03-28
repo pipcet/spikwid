@@ -11,6 +11,33 @@
 @namespace xul url("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul");
 @namespace html url("http://www.w3.org/1999/xhtml");
 
+:root {
+  /* ::::: Variables ::::: */
+  --default-arrowpanel-background: Field;
+  --default-arrowpanel-color: FieldText;
+  --default-arrowpanel-border-color: ThreeDShadow;
+  --arrowpanel-background: var(--default-arrowpanel-background);
+  --arrowpanel-color: var(--default-arrowpanel-color);
+  --arrowpanel-border-color: var(--default-arrowpanel-border-color);
+  --arrowpanel-border-radius: 8px;
+  --arrowpanel-padding: 16px;
+
+  --arrowpanel-dimmed: color-mix(in srgb, currentColor 17%, transparent);
+  --arrowpanel-dimmed-further: color-mix(in srgb, currentColor 30%, transparent);
+  --arrowpanel-dimmed-even-further: color-mix(in srgb, currentColor 35%, transparent);
+
+  --panel-description-color: GrayText;
+  --panel-disabled-color: GrayText;
+
+  --popup-notification-body-width: calc(31em - calc(2 * var(--arrowpanel-padding)));
+}
+
+@supports not -moz-bool-pref("browser.proton.doorhangers.enabled") {
+:root {
+  --popup-notification-body-width: 25em;
+}
+} /** END not Proton **/
+
 /* Lightweight theme roots */
 
 :root[lwtheme-image]:-moz-lwtheme-darktext {
@@ -133,7 +160,6 @@ xul|label[disabled="true"] {
 .panel-footer {
   background-color: var(--arrowpanel-dimmed);
 }
-} /** END not Proton **/
 
 .panel-footer > xul|button {
   appearance: none;
@@ -180,3 +206,4 @@ xul|label[disabled="true"] {
 .panel-footer > xul|button > .button-box {
   padding: 0;
 }
+} /** END not Proton **/

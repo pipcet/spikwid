@@ -53,10 +53,7 @@ nsLayoutHistoryState::GetKeys(nsTArray<nsCString>& aKeys) {
     return NS_ERROR_FAILURE;
   }
 
-  aKeys.SetCapacity(mStates.Count());
-  for (auto iter = mStates.Iter(); !iter.Done(); iter.Next()) {
-    aKeys.AppendElement(iter.Key());
-  }
+  AppendToArray(aKeys, mStates.Keys());
 
   return NS_OK;
 }
@@ -127,8 +124,7 @@ void nsLayoutHistoryState::SetScrollPositionOnly(const bool aFlag) {
 }
 
 void nsLayoutHistoryState::ResetScrollState() {
-  for (auto iter = mStates.Iter(); !iter.Done(); iter.Next()) {
-    PresState* state = iter.Data().get();
+  for (const auto& state : mStates.Values()) {
     if (state) {
       state->scrollState() = nsPoint(0, 0);
     }
@@ -141,9 +137,9 @@ void nsLayoutHistoryState::GetContents(bool* aScrollPositionOnly,
   *aScrollPositionOnly = mScrollPositionOnly;
   aKeys.SetCapacity(mStates.Count());
   aStates.SetCapacity(mStates.Count());
-  for (auto iter = mStates.Iter(); !iter.Done(); iter.Next()) {
-    aKeys.AppendElement(iter.Key());
-    aStates.AppendElement(*(iter.Data().get()));
+  for (const auto& entry : mStates) {
+    aKeys.AppendElement(entry.GetKey());
+    aStates.AppendElement(*(entry.GetData().get()));
   }
 }
 

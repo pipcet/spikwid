@@ -20,6 +20,8 @@ enum class AppShutdownMode {
 class AppShutdown {
  public:
   static bool IsShuttingDown();
+  static ShutdownPhase GetCurrentShutdownPhase();
+
   /**
    * Returns the current exit code that the process will be terminated with.
    */
@@ -65,12 +67,20 @@ class AppShutdown {
   static bool IsRestarting();
 
   /**
-   * Wrapper for shutdown notifications that inform the terminator before
+   * Wrapper for shutdown notifications that informs the terminator before
    * we notify other observers. Calls MaybeFastShutdown.
    */
   static void AdvanceShutdownPhase(
       ShutdownPhase aPhase, const char16_t* aNotificationData = nullptr,
-      nsCOMPtr<nsISupports> aNotificationSubject = nullptr);
+      const nsCOMPtr<nsISupports>& aNotificationSubject =
+          nsCOMPtr<nsISupports>(nullptr));
+
+  /**
+   * XXX: Before tackling bug 1697745 we need the
+   * possibility to advance the phase without notification
+   * in the content process.
+   */
+  static void AdvanceShutdownPhaseWithoutNotify(ShutdownPhase aPhase);
 
   /**
    * This will perform a fast shutdown via _exit(0) or similar if the user's

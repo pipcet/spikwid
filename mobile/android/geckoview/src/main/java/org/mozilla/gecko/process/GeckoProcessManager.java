@@ -438,9 +438,10 @@ public final class GeckoProcessManager extends IProcessManager.Stub {
         }
 
         private void removeContentConnection(@NonNull final ChildConnection conn) {
-            if (!mContentConnections.remove(conn) && !mNonStartedContentConnections.remove(conn)) {
+            if (!mContentConnections.remove(conn)) {
                 throw new RuntimeException("Attempt to remove non-registered connection");
             }
+            mNonStartedContentConnections.remove(conn);
 
             final int pid;
 
@@ -481,7 +482,7 @@ public final class GeckoProcessManager extends IProcessManager.Stub {
          */
         public void onBindComplete(@NonNull final ChildConnection conn) {
             if (conn.getType() == GeckoProcessType.CONTENT) {
-                int pid = conn.getPid();
+                final int pid = conn.getPid();
                 if (pid == INVALID_PID) {
                     throw new AssertionError("PID is invalid even though our caller just successfully retrieved it after binding");
                 }
@@ -618,7 +619,7 @@ public final class GeckoProcessManager extends IProcessManager.Stub {
             conn.bind().accept(proc -> {
                 try {
                     proc.crash();
-                } catch (RemoteException e) {
+                } catch (final RemoteException e) {
                 }
             });
         });
@@ -764,10 +765,11 @@ public final class GeckoProcessManager extends IProcessManager.Stub {
 
         int started = IChildProcess.STARTED_FAIL;
         RemoteException exception = null;
+        final String userSerialNumber = System.getenv("MOZ_ANDROID_USER_SERIAL_NUMBER");
         final String crashHandler = GeckoAppShell.getCrashHandlerService() != null ?
                 GeckoAppShell.getCrashHandlerService().getName() : null;
         try {
-            started = child.start(this, mInstanceId, args, extras, flags, crashHandler,
+            started = child.start(this, mInstanceId, args, extras, flags, userSerialNumber, crashHandler,
                     prefsPfd, prefMapPfd, ipcPfd, crashPfd, crashAnnotationPfd);
         } catch (final RemoteException e) {
             exception = e;
@@ -798,8 +800,9 @@ public final class GeckoProcessManager extends IProcessManager.Stub {
             // for now, so that's ok. We can improve on this if we eventually
             // end up needing something fancier.
             Log.w(LOGTAG, "Trying a different process");
-            start(result, type, args, extras, flags, prefsFd, prefMapFd, ipcFd,
-                    crashFd, crashAnnotationFd, /* isRetry */ false);
+            connection.unbind().accept(unused ->
+                start(result, type, args, extras, flags, prefsFd, prefMapFd, ipcFd,
+                        crashFd, crashAnnotationFd, /* isRetry */ false));
             return;
         }
 

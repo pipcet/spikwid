@@ -25,17 +25,25 @@
   --toolbar-field-focus-border-color: var(--focus-outline-color);
   --urlbar-container-padding: 1px;
 }
+
+@media not (prefers-contrast) {
+  :root {
+    --toolbar-field-focus-border-color: color-mix(in srgb, var(--focus-outline-color) 50%, transparent);
+  }
+}
 } /*** END proton ***/
 
 #urlbar-container,
 #search-container {
-  padding-block: 8px;
+  padding-block: 4px;
   margin-inline: @urlbarMarginInline@;
 }
 
-:root[uidensity=compact] #urlbar-container,
-:root[uidensity=compact] #search-container {
-  padding-block: 4px;
+@supports -moz-bool-pref("browser.proton.enabled") {
+:root[uidensity=touch] #urlbar-container,
+:root[uidensity=touch] #search-container {
+  padding-block: 6px;
+}
 }
 
 #urlbar,
@@ -45,7 +53,7 @@
   color: FieldText;
 }
 
-@supports not -moz-bool-pref("browser.proton.toolbar.enabled") {
+@supports not -moz-bool-pref("browser.proton.enabled") {
 #urlbar-container,
 #search-container {
   padding-block: 3px;
@@ -355,7 +363,7 @@
 /* Urlbar search mode indicator */
 #urlbar-search-mode-indicator {
   display: none;
-  background-color: var(--urlbar-box-bg-overlay);
+  background-color: var(--urlbar-box-bgcolor);
   margin-inline-end: 8px;
   align-items: center;
   border-radius: var(--toolbarbutton-border-radius);
@@ -477,18 +485,6 @@
   fill: var(--toolbarbutton-icon-fill-attention);
 }
 
-#pocket-button,
-#pageAction-panel-pocket {
-  list-style-image: url("chrome://browser/skin/pocket-outline.svg");
-}
-
-#pocket-button[open="true"],
-#pocket-button[pocketed="true"] {
-  list-style-image: url("chrome://browser/skin/pocket.svg");
-  fill: #ef4056;
-  fill-opacity: 1;
-}
-
 #pageAction-panel-pinTab,
 #pageAction-urlbar-pinTab {
   list-style-image: url("chrome://browser/skin/pin-tab.svg");
@@ -564,15 +560,7 @@
   min-height: 11px;
 }
 
-#pageActionActivatedActionPanel[actionID="pocket"] {
-  --arrowpanel-background: #fbfbfb;
-}
-
 /* URL bar and page action buttons */
-
-#page-action-buttons {
-  -moz-box-align: center;
-}
 
 @supports -moz-bool-pref("browser.proton.urlbar.enabled") {
 #pageActionSeparator {
@@ -591,7 +579,6 @@
   border-image: linear-gradient(transparent 15%, var(--urlbar-separator-color) 15%, var(--urlbar-separator-color) 85%, transparent 85%);
   border-image-slice: 1;
   width: 1px;
-  height: calc(var(--urlbar-min-height) - 2px);
   visibility: hidden;
 }
 
@@ -630,9 +617,7 @@
 @supports not -moz-bool-pref("browser.proton.urlbar.enabled") {
 .urlbar-icon {
   width: calc(var(--urlbar-min-height) - 2px);
-  /* The 0.5px solves a rounding problem where the
-    icon hover may not touch the borders */
-  height: calc(var(--urlbar-min-height) - 2px + 0.5px);
+  height: calc(var(--urlbar-min-height) - 2px);
   margin-inline: 0;
 }
 
@@ -687,15 +672,6 @@
     }
     to {
       transform: translateX(-627px);
-    }
-  }
-
-  @keyframes bookmark-animation-rtl {
-    from {
-      transform: scaleX(-1) translateX(0);
-    }
-    to {
-      transform: scaleX(-1) translateX(-627px);
     }
   }
 
@@ -755,7 +731,7 @@
   }
 
   #star-button[starred][animate]:-moz-locale-dir(rtl) + #star-button-animatable-box > #star-button-animatable-image {
-    animation-name: bookmark-animation-rtl;
+    scale: -1 1;
   }
 }
 
@@ -842,6 +818,8 @@
   transition-property: background-color, mask-position-x, width, margin-inline-end;
   transition-timing-function: ease-in-out, ease-in-out, step-end, step-end;
   transition-duration: var(--cfr-animation-duration);
+  -moz-box-align: center;
+  margin-block: calc((var(--urlbar-min-height) - var(--urlbar-container-padding) - 2px /* border */ - 24px) / 2);
 }
 #cfr-label-container:-moz-locale-dir(rtl) {
   mask-position-x: calc(var(--cfr-label-width) * -1);
@@ -908,10 +886,19 @@
   appearance: none;
   color: inherit;
   font-size: .8em;
-  padding: 0 8px;
-  border-radius: 1em;
-  background-color: hsla(0,0%,0%,.05);
-  border: 1px solid hsla(210,4%,50%,.3);
+  padding: 3px 7px;
+  border-radius: var(--toolbarbutton-border-radius);
+  background-color: var(--urlbar-box-bgcolor);
+  margin-block: calc((var(--urlbar-min-height) - 20px) / 2 - 1px /* border */ - var(--urlbar-container-padding));
+  overflow: hidden;
+}
+
+#urlbar-zoom-button:hover {
+  background-color: var(--urlbar-box-hover-bgcolor);
+}
+
+#urlbar-zoom-button:hover:active {
+  background-color: var(--urlbar-box-active-bgcolor);
 }
 
 @keyframes urlbar-zoom-reset-pulse {
@@ -931,21 +918,23 @@
   animation-duration: 250ms;
 }
 
+@supports not -moz-bool-pref("browser.proton.urlbar.enabled") {
+#urlbar-zoom-button {
+  background-color: hsla(0,0%,0%,.05);
+  border: 1px solid hsla(210,4%,50%,.3);
+  border-radius: 1em;
+  padding: 0 8px;
+  margin-block: calc((var(--urlbar-min-height) - 18px) / 2  - 1px /* border */ - var(--urlbar-container-padding));
+}
+
 #urlbar-zoom-button:hover {
-  background-color: hsla(0,0%,0%,.1);
+  background-color: color-mix(in srgb, currentColor 10%, transparent);
 }
 
 #urlbar-zoom-button:hover:active {
-  background-color: hsla(0,0%,0%,.15);
+  background-color: color-mix(in srgb, currentColor 17%, transparent);
 }
-
-:root[lwt-toolbar-field-brighttext] #urlbar-zoom-button:hover {
-  background-color: rgba(255,255,255,.2);
-}
-
-:root[lwt-toolbar-field-brighttext] #urlbar-zoom-button:hover:active {
-  background-color: rgba(255,255,255,.3);
-}
+} /*** END !proton ***/
 
 #urlbar-zoom-button:-moz-focusring {
   outline: var(--toolbarbutton-focus-outline);
@@ -1017,16 +1006,19 @@
   margin-inline: -26px 20px;
 }
 
+.searchbar-engine-one-off-add-engine:not([image]),
 moz-input-box > menupopup .context-menu-add-engine:not([image]) {
   list-style-image: url("chrome://browser/skin/search-engine-placeholder.png");
 }
 
 @media (min-resolution: 1.1dppx) {
+  .searchbar-engine-one-off-add-engine:not([image]),
   moz-input-box > menupopup .context-menu-add-engine:not([image]) {
     list-style-image: url("chrome://browser/skin/search-engine-placeholder@2x.png");
   }
 }
 
+.searchbar-engine-one-off-add-engine > .button-box::after,
 moz-input-box > menupopup .context-menu-add-engine > .menu-iconic-left::after {
   content: "";
   position: relative;
@@ -1034,8 +1026,30 @@ moz-input-box > menupopup .context-menu-add-engine > .menu-iconic-left::after {
   background: url(chrome://browser/skin/search-indicator-badge-add.svg) no-repeat center;
   height: 11px;
   width: 11px;
-  /* These differ from the search bar (-7x, -13px) because the contextual menu
-     may not have enough vertical space */
-  margin-inline-start: -6px;
+  margin-inline: -4px -7px;
+  margin-top: -13px;
+}
+
+#urlbar .searchbar-separator {
+  display: none;
+}
+
+#urlbar .search-one-offs {
+  border-top: 1px solid var(--panel-separator-color);
+}
+
+moz-input-box > menupopup .context-menu-add-engine > .menu-iconic-left::after {
+  /* These differ from the urlbar and searchbar because the context menu
+     may not have enough space */
+  margin-inline: -7px -4px;
   margin-top: -8px;
+}
+
+/* Fade a little the icon so that the + badge is more evident and the button
+   is less likely to be visually confused with a normal search shortcut */
+.searchbar-engine-one-off-add-engine[image]:not(:hover) > .button-box > .button-icon {
+  opacity: 0.7;
+}
+.searchbar-engine-one-off-add-engine[image]:hover > .button-box > .button-icon {
+  opacity: 1;
 }

@@ -479,9 +479,9 @@ static size_t SizeOfTableExcludingThis(
     const nsBaseHashtable<Key, Data, UserData, Converter>& aTable,
     MallocSizeOf aMallocSizeOf) {
   size_t n = aTable.ShallowSizeOfExcludingThis(aMallocSizeOf);
-  for (auto iter = aTable.ConstIter(); !iter.Done(); iter.Next()) {
-    n += iter.Key().SizeOfExcludingThisIfUnshared(aMallocSizeOf);
-    n += iter.Data()->SizeOfIncludingThis(aMallocSizeOf);
+  for (const auto& entry : aTable) {
+    n += entry.GetKey().SizeOfExcludingThisIfUnshared(aMallocSizeOf);
+    n += entry.GetData()->SizeOfIncludingThis(aMallocSizeOf);
   }
   return n;
 }
@@ -543,17 +543,17 @@ static nsAutoCString MangleURL(const char* aURL, bool aAnonymize) {
 NS_IMETHODIMP
 mozJSComponentLoader::CollectReports(nsIHandleReportCallback* aHandleReport,
                                      nsISupports* aData, bool aAnonymize) {
-  for (const auto& entry : mImports) {
+  for (const auto& entry : mImports.Values()) {
     nsAutoCString path("js-component-loader/modules/");
-    path.Append(MangleURL(entry.GetData()->location, aAnonymize));
+    path.Append(MangleURL(entry->location, aAnonymize));
 
     aHandleReport->Callback(""_ns, path, KIND_NONHEAP, UNITS_COUNT, 1,
                             "Loaded JS modules"_ns, aData);
   }
 
-  for (const auto& entry : mModules) {
+  for (const auto& entry : mModules.Values()) {
     nsAutoCString path("js-component-loader/components/");
-    path.Append(MangleURL(entry.GetData()->location, aAnonymize));
+    path.Append(MangleURL(entry->location, aAnonymize));
 
     aHandleReport->Callback(""_ns, path, KIND_NONHEAP, UNITS_COUNT, 1,
                             "Loaded JS components"_ns, aData);
@@ -978,16 +978,16 @@ nsresult mozJSComponentLoader::IsModuleLoaded(const nsACString& aLocation,
 void mozJSComponentLoader::GetLoadedModules(
     nsTArray<nsCString>& aLoadedModules) {
   aLoadedModules.SetCapacity(mImports.Count());
-  for (auto iter = mImports.Iter(); !iter.Done(); iter.Next()) {
-    aLoadedModules.AppendElement(iter.Data()->location);
+  for (const auto& data : mImports.Values()) {
+    aLoadedModules.AppendElement(data->location);
   }
 }
 
 void mozJSComponentLoader::GetLoadedComponents(
     nsTArray<nsCString>& aLoadedComponents) {
   aLoadedComponents.SetCapacity(mModules.Count());
-  for (auto iter = mModules.Iter(); !iter.Done(); iter.Next()) {
-    aLoadedComponents.AppendElement(iter.Data()->location);
+  for (const auto& data : mModules.Values()) {
+    aLoadedComponents.AppendElement(data->location);
   }
 }
 

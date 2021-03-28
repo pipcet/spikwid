@@ -22,6 +22,7 @@ const TYPES = {
   WEBSOCKET: "websocket",
   // storage types
   CACHE_STORAGE: "Cache",
+  COOKIE: "cookies",
   LOCAL_STORAGE: "local-storage",
   SESSION_STORAGE: "session-storage",
 };
@@ -87,9 +88,6 @@ const ProcessTargetResources = augmentResourceDictionary({
   [TYPES.CONSOLE_MESSAGE]: {
     path: "devtools/server/actors/resources/console-messages",
   },
-  [TYPES.CSS_MESSAGE]: {
-    path: "devtools/server/actors/resources/css-messages",
-  },
   [TYPES.ERROR_MESSAGE]: {
     path: "devtools/server/actors/resources/error-messages",
   },
@@ -123,6 +121,9 @@ const WorkerTargetResources = augmentResourceDictionary({
 const ParentProcessResources = augmentResourceDictionary({
   [TYPES.NETWORK_EVENT]: {
     path: "devtools/server/actors/resources/network-events",
+  },
+  [TYPES.COOKIE]: {
+    path: "devtools/server/actors/resources/storage-cookie",
   },
 });
 

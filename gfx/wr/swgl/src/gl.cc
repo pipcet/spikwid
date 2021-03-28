@@ -1158,6 +1158,8 @@ const char* GetString(GLenum name) {
       return "Software WebRender";
     case GL_VERSION:
       return "3.2";
+    case GL_SHADING_LANGUAGE_VERSION:
+      return "1.50";
     default:
       debugf("unhandled glGetString parameter %x\n", name);
       assert(false);
@@ -2034,11 +2036,18 @@ void FramebufferRenderbuffer(GLenum target, GLenum attachment,
 
 }  // extern "C"
 
-static inline Framebuffer* get_framebuffer(GLenum target) {
+static inline Framebuffer* get_framebuffer(GLenum target,
+                                           bool fallback = false) {
   if (target == GL_FRAMEBUFFER) {
     target = GL_DRAW_FRAMEBUFFER;
   }
-  return ctx->framebuffers.find(ctx->get_binding(target));
+  Framebuffer* fb = ctx->framebuffers.find(ctx->get_binding(target));
+  if (fallback && !fb) {
+    // If the specified framebuffer isn't found and a fallback is requested,
+    // use the default framebuffer.
+    fb = &ctx->framebuffers[0];
+  }
+  return fb;
 }
 
 template <typename T>
@@ -2094,9 +2103,11 @@ static void clear_buffer(Texture& t, T value, IntRect bb, int skip_start = 0,
   skip_end = max(skip_end, skip_start);
   assert(sizeof(T) == t.bpp());
   size_t stride = t.stride();
-  // When clearing multiple full-width rows, collapse them into a single
-  // large "row" to avoid redundant setup from clearing each row individually.
-  if (bb.width() == t.width && bb.height() > 1 && skip_start >= skip_end) {
+  // When clearing multiple full-width rows, collapse them into a single large
+  // "row" to avoid redundant setup from clearing each row individually. Note
+  // that we can only safely do this if the stride is tightly packed.
+  if (bb.width() == t.width && bb.height() > 1 && skip_start >= skip_end &&
+      (t.should_free() || stride == t.width * sizeof(T))) {
     bb.x1 += (stride / sizeof(T)) * (bb.height() - 1);
     bb.y1 = bb.y0 + 1;
   }
@@ -2256,10 +2267,25 @@ void* GetColorBuffer(GLuint fbo, GLboolean flush, int32_t* width,
     prepare_texture(colortex);
   }
   assert(colortex.offset == IntPoint(0, 0));
-  *width = colortex.width;
-  *height = colortex.height;
-  *stride = colortex.stride();
+  if (width) {
+    *width = colortex.width;
+  }
+  if (height) {
+    *height = colortex.height;
+  }
+  if (stride) {
+    *stride = colortex.stride();
+  }
   return colortex.buf ? colortex.sample_ptr(0, 0) : nullptr;
+}
+
+void ResolveFramebuffer(GLuint fbo) {
+  Framebuffer* fb = ctx->framebuffers.find(fbo);
+  if (!fb || !fb->color_attachment) {
+    return;
+  }
+  Texture& colortex = ctx->textures[fb->color_attachment];
+  prepare_texture(colortex);
 }
 
 void SetTextureBuffer(GLuint texid, GLenum internal_format, GLsizei width,
@@ -2377,25 +2403,25 @@ void ClearTexSubImage(GLuint texture, GLint level, GLint xoffset, GLint yoffset,
       break;
   }
 
-    switch (t.internal_format) {
-      case GL_RGBA8:
-        // Clear color needs to swizzle to BGRA.
-        request_clear<uint32_t>(t,
-                                (color & 0xFF00FF00) |
-                                    ((color << 16) & 0xFF0000) |
-                                    ((color >> 16) & 0xFF),
-                                scissor);
-        break;
-      case GL_R8:
-        request_clear<uint8_t>(t, uint8_t(color & 0xFF), scissor);
-        break;
-      case GL_RG8:
-        request_clear<uint16_t>(t, uint16_t(color & 0xFFFF), scissor);
-        break;
-      default:
-        assert(false);
-        break;
-    }
+  switch (t.internal_format) {
+    case GL_RGBA8:
+      // Clear color needs to swizzle to BGRA.
+      request_clear<uint32_t>(t,
+                              (color & 0xFF00FF00) |
+                                  ((color << 16) & 0xFF0000) |
+                                  ((color >> 16) & 0xFF),
+                              scissor);
+      break;
+    case GL_R8:
+      request_clear<uint8_t>(t, uint8_t(color & 0xFF), scissor);
+      break;
+    case GL_RG8:
+      request_clear<uint16_t>(t, uint16_t(color & 0xFFFF), scissor);
+      break;
+    default:
+      assert(false);
+      break;
+  }
 }
 
 void ClearTexImage(GLuint texture, GLint level, GLenum format, GLenum type,
@@ -2407,7 +2433,7 @@ void ClearTexImage(GLuint texture, GLint level, GLenum format, GLenum type,
 }
 
 void Clear(GLbitfield mask) {
-  Framebuffer& fb = *get_framebuffer(GL_DRAW_FRAMEBUFFER);
+  Framebuffer& fb = *get_framebuffer(GL_DRAW_FRAMEBUFFER, true);
   if ((mask & GL_COLOR_BUFFER_BIT) && fb.color_attachment) {
     Texture& t = ctx->textures[fb.color_attachment];
     IntRect scissor = ctx->scissortest
@@ -2617,7 +2643,10 @@ void DrawElementsInstanced(GLenum mode, GLsizei count, GLenum type,
     return;
   }
 
-  Framebuffer& fb = *get_framebuffer(GL_DRAW_FRAMEBUFFER);
+  Framebuffer& fb = *get_framebuffer(GL_DRAW_FRAMEBUFFER, true);
+  if (!fb.color_attachment) {
+    return;
+  }
   Texture& colortex = ctx->textures[fb.color_attachment];
   if (!colortex.buf) {
     return;

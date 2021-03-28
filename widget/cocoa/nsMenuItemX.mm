@@ -87,7 +87,7 @@ nsMenuItemX::nsMenuItemX(nsMenuX* aParent, const nsString& aLabel, EMenuItemType
     SetKeyEquiv();
   }
 
-  mIcon = MakeUnique<nsMenuItemIconX>(this, mContent, mNativeMenuItem);
+  mIcon = MakeUnique<nsMenuItemIconX>(this);
 
   NS_OBJC_END_TRY_ABORT_BLOCK;
 }
@@ -99,16 +99,24 @@ nsMenuItemX::~nsMenuItemX() {
   // object happens before the native menu item actually dies
   [mNativeMenuItem autorelease];
 
-  if (mContent) {
-    mMenuGroupOwner->UnregisterForContentChanges(mContent);
-  }
-  if (mCommandElement) {
-    mMenuGroupOwner->UnregisterForContentChanges(mCommandElement);
-  }
+  DetachFromGroupOwner();
 
   MOZ_COUNT_DTOR(nsMenuItemX);
 
   NS_OBJC_END_TRY_ABORT_BLOCK;
+}
+
+void nsMenuItemX::DetachFromGroupOwner() {
+  if (mMenuGroupOwner) {
+    if (mContent) {
+      mMenuGroupOwner->UnregisterForContentChanges(mContent);
+    }
+    if (mCommandElement) {
+      mMenuGroupOwner->UnregisterForContentChanges(mCommandElement);
+    }
+  }
+
+  mMenuGroupOwner = nullptr;
 }
 
 nsresult nsMenuItemX::SetChecked(bool aIsChecked) {
@@ -133,7 +141,7 @@ EMenuItemType nsMenuItemX::GetMenuItemType() { return mType; }
 
 // Executes the "cached" javaScript command.
 // Returns NS_OK if the command was executed properly, otherwise an error code.
-void nsMenuItemX::DoCommand() {
+void nsMenuItemX::DoCommand(NSEventModifierFlags aModifierFlags) {
   // flip "checked" state if we're a checkbox menu, or an un-checked radio menu
   if (mType == eCheckboxMenuItemType || (mType == eRadioMenuItemType && !mIsChecked)) {
     if (!mContent->IsElement() ||
@@ -144,7 +152,7 @@ void nsMenuItemX::DoCommand() {
     /* the AttributeChanged code will update all the internal state */
   }
 
-  nsMenuUtilsX::DispatchCommandTo(mContent);
+  nsMenuUtilsX::DispatchCommandTo(mContent, aModifierFlags);
 }
 
 nsresult nsMenuItemX::DispatchDOMEvent(const nsString& eventName, bool* preventDefaultCalled) {
@@ -257,6 +265,12 @@ void nsMenuItemX::SetKeyEquiv() {
   NS_OBJC_END_TRY_ABORT_BLOCK;
 }
 
+void nsMenuItemX::Dump(uint32_t aIndent) const {
+  printf("%*s - item [%p] %-16s <%s>\n", aIndent * 2, "", this,
+         mType == eSeparatorMenuItemType ? "----" : [mNativeMenuItem.title UTF8String],
+         NS_ConvertUTF16toUTF8(mContent->NodeName()).get());
+}
+
 //
 // nsChangeObserver
 //
@@ -279,9 +293,14 @@ void nsMenuItemX::ObserveAttributeChanged(dom::Document* aDocument, nsIContent* 
         UncheckRadioSiblings(mContent);
       }
       mMenuParent->SetRebuild(true);
-    } else if (aAttribute == nsGkAtoms::hidden || aAttribute == nsGkAtoms::collapsed ||
-               aAttribute == nsGkAtoms::label) {
+    } else if (aAttribute == nsGkAtoms::hidden || aAttribute == nsGkAtoms::collapsed) {
       mMenuParent->SetRebuild(true);
+    } else if (aAttribute == nsGkAtoms::label) {
+      if (mType != eSeparatorMenuItemType) {
+        nsAutoString newLabel;
+        mContent->AsElement()->GetAttr(kNameSpaceID_None, nsGkAtoms::label, newLabel);
+        mNativeMenuItem.title = nsMenuUtilsX::GetTruncatedCocoaLabel(newLabel);
+      }
     } else if (aAttribute == nsGkAtoms::key) {
       SetKeyEquiv();
     } else if (aAttribute == nsGkAtoms::image) {
@@ -324,6 +343,9 @@ bool IsMenuStructureElement(nsIContent* aContent) {
 
 void nsMenuItemX::ObserveContentRemoved(dom::Document* aDocument, nsIContent* aContainer,
                                         nsIContent* aChild, nsIContent* aPreviousSibling) {
+  MOZ_RELEASE_ASSERT(mMenuGroupOwner);
+  MOZ_RELEASE_ASSERT(mMenuParent);
+
   if (aChild == mCommandElement) {
     mMenuGroupOwner->UnregisterForContentChanges(mCommandElement);
     mCommandElement = nullptr;
@@ -335,6 +357,8 @@ void nsMenuItemX::ObserveContentRemoved(dom::Document* aDocument, nsIContent* aC
 
 void nsMenuItemX::ObserveContentInserted(dom::Document* aDocument, nsIContent* aContainer,
                                          nsIContent* aChild) {
+  MOZ_RELEASE_ASSERT(mMenuParent);
+
   // The child node could come from the custom element that is for display, so
   // only rebuild the menu if the child is related to the structure of the
   // menu.
@@ -343,4 +367,14 @@ void nsMenuItemX::ObserveContentInserted(dom::Document* aDocument, nsIContent* a
   }
 }
 
-void nsMenuItemX::SetupIcon() { mIcon->SetupIcon(); }
+void nsMenuItemX::SetupIcon() {
+  if (mType != eRegularMenuItemType) {
+    // Don't support icons on checkbox and radio menuitems, for consistency with Windows & Linux.
+    return;
+  }
+
+  mIcon->SetupIcon(mContent);
+  mNativeMenuItem.image = mIcon->GetIconImage();
+}
+
+void nsMenuItemX::IconUpdated() { mNativeMenuItem.image = mIcon->GetIconImage(); }

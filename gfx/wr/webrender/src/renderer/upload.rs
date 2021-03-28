@@ -37,7 +37,7 @@ use crate::device::{
 use crate::gpu_types::{ZBufferId, CompositeInstance};
 use crate::batch::BatchTextures;
 use crate::texture_pack::{GuillotineAllocator, FreeRectSlice};
-use crate::composite::CompositeSurfaceFormat;
+use crate::composite::{CompositeFeatures, CompositeSurfaceFormat};
 use crate::profiler;
 use crate::render_api::MemoryReport;
 
@@ -462,6 +462,11 @@ fn copy_from_staging_to_cache_using_draw_calls(
         texture_upload_mb: 0.0,
         resource_upload_time: 0.0,
         gpu_cache_upload_time: 0.0,
+        gecko_display_list_time: 0.0,
+        wr_display_list_time: 0.0,
+        scene_build_time: 0.0,
+        frame_build_time: 0.0,
+        full_frame: false,
     };
 
     let mut copy_instances = Vec::new();
@@ -512,9 +517,11 @@ fn copy_from_staging_to_cache_using_draw_calls(
                 .get_composite_shader(
                     CompositeSurfaceFormat::Rgba,
                     ImageBufferKind::Texture2D,
+                    CompositeFeatures::empty(),
                 ).bind(
                     &mut renderer.device,
                     &projection,
+                    None,
                     &mut renderer.renderer_errors
                 );
 

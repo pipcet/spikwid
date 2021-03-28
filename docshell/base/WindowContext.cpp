@@ -68,11 +68,7 @@ bool WindowContext::IsCached() const {
 }
 
 nsGlobalWindowInner* WindowContext::GetInnerWindow() const {
-  if (mInProcess) {
-    // FIXME: Replace this with something more efficient.
-    return nsGlobalWindowInner::GetInnerWindowWithId(mInnerWindowId);
-  }
-  return nullptr;
+  return mWindowGlobalChild ? mWindowGlobalChild->GetWindowGlobal() : nullptr;
 }
 
 Document* WindowContext::GetDocument() const {
@@ -86,10 +82,7 @@ Document* WindowContext::GetExtantDoc() const {
 }
 
 WindowGlobalChild* WindowContext::GetWindowGlobalChild() const {
-  MOZ_ASSERT(XRE_IsContentProcess());
-  NS_ENSURE_TRUE(XRE_IsContentProcess(), nullptr);
-  nsGlobalWindowInner* innerWindow = GetInnerWindow();
-  return innerWindow ? innerWindow->GetWindowGlobalChild() : nullptr;
+  return mWindowGlobalChild;
 }
 
 WindowContext* WindowContext::GetParentWindowContext() {
@@ -156,7 +149,7 @@ void WindowContext::SendCommitTransaction(ContentChild* aChild,
 }
 
 bool WindowContext::CheckOnlyOwningProcessCanSet(ContentParent* aSource) {
-  if (mInProcess) {
+  if (IsInProcess()) {
     return true;
   }
 
@@ -286,12 +279,12 @@ void WindowContext::DidSet(FieldIndex<IDX_SHEntryHasUserInteraction>,
 }
 
 void WindowContext::DidSet(FieldIndex<IDX_UserActivationState>) {
-  MOZ_ASSERT_IF(!mInProcess, mUserGestureStart.IsNull());
+  MOZ_ASSERT_IF(!IsInProcess(), mUserGestureStart.IsNull());
   USER_ACTIVATION_LOG("Set user gesture activation %" PRIu8
                       " for %s browsing context 0x%08" PRIx64,
                       static_cast<uint8_t>(GetUserActivationState()),
                       XRE_IsParentProcess() ? "Parent" : "Child", Id());
-  if (mInProcess) {
+  if (IsInProcess()) {
     USER_ACTIVATION_LOG(
         "Set user gesture start time for %s browsing context 0x%08" PRIx64,
         XRE_IsParentProcess() ? "Parent" : "Child", Id());
@@ -336,9 +329,8 @@ void WindowContext::CreateFromIPC(IPCInitializer&& aInit) {
     return;
   }
 
-  RefPtr<WindowContext> context =
-      new WindowContext(bc, aInit.mInnerWindowId, aInit.mOuterWindowId,
-                        /* aInProcess */ false, std::move(aInit.mFields));
+  RefPtr<WindowContext> context = new WindowContext(
+      bc, aInit.mInnerWindowId, aInit.mOuterWindowId, std::move(aInit.mFields));
   context->Init();
 }
 
@@ -410,7 +402,7 @@ bool WindowContext::HasBeenUserGestureActivated() {
 }
 
 bool WindowContext::HasValidTransientUserGestureActivation() {
-  MOZ_ASSERT(mInProcess);
+  MOZ_ASSERT(IsInProcess());
 
   if (GetUserActivationState() != UserActivation::State::FullActivated) {
     MOZ_ASSERT(mUserGestureStart.IsNull(),
@@ -430,7 +422,7 @@ bool WindowContext::HasValidTransientUserGestureActivation() {
 }
 
 bool WindowContext::ConsumeTransientUserGestureActivation() {
-  MOZ_ASSERT(mInProcess);
+  MOZ_ASSERT(IsInProcess());
   MOZ_ASSERT(!IsCached());
 
   if (!HasValidTransientUserGestureActivation()) {
@@ -473,12 +465,11 @@ WindowContext::IPCInitializer WindowContext::GetIPCInitializer() {
 
 WindowContext::WindowContext(BrowsingContext* aBrowsingContext,
                              uint64_t aInnerWindowId, uint64_t aOuterWindowId,
-                             bool aInProcess, FieldValues&& aInit)
+                             FieldValues&& aInit)
     : mFields(std::move(aInit)),
       mInnerWindowId(aInnerWindowId),
       mOuterWindowId(aOuterWindowId),
-      mBrowsingContext(aBrowsingContext),
-      mInProcess(aInProcess) {
+      mBrowsingContext(aBrowsingContext) {
   MOZ_ASSERT(mBrowsingContext);
   MOZ_ASSERT(mInnerWindowId);
   MOZ_ASSERT(mOuterWindowId);

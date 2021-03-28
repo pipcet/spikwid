@@ -2378,7 +2378,7 @@ void CodeGenerator::visitWasmBinarySimd128(LWasmBinarySimd128* ins) {
       masm.subInt64x2(rhs, lhsDest);
       break;
     case wasm::SimdOp::I64x2Mul:
-      masm.mulInt64x2(rhs, lhsDest, temp1);
+      masm.mulInt64x2(lhsDest, rhs, lhsDest, temp1);
       break;
     case wasm::SimdOp::F32x4Add:
       masm.addFloat32x4(rhs, lhsDest);
@@ -2417,7 +2417,7 @@ void CodeGenerator::visitWasmBinarySimd128(LWasmBinarySimd128* ins) {
       masm.maxFloat64x2(rhs, lhsDest, temp1, temp2);
       break;
     case wasm::SimdOp::V8x16Swizzle:
-      masm.swizzleInt8x16(rhs, lhsDest, temp1);
+      masm.swizzleInt8x16(rhs, lhsDest);
       break;
     case wasm::SimdOp::I8x16NarrowSI16x8:
       masm.narrowInt16x8(rhs, lhsDest);
@@ -2528,10 +2528,26 @@ void CodeGenerator::visitWasmBinarySimd128(LWasmBinarySimd128* ins) {
                                   temp2);
       break;
     case wasm::SimdOp::I64x2Eq:
-      masm.compareInt64x2(Assembler::Equal, rhs, lhsDest);
+      masm.compareForEqualityInt64x2(Assembler::Equal, rhs, lhsDest);
       break;
     case wasm::SimdOp::I64x2Ne:
-      masm.compareInt64x2(Assembler::NotEqual, rhs, lhsDest);
+      masm.compareForEqualityInt64x2(Assembler::NotEqual, rhs, lhsDest);
+      break;
+    case wasm::SimdOp::I64x2LtS:
+      masm.compareForOrderingInt64x2(Assembler::LessThan, rhs, lhsDest, temp1,
+                                     temp2);
+      break;
+    case wasm::SimdOp::I64x2GtS:
+      masm.compareForOrderingInt64x2(Assembler::GreaterThan, rhs, lhsDest,
+                                     temp1, temp2);
+      break;
+    case wasm::SimdOp::I64x2LeS:
+      masm.compareForOrderingInt64x2(Assembler::LessThanOrEqual, rhs, lhsDest,
+                                     temp1, temp2);
+      break;
+    case wasm::SimdOp::I64x2GeS:
+      masm.compareForOrderingInt64x2(Assembler::GreaterThanOrEqual, rhs,
+                                     lhsDest, temp1, temp2);
       break;
     case wasm::SimdOp::F32x4Eq:
       masm.compareFloat32x4(Assembler::Equal, rhs, lhsDest);
@@ -2962,20 +2978,20 @@ void CodeGenerator::visitWasmShuffleSimd128(LWasmShuffleSimd128* ins) {
   switch (ins->op()) {
     case LWasmShuffleSimd128::BLEND_8x16: {
       masm.blendInt8x16(reinterpret_cast<const uint8_t*>(control.asInt8x16()),
-                        rhs, lhsDest, ToFloatRegister(ins->temp()));
+                        lhsDest, rhs, lhsDest, ToFloatRegister(ins->temp()));
       break;
     }
     case LWasmShuffleSimd128::BLEND_16x8: {
       MOZ_ASSERT(ins->temp()->isBogusTemp());
       masm.blendInt16x8(reinterpret_cast<const uint16_t*>(control.asInt16x8()),
-                        rhs, lhsDest);
+                        lhsDest, rhs, lhsDest);
       break;
     }
     case LWasmShuffleSimd128::CONCAT_RIGHT_SHIFT_8x16: {
       MOZ_ASSERT(ins->temp()->isBogusTemp());
       int8_t count = 16 - control.asInt8x16()[0];
       MOZ_ASSERT(count > 0, "Should have been a MOVE operation");
-      masm.concatAndRightShiftInt8x16(rhs, lhsDest, count);
+      masm.concatAndRightShiftSimd128(rhs, lhsDest, count);
       break;
     }
     case LWasmShuffleSimd128::INTERLEAVE_HIGH_8x16: {
@@ -3139,7 +3155,7 @@ void CodeGenerator::visitWasmPermuteSimd128(LWasmPermuteSimd128* ins) {
       }
       int8_t count = control.asInt8x16()[0];
       MOZ_ASSERT(count > 0, "Should have been a MOVE operation");
-      masm.concatAndRightShiftInt8x16(dest, dest, count);
+      masm.concatAndRightShiftSimd128(dest, dest, count);
       break;
     }
     case LWasmPermuteSimd128::SHIFT_LEFT_8x16: {
@@ -3341,6 +3357,9 @@ void CodeGenerator::visitWasmUnarySimd128(LWasmUnarySimd128* ins) {
     case wasm::SimdOp::V128Not:
       masm.bitwiseNotSimd128(src, dest);
       break;
+    case wasm::SimdOp::I8x16Popcnt:
+      masm.popcntInt8x16(src, dest, ToFloatRegister(ins->temp()));
+      break;
     case wasm::SimdOp::I8x16Abs:
       masm.absInt8x16(src, dest);
       break;
@@ -3349,6 +3368,9 @@ void CodeGenerator::visitWasmUnarySimd128(LWasmUnarySimd128* ins) {
       break;
     case wasm::SimdOp::I32x4Abs:
       masm.absInt32x4(src, dest);
+      break;
+    case wasm::SimdOp::I64x2Abs:
+      masm.absInt64x2(src, dest);
       break;
     case wasm::SimdOp::F32x4Ceil:
       masm.ceilFloat32x4(src, dest);
@@ -3392,6 +3414,18 @@ void CodeGenerator::visitWasmUnarySimd128(LWasmUnarySimd128* ins) {
     case wasm::SimdOp::I32x4TruncSatF64x2UZero:
       masm.unsignedTruncSatFloat64x2ToInt32x4(src, dest,
                                               ToFloatRegister(ins->temp()));
+      break;
+    case wasm::SimdOp::I16x8ExtAddPairwiseI8x16S:
+      masm.extAddPairwiseInt8x16(src, dest);
+      break;
+    case wasm::SimdOp::I16x8ExtAddPairwiseI8x16U:
+      masm.unsignedExtAddPairwiseInt8x16(src, dest);
+      break;
+    case wasm::SimdOp::I32x4ExtAddPairwiseI16x8S:
+      masm.extAddPairwiseInt16x8(src, dest);
+      break;
+    case wasm::SimdOp::I32x4ExtAddPairwiseI16x8U:
+      masm.unsignedExtAddPairwiseInt16x8(src, dest);
       break;
     default:
       MOZ_CRASH("Unary SimdOp not implemented");

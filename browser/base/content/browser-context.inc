@@ -3,6 +3,25 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+#ifdef XP_MACOSX
+      <menuitem id="context-back"
+                data-l10n-id="main-context-menu-back-mac"
+                command="Browser:BackOrBackDuplicate"
+                onclick="checkForMiddleClick(this, event);"/>
+      <menuitem id="context-forward"
+                data-l10n-id="main-context-menu-forward-mac"
+                command="Browser:ForwardOrForwardDuplicate"
+                onclick="checkForMiddleClick(this, event);"/>
+      <menuitem id="context-reload"
+                tooltip="dynamic-shortcut-tooltip"
+                data-l10n-id="main-context-menu-reload-mac"
+                command="Browser:ReloadOrDuplicate"
+                onclick="checkForMiddleClick(this, event);"/>
+      <menuitem id="context-stop"
+                tooltip="dynamic-shortcut-tooltip"
+                data-l10n-id="main-context-menu-stop-mac"
+                command="Browser:Stop"/>
+#else
       <menugroup id="context-navigation">
         <menuitem id="context-back"
                   data-l10n-id="main-context-menu-back-2"
@@ -32,6 +51,7 @@
                   data-l10n-id="main-context-menu-bookmark-add"
                   oncommand="gContextMenu.bookmarkThisPage();"/>
       </menugroup>
+#endif
       <menuseparator id="context-sep-navigation"/>
       <menuseparator id="page-menu-separator"/>
       <menuitem id="context-viewsource-goToLine"
@@ -68,7 +88,7 @@
                 oncommand="gContextMenu.openLinkInTab(event);"/>
 
       <menu id="context-openlinkinusercontext-menu"
-            data-l10n-id="main-context-menu-open-link-container"
+            data-l10n-id="main-context-menu-open-link-container-tab"
             hidden="true">
         <menupopup oncommand="gContextMenu.openLinkInTab(event);"
                    onpopupshowing="return gContextMenu.createContainerMenu(event);" />
@@ -222,6 +242,11 @@
                 data-l10n-id="main-context-menu-plugin-hide"
                 oncommand="gContextMenu.hidePlugin();"/>
       <menuseparator id="context-sep-ctp"/>
+#ifdef XP_MACOSX
+      <menuitem id="context-bookmarkpage"
+                data-l10n-id="main-context-menu-bookmark-add-mac"
+                oncommand="gContextMenu.bookmarkThisPage();"/>
+#endif
       <menuitem id="context-savepage"
                 data-l10n-id="main-context-menu-page-save"
                 oncommand="gContextMenu.savePageAs();"/>
@@ -271,6 +296,9 @@
       <menuitem id="context-selectall"
                 data-l10n-id="text-action-select-all"
                 command="cmd_selectAll"/>
+      <menuitem id="context-print-selection"
+                data-l10n-id="main-context-menu-print-selection"
+                oncommand="gContextMenu.printSelection();"/>
       <menuseparator id="context-sep-sendlinktodevice" class="sync-ui-item"
                 hidden="true"/>
       <menu id="context-sendlinktodevice"
@@ -332,9 +360,6 @@
 #endif
         </menupopup>
       </menu>
-      <menuitem id="context-print-selection"
-                data-l10n-id="main-context-menu-print-selection"
-                oncommand="gContextMenu.printSelection();"/>
       <menuseparator id="context-sep-screenshots"/>
       <menuitem id="context-take-screenshot"
                 data-l10n-id="main-context-menu-take-screenshot"

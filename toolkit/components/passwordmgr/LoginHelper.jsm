@@ -362,6 +362,7 @@ this.LoginHelper = {
   enabled: null,
   storageEnabled: null,
   formlessCaptureEnabled: null,
+  formRemovalCaptureEnabled: null,
   generationAvailable: null,
   generationConfidenceThreshold: null,
   generationEnabled: null,
@@ -370,6 +371,8 @@ this.LoginHelper = {
   privateBrowsingCaptureEnabled: null,
   remoteRecipesEnabled: null,
   remoteRecipesCollection: "password-recipes",
+  relatedRealmsEnabled: null,
+  relatedRealmsCollection: "websites-with-shared-credential-backends",
   schemeUpgrades: null,
   showAutoCompleteFooter: null,
   showAutoCompleteImport: null,
@@ -401,6 +404,9 @@ this.LoginHelper = {
     );
     this.formlessCaptureEnabled = Services.prefs.getBoolPref(
       "signon.formlessCapture.enabled"
+    );
+    this.formRemovalCaptureEnabled = Services.prefs.getBoolPref(
+      "signon.formRemovalCapture.enabled"
     );
     this.generationAvailable = Services.prefs.getBoolPref(
       "signon.generation.available"
@@ -465,6 +471,9 @@ this.LoginHelper = {
     );
     this.remoteRecipesEnabled = Services.prefs.getBoolPref(
       "signon.recipes.remoteRecipesEnabled"
+    );
+    this.relatedRealmsEnabled = Services.prefs.getBoolPref(
+      "signon.relatedRealms.enabled"
     );
   },
 
@@ -678,6 +687,8 @@ this.LoginHelper = {
       schemeUpgrades: false,
       acceptWildcardMatch: false,
       acceptDifferentSubdomains: false,
+      acceptRelatedRealms: false,
+      relatedRealms: [],
     }
   ) {
     if (aLoginOrigin == aSearchOrigin) {
@@ -713,6 +724,18 @@ this.LoginHelper = {
             (aOptions.schemeUpgrades && schemeMatches))
         ) {
           return true;
+        }
+        if (
+          aOptions.acceptRelatedRealms &&
+          aOptions.relatedRealms.length &&
+          (loginURI.scheme == searchURI.scheme ||
+            (aOptions.schemeUpgrades && schemeMatches))
+        ) {
+          for (let relatedOrigin of aOptions.relatedRealms) {
+            if (Services.eTLD.hasRootDomain(loginURI.host, relatedOrigin)) {
+              return true;
+            }
+          }
         }
       }
 
@@ -1207,16 +1230,19 @@ this.LoginHelper = {
    *
    * @param {Element} element
    *                  the field we want to check.
+   * @param {Object} options
+   * @param {bool} [options.ignoreConnect] - Whether to ignore checking isConnected
+   *                                         of the element.
    *
    * @returns {Boolean} true if the field can
    *                    be treated as a password input
    */
-  isPasswordFieldType(element) {
+  isPasswordFieldType(element, { ignoreConnect = false } = {}) {
     if (ChromeUtils.getClassName(element) !== "HTMLInputElement") {
       return false;
     }
 
-    if (!element.isConnected) {
+    if (!element.isConnected && !ignoreConnect) {
       // If the element isn't connected then it isn't visible to the user so
       // shouldn't be considered. It must have been connected in the past.
       return false;
@@ -1242,16 +1268,19 @@ this.LoginHelper = {
    *
    * @param {Element} element
    *                  the field we want to check.
+   * @param {Object} options
+   * @param {bool} [options.ignoreConnect] - Whether to ignore checking isConnected
+   *                                         of the element.
    *
    * @returns {Boolean} true if the field type is one
    *                    of the username types.
    */
-  isUsernameFieldType(element) {
+  isUsernameFieldType(element, { ignoreConnect = false } = {}) {
     if (ChromeUtils.getClassName(element) !== "HTMLInputElement") {
       return false;
     }
 
-    if (!element.isConnected) {
+    if (!element.isConnected && !ignoreConnect) {
       // If the element isn't connected then it isn't visible to the user so
       // shouldn't be considered. It must have been connected in the past.
       return false;

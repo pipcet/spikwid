@@ -442,7 +442,8 @@ nsresult nsHttpTransaction::Init(
     mPushedStream = trans->TakePushedStreamById(aPushedStreamId);
   }
 
-  if (gHttpHandler->UseHTTPSRRAsAltSvcEnabled() && !mConnInfo->UsingConnect()) {
+  if (gHttpHandler->UseHTTPSRRAsAltSvcEnabled() &&
+      !(mCaps & NS_HTTP_DISALLOW_HTTPS_RR)) {
     mHTTPSSVCReceivedStage = HTTPSSVC_NOT_PRESENT;
 
     nsCOMPtr<nsIEventTarget> target;
@@ -1715,9 +1716,9 @@ void nsHttpTransaction::Close(nsresult reason) {
     mChunkedDecoder = nullptr;
   }
 
-  for (auto iter = mEchRetryCounterMap.ConstIter(); !iter.Done(); iter.Next()) {
-    Telemetry::Accumulate(static_cast<Telemetry::HistogramID>(iter.Key()),
-                          iter.UserData());
+  for (const auto& entry : mEchRetryCounterMap) {
+    Telemetry::Accumulate(static_cast<Telemetry::HistogramID>(entry.GetKey()),
+                          entry.GetData());
   }
 
   // closing this pipe triggers the channel's OnStopRequest method.

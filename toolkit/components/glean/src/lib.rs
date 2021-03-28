@@ -37,6 +37,7 @@ extern crate xpcom;
 
 use std::ffi::CStr;
 use std::os::raw::c_char;
+use std::path::PathBuf;
 
 use nserror::{nsresult, NS_ERROR_FAILURE, NS_OK};
 use nsstring::{nsACString, nsCStr, nsCString, nsString};
@@ -63,7 +64,7 @@ pub unsafe extern "C" fn fog_init(data_path_override: &nsACString) -> nsresult {
 
     log::debug!("Initializing FOG.");
 
-    let data_path = if data_path_override.is_empty() {
+    let data_path_str = if data_path_override.is_empty() {
         match get_data_path() {
             Ok(dp) => dp,
             Err(e) => return e,
@@ -71,6 +72,7 @@ pub unsafe extern "C" fn fog_init(data_path_override: &nsACString) -> nsresult {
     } else {
         data_path_override.to_utf8().to_string()
     };
+    let data_path = PathBuf::from(&data_path_str);
 
     let (app_build, app_display_version, channel) = match get_app_info() {
         Ok(ai) => ai,
@@ -109,7 +111,6 @@ pub unsafe extern "C" fn fog_init(data_path_override: &nsACString) -> nsresult {
     };
 
     let upload_enabled = static_prefs::pref!("datareporting.healthreport.uploadEnabled");
-    let data_path = data_path.to_string();
     let configuration = Configuration {
         upload_enabled,
         data_path,
@@ -136,14 +137,12 @@ pub unsafe extern "C" fn fog_init(data_path_override: &nsACString) -> nsresult {
         log::error!("Failed to create Viaduct via XPCOM. Ping upload may not be available.");
     }
 
-    if configuration.data_path.len() > 0 {
-        glean::initialize(configuration, client_info);
+    glean::initialize(configuration, client_info);
 
-        // Register all custom pings before we initialize.
-        fog::pings::register_pings();
+    // Register all custom pings before we initialize.
+    fog::pings::register_pings();
 
-        fog::metrics::fog::initialization.stop();
-    }
+    fog::metrics::fog::initialization.stop();
 
     NS_OK
 }

@@ -42,6 +42,8 @@ enum class LabelKind : uint8_t {
 #ifdef ENABLE_WASM_EXCEPTIONS
   Try,
   Catch,
+  CatchAll,
+  Unwind
 #endif
 };
 
@@ -202,7 +204,11 @@ enum class OpKind {
 #  endif
 #  ifdef ENABLE_WASM_EXCEPTIONS
   Catch,
+  CatchAll,
+  Delegate,
+  Unwind,
   Throw,
+  Rethrow,
   Try,
 #  endif
 };
@@ -269,6 +275,18 @@ class ControlStackEntry {
     kind_ = LabelKind::Catch;
     polymorphicBase_ = false;
   }
+
+  void switchToCatchAll() {
+    MOZ_ASSERT(kind() == LabelKind::Try || kind() == LabelKind::Catch);
+    kind_ = LabelKind::CatchAll;
+    polymorphicBase_ = false;
+  }
+
+  void switchToUnwind() {
+    MOZ_ASSERT(kind() == LabelKind::Try);
+    kind_ = LabelKind::Unwind;
+    polymorphicBase_ = false;
+  }
 #endif
 };
 
@@ -301,10 +319,10 @@ class MOZ_STACK_CLASS OpIter : private Policy {
   using Value = typename Policy::Value;
   using ValueVector = typename Policy::ValueVector;
   using TypeAndValue = TypeAndValueT<Value>;
-  typedef Vector<TypeAndValue, 8, SystemAllocPolicy> TypeAndValueStack;
+  using TypeAndValueStack = Vector<TypeAndValue, 8, SystemAllocPolicy>;
   using ControlItem = typename Policy::ControlItem;
   using Control = ControlStackEntry<ControlItem>;
-  typedef Vector<Control, 8, SystemAllocPolicy> ControlStack;
+  using ControlStack = Vector<Control, 8, SystemAllocPolicy>;
 
  private:
   Decoder& d_;
@@ -362,8 +380,11 @@ class MOZ_STACK_CLASS OpIter : private Policy {
   [[nodiscard]] bool getControl(uint32_t relativeDepth, Control** controlEntry);
   [[nodiscard]] bool checkBranchValue(uint32_t relativeDepth, ResultType* type,
                                       ValueVector* values);
-  [[nodiscard]] bool checkBranchType(uint32_t relativeDepth,
-                                     ResultType expectedType);
+  [[nodiscard]] bool checkCastedBranchValue(uint32_t relativeDepth,
+                                            ValType castedFromType,
+                                            ValType castedToType,
+                                            ResultType* branchTargetType,
+                                            ValueVector* values);
   [[nodiscard]] bool checkBrTableEntry(uint32_t* relativeDepth,
                                        ResultType prevBranchType,
                                        ResultType* branchType,
@@ -390,12 +411,8 @@ class MOZ_STACK_CLASS OpIter : private Policy {
     controlStack_.back().setPolymorphicBase();
   }
 
-  inline bool checkIsSubtypeOf(ValType lhs, ValType rhs);
+  inline bool checkIsSubtypeOf(ValType actual, ValType expected);
   inline bool checkIsSubtypeOf(ResultType params, ResultType results);
-
-#ifdef ENABLE_WASM_EXCEPTIONS
-  [[nodiscard]] bool exceptionTypeHasRef(ResultType type);
-#endif
 
  public:
 #ifdef DEBUG
@@ -465,14 +482,24 @@ class MOZ_STACK_CLASS OpIter : private Policy {
   [[nodiscard]] bool readBrIf(uint32_t* relativeDepth, ResultType* type,
                               ValueVector* values, Value* condition);
   [[nodiscard]] bool readBrTable(Uint32Vector* depths, uint32_t* defaultDepth,
-                                 ResultType* defaultBranchValueType,
+                                 ResultType* defaultBranchType,
                                  ValueVector* branchValues, Value* index);
 #ifdef ENABLE_WASM_EXCEPTIONS
   [[nodiscard]] bool readTry(ResultType* type);
   [[nodiscard]] bool readCatch(LabelKind* kind, uint32_t* eventIndex,
                                ResultType* paramType, ResultType* resultType,
                                ValueVector* tryResults);
+  [[nodiscard]] bool readCatchAll(LabelKind* kind, ResultType* paramType,
+                                  ResultType* resultType,
+                                  ValueVector* tryResults);
+  [[nodiscard]] bool readDelegate(uint32_t* relativeDepth,
+                                  ResultType* resultType,
+                                  ValueVector* tryResults);
+  void popDelegate();
+  [[nodiscard]] bool readUnwind(ResultType* resultType,
+                                ValueVector* tryResults);
   [[nodiscard]] bool readThrow(uint32_t* eventIndex, ValueVector* argValues);
+  [[nodiscard]] bool readRethrow(uint32_t* relativeDepth);
 #endif
   [[nodiscard]] bool readUnreachable();
   [[nodiscard]] bool readDrop();
@@ -512,18 +539,18 @@ class MOZ_STACK_CLASS OpIter : private Policy {
   [[nodiscard]] bool readRefAsNonNull(Value* input);
   [[nodiscard]] bool readBrOnNull(uint32_t* relativeDepth, ResultType* type,
                                   ValueVector* values, Value* condition);
-  [[nodiscard]] bool readCall(uint32_t* calleeIndex, ValueVector* argValues);
+  [[nodiscard]] bool readCall(uint32_t* funcTypeIndex, ValueVector* argValues);
   [[nodiscard]] bool readCallIndirect(uint32_t* funcTypeIndex,
                                       uint32_t* tableIndex, Value* callee,
                                       ValueVector* argValues);
   [[nodiscard]] bool readOldCallDirect(uint32_t numFuncImports,
-                                       uint32_t* funcIndex,
+                                       uint32_t* funcTypeIndex,
                                        ValueVector* argValues);
   [[nodiscard]] bool readOldCallIndirect(uint32_t* funcTypeIndex, Value* callee,
                                          ValueVector* argValues);
   [[nodiscard]] bool readWake(LinearMemoryAddress<Value>* addr, Value* count);
   [[nodiscard]] bool readWait(LinearMemoryAddress<Value>* addr,
-                              ValType resultType, uint32_t byteSize,
+                              ValType valueType, uint32_t byteSize,
                               Value* value, Value* timeout);
   [[nodiscard]] bool readFence();
   [[nodiscard]] bool readAtomicLoad(LinearMemoryAddress<Value>* addr,
@@ -581,7 +608,8 @@ class MOZ_STACK_CLASS OpIter : private Policy {
                                  uint32_t* rttDepth, Value* ref);
   [[nodiscard]] bool readBrOnCast(uint32_t* relativeDepth, Value* rtt,
                                   uint32_t* rttTypeIndex, uint32_t* rttDepth,
-                                  ValueVector* values, ResultType* types);
+                                  ResultType* branchTargetType,
+                                  ValueVector* values);
   [[nodiscard]] bool readValType(ValType* type);
   [[nodiscard]] bool readHeapType(bool nullable, RefType* type);
   [[nodiscard]] bool readReferenceType(ValType* type,
@@ -597,7 +625,7 @@ class MOZ_STACK_CLASS OpIter : private Policy {
   [[nodiscard]] bool readVectorShift(Value* baseValue, Value* shift);
   [[nodiscard]] bool readVectorSelect(Value* v1, Value* v2, Value* controlMask);
   [[nodiscard]] bool readVectorShuffle(Value* v1, Value* v2, V128* selectMask);
-  [[nodiscard]] bool readV128Const(V128* f64);
+  [[nodiscard]] bool readV128Const(V128* value);
   [[nodiscard]] bool readLoadSplat(uint32_t byteSize,
                                    LinearMemoryAddress<Value>* addr);
   [[nodiscard]] bool readLoadExtend(LinearMemoryAddress<Value>* addr);
@@ -651,6 +679,11 @@ class MOZ_STACK_CLASS OpIter : private Policy {
   ControlItem& controlItem(uint32_t relativeDepth) {
     return controlStack_[controlStack_.length() - 1 - relativeDepth]
         .controlItem();
+  }
+
+  // Return the LabelKind of an element in the control stack.
+  LabelKind controlKind(uint32_t relativeDepth) {
+    return controlStack_[controlStack_.length() - 1 - relativeDepth].kind();
   }
 
   // Return a reference to the outermost element on the control stack.
@@ -1208,11 +1241,32 @@ inline bool OpIter<Policy>::readEnd(LabelKind* kind, ResultType* type,
                                     ValueVector* resultsForEmptyElse) {
   MOZ_ASSERT(Classify(op_) == OpKind::End);
 
+  Control& block = controlStack_.back();
+
+#ifdef ENABLE_WASM_EXCEPTIONS
+  if (block.kind() == LabelKind::Try) {
+    return fail("try without catch or unwind not allowed");
+  }
+
+  // Unwind blocks require an empty result type rather than the try's type.
+  if (block.kind() == LabelKind::Unwind) {
+    if (valueStack_.length() != block.valueStackBase()) {
+      return fail("unused values not explicitly dropped by end of block");
+    }
+    *type = block.type().results();
+    // As the `end` for an `unwind` always rethrows the exception, we need
+    // to push the try block's type here to the value stack.
+    if (!push(*type)) {
+      return false;
+    }
+  } else if (!checkStackAtEndOfBlock(type, results)) {
+    return false;
+  }
+#else
   if (!checkStackAtEndOfBlock(type, results)) {
     return false;
   }
-
-  Control& block = controlStack_.back();
+#endif
 
   if (block.kind() == LabelKind::Then) {
     ResultType params = block.type().params();
@@ -1234,12 +1288,6 @@ inline bool OpIter<Policy>::readEnd(LabelKind* kind, ResultType* type,
     }
     elseParamStack_.shrinkBy(nparams);
   }
-
-#ifdef ENABLE_WASM_EXCEPTIONS
-  if (block.kind() == LabelKind::Try) {
-    return fail("try without catch or unwind not allowed");
-  }
-#endif
 
   *kind = block.kind();
   return true;
@@ -1265,14 +1313,63 @@ inline bool OpIter<Policy>::checkBranchValue(uint32_t relativeDepth,
   return topWithType(*type, values);
 }
 
+// Check the typing of a branch instruction which casts an input type to
+// an output type, branching on success to a target which takes the output
+// type along with extra values from the stack. On casting failure, the
+// original input type and extra values are left on the stack.
 template <typename Policy>
-inline bool OpIter<Policy>::checkBranchType(uint32_t relativeDepth,
-                                            ResultType expectedType) {
+inline bool OpIter<Policy>::checkCastedBranchValue(uint32_t relativeDepth,
+                                                   ValType castedFromType,
+                                                   ValType castedToType,
+                                                   ResultType* branchTargetType,
+                                                   ValueVector* values) {
+  // Get the branch target type, which will determine the type of extra values
+  // that are passed along with the casted type.
   Control* block = nullptr;
   if (!getControl(relativeDepth, &block)) {
     return false;
   }
-  return checkIsSubtypeOf(expectedType, block->branchTargetType());
+  *branchTargetType = block->branchTargetType();
+
+  // Check we at least have one type in the branch target type, which will take
+  // the casted type.
+  if (branchTargetType->length() < 1) {
+    UniqueChars expectedText = ToString(castedToType);
+    if (!expectedText) {
+      return false;
+    }
+
+    UniqueChars error(JS_smprintf("type mismatch: expected [_, %s], got []",
+                                  expectedText.get()));
+    if (!error) {
+      return false;
+    }
+    return fail(error.get());
+  }
+
+  // The top of the stack is the type that is being cast. This is the last type
+  // in the branch target type. This is guaranteed to exist by the above check.
+  const size_t castTypeIndex = branchTargetType->length() - 1;
+
+  // Check that the branch target type can accept the castedToType. The branch
+  // target may specify a super type of the castedToType, and this is okay.
+  if (!checkIsSubtypeOf(castedToType, (*branchTargetType)[castTypeIndex])) {
+    return false;
+  }
+
+  // Create a copy of the branch target type, with the castTypeIndex replaced
+  // with the castedFromType. Use this to check that the stack has the proper
+  // types to branch to the target type.
+  //
+  // TODO: We could avoid a potential allocation here by handwriting a custom
+  //       topWithType that handles this case.
+  ValTypeVector stackTargetType;
+  if (!branchTargetType->cloneToVector(&stackTargetType)) {
+    return false;
+  }
+  stackTargetType[castTypeIndex] = castedFromType;
+
+  return topWithType(ResultType::Vector(stackTargetType), values);
 }
 
 template <typename Policy>
@@ -1312,7 +1409,7 @@ inline bool OpIter<Policy>::readBrIf(uint32_t* relativeDepth, ResultType* type,
 
 template <typename Policy>
 inline bool OpIter<Policy>::checkBrTableEntry(uint32_t* relativeDepth,
-                                              ResultType prevType,
+                                              ResultType prevBranchType,
                                               ResultType* type,
                                               ValueVector* branchValues) {
   if (!readVarU32(relativeDepth)) {
@@ -1326,8 +1423,8 @@ inline bool OpIter<Policy>::checkBrTableEntry(uint32_t* relativeDepth,
 
   *type = block->branchTargetType();
 
-  if (prevType != ResultType()) {
-    if (prevType.length() != type->length()) {
+  if (prevBranchType != ResultType()) {
+    if (prevBranchType.length() != type->length()) {
       return fail("br_table targets must all have the same arity");
     }
 
@@ -1388,17 +1485,6 @@ inline bool OpIter<Policy>::readBrTable(Uint32Vector* depths,
 
 #ifdef ENABLE_WASM_EXCEPTIONS
 template <typename Policy>
-inline bool OpIter<Policy>::exceptionTypeHasRef(ResultType type) {
-  for (size_t i = 0; i < type.length(); i++) {
-    if (type[i].isReference()) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-template <typename Policy>
 inline bool OpIter<Policy>::readTry(ResultType* paramType) {
   MOZ_ASSERT(Classify(op_) == OpKind::Try);
 
@@ -1424,13 +1510,13 @@ inline bool OpIter<Policy>::readCatch(LabelKind* kind, uint32_t* eventIndex,
   if (*eventIndex >= env_.events.length()) {
     return fail("event index out of range");
   }
-  if (exceptionTypeHasRef(env_.events[*eventIndex].resultType())) {
-    return fail("exception with reference types not supported");
-  }
 
   Control& block = controlStack_.back();
+  if (block.kind() == LabelKind::CatchAll) {
+    return fail("catch cannot follow a catch_all");
+  }
   if (block.kind() != LabelKind::Try && block.kind() != LabelKind::Catch) {
-    return fail("catch can only be used within a try");
+    return fail("catch can only be used within a try-catch");
   }
   *kind = block.kind();
   *paramType = block.type().params();
@@ -1448,6 +1534,90 @@ inline bool OpIter<Policy>::readCatch(LabelKind* kind, uint32_t* eventIndex,
 }
 
 template <typename Policy>
+inline bool OpIter<Policy>::readCatchAll(LabelKind* kind, ResultType* paramType,
+                                         ResultType* resultType,
+                                         ValueVector* tryResults) {
+  MOZ_ASSERT(Classify(op_) == OpKind::CatchAll);
+
+  Control& block = controlStack_.back();
+  if (block.kind() != LabelKind::Try && block.kind() != LabelKind::Catch) {
+    return fail("catch_all can only be used within a try-catch");
+  }
+  *kind = block.kind();
+  *paramType = block.type().params();
+
+  if (!checkStackAtEndOfBlock(resultType, tryResults)) {
+    return false;
+  }
+
+  valueStack_.shrinkTo(block.valueStackBase());
+  block.switchToCatchAll();
+
+  return true;
+}
+
+template <typename Policy>
+inline bool OpIter<Policy>::readDelegate(uint32_t* relativeDepth,
+                                         ResultType* resultType,
+                                         ValueVector* tryResults) {
+  MOZ_ASSERT(Classify(op_) == OpKind::Delegate);
+
+  uint32_t originalDepth;
+  if (!readVarU32(&originalDepth)) {
+    return fail("unable to read delegate depth");
+  }
+
+  Control& block = controlStack_.back();
+  if (block.kind() != LabelKind::Try) {
+    return fail("delegate can only be used within a try");
+  }
+
+  // Depths for delegate start counting in the surrounding block.
+  *relativeDepth = originalDepth + 1;
+  if (*relativeDepth >= controlStack_.length()) {
+    return fail("delegate depth exceeds current nesting level");
+  }
+
+  LabelKind kind = controlKind(*relativeDepth);
+  if (kind != LabelKind::Try && kind != LabelKind::Body) {
+    return fail("delegate target was not a try or function body");
+  }
+
+  // Because `delegate` acts like `end` and ends the block, we will check
+  // the stack here.
+  return checkStackAtEndOfBlock(resultType, tryResults);
+}
+
+// We need popDelegate because readDelegate cannot pop the control stack
+// itself, as its caller may need to use the control item for delegate.
+template <typename Policy>
+inline void OpIter<Policy>::popDelegate() {
+  MOZ_ASSERT(Classify(op_) == OpKind::Delegate);
+
+  controlStack_.popBack();
+}
+
+template <typename Policy>
+inline bool OpIter<Policy>::readUnwind(ResultType* resultType,
+                                       ValueVector* tryResults) {
+  MOZ_ASSERT(Classify(op_) == OpKind::Unwind);
+
+  Control& block = controlStack_.back();
+  if (block.kind() != LabelKind::Try) {
+    return fail("unwind can only be used within a try");
+  }
+
+  if (!checkStackAtEndOfBlock(resultType, tryResults)) {
+    return false;
+  }
+
+  valueStack_.shrinkTo(block.valueStackBase());
+  block.switchToUnwind();
+
+  return true;
+}
+
+template <typename Policy>
 inline bool OpIter<Policy>::readThrow(uint32_t* eventIndex,
                                       ValueVector* argValues) {
   MOZ_ASSERT(Classify(op_) == OpKind::Throw);
@@ -1458,12 +1628,29 @@ inline bool OpIter<Policy>::readThrow(uint32_t* eventIndex,
   if (*eventIndex >= env_.events.length()) {
     return fail("event index out of range");
   }
-  if (exceptionTypeHasRef(env_.events[*eventIndex].resultType())) {
-    return fail("exception with reference types not supported.");
-  }
 
   if (!popWithType(env_.events[*eventIndex].resultType(), argValues)) {
     return false;
+  }
+
+  afterUnconditionalBranch();
+  return true;
+}
+
+template <typename Policy>
+inline bool OpIter<Policy>::readRethrow(uint32_t* relativeDepth) {
+  MOZ_ASSERT(Classify(op_) == OpKind::Rethrow);
+
+  if (!readVarU32(relativeDepth)) {
+    return fail("unable to read rethrow depth");
+  }
+
+  if (*relativeDepth >= controlStack_.length()) {
+    return fail("rethrow depth exceeds current nesting level");
+  }
+  LabelKind kind = controlKind(*relativeDepth);
+  if (kind != LabelKind::Catch && kind != LabelKind::CatchAll) {
+    return fail("rethrow target was not a catch block");
   }
 
   afterUnconditionalBranch();
@@ -2988,8 +3175,8 @@ template <typename Policy>
 inline bool OpIter<Policy>::readBrOnCast(uint32_t* relativeDepth, Value* rtt,
                                          uint32_t* rttTypeIndex,
                                          uint32_t* rttDepth,
-                                         ValueVector* values,
-                                         ResultType* types) {
+                                         ResultType* branchTargetType,
+                                         ValueVector* values) {
   MOZ_ASSERT(Classify(op_) == OpKind::BrOnCast);
 
   if (!readVarU32(relativeDepth)) {
@@ -3000,13 +3187,15 @@ inline bool OpIter<Policy>::readBrOnCast(uint32_t* relativeDepth, Value* rtt,
     return false;
   }
 
-  *types =
-      ResultType::Single(ValType(RefType::fromTypeIndex(*rttTypeIndex, false)));
-  if (!checkBranchType(*relativeDepth, *types)) {
-    return false;
-  }
+  // The casted from type is any subtype of eqref
+  ValType castedFromType(RefType::eq());
 
-  return topWithType(ResultType::Single(ValType(RefType::eq())), values);
+  // The casted to type is a non-nullable reference to the type index specified
+  // by the input rtt on the stack
+  ValType castedToType(RefType::fromTypeIndex(*rttTypeIndex, false));
+
+  return checkCastedBranchValue(*relativeDepth, castedFromType, castedToType,
+                                branchTargetType, values);
 }
 
 #ifdef ENABLE_WASM_SIMD
@@ -3112,7 +3301,7 @@ inline bool OpIter<Policy>::readVectorShuffle(Value* v1, Value* v2,
                                               V128* selectMask) {
   MOZ_ASSERT(Classify(op_) == OpKind::VectorShuffle);
 
-  for (unsigned i = 0; i < 16; i++) {
+  for (unsigned char& byte : selectMask->bytes) {
     uint8_t tmp;
     if (!readFixedU8(&tmp)) {
       return fail("unable to read shuffle index");
@@ -3120,7 +3309,7 @@ inline bool OpIter<Policy>::readVectorShuffle(Value* v1, Value* v2,
     if (tmp > 31) {
       return fail("shuffle index out of range");
     }
-    selectMask->bytes[i] = tmp;
+    byte = tmp;
   }
 
   if (!popWithType(ValType::V128, v2)) {
@@ -3140,8 +3329,8 @@ template <typename Policy>
 inline bool OpIter<Policy>::readV128Const(V128* value) {
   MOZ_ASSERT(Classify(op_) == OpKind::V128);
 
-  for (unsigned i = 0; i < 16; i++) {
-    if (!readFixedU8(&value->bytes[i])) {
+  for (unsigned char& byte : value->bytes) {
+    if (!readFixedU8(&byte)) {
       return fail("unable to read V128 constant");
     }
   }

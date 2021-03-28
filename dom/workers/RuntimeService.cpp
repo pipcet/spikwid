@@ -274,19 +274,27 @@ void LoadContextOptions(const char* aPrefName, void* /* aClosure */) {
 #else
       .setWasmIon(GetWorkerPref<bool>("wasm_optimizingjit"_ns))
 #endif
+      .setWasmBaseline(GetWorkerPref<bool>("wasm_baselinejit"_ns))
       .setWasmReftypes(GetWorkerPref<bool>("wasm_reftypes"_ns))
-#ifdef ENABLE_WASM_MULTI_VALUE
-      .setWasmMultiValue(GetWorkerPref<bool>("wasm_multi_value"_ns))
-#endif
-#ifdef ENABLE_WASM_SIMD
-      .setWasmSimd(GetWorkerPref<bool>("wasm_simd"_ns))
-#endif
 #ifdef ENABLE_WASM_FUNCTION_REFERENCES
       .setWasmFunctionReferences(
           GetWorkerPref<bool>("wasm_function_references"_ns))
 #endif
 #ifdef ENABLE_WASM_GC
       .setWasmGc(GetWorkerPref<bool>("wasm_gc"_ns))
+#endif
+#ifdef ENABLE_WASM_MULTI_VALUE
+      .setWasmMultiValue(GetWorkerPref<bool>("wasm_multi_value"_ns))
+#endif
+#ifdef ENABLE_WASM_SIMD
+      .setWasmSimd(GetWorkerPref<bool>("wasm_simd"_ns))
+#endif
+#ifdef ENABLE_WASM_SIMD_WORMHOLE
+#  ifdef EARLY_BETA_OR_EARLIER
+      .setWasmSimdWormhole(GetWorkerPref<bool>("wasm_simd_wormhole"_ns))
+#  else
+      .setWasmSimdWormhole(false)
+#  endif
 #endif
       .setWasmVerbose(GetWorkerPref<bool>("wasm_verbose"_ns))
       .setThrowOnAsmJSValidationFailure(
@@ -1673,9 +1681,7 @@ void RuntimeService::CrashIfHanging() {
   ActiveWorkerStats activeStats;
   uint32_t inactiveWorkers = 0;
 
-  for (const auto& entry : mDomainMap) {
-    const WorkerDomainInfo* const aData = entry.GetData().get();
-
+  for (const auto& aData : mDomainMap.Values()) {
     activeStats.Update<&ActiveWorkerStats::mWorkers>(aData->mActiveWorkers);
     activeStats.Update<&ActiveWorkerStats::mServiceWorkers>(
         aData->mActiveServiceWorkers);
@@ -1831,9 +1837,7 @@ void RuntimeService::Cleanup() {
 
 void RuntimeService::AddAllTopLevelWorkersToArray(
     nsTArray<WorkerPrivate*>& aWorkers) {
-  for (const auto& entry : mDomainMap) {
-    WorkerDomainInfo* const aData = entry.GetData().get();
-
+  for (const auto& aData : mDomainMap.Values()) {
 #ifdef DEBUG
     for (const auto& activeWorker : aData->mActiveWorkers) {
       MOZ_ASSERT(!activeWorker->GetParent(),

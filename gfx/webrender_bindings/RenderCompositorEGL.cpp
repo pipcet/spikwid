@@ -36,11 +36,11 @@ namespace mozilla::wr {
 UniquePtr<RenderCompositor> RenderCompositorEGL::Create(
     RefPtr<widget::CompositorWidget> aWidget, nsACString& aError) {
 #ifdef MOZ_WAYLAND
-  if (!mozilla::widget::GdkIsWaylandDisplay()) {
+  if (!gfx::gfxVars::UseEGL()) {
     return nullptr;
   }
 #endif
-  if (!RenderThread::Get()->SharedGL()) {
+  if (!RenderThread::Get()->SingletonGL()) {
     gfxCriticalNote << "Failed to get shared GL context";
     return nullptr;
   }
@@ -202,7 +202,7 @@ bool RenderCompositorEGL::Resume() {
 bool RenderCompositorEGL::IsPaused() { return mEGLSurface == EGL_NO_SURFACE; }
 
 gl::GLContext* RenderCompositorEGL::gl() const {
-  return RenderThread::Get()->SharedGL();
+  return RenderThread::Get()->SingletonGL();
 }
 
 bool RenderCompositorEGL::MakeCurrent() {

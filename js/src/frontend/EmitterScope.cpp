@@ -173,12 +173,12 @@ NameLocation EmitterScope::searchAndCache(BytecodeEmitter* bce,
   // If the name is not found in the current compilation, walk the Scope
   // chain encompassing the compilation.
   if (!loc) {
-    MOZ_ASSERT(bce->compilationState.input.lazy);
+    MOZ_ASSERT(bce->compilationState.input.lazy ||
+               bce->compilationState.input.target ==
+                   CompilationInput::CompilationTarget::Eval);
     inCurrentScript = false;
-    loc = Some(
-        bce->compilationState.scopeContext.searchInDelazificationEnclosingScope(
-            bce->cx, bce->compilationState.input, bce->parserAtoms(), name,
-            hops));
+    loc = Some(bce->compilationState.scopeContext.searchInEnclosingScope(
+        bce->cx, bce->compilationState.input, bce->parserAtoms(), name, hops));
   }
 
   // Each script has its own frame. A free name that is accessed
@@ -210,20 +210,20 @@ bool EmitterScope::internEmptyGlobalScopeAsBody(BytecodeEmitter* bce) {
       &scopeIndex_);
 }
 
-bool EmitterScope::internScopeCreationData(BytecodeEmitter* bce,
-                                           ScopeIndex scopeIndex) {
+bool EmitterScope::internScopeStencil(BytecodeEmitter* bce,
+                                      ScopeIndex scopeIndex) {
   ScopeStencil& scope = bce->compilationState.scopeData[scopeIndex.index];
   hasEnvironment_ = scope.hasEnvironment();
   return bce->perScriptData().gcThingList().append(scopeIndex, &scopeIndex_);
 }
 
-bool EmitterScope::internBodyScopeCreationData(BytecodeEmitter* bce,
-                                               ScopeIndex scopeIndex) {
+bool EmitterScope::internBodyScopeStencil(BytecodeEmitter* bce,
+                                          ScopeIndex scopeIndex) {
   MOZ_ASSERT(bce->bodyScopeIndex == ScopeNote::NoScopeIndex,
              "There can be only one body scope");
   bce->bodyScopeIndex =
       GCThingIndex(bce->perScriptData().gcThingList().length());
-  return internScopeCreationData(bce, scopeIndex);
+  return internScopeStencil(bce, scopeIndex);
 }
 
 bool EmitterScope::appendScopeNote(BytecodeEmitter* bce) {
@@ -362,7 +362,7 @@ bool EmitterScope::enterLexical(BytecodeEmitter* bce, ScopeKind kind,
           enclosingScopeIndex(bce), &scopeIndex)) {
     return false;
   }
-  if (!internScopeCreationData(bce, scopeIndex)) {
+  if (!internScopeStencil(bce, scopeIndex)) {
     return false;
   }
 
@@ -422,7 +422,7 @@ bool EmitterScope::enterNamedLambda(BytecodeEmitter* bce, FunctionBox* funbox) {
           enclosingScopeIndex(bce), &scopeIndex)) {
     return false;
   }
-  if (!internScopeCreationData(bce, scopeIndex)) {
+  if (!internScopeStencil(bce, scopeIndex)) {
     return false;
   }
 
@@ -523,7 +523,7 @@ bool EmitterScope::enterFunction(BytecodeEmitter* bce, FunctionBox* funbox) {
           funbox->isArrow(), enclosingScopeIndex(bce), &scopeIndex)) {
     return false;
   }
-  if (!internBodyScopeCreationData(bce, scopeIndex)) {
+  if (!internBodyScopeStencil(bce, scopeIndex)) {
     return false;
   }
 
@@ -594,7 +594,7 @@ bool EmitterScope::enterFunctionExtraBodyVar(BytecodeEmitter* bce,
           enclosingScopeIndex(bce), &scopeIndex)) {
     return false;
   }
-  if (!internScopeCreationData(bce, scopeIndex)) {
+  if (!internScopeStencil(bce, scopeIndex)) {
     return false;
   }
 
@@ -646,7 +646,7 @@ bool EmitterScope::enterGlobal(BytecodeEmitter* bce,
                                           globalsc->bindings, &scopeIndex)) {
     return false;
   }
-  if (!internBodyScopeCreationData(bce, scopeIndex)) {
+  if (!internBodyScopeStencil(bce, scopeIndex)) {
     return false;
   }
 
@@ -688,9 +688,6 @@ bool EmitterScope::enterEval(BytecodeEmitter* bce, EvalSharedContext* evalsc) {
     return false;
   }
 
-  // For simplicity, treat all free name lookups in eval scripts as dynamic.
-  fallbackFreeNameLocation_ = Some(NameLocation::Dynamic());
-
   // Create the `var` scope. Note that there is also a lexical scope, created
   // separately in emitScript().
   ScopeKind scopeKind =
@@ -702,8 +699,30 @@ bool EmitterScope::enterEval(BytecodeEmitter* bce, EvalSharedContext* evalsc) {
           enclosingScopeIndex(bce), &scopeIndex)) {
     return false;
   }
-  if (!internBodyScopeCreationData(bce, scopeIndex)) {
+  if (!internBodyScopeStencil(bce, scopeIndex)) {
     return false;
+  }
+
+  if (evalsc->strict()) {
+    if (evalsc->bindings) {
+      ParserBindingIter bi(*evalsc->bindings, true);
+      for (; bi; bi++) {
+        if (!checkSlotLimits(bce, bi)) {
+          return false;
+        }
+
+        NameLocation loc = NameLocation::fromBinding(bi.kind(), bi.location());
+        if (!putNameInCache(bce, bi.name(), loc)) {
+          return false;
+        }
+      }
+
+      updateFrameFixedSlots(bce, bi);
+    }
+  } else {
+    // For simplicity, treat all free name lookups in nonstrict eval scripts as
+    // dynamic.
+    fallbackFreeNameLocation_ = Some(NameLocation::Dynamic());
   }
 
   if (hasEnvironment()) {
@@ -723,7 +742,7 @@ bool EmitterScope::enterEval(BytecodeEmitter* bce, EvalSharedContext* evalsc) {
     }
   }
 
-  return true;
+  return checkEnvironmentChainLength(bce);
 }
 
 bool EmitterScope::enterModule(BytecodeEmitter* bce,
@@ -786,7 +805,7 @@ bool EmitterScope::enterModule(BytecodeEmitter* bce,
           enclosingScopeIndex(bce), &scopeIndex)) {
     return false;
   }
-  if (!internBodyScopeCreationData(bce, scopeIndex)) {
+  if (!internBodyScopeStencil(bce, scopeIndex)) {
     return false;
   }
 
@@ -810,7 +829,7 @@ bool EmitterScope::enterWith(BytecodeEmitter* bce) {
     return false;
   }
 
-  if (!internScopeCreationData(bce, scopeIndex)) {
+  if (!internScopeStencil(bce, scopeIndex)) {
     return false;
   }
 

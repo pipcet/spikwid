@@ -17,7 +17,8 @@
 #include "nsNativeTheme.h"
 #include "ScrollbarDrawingMac.h"
 
-@class CellDrawView;
+@class MOZCellDrawWindow;
+@class MOZCellDrawView;
 @class NSProgressBarCell;
 class nsDeviceContext;
 struct SegmentedControlRenderSettings;
@@ -43,9 +44,6 @@ class nsNativeThemeCocoa : private nsNativeTheme, public nsITheme {
   enum class ButtonType : uint8_t {
     eRegularPushButton,
     eDefaultPushButton,
-    eRegularBevelButton,
-    eDefaultBevelButton,
-    eRoundedBezelPushButton,
     eSquareBezelPushButton,
     eArrowButton,
     eHelpButton,
@@ -123,11 +121,6 @@ class nsNativeThemeCocoa : private nsNativeTheme, public nsITheme {
     bool rtl = false;
   };
 
-  struct UnifiedToolbarParams {
-    float unifiedHeight = 0.0f;
-    bool isMain = false;
-  };
-
   struct TextFieldParams {
     float verticalAlignFactor = 0.5f;
     bool insideToolbar = false;
@@ -190,10 +183,8 @@ class nsNativeThemeCocoa : private nsNativeTheme, public nsITheme {
     eSpinButtonDown,  // SpinButtonParams
     eSegment,         // SegmentParams
     eSeparator,
-    eUnifiedToolbar,  // UnifiedToolbarParams
-    eToolbar,         // bool
-    eNativeTitlebar,  // UnifiedToolbarParams
-    eStatusBar,       // bool
+    eToolbar,    // bool
+    eStatusBar,  // bool
     eGroupBox,
     eTextField,           // TextFieldParams
     eSearchField,         // TextFieldParams
@@ -251,13 +242,7 @@ class nsNativeThemeCocoa : private nsNativeTheme, public nsITheme {
       return WidgetInfo(Widget::eSegment, aParams);
     }
     static WidgetInfo Separator() { return WidgetInfo(Widget::eSeparator, false); }
-    static WidgetInfo UnifiedToolbar(const UnifiedToolbarParams& aParams) {
-      return WidgetInfo(Widget::eUnifiedToolbar, aParams);
-    }
     static WidgetInfo Toolbar(bool aParams) { return WidgetInfo(Widget::eToolbar, aParams); }
-    static WidgetInfo NativeTitlebar(const UnifiedToolbarParams& aParams) {
-      return WidgetInfo(Widget::eNativeTitlebar, aParams);
-    }
     static WidgetInfo StatusBar(bool aParams) { return WidgetInfo(Widget::eStatusBar, aParams); }
     static WidgetInfo GroupBox() { return WidgetInfo(Widget::eGroupBox, false); }
     static WidgetInfo TextField(const TextFieldParams& aParams) {
@@ -313,9 +298,9 @@ class nsNativeThemeCocoa : private nsNativeTheme, public nsITheme {
     WidgetInfo(enum Widget aWidget, const T& aParams) : mVariant(aParams), mWidget(aWidget) {}
 
     mozilla::Variant<mozilla::gfx::sRGBColor, MenuIconParams, MenuItemParams, CheckboxOrRadioParams,
-                     ButtonParams, DropdownParams, SpinButtonParams, SegmentParams,
-                     UnifiedToolbarParams, TextFieldParams, ProgressParams, MeterParams,
-                     TreeHeaderCellParams, ScaleParams, ScrollbarParams, bool>
+                     ButtonParams, DropdownParams, SpinButtonParams, SegmentParams, TextFieldParams,
+                     ProgressParams, MeterParams, TreeHeaderCellParams, ScaleParams,
+                     ScrollbarParams, bool>
         mVariant;
 
     enum Widget mWidget;
@@ -330,7 +315,8 @@ class nsNativeThemeCocoa : private nsNativeTheme, public nsITheme {
   // The nsITheme interface.
   NS_IMETHOD DrawWidgetBackground(gfxContext* aContext, nsIFrame* aFrame,
                                   StyleAppearance aAppearance, const nsRect& aRect,
-                                  const nsRect& aDirtyRect) override;
+                                  const nsRect& aDirtyRect,
+                                  DrawOverflow) override;
   bool CreateWebRenderCommandsForWidget(mozilla::wr::DisplayListBuilder& aBuilder,
                                         mozilla::wr::IpcResourceUpdateQueue& aResources,
                                         const mozilla::layers::StackingContextHelper& aSc,
@@ -368,9 +354,6 @@ class nsNativeThemeCocoa : private nsNativeTheme, public nsITheme {
                                                const nsRect& aRect);
   void DrawProgress(CGContextRef context, const HIRect& inBoxRect, const ProgressParams& aParams);
 
-  static void DrawNativeTitlebar(CGContextRef aContext, CGRect aTitlebarRect,
-                                 CGFloat aUnifiedHeight, BOOL aIsMain, BOOL aIsFlipped);
-
  protected:
   virtual ~nsNativeThemeCocoa();
 
@@ -406,8 +389,8 @@ class nsNativeThemeCocoa : private nsNativeTheme, public nsITheme {
                        const TextFieldParams& aParams);
   void DrawTextField(CGContextRef cgContext, const HIRect& inBoxRect,
                      const TextFieldParams& aParams);
-  void DrawRoundedBezelPushButton(CGContextRef cgContext, const HIRect& inBoxRect,
-                                  ControlParams aControlParams);
+  void DrawPushButton(CGContextRef cgContext, const HIRect& inBoxRect, ButtonType aButtonType,
+                      ControlParams aControlParams);
   void DrawSquareBezelPushButton(CGContextRef cgContext, const HIRect& inBoxRect,
                                  ControlParams aControlParams);
   void DrawHelpButton(CGContextRef cgContext, const HIRect& inBoxRect,
@@ -434,10 +417,6 @@ class nsNativeThemeCocoa : private nsNativeTheme, public nsITheme {
   void DrawSpinButton(CGContextRef context, const HIRect& inBoxRect, SpinButton aDrawnButton,
                       const SpinButtonParams& aParams);
   void DrawToolbar(CGContextRef cgContext, const CGRect& inBoxRect, bool aIsMain);
-  void DrawUnifiedToolbar(CGContextRef cgContext, const HIRect& inBoxRect,
-                          const UnifiedToolbarParams& aParams);
-  void DrawNativeTitlebar(CGContextRef aContext, CGRect aTitlebarRect,
-                          const UnifiedToolbarParams& aParams);
   void DrawStatusBar(CGContextRef cgContext, const HIRect& inBoxRect, bool aIsMain);
   void DrawResizer(CGContextRef cgContext, const HIRect& aRect, bool aIsRTL);
   void DrawMultilineTextField(CGContextRef cgContext, const CGRect& inBoxRect, bool aIsFocused);
@@ -461,7 +440,8 @@ class nsNativeThemeCocoa : private nsNativeTheme, public nsITheme {
   NSComboBoxCell* mComboBoxCell;
   NSProgressBarCell* mProgressBarCell;
   NSLevelIndicatorCell* mMeterBarCell;
-  CellDrawView* mCellDrawView;
+  MOZCellDrawWindow* mCellDrawWindow = nil;
+  MOZCellDrawView* mCellDrawView;
 };
 
 #endif  // nsNativeThemeCocoa_h_

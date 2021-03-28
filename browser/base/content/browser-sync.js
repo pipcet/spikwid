@@ -327,6 +327,7 @@ this.SyncedTabsPanelList = class SyncedTabsPanelList {
 
 var gSync = {
   _initialized: false,
+  _isCurrentlySyncing: false,
   // The last sync start time. Used to calculate the leftover animation time
   // once syncing completes (bug 1239042).
   _syncStartTime: 0,
@@ -353,7 +354,12 @@ var gSync = {
   get fluentStrings() {
     delete this.fluentStrings;
     return (this.fluentStrings = new Localization(
-      ["branding/brand.ftl", "browser/appmenu.ftl", "browser/sync.ftl"],
+      [
+        "branding/brand.ftl",
+        "browser/accounts.ftl",
+        "browser/appmenu.ftl",
+        "browser/sync.ftl",
+      ],
       true
     ));
   },
@@ -378,6 +384,20 @@ var gSync = {
 
   get isSignedIn() {
     return UIState.get().status == UIState.STATUS_SIGNED_IN;
+  },
+
+  shouldHideSendContextMenuItems(enabled) {
+    const state = UIState.get();
+    // Only show the "Send..." context menu items when sending would be possible
+    if (
+      enabled &&
+      state.status == UIState.STATUS_SIGNED_IN &&
+      state.syncEnabled &&
+      this.getSendTabTargets().length
+    ) {
+      return false;
+    }
+    return true;
   },
 
   getSendTabTargets() {
@@ -520,6 +540,14 @@ var gSync = {
   },
 
   onFxAPanelViewShowing(panelview) {
+    let syncNowBtn = panelview.querySelector(".syncnow-label");
+    let l10nId = syncNowBtn.getAttribute(
+      this._isCurrentlySyncing
+        ? "syncing-data-l10n-id"
+        : "sync-now-data-l10n-id"
+    );
+    syncNowBtn.setAttribute("data-l10n-id", l10nId);
+
     panelview.syncedTabsPanelList = new SyncedTabsPanelList(
       panelview,
       PanelMultiView.getViewNode(document, "PanelUI-fxa-remotetabs-deck"),
@@ -868,15 +896,15 @@ var gSync = {
     } else if (state.status === UIState.STATUS_LOGIN_FAILED) {
       stateValue = "login-failed";
       headerTitle = state.email;
-      headerDescription = this.fxaStrings.GetStringFromName(
-        "account.reconnectToFxA"
+      headerDescription = this.fluentStrings.formatValueSync(
+        "account-reconnect-to-fxa"
       );
       mainWindowEl.style.removeProperty("--avatar-image-url");
     } else if (state.status === UIState.STATUS_NOT_VERIFIED) {
       stateValue = "unverified";
       headerTitle = state.email;
-      headerDescription = this.fxaStrings.GetStringFromName(
-        "account.finishAccountSetup"
+      headerDescription = this.fluentStrings.formatValueSync(
+        "account-finish-account-setup"
       );
     } else if (state.status === UIState.STATUS_SIGNED_IN) {
       stateValue = "signedin";
@@ -999,6 +1027,7 @@ var gSync = {
         appMenuHeaderText.hidden = false;
         appMenuHeaderText.style.visibility = "visible";
         appMenuStatus.classList.add("toolbaritem-combined-buttons");
+        appMenuLabel.classList.remove("subviewbutton-nav");
       }
       return;
     }
@@ -1011,8 +1040,8 @@ var gSync = {
         [state.email]
       );
       appMenuStatus.setAttribute("fxastatus", "login-failed");
-      let errorLabel = this.fxaStrings.GetStringFromName(
-        "account.reconnectToFxA"
+      let errorLabel = this.fluentStrings.formatValueSync(
+        "account-reconnect-to-fxa"
       );
       appMenuLabel.setAttribute("label", errorLabel);
       appMenuStatus.setAttribute("tooltiptext", tooltipDescription);
@@ -1023,8 +1052,8 @@ var gSync = {
         [state.email]
       );
       appMenuStatus.setAttribute("fxastatus", "unverified");
-      let unverifiedLabel = this.fxaStrings.GetStringFromName(
-        "account.finishAccountSetup"
+      let unverifiedLabel = this.fluentStrings.formatValueSync(
+        "account-finish-account-setup"
       );
       appMenuLabel.setAttribute("label", unverifiedLabel);
       appMenuStatus.setAttribute("tooltiptext", tooltipDescription);
@@ -1409,6 +1438,38 @@ var gSync = {
       }
       addTargetDevice(target.id, target.name, type, lastModified);
     }
+
+    if (targets.length > 1) {
+      // "Send to All Devices" menu item
+      const separator = createDeviceNodeFn();
+      separator.classList.add("sync-menuitem");
+      fragment.appendChild(separator);
+      const allDevicesLabel = this.fxaStrings.GetStringFromName(
+        "sendToAllDevices.menuitem"
+      );
+      addTargetDevice("", allDevicesLabel, "");
+
+      // "Manage devices" menu item
+      const manageDevicesLabel = this.fxaStrings.GetStringFromName(
+        "manageDevices.menuitem"
+      );
+      // We piggyback on the createDeviceNodeFn implementation,
+      // it's a big disgusting.
+      const targetDevice = createDeviceNodeFn(
+        null,
+        manageDevicesLabel,
+        null,
+        null
+      );
+      targetDevice.addEventListener(
+        "command",
+        () => gSync.openDevicesManagementPage("sendtab"),
+        true
+      );
+      targetDevice.classList.add("sync-menuitem", "sendtab-target");
+      targetDevice.setAttribute("label", manageDevicesLabel);
+      fragment.appendChild(targetDevice);
+    }
   },
 
   _appendSendTabSingleDevice(fragment, createDeviceNodeFn) {
@@ -1530,27 +1591,33 @@ var gSync = {
       }
     }
     const enabled = !this.sendTabConfiguredAndLoading && hasASendableURI;
+    const hideItems = this.shouldHideSendContextMenuItems(enabled);
 
     let sendTabsToDevice = document.getElementById("context_sendTabToDevice");
     sendTabsToDevice.disabled = !enabled;
 
-    let tabCount = aTargetTab.multiselected
-      ? gBrowser.multiSelectedTabsCount
-      : 1;
-    sendTabsToDevice.label = PluralForm.get(
-      tabCount,
-      gNavigatorBundle.getString("sendTabsToDevice.label")
-    ).replace("#1", tabCount.toLocaleString());
-    sendTabsToDevice.accessKey = gNavigatorBundle.getString(
-      "sendTabsToDevice.accesskey"
-    );
+    if (hideItems || !hasASendableURI) {
+      sendTabsToDevice.hidden = true;
+    } else {
+      let tabCount = aTargetTab.multiselected
+        ? gBrowser.multiSelectedTabsCount
+        : 1;
+      sendTabsToDevice.label = PluralForm.get(
+        tabCount,
+        gNavigatorBundle.getString("sendTabsToDevice.label")
+      ).replace("#1", tabCount.toLocaleString());
+      sendTabsToDevice.accessKey = gNavigatorBundle.getString(
+        "sendTabsToDevice.accesskey"
+      );
+      sendTabsToDevice.hidden = false;
+    }
   },
 
   // "Send Page to Device" and "Send Link to Device" menu items
   updateContentContextMenu(contextMenu) {
     if (!this.FXA_ENABLED) {
       // These items are hidden by default. No need to do anything.
-      return;
+      return false;
     }
     // showSendLink and showSendPage are mutually exclusive
     const showSendLink =
@@ -1567,37 +1634,45 @@ var gSync = {
         contextMenu.onTextInput
       );
 
-    contextMenu.showItem("context-sendpagetodevice", showSendPage);
-    contextMenu.showItem("context-sendlinktodevice", showSendLink);
-
-    if (!showSendLink && !showSendPage) {
-      return;
-    }
-
     const targetURI = showSendLink
       ? contextMenu.getLinkURI()
       : contextMenu.browser.currentURI;
     const enabled =
       !this.sendTabConfiguredAndLoading &&
       BrowserUtils.isShareableURL(targetURI);
+    const hideItems = this.shouldHideSendContextMenuItems(enabled);
+
+    contextMenu.showItem(
+      "context-sendpagetodevice",
+      !hideItems && showSendPage
+    );
+    contextMenu.showItem(
+      "context-sendlinktodevice",
+      !hideItems && showSendLink
+    );
+
+    if (!showSendLink && !showSendPage) {
+      return false;
+    }
+
     contextMenu.setItemAttr(
       showSendPage ? "context-sendpagetodevice" : "context-sendlinktodevice",
       "disabled",
       !enabled || null
     );
+    // return true if context menu items are visible
+    return !hideItems && (showSendPage || showSendLink);
   },
 
   // Functions called by observers
   onActivityStart() {
+    this._isCurrentlySyncing = true;
     clearTimeout(this._syncAnimationTimer);
     this._syncStartTime = Date.now();
 
-    let syncingLabel = this.fluentStrings.formatValueSync(
-      "fxa-toolbar-sync-syncing2"
-    );
-
     document.querySelectorAll(".syncnow-label").forEach(el => {
-      el.value = syncingLabel;
+      let l10nId = el.getAttribute("syncing-data-l10n-id");
+      el.setAttribute("data-l10n-id", l10nId);
     });
 
     document.querySelectorAll(".syncNowBtn").forEach(el => {
@@ -1613,16 +1688,14 @@ var gSync = {
   },
 
   _onActivityStop() {
+    this._isCurrentlySyncing = false;
     if (!gBrowser) {
       return;
     }
 
-    let syncingLabel = this.fluentStrings.formatValueSync(
-      "appmenuitem-fxa-toolbar-sync-now2"
-    );
-
     document.querySelectorAll(".syncnow-label").forEach(el => {
-      el.value = syncingLabel;
+      let l10nId = el.getAttribute("sync-now-data-l10n-id");
+      el.setAttribute("data-l10n-id", l10nId);
     });
 
     document.querySelectorAll(".syncNowBtn").forEach(el => {

@@ -73,7 +73,7 @@ pub enum DepthFunction {
 }
 
 #[repr(u32)]
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "capture", derive(Serialize))]
 #[cfg_attr(feature = "replay", derive(Deserialize))]
 pub enum TextureFilter {
@@ -156,6 +156,15 @@ pub fn get_gl_target(target: ImageBufferKind) -> gl::GLuint {
         ImageBufferKind::Texture2D => gl::TEXTURE_2D,
         ImageBufferKind::TextureRect => gl::TEXTURE_RECTANGLE,
         ImageBufferKind::TextureExternal => gl::TEXTURE_EXTERNAL_OES,
+    }
+}
+
+pub fn from_gl_target(target: gl::GLuint) -> ImageBufferKind {
+    match target {
+        gl::TEXTURE_2D => ImageBufferKind::Texture2D,
+        gl::TEXTURE_RECTANGLE => ImageBufferKind::TextureRect,
+        gl::TEXTURE_EXTERNAL_OES => ImageBufferKind::TextureExternal,
+        _ => panic!("Unexpected target {:?}", target),
     }
 }
 
@@ -471,6 +480,10 @@ impl Texture {
         self.filter
     }
 
+    pub fn get_target(&self) -> ImageBufferKind {
+        from_gl_target(self.target)
+    }
+
     pub fn supports_depth(&self) -> bool {
         self.fbo_with_depth.is_some()
     }
@@ -541,6 +554,7 @@ pub struct Program {
     id: gl::GLuint,
     u_transform: gl::GLint,
     u_mode: gl::GLint,
+    u_texture_size: gl::GLint,
     source_info: ProgramSourceInfo,
     is_initialized: bool,
 }
@@ -967,6 +981,10 @@ pub struct Capabilities {
     /// Whether anti-aliasing is supported natively by the GL implementation
     /// rather than emulated in shaders.
     pub uses_native_antialiasing: bool,
+    /// Whether the extension GL_OES_EGL_image_external_essl3 is supported. If true, external
+    /// textures can be used as normal. If false, external textures can only be rendered with
+    /// certain shaders, and must first be copied in to regular textures for others.
+    pub supports_image_external_essl3: bool,
     /// The name of the renderer, as reported by GL
     pub renderer_name: String,
 }
@@ -1171,6 +1189,7 @@ pub enum DrawTarget {
         offset: DeviceIntPoint,
         external_fbo_id: u32,
         dimensions: DeviceIntSize,
+        surface_origin_is_top_left: bool,
     },
 }
 
@@ -1232,7 +1251,13 @@ impl DrawTarget {
                     fb_rect.origin.x += rect.origin.x;
                 }
             }
-            DrawTarget::Texture { .. } | DrawTarget::External { .. } | DrawTarget::NativeSurface { .. } => (),
+            DrawTarget::NativeSurface { surface_origin_is_top_left, .. } => {
+                if !surface_origin_is_top_left {
+                    let dimensions = self.dimensions();
+                    fb_rect.origin.y = dimensions.height - fb_rect.origin.y - fb_rect.size.height;
+                }
+            }
+            DrawTarget::Texture { .. } | DrawTarget::External { .. } => (),
         }
         fb_rect
     }
@@ -1240,7 +1265,8 @@ impl DrawTarget {
     pub fn surface_origin_is_top_left(&self) -> bool {
         match *self {
             DrawTarget::Default { surface_origin_is_top_left, .. } => surface_origin_is_top_left,
-            DrawTarget::Texture { .. } | DrawTarget::External { .. } | DrawTarget::NativeSurface { .. } => true,
+            DrawTarget::NativeSurface { surface_origin_is_top_left, .. } => surface_origin_is_top_left,
+            DrawTarget::Texture { .. } | DrawTarget::External { .. } => true,
         }
     }
 
@@ -1261,7 +1287,7 @@ impl DrawTarget {
                         .unwrap_or_else(FramebufferIntRect::zero)
                 }
                 DrawTarget::NativeSurface { offset, .. } => {
-                    device_rect_as_framebuffer_rect(&scissor_rect.translate(offset.to_vector()))
+                    self.to_framebuffer_rect(scissor_rect.translate(offset.to_vector()))
                 }
                 DrawTarget::Texture { .. } | DrawTarget::External { .. } => {
                     device_rect_as_framebuffer_rect(&scissor_rect)
@@ -1650,6 +1676,8 @@ impl Device {
         // As above, this allows bypassing certain alpha-pass variants.
         let uses_native_antialiasing = is_software_webrender;
 
+        let supports_image_external_essl3 = supports_extension(&extensions, "GL_OES_EGL_image_external_essl3");
+
         let is_mali_g = renderer_name.starts_with("Mali-G");
 
         let mut requires_batched_texture_uploads = None;
@@ -1702,6 +1730,7 @@ impl Device {
                 supports_r8_texture_upload,
                 uses_native_clip_mask,
                 uses_native_antialiasing,
+                supports_image_external_essl3,
                 renderer_name,
             },
 
@@ -1899,7 +1928,12 @@ impl Device {
             self.gl.get_shader_iv(id, gl::COMPILE_STATUS, &mut status);
         }
         if status[0] == 0 {
-            error!("Failed to compile shader: {}\n{}", name, log);
+            let type_str = match shader_type {
+                gl::VERTEX_SHADER => "vertex",
+                gl::FRAGMENT_SHADER => "fragment",
+                _ => panic!("Unexpected shader type {:x}", shader_type),
+            };
+            error!("Failed to compile {} shader: {}\n{}", type_str, name, log);
             #[cfg(debug_assertions)]
             Self::print_shader_errors(source, &log);
             Err(ShaderError::Compilation(name.to_string(), log))
@@ -2212,7 +2246,7 @@ impl Device {
         if build_program {
             // Compile the vertex shader
             let vs_source = info.compute_source(self, ShaderKind::Vertex);
-            let vs_id = match self.compile_shader(&info.base_filename, gl::VERTEX_SHADER, &vs_source) {
+            let vs_id = match self.compile_shader(&info.full_name(), gl::VERTEX_SHADER, &vs_source) {
                     Ok(vs_id) => vs_id,
                     Err(err) => return Err(err),
                 };
@@ -2220,7 +2254,7 @@ impl Device {
             // Compile the fragment shader
             let fs_source = info.compute_source(self, ShaderKind::Fragment);
             let fs_id =
-                match self.compile_shader(&info.base_filename, gl::FRAGMENT_SHADER, &fs_source) {
+                match self.compile_shader(&info.full_name(), gl::FRAGMENT_SHADER, &fs_source) {
                     Ok(fs_id) => fs_id,
                     Err(err) => {
                         self.gl.delete_shader(vs_id);
@@ -2313,6 +2347,7 @@ impl Device {
         program.is_initialized = true;
         program.u_transform = self.gl.get_uniform_location(program.id, "uTransform");
         program.u_mode = self.gl.get_uniform_location(program.id, "uMode");
+        program.u_texture_size = self.gl.get_uniform_location(program.id, "uTextureSize");
 
         Ok(())
     }
@@ -2817,6 +2852,7 @@ impl Device {
             id: pid,
             u_transform: 0,
             u_mode: 0,
+            u_texture_size: 0,
             source_info,
             is_initialized: false,
         };
@@ -2881,6 +2917,22 @@ impl Device {
         debug_assert!(self.shader_is_ready);
 
         self.gl.uniform_1i(self.program_mode_id.0, mode);
+    }
+
+    /// Sets the uTextureSize uniform. Most shaders do not require this to be called
+    /// as they use the textureSize GLSL function instead.
+    pub fn set_shader_texture_size(
+        &self,
+        program: &Program,
+        texture_size: DeviceSize,
+    ) {
+        debug_assert!(self.inside_frame);
+        #[cfg(debug_assertions)]
+        debug_assert!(self.shader_is_ready);
+
+        if program.u_texture_size != -1 {
+            self.gl.uniform_2f(program.u_texture_size, texture_size.width, texture_size.height);
+        }
     }
 
     pub fn create_pbo(&mut self) -> PBO {

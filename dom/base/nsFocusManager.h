@@ -295,13 +295,10 @@ class nsFocusManager final : public nsIFocusManager,
    */
   void NotifyOfReFocus(nsIContent& aContent);
 
-  static bool sMouseFocusesFormControl;
-
   static void MarkUncollectableForCCGeneration(uint32_t aGeneration);
 
   struct BlurredElementInfo {
     const mozilla::OwningNonNull<mozilla::dom::Element> mElement;
-    const bool mHadRing;
 
     explicit BlurredElementInfo(mozilla::dom::Element&);
     ~BlurredElementInfo();

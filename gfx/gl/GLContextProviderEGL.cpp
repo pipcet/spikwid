@@ -255,7 +255,7 @@ already_AddRefed<GLContext> GLContextEGLFactory::CreateImpl(
   int visualID = 0;
 #ifdef MOZ_X11
   GdkDisplay* gdkDisplay = gdk_display_get_default();
-  if (GdkIsX11Display(gdkDisplay)) {
+  if (GdkIsX11Display(gdkDisplay) && aWindow) {
     auto* display = GDK_DISPLAY_XDISPLAY(gdkDisplay);
     if (display) {
       XWindowAttributes windowAttrs;
@@ -1007,6 +1007,10 @@ already_AddRefed<GLContext> GLContextProviderEGL::CreateForCompositorWidget(
     window = GET_NATIVE_WINDOW_FROM_COMPOSITOR_WIDGET(aCompositorWidget);
 #if defined(MOZ_WIDGET_GTK)
     depth = aCompositorWidget->AsX11()->GetDepth();
+#endif
+  } else {
+#if defined(MOZ_WIDGET_GTK)
+    depth = 32;
 #endif
   }
   return GLContextEGLFactory::Create(window, aWebRender, depth);

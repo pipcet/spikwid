@@ -51,17 +51,17 @@ static inline SymbolicAddress ToSymbolicAddress(BD_SymbolicAddress bd) {
     case BD_SymbolicAddress::MemorySize:
       return SymbolicAddress::MemorySize;
     case BD_SymbolicAddress::MemoryCopy:
-      return SymbolicAddress::MemCopy;
+      return SymbolicAddress::MemCopy32;
     case BD_SymbolicAddress::MemoryCopyShared:
-      return SymbolicAddress::MemCopyShared;
+      return SymbolicAddress::MemCopyShared32;
     case BD_SymbolicAddress::DataDrop:
       return SymbolicAddress::DataDrop;
     case BD_SymbolicAddress::MemoryFill:
-      return SymbolicAddress::MemFill;
+      return SymbolicAddress::MemFill32;
     case BD_SymbolicAddress::MemoryFillShared:
-      return SymbolicAddress::MemFillShared;
+      return SymbolicAddress::MemFillShared32;
     case BD_SymbolicAddress::MemoryInit:
-      return SymbolicAddress::MemInit;
+      return SymbolicAddress::MemInit32;
     case BD_SymbolicAddress::TableCopy:
       return SymbolicAddress::TableCopy;
     case BD_SymbolicAddress::ElemDrop:
@@ -304,7 +304,7 @@ class CraneliftContext {
       staticEnv_.memory_guard_size = OffsetGuardLimit;
     }
 #endif
-    // Otherwise, heap bounds are stored in the `boundsCheckLimit32` field
+    // Otherwise, heap bounds are stored in the `boundsCheckLimit` field
     // of TlsData.
   }
   bool init() {
@@ -326,7 +326,7 @@ CraneliftFuncCompileInput::CraneliftFuncCompileInput(
       index(func.index),
       offset_in_module(func.lineOrBytecode) {}
 
-static_assert(offsetof(TlsData, boundsCheckLimit32) == sizeof(void*),
+static_assert(offsetof(TlsData, boundsCheckLimit) == sizeof(void*),
               "fix make_heap() in wasm2clif.rs");
 
 CraneliftStaticEnvironment::CraneliftStaticEnvironment()
@@ -411,6 +411,8 @@ TypeCode env_elem_typecode(const CraneliftModuleEnvironment* env,
   return env->env->elemSegments[index]->elemType.packed().typeCode();
 }
 
+// Returns a number of pages in the range [0..65536], or UINT32_MAX to signal
+// that no maximum has been set.
 uint32_t env_max_memory(const CraneliftModuleEnvironment* env) {
   // env.maxMemoryLength is in bytes.  Convert it to wasm pages.
   if (env->env->maxMemoryLength.isSome()) {
@@ -421,9 +423,8 @@ uint32_t env_max_memory(const CraneliftModuleEnvironment* env) {
     MOZ_RELEASE_ASSERT(inBytes <= (((uint64_t)1) << 32));
     MOZ_RELEASE_ASSERT((inBytes & wasm::PageMask) == 0);
     return (uint32_t)(inBytes >> wasm::PageBits);
-  } else {
-    return UINT32_MAX;
   }
+  return UINT32_MAX;
 }
 
 bool env_uses_shared_memory(const CraneliftModuleEnvironment* env) {

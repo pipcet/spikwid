@@ -127,6 +127,7 @@ updatebot:
     - type: commit-alert
       branch: upstream-branch-name
       cc: ["bugzilla@email.address", "another@example.com"]
+      needinfo: ["bugzilla@email.address", "another@example.com"]
       enabled: True
       filter: security
     - type: vendoring
@@ -367,6 +368,7 @@ def _schema_1():
                             "branch": All(str, Length(min=1)),
                             "enabled": Boolean(),
                             "cc": Unique([str]),
+                            "needinfo": Unique([str]),
                             "filter": In(
                                 [
                                     "none",
@@ -449,6 +451,17 @@ def _schema_1_additional(filename, manifest, require_license_file=True):
     # Cannot vendor without an origin.
     if "vendoring" in manifest and "origin" not in manifest:
         raise ValueError('"vendoring" requires an "origin"')
+
+    # If there are Updatebot tasks, then certain fields must be present
+    if "updatebot" in manifest and "tasks" in manifest["updatebot"]:
+        if "vendoring" not in manifest or "url" not in manifest["vendoring"]:
+            raise ValueError(
+                "If Updatebot tasks are specified, a vendoring url must be included."
+            )
+        if "origin" not in manifest or "revision" not in manifest["origin"]:
+            raise ValueError(
+                "If Updatebot tasks are specified, an origin revision must be specified."
+            )
 
     # Check for a simple YAML file
     with open(filename, "r") as f:

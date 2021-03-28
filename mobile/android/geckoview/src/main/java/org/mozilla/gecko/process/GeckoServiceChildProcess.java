@@ -73,6 +73,7 @@ public class GeckoServiceChildProcess extends Service {
                              final String[] args,
                              final Bundle extras,
                              final int flags,
+                             final String userSerialNumber,
                              final String crashHandlerService,
                              final ParcelFileDescriptor prefsPfd,
                              final ParcelFileDescriptor prefMapPfd,
@@ -115,7 +116,7 @@ public class GeckoServiceChildProcess extends Service {
                             // do anything special for that.
                             GeckoAppShell.setCrashHandlerService(crashHandler);
                             GeckoAppShell.ensureCrashHandling(crashHandler);
-                        } catch (ClassNotFoundException e) {
+                        } catch (final ClassNotFoundException e) {
                             Log.w(LOGTAG, "Couldn't find crash handler service " + crashHandlerService);
                         }
                     }
@@ -129,6 +130,7 @@ public class GeckoServiceChildProcess extends Service {
                     info.ipcFd = ipcFd;
                     info.crashFd = crashReporterFd;
                     info.crashAnnotationFd = crashAnnotationFd;
+                    info.userSerialNumber = userSerialNumber;
 
                     if (GeckoThread.init(info)) {
                         GeckoThread.launch();

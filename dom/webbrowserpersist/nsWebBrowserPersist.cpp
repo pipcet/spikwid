@@ -691,11 +691,11 @@ void nsWebBrowserPersist::SerializeNextFile() {
   // mTargetBaseURI is used to create the relative URLs and will be different
   // with each serialized document.
   RefPtr<FlatURIMap> flatMap = new FlatURIMap(targetBaseSpec);
-  for (auto iter = mURIMap.Iter(); !iter.Done(); iter.Next()) {
+  for (const auto& uriEntry : mURIMap) {
     nsAutoCString mapTo;
-    nsresult rv = iter.UserData()->GetLocalURI(mTargetBaseURI, mapTo);
+    nsresult rv = uriEntry.GetWeak()->GetLocalURI(mTargetBaseURI, mapTo);
     if (NS_SUCCEEDED(rv) || !mapTo.IsVoid()) {
-      flatMap->Add(iter.Key(), mapTo);
+      flatMap->Add(uriEntry.GetKey(), mapTo);
     }
   }
   mFlatURIMap = std::move(flatMap);
@@ -1824,16 +1824,16 @@ void nsWebBrowserPersist::Cleanup() {
     MutexAutoLock lock(mOutputMapMutex);
     mOutputMap.SwapElements(outputMapCopy);
   }
-  for (auto iter = outputMapCopy.Iter(); !iter.Done(); iter.Next()) {
-    nsCOMPtr<nsIChannel> channel = do_QueryInterface(iter.Key());
+  for (const auto& key : outputMapCopy.Keys()) {
+    nsCOMPtr<nsIChannel> channel = do_QueryInterface(key);
     if (channel) {
       channel->Cancel(NS_BINDING_ABORTED);
     }
   }
   outputMapCopy.Clear();
 
-  for (auto iter = mUploadList.Iter(); !iter.Done(); iter.Next()) {
-    nsCOMPtr<nsIChannel> channel = do_QueryInterface(iter.Key());
+  for (const auto& key : mUploadList.Keys()) {
+    nsCOMPtr<nsIChannel> channel = do_QueryInterface(key);
     if (channel) {
       channel->Cancel(NS_BINDING_ABORTED);
     }
@@ -2379,8 +2379,7 @@ nsresult nsWebBrowserPersist::FixRedirectedChannelEntry(
   nsCOMPtr<nsIURI> originalURI;
   aNewChannel->GetOriginalURI(getter_AddRefs(originalURI));
   nsISupports* matchingKey = nullptr;
-  for (auto iter = mOutputMap.Iter(); !iter.Done(); iter.Next()) {
-    nsISupports* key = iter.Key();
+  for (nsISupports* key : mOutputMap.Keys()) {
     nsCOMPtr<nsIChannel> thisChannel = do_QueryInterface(key);
     nsCOMPtr<nsIURI> thisURI;
 
@@ -2421,9 +2420,8 @@ void nsWebBrowserPersist::CalcTotalProgress() {
 
   if (mOutputMap.Count() > 0) {
     // Total up the progress of each output stream
-    for (auto iter = mOutputMap.Iter(); !iter.Done(); iter.Next()) {
+    for (const auto& data : mOutputMap.Values()) {
       // Only count toward total progress if destination file is local.
-      OutputData* data = iter.UserData();
       nsCOMPtr<nsIFileURL> fileURL = do_QueryInterface(data->mFile);
       if (fileURL) {
         mTotalCurrentProgress += data->mSelfProgress;
@@ -2434,8 +2432,7 @@ void nsWebBrowserPersist::CalcTotalProgress() {
 
   if (mUploadList.Count() > 0) {
     // Total up the progress of each upload
-    for (auto iter = mUploadList.Iter(); !iter.Done(); iter.Next()) {
-      UploadData* data = iter.UserData();
+    for (const auto& data : mUploadList.Values()) {
       if (data) {
         mTotalCurrentProgress += data->mSelfProgress;
         mTotalMaxProgress += data->mSelfProgressMax;

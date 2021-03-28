@@ -3358,12 +3358,12 @@ void HTMLMediaElement::MozGetMetadata(JSContext* cx,
     return;
   }
   if (mTags) {
-    for (auto iter = mTags->ConstIter(); !iter.Done(); iter.Next()) {
+    for (const auto& entry : *mTags) {
       nsString wideValue;
-      CopyUTF8toUTF16(iter.UserData(), wideValue);
+      CopyUTF8toUTF16(entry.GetData(), wideValue);
       JS::Rooted<JSString*> string(cx,
                                    JS_NewUCStringCopyZ(cx, wideValue.Data()));
-      if (!string || !JS_DefineProperty(cx, tags, iter.Key().Data(), string,
+      if (!string || !JS_DefineProperty(cx, tags, entry.GetKey().Data(), string,
                                         JSPROP_ENUMERATE)) {
         NS_WARNING("couldn't create metadata object!");
         aRv.Throw(NS_ERROR_FAILURE);
@@ -3452,8 +3452,8 @@ void HTMLMediaElement::GetAllEnabledMediaTracks(
 }
 
 void HTMLMediaElement::SetCapturedOutputStreamsEnabled(bool aEnabled) {
-  for (auto& entry : mOutputTrackSources) {
-    entry.GetData()->SetEnabled(aEnabled);
+  for (const auto& entry : mOutputTrackSources.Values()) {
+    entry->SetEnabled(aEnabled);
   }
 }
 
@@ -3463,8 +3463,8 @@ HTMLMediaElement::OutputMuteState HTMLMediaElement::OutputTracksMuted() {
 }
 
 void HTMLMediaElement::UpdateOutputTracksMuting() {
-  for (auto& entry : mOutputTrackSources) {
-    entry.GetData()->SetMutedByElement(OutputTracksMuted());
+  for (const auto& entry : mOutputTrackSources.Values()) {
+    entry->SetMutedByElement(OutputTracksMuted());
   }
 }
 
@@ -3559,10 +3559,8 @@ void HTMLMediaElement::UpdateOutputTrackSources() {
   }
 
   // ...and all MediaElementTrackSources.
-  AutoTArray<nsString, 4> trackSourcesToRemove;
-  for (const auto& entry : mOutputTrackSources) {
-    trackSourcesToRemove.AppendElement(entry.GetKey());
-  }
+  auto trackSourcesToRemove =
+      ToTArray<AutoTArray<nsString, 4>>(mOutputTrackSources.Keys());
 
   // Then work out the differences.
   mediaTracksToAdd.RemoveLastElements(
@@ -3814,8 +3812,8 @@ already_AddRefed<DOMMediaStream> HTMLMediaElement::CaptureStreamInternal(
     mAudioCaptured = true;
   }
 
-  for (const auto& entry : mOutputTrackSources) {
-    const RefPtr<MediaElementTrackSource>& source = entry.GetData();
+  for (const RefPtr<MediaElementTrackSource>& source :
+       mOutputTrackSources.Values()) {
     if (source->Track()->mType == MediaSegment::VIDEO) {
       // Only add video tracks if we're a video element and the output stream
       // wants video.
@@ -3963,15 +3961,14 @@ static unsigned MediaElementTableCount(HTMLMediaElement* aElement,
   }
   uint32_t uriCount = 0;
   uint32_t otherCount = 0;
-  for (auto it = gElementTable->ConstIter(); !it.Done(); it.Next()) {
-    const MediaElementSetForURI* entry = it.Get();
+  for (const auto& entry : *gElementTable) {
     uint32_t count = 0;
-    for (const auto& elem : entry->mElements) {
+    for (const auto& elem : entry.mElements) {
       if (elem == aElement) {
         count++;
       }
     }
-    if (URISafeEquals(aURI, entry->GetKey())) {
+    if (URISafeEquals(aURI, entry.GetKey())) {
       uriCount = count;
     } else {
       otherCount += count;
@@ -6222,8 +6219,8 @@ void HTMLMediaElement::NotifyDecoderPrincipalChanged() {
   if (isSameOrigin) {
     principal = NodePrincipal();
   }
-  for (const auto& entry : mOutputTrackSources) {
-    entry.GetData()->SetPrincipal(principal);
+  for (const auto& entry : mOutputTrackSources.Values()) {
+    entry->SetPrincipal(principal);
   }
   mDecoder->SetOutputTracksPrincipal(principal);
 }

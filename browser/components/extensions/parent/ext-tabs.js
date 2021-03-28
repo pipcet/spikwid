@@ -33,11 +33,6 @@ ChromeUtils.defineModuleGetter(
 );
 ChromeUtils.defineModuleGetter(
   this,
-  "Services",
-  "resource://gre/modules/Services.jsm"
-);
-ChromeUtils.defineModuleGetter(
-  this,
   "SessionStore",
   "resource:///modules/sessionstore/SessionStore.jsm"
 );
@@ -282,6 +277,7 @@ class TabsUpdateFilterEventManager extends EventManager {
 
       let listener = event => {
         // Ignore any events prior to TabOpen
+        // and events that are triggered while tabs are swapped between windows.
         if (event.originalTarget.initializingTab) {
           return;
         }

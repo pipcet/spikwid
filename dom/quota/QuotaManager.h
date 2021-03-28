@@ -140,11 +140,9 @@ class QuotaManager final : public BackgroundThreadObject {
    * has tallied origin usage by calling each of the QuotaClient InitOrigin
    * methods.
    */
-  void InitQuotaForOrigin(PersistenceType aPersistenceType,
-                          const OriginMetadata& aOriginMetadata,
+  void InitQuotaForOrigin(const FullOriginMetadata& aFullOriginMetadata,
                           const ClientUsageArray& aClientUsages,
-                          uint64_t aUsageBytes, int64_t aAccessTime,
-                          bool aPersisted);
+                          uint64_t aUsageBytes);
 
   /**
    * For use in special-cases like LSNG where we need to be able to know that
@@ -156,27 +154,24 @@ class QuotaManager final : public BackgroundThreadObject {
    * different client has usages for the origin (and there's no need to add
    * LSNG's 0 usage to the QuotaObject).
    */
-  void EnsureQuotaForOrigin(PersistenceType aPersistenceType,
-                            const OriginMetadata& aOriginMetadata);
+  void EnsureQuotaForOrigin(const OriginMetadata& aOriginMetadata);
 
   /**
    * For use when creating an origin directory. It's possible that origin usage
    * is already being tracked due to a call to EnsureQuotaForOrigin, and in that
    * case we need to update the existing OriginInfo rather than create a new
    * one.
+   *
+   * @return last access time of the origin.
    */
-  void NoteOriginDirectoryCreated(PersistenceType aPersistenceType,
-                                  const OriginMetadata& aOriginMetadata,
-                                  bool aPersisted, int64_t& aTimestamp);
+  int64_t NoteOriginDirectoryCreated(const OriginMetadata& aOriginMetadata,
+                                     bool aPersisted);
 
   // XXX clients can use QuotaObject instead of calling this method directly.
-  void DecreaseUsageForOrigin(PersistenceType aPersistenceType,
-                              const OriginMetadata& aOriginMetadata,
-                              Client::Type aClientType, int64_t aSize);
+  void DecreaseUsageForClient(const ClientMetadata& aClientMetadata,
+                              int64_t aSize);
 
-  void ResetUsageForClient(PersistenceType aPersistenceType,
-                           const OriginMetadata& aOriginMetadata,
-                           Client::Type aClientType);
+  void ResetUsageForClient(const ClientMetadata& aClientMetadata);
 
   UsageInfo GetUsageForClient(PersistenceType aPersistenceType,
                               const OriginMetadata& aOriginMetadata,

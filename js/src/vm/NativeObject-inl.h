@@ -573,6 +573,29 @@ MOZ_ALWAYS_INLINE bool NativeObject::setLastProperty(JSContext* cx,
   return true;
 }
 
+MOZ_ALWAYS_INLINE bool NativeObject::setLastPropertyForNewDataProperty(
+    JSContext* cx, Shape* shape) {
+  MOZ_ASSERT(!inDictionaryMode());
+  MOZ_ASSERT(!shape->inDictionary());
+  MOZ_ASSERT(shape->zone() == zone());
+  MOZ_ASSERT(shape->numFixedSlots() == numFixedSlots());
+
+  MOZ_ASSERT(shape->previous() == lastProperty());
+  MOZ_ASSERT(shape->base() == lastProperty()->base());
+  MOZ_ASSERT(shape->isDataProperty());
+  MOZ_ASSERT(shape->slotSpan() == lastProperty()->slotSpan() + 1);
+
+  size_t slot = shape->slot();
+  MOZ_ASSERT(slot == lastProperty()->slotSpan());
+
+  if (MOZ_UNLIKELY(!updateSlotsForSpan(cx, slot, slot + 1))) {
+    return false;
+  }
+
+  setShape(shape);
+  return true;
+}
+
 inline js::gc::AllocKind NativeObject::allocKindForTenure() const {
   using namespace js::gc;
   AllocKind kind = GetGCObjectFixedSlotsKind(numFixedSlots());
@@ -869,7 +892,7 @@ MOZ_ALWAYS_INLINE bool AddDataPropertyNonPrototype(JSContext* cx,
     return false;
   }
 
-  obj->setSlot(shape->slot(), v);
+  obj->initSlot(shape->slot(), v);
 
   MOZ_ASSERT(!obj->getClass()->getAddProperty());
   return true;

@@ -788,7 +788,7 @@ nsresult nsDNSService::ReadPrefs(const char* name) {
                                            nsTokenizerFlags::SeparatorOptional>(
              localDomains, ',')
              .ToRange()) {
-      mLocalDomains.PutEntry(token);
+      mLocalDomains.Insert(token);
     }
   }
   if (!name || !strcmp(name, kPrefDnsForceResolve)) {
@@ -996,7 +996,7 @@ nsresult nsDNSService::AsyncResolveInternal(
 
     res = mResolver;
     idn = mIDN;
-    localDomain = mLocalDomains.GetEntry(aHostname);
+    localDomain = mLocalDomains.Contains(aHostname);
   }
 
   if (mNotifyResolution) {
@@ -1075,7 +1075,7 @@ nsresult nsDNSService::CancelAsyncResolveInternal(
 
     res = mResolver;
     idn = mIDN;
-    localDomain = mLocalDomains.GetEntry(aHostname);
+    localDomain = mLocalDomains.Contains(aHostname);
   }
   if (!res) {
     return NS_ERROR_OFFLINE;
@@ -1207,7 +1207,7 @@ nsresult nsDNSService::ResolveInternal(
     MutexAutoLock lock(mLock);
     res = mResolver;
     idn = mIDN;
-    localDomain = mLocalDomains.GetEntry(aHostname);
+    localDomain = mLocalDomains.Contains(aHostname);
   }
 
   if (mNotifyResolution) {
@@ -1442,6 +1442,15 @@ nsDNSService::GetCurrentTrrMode(nsIDNSService::ResolverMode* aMode) {
   return NS_OK;
 }
 
+NS_IMETHODIMP
+nsDNSService::GetCurrentTrrConfirmationState(uint32_t* aConfirmationState) {
+  *aConfirmationState = uint32_t(TRRService::CONFIRM_OFF);
+  if (mTrrService) {
+    *aConfirmationState = mTrrService->ConfirmationState();
+  }
+  return NS_OK;
+}
+
 size_t nsDNSService::SizeOfIncludingThis(
     mozilla::MallocSizeOf mallocSizeOf) const {
   // Measurement of the following members may be added later if DMD finds it
@@ -1454,10 +1463,9 @@ size_t nsDNSService::SizeOfIncludingThis(
   n += mIPv4OnlyDomains.SizeOfExcludingThisIfUnshared(mallocSizeOf);
   n += mLocalDomains.SizeOfExcludingThis(mallocSizeOf);
   n += mFailedSVCDomainNames.ShallowSizeOfExcludingThis(mallocSizeOf);
-  for (auto iter = mFailedSVCDomainNames.ConstIter(); !iter.Done();
-       iter.Next()) {
-    n += iter.UserData()->ShallowSizeOfExcludingThis(mallocSizeOf);
-    for (const auto& name : *iter.UserData()) {
+  for (const auto& data : mFailedSVCDomainNames.Values()) {
+    n += data->ShallowSizeOfExcludingThis(mallocSizeOf);
+    for (const auto& name : *data) {
       n += name.SizeOfExcludingThisIfUnshared(mallocSizeOf);
     }
   }

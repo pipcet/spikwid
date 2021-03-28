@@ -494,6 +494,12 @@ class gfxFontEntry {
   StretchRange mStretchRange = StretchRange(FontStretch::Normal());
   SlantStyleRange mStyleRange = SlantStyleRange(FontSlantStyle::Normal());
 
+  // Font metrics overrides (as multiples of used font size); negative values
+  // indicate no override to be applied.
+  float mAscentOverride = -1.0;
+  float mDescentOverride = -1.0;
+  float mLineGapOverride = -1.0;
+
   // For user fonts (only), we need to record whether or not weight/stretch/
   // slant variations should be clamped to the range specified in the entry
   // properties. When the @font-face rule omitted one or more of these
@@ -932,6 +938,8 @@ class gfxFontFamily {
       SetBadUnderlineFonts();
     }
   }
+
+  virtual bool IsSingleFaceFamily() const { return false; }
 
   bool IsBadUnderlineFamily() const { return mIsBadUnderlineFamily; }
   bool CheckForFallbackFaces() const { return mCheckForFallbackFaces; }

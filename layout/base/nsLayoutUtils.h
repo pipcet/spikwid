@@ -83,6 +83,7 @@ class EffectSet;
 struct ActiveScrolledRoot;
 enum class ScrollOrigin : uint8_t;
 enum class StyleImageOrientation : uint8_t;
+enum class StyleSystemFont : uint8_t;
 enum class StyleScrollbarWidth : uint8_t;
 struct OverflowAreas;
 namespace dom {
@@ -445,11 +446,22 @@ class nsLayoutUtils {
    * Get the parent of aFrame. If aFrame is the root frame for a document,
    * and the document has a parent document in the same view hierarchy, then
    * we try to return the subdocumentframe in the parent document.
-   * @param aExtraOffset [in/out] if non-null, then as we cross documents
+   * @param aCrossDocOffset [in/out] if non-null, then as we cross documents
    * an extra offset may be required and it will be added to aCrossDocOffset.
    * Be careful dealing with this extra offset as it is in app units of the
    * parent document, which may have a different app units per dev pixel ratio
    * than the child document.
+   * Note that, while this function crosses document boundaries, it (naturally)
+   * cannot cross process boundaries.
+   */
+  static nsIFrame* GetCrossDocParentFrameInProcess(
+      const nsIFrame* aFrame, nsPoint* aCrossDocOffset = nullptr);
+
+  /**
+   * Does the same thing as GetCrossDocParentFrameInProcess().
+   * The purpose of having two functions is to more easily track which call
+   * sites have been audited to consider out-of-process iframes (bug 1599913).
+   * Once all call sites have been audited, this function can be removed.
    */
   static nsIFrame* GetCrossDocParentFrame(const nsIFrame* aFrame,
                                           nsPoint* aCrossDocOffset = nullptr);
@@ -484,8 +496,26 @@ class nsLayoutUtils {
    *
    * Just like IsProperAncestorFrameCrossDoc, except that it returns true when
    * aFrame == aAncestorFrame.
+   *
+   * TODO: Bug 1700245, all call sites of this function will be eventually
+   * replaced by IsAncestorFrameCrossDocInProcess.
    */
   static bool IsAncestorFrameCrossDoc(
+      const nsIFrame* aAncestorFrame, const nsIFrame* aFrame,
+      const nsIFrame* aCommonAncestor = nullptr);
+
+  /**
+   * IsAncestorFrameCrossDocInProcess checks whether aAncestorFrame is an
+   * ancestor of aFrame or equal to aFrame, looking across document boundaries
+   * in the same process.
+   * @param aCommonAncestor nullptr, or a common ancestor of aFrame and
+   * aAncestorFrame. If non-null, this can bound the search and speed up
+   * the function.
+   *
+   * Just like IsProperAncestorFrameCrossDoc, except that it returns true when
+   * aFrame == aAncestorFrame.
+   */
+  static bool IsAncestorFrameCrossDocInProcess(
       const nsIFrame* aAncestorFrame, const nsIFrame* aFrame,
       const nsIFrame* aCommonAncestor = nullptr);
 
@@ -2854,7 +2884,7 @@ class nsLayoutUtils {
       bool aUseUserFontSet);
 
   static void ComputeSystemFont(nsFont* aSystemFont,
-                                mozilla::LookAndFeel::FontID aFontID,
+                                mozilla::StyleSystemFont aFontID,
                                 const nsFont* aDefaultVariableFont,
                                 const mozilla::dom::Document* aDocument);
 

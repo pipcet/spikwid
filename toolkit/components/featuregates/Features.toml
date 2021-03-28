@@ -29,7 +29,7 @@ preference = "dom.forms.inputmode"
 type = "boolean"
 bug-numbers = [1205133]
 is-public = {default = false, nightly = true}
-default-value = {default = true, android = true, release = false, beta = false}
+default-value = {default = false, nightly = true, android = true}
 
 [css-constructable-stylesheets]
 title = "experimental-features-css-constructable-stylesheets"
@@ -164,7 +164,7 @@ preference = "network.http.http3.enabled"
 type = "boolean"
 bug-numbers = [1682539]
 is-public = true
-default-value = false
+default-value = {default = false, android=false, early_beta_or_earlier = true}
 
 [url-bar-ime-search]
 title = "experimental-features-ime-search"

@@ -76,8 +76,7 @@ DocAccessible* DocManager::GetDocAccessible(const PresShell* aPresShell) {
 }
 
 LocalAccessible* DocManager::FindAccessibleInCache(nsINode* aNode) const {
-  for (const auto& entry : mDocAccessibleCache) {
-    DocAccessible* docAccessible = entry.GetData().get();
+  for (const auto& docAccessible : mDocAccessibleCache.Values()) {
     NS_ASSERTION(docAccessible,
                  "No doc accessible for the object in doc accessible cache!");
 
@@ -157,8 +156,7 @@ xpcAccessibleDocument* DocManager::GetXPCDocument(DocAccessibleParent* aDoc) {
   }
 
   MOZ_ASSERT(!aDoc->IsShutdown(), "Adding a shutdown doc to remote XPC cache");
-  doc = new xpcAccessibleDocument(aDoc,
-                                  Interfaces::DOCUMENT | Interfaces::HYPERTEXT);
+  doc = new xpcAccessibleDocument(aDoc);
   sRemoteXPCDocumentCache->InsertOrUpdate(aDoc, RefPtr{doc});
 
   return doc;

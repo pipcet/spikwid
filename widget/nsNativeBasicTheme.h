@@ -66,8 +66,6 @@ static const gfx::sRGBColor sScrollbarBorderColor(gfx::sRGBColor(1.0f, 1.0f,
 static const gfx::sRGBColor sScrollbarThumbColor(
     gfx::sRGBColor::UnusualFromARGB(0xffcdcdcd));
 
-static const CSSCoord kMinimumScrollbarSize = 17.0f;
-static const CSSCoord kMinimumThinScrollbarSize = 6.0f;
 static const CSSCoord kMinimumColorPickerHeight = 32.0f;
 static const CSSCoord kMinimumRangeThumbSize = 20.0f;
 static const CSSCoord kMinimumDropdownArrowButtonWidth = 18.0f;
@@ -115,7 +113,8 @@ class nsNativeBasicTheme : protected nsNativeTheme, public nsITheme {
   // The nsITheme interface.
   NS_IMETHOD DrawWidgetBackground(gfxContext* aContext, nsIFrame*,
                                   StyleAppearance, const nsRect& aRect,
-                                  const nsRect& aDirtyRect) override;
+                                  const nsRect& aDirtyRect,
+                                  DrawOverflow) override;
 
   struct WebRenderBackendData {
     mozilla::wr::DisplayListBuilder& mBuilder;
@@ -137,7 +136,7 @@ class nsNativeBasicTheme : protected nsNativeTheme, public nsITheme {
   // given back-end.
   template <typename PaintBackendData>
   bool DoDrawWidgetBackground(PaintBackendData&, nsIFrame*, StyleAppearance,
-                              const nsRect& aRect);
+                              const nsRect&, DrawOverflow);
 
   [[nodiscard]] LayoutDeviceIntMargin GetWidgetBorder(nsDeviceContext* aContext,
                                                       nsIFrame*,
@@ -207,7 +206,6 @@ class nsNativeBasicTheme : protected nsNativeTheme, public nsITheme {
   std::pair<sRGBColor, sRGBColor> ComputeProgressTrackColors(UseSystemColors);
   std::pair<sRGBColor, sRGBColor> ComputeMeterchunkColors(
       const EventStates& aMeterState, UseSystemColors);
-  std::pair<sRGBColor, sRGBColor> ComputeMeterTrackColors(UseSystemColors);
   sRGBColor ComputeMenulistArrowButtonColor(const EventStates&,
                                             UseSystemColors);
   std::array<sRGBColor, 3> ComputeFocusRectColors(UseSystemColors);
@@ -315,7 +313,7 @@ class nsNativeBasicTheme : protected nsNativeTheme, public nsITheme {
   template <typename PaintBackendData>
   void PaintProgress(nsIFrame*, PaintBackendData&, const LayoutDeviceRect&,
                      const EventStates&, UseSystemColors, DPIRatio,
-                     bool aIsMeter, bool aBar);
+                     bool aIsMeter);
   template <typename PaintBackendData>
   void PaintButton(nsIFrame*, PaintBackendData&, const LayoutDeviceRect&,
                    const EventStates&, UseSystemColors, DPIRatio);
@@ -401,11 +399,12 @@ class nsNativeBasicTheme : protected nsNativeTheme, public nsITheme {
   static sRGBColor sAccentColorLight;
   static sRGBColor sAccentColorDark;
   static sRGBColor sAccentColorDarker;
+  static CSSIntCoord sHorizontalScrollbarHeight;
+  static CSSIntCoord sVerticalScrollbarWidth;
 
-  static void PrefChangedCallback(const char*, void*) {
-    RecomputeAccentColors();
-  }
+  static void PrefChangedCallback(const char*, void*) { LookAndFeelChanged(); }
   static void RecomputeAccentColors();
+  static void RecomputeScrollbarSizes();
 };
 
 #endif

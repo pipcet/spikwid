@@ -16,7 +16,6 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   AddonManager: "resource://gre/modules/AddonManager.jsm",
   IgnoreLists: "resource://gre/modules/IgnoreLists.jsm",
   OpenSearchEngine: "resource://gre/modules/OpenSearchEngine.jsm",
-  OS: "resource://gre/modules/osfile.jsm",
   Region: "resource://gre/modules/Region.jsm",
   RemoteSettings: "resource://services-settings/remote-settings.js",
   SearchEngine: "resource://gre/modules/SearchEngine.jsm",
@@ -1579,39 +1578,6 @@ SearchService.prototype = {
   },
 
   /**
-   * Adds an engine with specific details, only used for tests and should
-   * be considered obsolete, see bug 1649186.
-   *
-   * @param {string} name
-   *   The name of the engine to add.
-   * @param {object} details
-   *   The details of the engine to add.
-   */
-  async addEngineWithDetails(name, details) {
-    let manifest = {
-      description: details.description,
-      iconURL: details.iconURL,
-      chrome_settings_overrides: {
-        search_provider: {
-          name,
-          encoding: details.encoding || SearchUtils.DEFAULT_QUERY_CHARSET,
-          search_url: encodeURI(details.template),
-          keyword: details.alias,
-          search_url_get_params: details.searchGetParams,
-          search_url_post_params: details.postData || details.searchPostParams,
-          suggest_url: details.suggestURL,
-        },
-      },
-    };
-    return this._createAndAddEngine({
-      extensionID: details.extensionID ?? `${name}@test.engine`,
-      extensionBaseURI: "",
-      isAppProvided: false,
-      manifest,
-    });
-  },
-
-  /**
    * Creates and adds a WebExtension based engine.
    * Note: this is currently used for enterprise policy engines as well.
    *
@@ -2810,7 +2776,7 @@ SearchService.prototype = {
         stack: undefined,
       },
     };
-    OS.File.profileBeforeChange.addBlocker(
+    IOUtils.profileBeforeChange.addBlocker(
       "Search service: shutting down",
       () =>
         (async () => {

@@ -84,6 +84,57 @@ add_task(async function test_navBar_button_visibility() {
   );
 });
 
+add_task(async function test_overflow_navBar_button_visibility() {
+  const button = document.getElementById("fxa-toolbar-menu-button");
+  info("proton enabled: " + CustomizableUI.protonToolbarEnabled);
+
+  let overflowPanel = document.getElementById("widget-overflow");
+  overflowPanel.setAttribute("animate", "false");
+  let navbar = document.getElementById(CustomizableUI.AREA_NAVBAR);
+  let originalWindowWidth = window.outerWidth;
+
+  registerCleanupFunction(function() {
+    overflowPanel.removeAttribute("animate");
+    window.resizeTo(originalWindowWidth, window.outerHeight);
+    return TestUtils.waitForCondition(
+      () => !navbar.hasAttribute("overflowing")
+    );
+  });
+
+  window.resizeTo(450, window.outerHeight);
+
+  await TestUtils.waitForCondition(() => navbar.hasAttribute("overflowing"));
+  ok(navbar.hasAttribute("overflowing"), "Should have an overflowing toolbar.");
+
+  let chevron = document.getElementById("nav-bar-overflow-button");
+  let shownPanelPromise = BrowserTestUtils.waitForEvent(
+    overflowPanel,
+    "popupshown"
+  );
+  chevron.click();
+  await shownPanelPromise;
+
+  ok(button, "fxa-toolbar-menu-button was found");
+
+  const state = {
+    status: UIState.STATUS_NOT_CONFIGURED,
+    syncEnabled: true,
+  };
+  gSync.updateAllUI(state);
+
+  is(
+    BrowserTestUtils.is_visible(button),
+    !CustomizableUI.protonToolbarEnabled,
+    "Check button visibility with STATUS_NOT_CONFIGURED"
+  );
+  let hidePanelPromise = BrowserTestUtils.waitForEvent(
+    overflowPanel,
+    "popuphidden"
+  );
+  chevron.click();
+  await hidePanelPromise;
+});
+
 add_task(async function setupForPanelTests() {
   /* Proton hides the FxA toolbar button when in the nav-bar and unconfigured.
      To test the panel in all states, we move it to the tabstrip toolbar where
@@ -169,7 +220,7 @@ add_task(async function test_ui_state_signedin() {
   await closeTabAndMainPanel();
 });
 
-add_task(async function test_ui_state_syncing() {
+add_task(async function test_ui_state_syncing_panel_closed() {
   let state = {
     status: UIState.STATUS_SIGNED_IN,
     syncEnabled: true,
@@ -194,6 +245,88 @@ add_task(async function test_ui_state_syncing() {
   });
   // Because we switch from syncing to non-syncing, and there's a timeout involved.
   await promiseObserver("test:browser-sync:activity-stop");
+});
+
+add_task(async function test_ui_state_syncing_panel_open() {
+  await BrowserTestUtils.openNewForegroundTab(gBrowser, "https://example.com/");
+
+  let state = {
+    status: UIState.STATUS_SIGNED_IN,
+    syncEnabled: true,
+    email: "foo@bar.com",
+    displayName: "Foo Bar",
+    avatarURL: "https://foo.bar",
+    lastSync: new Date(),
+    syncing: false,
+  };
+
+  gSync.updateAllUI(state);
+
+  await openFxaPanel();
+
+  checkSyncNowButtons(false);
+
+  state = {
+    status: UIState.STATUS_SIGNED_IN,
+    syncEnabled: true,
+    email: "foo@bar.com",
+    displayName: "Foo Bar",
+    avatarURL: "https://foo.bar",
+    lastSync: new Date(),
+    syncing: true,
+  };
+
+  gSync.updateAllUI(state);
+
+  checkSyncNowButtons(true);
+
+  // Be good citizens and remove the "syncing" state.
+  gSync.updateAllUI({
+    status: UIState.STATUS_SIGNED_IN,
+    syncEnabled: true,
+    email: "foo@bar.com",
+    lastSync: new Date(),
+    syncing: false,
+  });
+  // Because we switch from syncing to non-syncing, and there's a timeout involved.
+  await promiseObserver("test:browser-sync:activity-stop");
+
+  await closeFxaPanel();
+  BrowserTestUtils.removeTab(gBrowser.selectedTab);
+});
+
+add_task(async function test_ui_state_panel_open_after_syncing() {
+  await BrowserTestUtils.openNewForegroundTab(gBrowser, "https://example.com/");
+
+  let state = {
+    status: UIState.STATUS_SIGNED_IN,
+    syncEnabled: true,
+    email: "foo@bar.com",
+    displayName: "Foo Bar",
+    avatarURL: "https://foo.bar",
+    lastSync: new Date(),
+    syncing: true,
+  };
+
+  gSync.updateAllUI(state);
+
+  await openFxaPanel();
+
+  checkSyncNowButtons(true);
+
+  // Be good citizens and remove the "syncing" state.
+  gSync.updateAllUI({
+    status: UIState.STATUS_SIGNED_IN,
+    syncEnabled: true,
+    email: "foo@bar.com",
+    lastSync: new Date(),
+    syncing: false,
+  });
+  // Because we switch from syncing to non-syncing, and there's a timeout involved.
+  await promiseObserver("test:browser-sync:activity-stop");
+
+  await closeFxaPanel();
+  BrowserTestUtils.removeTab(gBrowser.selectedTab);
 });
 
 add_task(async function test_ui_state_unconfigured() {
@@ -334,8 +467,8 @@ add_task(async function test_ui_state_unverified() {
     await openFxaPanel();
   }
 
-  const expectedLabel = gSync.fxaStrings.GetStringFromName(
-    "account.finishAccountSetup"
+  const expectedLabel = gSync.fluentStrings.formatValueSync(
+    "account-finish-account-setup"
   );
 
   checkMenuBarItem("sync-unverifieditem");
@@ -388,8 +521,8 @@ add_task(async function test_ui_state_loginFailed() {
     await openFxaPanel();
   }
 
-  const expectedLabel = gSync.fxaStrings.GetStringFromName(
-    "account.reconnectToFxA"
+  const expectedLabel = gSync.fluentStrings.formatValueSync(
+    "account-reconnect-to-fxa"
   );
 
   checkMenuBarItem("sync-reauthitem");
@@ -499,16 +632,14 @@ function checkSyncNowButtons(syncing, tooltip = null) {
   for (const syncLabel of syncLabels) {
     if (syncing) {
       is(
-        syncLabel.value,
-        gSync.fluentStrings.formatValueSync("fxa-toolbar-sync-syncing2"),
+        syncLabel.getAttribute("data-l10n-id"),
+        syncLabel.getAttribute("syncing-data-l10n-id"),
         "label is set to the right value"
       );
     } else {
       is(
-        syncLabel.value,
-        gSync.fluentStrings.formatValueSync(
-          "appmenuitem-fxa-toolbar-sync-now2"
-        ),
+        syncLabel.getAttribute("data-l10n-id"),
+        syncLabel.getAttribute("sync-now-data-l10n-id"),
         "label is set to the right value"
       );
     }

@@ -96,6 +96,7 @@ var BrowserPageActions = {
     for (let action of urlbarActions) {
       this.placeActionInUrlbar(action);
     }
+    this._updateMainButtonAttributes();
   },
 
   /**
@@ -128,6 +129,7 @@ var BrowserPageActions = {
   placeAction(action) {
     this.placeActionInPanel(action);
     this.placeActionInUrlbar(action);
+    this._updateMainButtonAttributes();
   },
 
   /**
@@ -211,6 +213,13 @@ var BrowserPageActions = {
         }
       }
     }
+  },
+
+  _updateMainButtonAttributes() {
+    this.mainButtonNode.toggleAttribute(
+      "multiple-children",
+      PageActions.actions.length > 1
+    );
   },
 
   /**
@@ -545,6 +554,7 @@ var BrowserPageActions = {
     this._removeActionFromPanel(action);
     this._removeActionFromUrlbar(action);
     action.onRemovedFromWindow(window);
+    this._updateMainButtonAttributes();
   },
 
   _removeActionFromUrlbar(action) {
@@ -940,11 +950,17 @@ var BrowserPageActions = {
       return;
     }
 
-    this._contextAction = this.actionForNode(popup.triggerNode);
-    if (!this._contextAction) {
+    let action = this.actionForNode(popup.triggerNode);
+    if (
+      !action ||
+      // In Proton, only extension actions provide a context menu.
+      (UrlbarPrefs.get("browser.proton.urlbar.enabled") && !action.extensionID)
+    ) {
+      this._contextAction = null;
       event.preventDefault();
       return;
     }
+    this._contextAction = action;
 
     let state;
     if (this._contextAction._isMozillaAction) {

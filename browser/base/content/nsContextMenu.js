@@ -86,7 +86,7 @@ function openContextMenu(aMessage, aBrowser, aActor) {
     false,
     false,
     false,
-    0,
+    2,
     null,
     0,
     context.mozInputSource
@@ -327,12 +327,12 @@ class nsContextMenu {
     this.initMiscItems();
     this.initSpellingItems();
     this.initSaveItems();
+    this.initSyncItems();
     this.initClipboardItems();
     this.initMediaPlayerItems();
     this.initLeaveDOMFullScreenItems();
     this.initClickToPlayItems();
     this.initPasswordManagerItems();
-    this.initSyncItems();
     this.initViewSourceItems();
     this.initScreenshotItem();
 
@@ -430,20 +430,37 @@ class nsContextMenu {
         this.onAudio ||
         this.onTextInput
       ) && this.inTabBrowser;
-    this.showItem("context-navigation", shouldShow);
+    if (AppConstants.platform == "macosx") {
+      for (let id of [
+        "context-back",
+        "context-forward",
+        "context-reload",
+        "context-stop",
+        "context-sep-navigation",
+      ]) {
+        this.showItem(id, shouldShow);
+      }
+    } else {
+      this.showItem("context-navigation", shouldShow);
+    }
 
     let stopped =
       XULBrowserWindow.stopCommand.getAttribute("disabled") == "true";
 
     let stopReloadItem = "";
-    if (shouldShow || !this.inTabBrowser) {
-      stopReloadItem = stopped || !this.inTabBrowser ? "reload" : "stop";
+    if (shouldShow) {
+      stopReloadItem = stopped ? "reload" : "stop";
     }
 
     this.showItem("context-reload", stopReloadItem == "reload");
     this.showItem("context-stop", stopReloadItem == "stop");
 
     function initBackForwardMenuItemTooltip(menuItemId, l10nId, shortcutId) {
+      // On macOS regular menuitems are used and the shortcut isn't added
+      if (AppConstants.platform == "macosx") {
+        return;
+      }
+
       let shortcut = document.getElementById(shortcutId);
       if (shortcut) {
         shortcut = ShortcutUtils.prettifyShortcut(shortcut);
@@ -803,7 +820,7 @@ class nsContextMenu {
     // Other cases will show a divider.
     copyLinkSeparator.toggleAttribute(
       "ensureHidden",
-      this.onLink && !this.onMailtoLink && !this.onImage
+      this.onLink && !this.onMailtoLink && !this.onImage && this.syncItemsShown
     );
 
     this.showItem("context-copyvideourl", this.onVideo);
@@ -1016,7 +1033,7 @@ class nsContextMenu {
   }
 
   initSyncItems() {
-    gSync.updateContentContextMenu(this);
+    this.syncItemsShown = gSync.updateContentContextMenu(this);
   }
 
   initViewSourceItems() {
@@ -1279,7 +1296,7 @@ class nsContextMenu {
   }
 
   takeScreenshot() {
-    Services.obs.notifyObservers(null, "contextmenu-screenshot");
+    Services.obs.notifyObservers(null, "menuitem-screenshot", true);
   }
 
   // View Partial Source

@@ -14,7 +14,10 @@ use crate::gpu_types::{BorderInstance, ImageSource, UvRectKind};
 use crate::internal_types::{CacheTextureId, FastHashMap, TextureSource, Swizzle};
 use crate::picture::{ResolvedSurfaceTexture, SurfaceInfo};
 use crate::prim_store::{ClipData, PictureIndex};
-use crate::prim_store::gradient::{GRADIENT_FP_STOPS, GradientStopKey, FastLinearGradientTask};
+use crate::prim_store::gradient::{
+    GRADIENT_FP_STOPS, GradientStopKey, FastLinearGradientTask, RadialGradientTask,
+    ConicGradientTask,
+};
 #[cfg(feature = "debugger")]
 use crate::print_tree::{PrintTreePrinter};
 use crate::resource_cache::{ResourceCache, ImageRequest};
@@ -24,7 +27,6 @@ use crate::render_task_graph::{PassId, RenderTaskId, RenderTaskGraphBuilder};
 #[cfg(feature = "debugger")]
 use crate::render_task_graph::RenderTaskGraph;
 use crate::render_task_cache::{RenderTaskCacheEntryHandle, RenderTaskCacheKey, RenderTaskCacheKeyKind, RenderTaskParent};
-use crate::visibility::PrimitiveVisibilityMask;
 use smallvec::SmallVec;
 
 const FLOATS_PER_RENDER_TASK_INFO: usize = 8;
@@ -172,9 +174,8 @@ pub struct PictureTask {
     pub content_origin: DevicePoint,
     pub surface_spatial_node_index: SpatialNodeIndex,
     pub device_pixel_scale: DevicePixelScale,
-    /// A bitfield that describes which dirty regions should be included
-    /// in batches built for this picture task.
-    pub vis_mask: PrimitiveVisibilityMask,
+    /// A dirty rect defining which prims should be built for this picture task.
+    pub dirty_rect: Option<PictureRect>,
     pub scissor_rect: Option<DeviceIntRect>,
     pub valid_rect: Option<DeviceIntRect>,
 }
@@ -306,6 +307,8 @@ pub enum RenderTaskKind {
     Border(BorderTask),
     LineDecoration(LineDecorationTask),
     FastLinearGradient(FastLinearGradientTask),
+    RadialGradient(RadialGradientTask),
+    ConicGradient(ConicGradientTask),
     SvgFilter(SvgFilterTask),
     #[cfg(test)]
     Test(RenderTargetKind),
@@ -335,6 +338,8 @@ impl RenderTaskKind {
             RenderTaskKind::Border(..) => "Border",
             RenderTaskKind::LineDecoration(..) => "LineDecoration",
             RenderTaskKind::FastLinearGradient(..) => "FastLinearGradient",
+            RenderTaskKind::RadialGradient(..) => "RadialGradient",
+            RenderTaskKind::ConicGradient(..) => "ConicGradient",
             RenderTaskKind::SvgFilter(..) => "SvgFilter",
             #[cfg(test)]
             RenderTaskKind::Test(..) => "Test",
@@ -348,6 +353,8 @@ impl RenderTaskKind {
             RenderTaskKind::Readback(..) |
             RenderTaskKind::Border(..) |
             RenderTaskKind::FastLinearGradient(..) |
+            RenderTaskKind::RadialGradient(..) |
+            RenderTaskKind::ConicGradient(..) |
             RenderTaskKind::Picture(..) |
             RenderTaskKind::Blit(..) |
             RenderTaskKind::SvgFilter(..) => {
@@ -384,7 +391,7 @@ impl RenderTaskKind {
         content_origin: DevicePoint,
         surface_spatial_node_index: SpatialNodeIndex,
         device_pixel_scale: DevicePixelScale,
-        vis_mask: PrimitiveVisibilityMask,
+        dirty_rect: Option<PictureRect>,
         scissor_rect: Option<DeviceIntRect>,
         valid_rect: Option<DeviceIntRect>,
     ) -> Self {
@@ -399,7 +406,7 @@ impl RenderTaskKind {
             can_merge,
             surface_spatial_node_index,
             device_pixel_scale,
-            vis_mask,
+            dirty_rect,
             scissor_rect,
             valid_rect,
         })
@@ -644,6 +651,8 @@ impl RenderTaskKind {
             RenderTaskKind::Border(..) |
             RenderTaskKind::LineDecoration(..) |
             RenderTaskKind::FastLinearGradient(..) |
+            RenderTaskKind::RadialGradient(..) |
+            RenderTaskKind::ConicGradient(..) |
             RenderTaskKind::Blit(..) => {
                 [0.0; 4]
             }
@@ -1467,6 +1476,12 @@ impl RenderTask {
             }
             RenderTaskKind::FastLinearGradient(..) => {
                 pt.new_level("FastLinearGradient".to_owned());
+            }
+            RenderTaskKind::RadialGradient(..) => {
+                pt.new_level("RadialGradient".to_owned());
+            }
+            RenderTaskKind::ConicGradient(..) => {
+                pt.new_level("ConicGradient".to_owned());
             }
             RenderTaskKind::SvgFilter(ref task) => {
                 pt.new_level("SvgFilter".to_owned());

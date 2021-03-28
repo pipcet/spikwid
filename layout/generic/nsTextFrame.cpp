@@ -1926,6 +1926,14 @@ bool BuildTextRunsScanner::ContinueTextRunAcrossFrames(nsTextFrame* aFrame1,
       return false;
     }
 
+    // We inhibit cross-element-boundary shaping if we're in SVG content,
+    // as there are too many things SVG might be doing (like applying per-
+    // element positioning) that wouldn't make sense with shaping across
+    // the boundary.
+    if (SVGUtils::IsInSVGTextSubtree(ancestor)) {
+      return false;
+    }
+
     // Map inline-end and inline-start to physical sides for checking presence
     // of non-zero margin/border/padding.
     Side side1 = wm.PhysicalSide(eLogicalSideIEnd);
@@ -4647,6 +4655,8 @@ nsTextFrame* nsTextFrame::LastContinuation() const {
 
 void nsTextFrame::InvalidateFrame(uint32_t aDisplayItemKey,
                                   bool aRebuildDisplayItems) {
+  InvalidateSelectionState();
+
   if (SVGUtils::IsInSVGTextSubtree(this)) {
     nsIFrame* svgTextFrame = nsLayoutUtils::GetClosestFrameOfType(
         GetParent(), LayoutFrameType::SVGText);
@@ -4659,6 +4669,8 @@ void nsTextFrame::InvalidateFrame(uint32_t aDisplayItemKey,
 void nsTextFrame::InvalidateFrameWithRect(const nsRect& aRect,
                                           uint32_t aDisplayItemKey,
                                           bool aRebuildDisplayItems) {
+  InvalidateSelectionState();
+
   if (SVGUtils::IsInSVGTextSubtree(this)) {
     nsIFrame* svgTextFrame = nsLayoutUtils::GetClosestFrameOfType(
         GetParent(), LayoutFrameType::SVGText);
@@ -4891,12 +4903,10 @@ void nsTextFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
   bool isTextTransparent =
       NS_GET_A(st->mWebkitTextFillColor.CalcColor(this)) == 0 &&
       NS_GET_A(st->mWebkitTextStrokeColor.CalcColor(this)) == 0;
-  Maybe<bool> isSelected;
   if ((HasAnyStateBits(TEXT_NO_RENDERED_GLYPHS) ||
        (isTextTransparent && !StyleText()->HasTextShadow())) &&
       aBuilder->IsForPainting() && !SVGUtils::IsInSVGTextSubtree(this)) {
-    isSelected.emplace(IsSelected());
-    if (!isSelected.value()) {
+    if (!IsSelected()) {
       TextDecorations textDecs;
       GetTextDecorations(PresContext(), eResolvedColors, textDecs);
       if (!textDecs.HasDecorationLines()) {
@@ -4908,7 +4918,7 @@ void nsTextFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
     }
   }
 
-  aLists.Content()->AppendNewToTop<nsDisplayText>(aBuilder, this, isSelected);
+  aLists.Content()->AppendNewToTop<nsDisplayText>(aBuilder, this);
 }
 
 UniquePtr<SelectionDetails> nsTextFrame::GetSelectionDetails() {
@@ -5298,7 +5308,8 @@ nsRect nsTextFrame::UpdateTextEmphasis(WritingMode aWM,
 // Returns the thickness in device pixels.
 static gfxFloat ComputeDecorationLineThickness(
     const StyleTextDecorationLength& aThickness, const gfxFloat aAutoValue,
-    const gfxFont::Metrics& aFontMetrics, const gfxFloat aAppUnitsPerDevPixel) {
+    const gfxFont::Metrics& aFontMetrics, const gfxFloat aAppUnitsPerDevPixel,
+    const nsIFrame* aFrame) {
   if (aThickness.IsAuto()) {
     return aAutoValue;
   }
@@ -5306,9 +5317,7 @@ static gfxFloat ComputeDecorationLineThickness(
   if (aThickness.IsFromFont()) {
     return aFontMetrics.underlineSize;
   }
-  auto em = [&] {
-    return nscoord(NS_round(aFontMetrics.emHeight * aAppUnitsPerDevPixel));
-  };
+  auto em = [&] { return aFrame->StyleFont()->mSize.ToAppUnits(); };
   return aThickness.AsLengthPercentage().Resolve(em) / aAppUnitsPerDevPixel;
 }
 
@@ -5319,13 +5328,10 @@ static gfxFloat ComputeDecorationLineOffset(
     StyleTextDecorationLine aLineType,
     const StyleTextUnderlinePosition& aPosition,
     const LengthPercentageOrAuto& aOffset, const gfxFont::Metrics& aFontMetrics,
-    const gfxFloat aAppUnitsPerDevPixel, bool aIsCentralBaseline,
-    bool aSwappedUnderline) {
+    const gfxFloat aAppUnitsPerDevPixel, const nsIFrame* aFrame,
+    bool aIsCentralBaseline, bool aSwappedUnderline) {
   // Em value to use if we need to resolve a percentage length.
-  auto em = [&] {
-    return nscoord(NS_round(aFontMetrics.emHeight * aAppUnitsPerDevPixel));
-  };
-
+  auto em = [&] { return aFrame->StyleFont()->mSize.ToAppUnits(); };
   // If we're in vertical-upright typographic mode, we need to compute the
   // offset of the decoration line from the default central baseline.
   if (aIsCentralBaseline) {
@@ -5436,14 +5442,14 @@ void nsTextFrame::UnionAdditionalOverflow(nsPresContext* aPresContext,
     params.defaultLineThickness = metrics.underlineSize;
     params.lineSize.height = ComputeDecorationLineThickness(
         aBlock->Style()->StyleTextReset()->mTextDecorationThickness,
-        params.defaultLineThickness, metrics, appUnitsPerDevUnit);
+        params.defaultLineThickness, metrics, appUnitsPerDevUnit, this);
 
     const auto* styleText = aBlock->StyleText();
     bool swapUnderline =
         wm.IsCentralBaseline() && IsUnderlineRight(*aBlock->Style());
     params.offset = ComputeDecorationLineOffset(
         StyleTextDecorationLine::UNDERLINE, styleText->mTextUnderlinePosition,
-        styleText->mTextUnderlineOffset, metrics, appUnitsPerDevUnit,
+        styleText->mTextUnderlineOffset, metrics, appUnitsPerDevUnit, this,
         wm.IsCentralBaseline(), swapUnderline);
 
     nscoord maxAscent =
@@ -5533,13 +5539,13 @@ void nsTextFrame::UnionAdditionalOverflow(nsPresContext* aPresContext,
             params.defaultLineThickness = metrics.*lineSize;
             params.lineSize.height = ComputeDecorationLineThickness(
                 dec.mTextDecorationThickness, params.defaultLineThickness,
-                metrics, appUnitsPerDevUnit);
+                metrics, appUnitsPerDevUnit, this);
 
             bool swapUnderline =
                 parentWM.IsCentralBaseline() && IsUnderlineRight(*Style());
             params.offset = ComputeDecorationLineOffset(
                 lineType, dec.mTextUnderlinePosition, dec.mTextUnderlineOffset,
-                metrics, appUnitsPerDevUnit, parentWM.IsCentralBaseline(),
+                metrics, appUnitsPerDevUnit, this, parentWM.IsCentralBaseline(),
                 swapUnderline);
 
             const nsRect decorationRect =
@@ -5769,14 +5775,14 @@ void nsTextFrame::DrawSelectionDecorations(
           aTextPaintStyle.PresContext(), aFontMetrics, aSelectionType);
       params.lineSize.height = ComputeDecorationLineThickness(
           decThickness, params.defaultLineThickness, aFontMetrics,
-          appUnitsPerDevPixel);
+          appUnitsPerDevPixel, this);
 
       bool swapUnderline = wm.IsCentralBaseline() && IsUnderlineRight(*Style());
       const auto* styleText = StyleText();
       params.offset = ComputeDecorationLineOffset(
           aDecoration, styleText->mTextUnderlinePosition,
           styleText->mTextUnderlineOffset, aFontMetrics, appUnitsPerDevPixel,
-          wm.IsCentralBaseline(), swapUnderline);
+          this, wm.IsCentralBaseline(), swapUnderline);
 
       bool isIMEType = aSelectionType != SelectionType::eSpellCheck;
 
@@ -5851,7 +5857,7 @@ void nsTextFrame::DrawSelectionDecorations(
       params.defaultLineThickness = metrics.strikeoutSize;
       params.lineSize.height = ComputeDecorationLineThickness(
           decThickness, params.defaultLineThickness, metrics,
-          appUnitsPerDevPixel);
+          appUnitsPerDevPixel, this);
       // TODO(jfkthame): ComputeDecorationLineOffset? check vertical mode!
       params.offset = metrics.strikeoutOffset + 0.5;
       params.decoration = StyleTextDecorationLine::LINE_THROUGH;
@@ -7032,7 +7038,7 @@ void nsTextFrame::DrawTextRunAndDecorations(
   typedef gfxFont::Metrics Metrics;
   auto paintDecorationLine = [&](const LineDecoration& dec,
                                  gfxFloat Metrics::*lineSize,
-                                 mozilla::StyleTextDecorationLine lineType) {
+                                 StyleTextDecorationLine lineType) {
     if (dec.mStyle == NS_STYLE_TEXT_DECORATION_STYLE_NONE) {
       return;
     }
@@ -7048,13 +7054,13 @@ void nsTextFrame::DrawTextRunAndDecorations(
     params.baselineOffset = dec.mBaselineOffset / app;
     params.defaultLineThickness = metrics.*lineSize;
     params.lineSize.height = ComputeDecorationLineThickness(
-        dec.mTextDecorationThickness, params.defaultLineThickness, metrics,
-        app);
+        dec.mTextDecorationThickness, params.defaultLineThickness, metrics, app,
+        dec.mFrame);
 
     bool swapUnderline = wm.IsCentralBaseline() && IsUnderlineRight(*Style());
     params.offset = ComputeDecorationLineOffset(
         lineType, dec.mTextUnderlinePosition, dec.mTextUnderlineOffset, metrics,
-        app, wm.IsCentralBaseline(), swapUnderline);
+        app, dec.mFrame, wm.IsCentralBaseline(), swapUnderline);
 
     params.style = dec.mStyle;
     PaintDecorationLine(params);
@@ -7397,7 +7403,7 @@ bool nsTextFrame::CombineSelectionUnderlineRect(nsPresContext* aPresContext,
 
     params.lineSize.height = ComputeDecorationLineThickness(
         decThickness, params.defaultLineThickness, metrics,
-        aPresContext->AppUnitsPerDevPixel());
+        aPresContext->AppUnitsPerDevPixel(), this);
 
     bool swapUnderline = wm.IsCentralBaseline() && IsUnderlineRight(*Style());
     const auto* styleText = StyleText();
@@ -7405,8 +7411,8 @@ bool nsTextFrame::CombineSelectionUnderlineRect(nsPresContext* aPresContext,
         textDecs.HasUnderline() ? StyleTextDecorationLine::UNDERLINE
                                 : StyleTextDecorationLine::OVERLINE,
         styleText->mTextUnderlinePosition, styleText->mTextUnderlineOffset,
-        metrics, aPresContext->AppUnitsPerDevPixel(), wm.IsCentralBaseline(),
-        swapUnderline);
+        metrics, aPresContext->AppUnitsPerDevPixel(), this,
+        wm.IsCentralBaseline(), swapUnderline);
 
     relativeSize = std::max(relativeSize, 1.0f);
     params.lineSize.height *= relativeSize;
@@ -7422,7 +7428,22 @@ bool nsTextFrame::CombineSelectionUnderlineRect(nsPresContext* aPresContext,
 bool nsTextFrame::IsFrameSelected() const {
   NS_ASSERTION(!GetContent() || GetContent()->IsMaybeSelected(),
                "use the public IsSelected() instead");
-  return GetContent()->IsSelected(GetContentOffset(), GetContentEnd());
+  if (mIsSelected == nsTextFrame::SelectionState::Unknown) {
+    const bool isSelected =
+        GetContent()->IsSelected(GetContentOffset(), GetContentEnd());
+    mIsSelected = isSelected ? nsTextFrame::SelectionState::Selected
+                             : nsTextFrame::SelectionState::NotSelected;
+  } else {
+#ifdef DEBUG
+    // Assert that the selection caching works.
+    const bool isReallySelected =
+        GetContent()->IsSelected(GetContentOffset(), GetContentEnd());
+    MOZ_ASSERT((mIsSelected == nsTextFrame::SelectionState::Selected) ==
+               isReallySelected);
+#endif
+  }
+
+  return mIsSelected == nsTextFrame::SelectionState::Selected;
 }
 
 void nsTextFrame::SelectionStateChanged(uint32_t aStart, uint32_t aEnd,
@@ -7431,6 +7452,8 @@ void nsTextFrame::SelectionStateChanged(uint32_t aStart, uint32_t aEnd,
   NS_ASSERTION(!GetPrevContinuation(),
                "Should only be called for primary frame");
   DEBUG_VERIFY_NOT_DIRTY(mState);
+
+  InvalidateSelectionState();
 
   // Selection is collapsed, which can't affect text frame rendering
   if (aStart == aEnd) return;
@@ -8997,6 +9020,8 @@ void nsTextFrame::Reflow(nsPresContext* aPresContext, ReflowOutput& aMetrics,
   DISPLAY_REFLOW(aPresContext, this, aReflowInput, aMetrics, aStatus);
   MOZ_ASSERT(aStatus.IsEmpty(), "Caller should pass a fresh reflow status!");
 
+  InvalidateSelectionState();
+
   // XXX If there's no line layout, we shouldn't even have created this
   // frame. This may happen if, for example, this is text inside a table
   // but not inside a cell. For now, just don't reflow.
@@ -9073,6 +9098,8 @@ void nsTextFrame::ReflowText(nsLineLayout& aLineLayout, nscoord aAvailableWidth,
   // textrun we look at. Note that next-in-flows may be mapping the same
   // content; gfxTextRun construction logic will ensure that we take priority.
   int32_t maxContentLength = GetInFlowContentLength();
+
+  InvalidateSelectionState();
 
   // We don't need to reflow if there is no content.
   if (!maxContentLength) {
@@ -10113,11 +10140,11 @@ void nsTextFrame::List(FILE* out, const char* aPrefix, ListFlags aFlags) const {
 }
 
 void nsTextFrame::ListTextRuns(FILE* out,
-                               nsTHashtable<nsVoidPtrHashKey>& aSeen) const {
+                               nsTHashSet<const void*>& aSeen) const {
   if (!mTextRun || aSeen.Contains(mTextRun)) {
     return;
   }
-  aSeen.PutEntry(mTextRun);
+  aSeen.Insert(mTextRun);
   mTextRun->Dump(out);
 }
 #endif

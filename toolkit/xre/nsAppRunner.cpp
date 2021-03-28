@@ -107,9 +107,7 @@
 #  include "mozilla/WindowsProcessMitigations.h"
 #  include "mozilla/WinHeaderOnlyUtils.h"
 #  include "mozilla/mscom/ProcessRuntime.h"
-#  if defined(MOZ_GECKO_PROFILER)
-#    include "mozilla/mscom/ProfilerMarkers.h"
-#  endif  // defined(MOZ_GECKO_PROFILER)
+#  include "mozilla/mscom/ProfilerMarkers.h"
 #  include "mozilla/widget/AudioSession.h"
 #  include "WinTokenUtils.h"
 
@@ -2430,7 +2428,7 @@ static ReturnAbortOnError ProfileLockedDialog(nsIFile* aProfileDir,
     if (aUnlocker) {
       int32_t button;
 #ifdef MOZ_WIDGET_ANDROID
-      java::GeckoAppShell::KillAnyZombies();
+      // On Android we always kill the process if the lock is still being held
       button = 0;
 #else
       const uint32_t flags = (nsIPromptService::BUTTON_TITLE_IS_STRING *
@@ -2457,15 +2455,8 @@ static ReturnAbortOnError ProfileLockedDialog(nsIFile* aProfileDir,
         return LaunchChild(false, true);
       }
     } else {
-#ifdef MOZ_WIDGET_ANDROID
-      if (java::GeckoAppShell::UnlockProfile()) {
-        return NS_LockProfilePath(aProfileDir, aProfileLocalDir, nullptr,
-                                  aResult);
-      }
-#else
       rv = ps->Alert(nullptr, killTitle.get(), killMessage.get());
       NS_ENSURE_SUCCESS_LOG(rv, rv);
-#endif
     }
 
     return NS_ERROR_ABORT;
@@ -3514,7 +3505,8 @@ int XREMain::XRE_mainInit(bool* aExitFlag) {
 #ifdef MOZ_BACKGROUNDTASKS
   Maybe<nsCString> backgroundTask = Nothing();
   const char* backgroundTaskName = nullptr;
-  if (ARG_FOUND == CheckArg("backgroundtask", &backgroundTaskName)) {
+  if (ARG_FOUND ==
+      CheckArg("backgroundtask", &backgroundTaskName, CheckArgFlag::None)) {
     backgroundTask = Some(backgroundTaskName);
   }
   BackgroundTasks::Init(backgroundTask);
@@ -3881,6 +3873,12 @@ int XREMain::XRE_mainInit(bool* aExitFlag) {
 #ifdef MOZ_BACKGROUNDTASKS
   if (BackgroundTasks::IsBackgroundTaskMode()) {
     safeModeRequested = Some(false);
+
+    // Remove the --backgroundtask arg now that it has been saved in
+    // gRestartArgv.
+    const char* tmpBackgroundTaskName = nullptr;
+    Unused << CheckArg("backgroundtask", &tmpBackgroundTaskName,
+                       CheckArgFlag::RemoveArg);
   }
 #endif
 
@@ -4459,8 +4457,6 @@ int XREMain::XRE_mainStartup(bool* aExitFlag) {
         PR_fprintf(PR_STDERR, "Error: cannot open display: %s\n", display_name);
         return 1;
       }
-      gdk_display_manager_set_default_display(gdk_display_manager_get(),
-                                              mGdkDisplay);
       if (saveDisplayArg) {
         if (GdkIsX11Display(mGdkDisplay)) {
           SaveWordToEnv("DISPLAY", nsDependentCString(display_name));
@@ -4895,10 +4891,8 @@ nsresult XREMain::XRE_mainRun() {
   auto dllServicesDisable =
       MakeScopeExit([&dllServices]() { dllServices->DisableFull(); });
 
-#  if defined(MOZ_GECKO_PROFILER)
   mozilla::mscom::InitProfilerMarkers();
-#  endif  // defined(MOZ_GECKO_PROFILER)
-#endif    // defined(XP_WIN)
+#endif  // defined(XP_WIN)
 
   // We need the appStartup pointer to span multiple scopes, so we declare
   // it here.

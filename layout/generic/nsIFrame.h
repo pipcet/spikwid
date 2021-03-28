@@ -80,6 +80,7 @@
 #include "mozilla/gfx/MatrixFwd.h"
 #include "nsDisplayItemTypes.h"
 #include "nsPresContext.h"
+#include "nsTHashSet.h"
 
 #ifdef ACCESSIBILITY
 #  include "mozilla/a11y/AccTypes.h"
@@ -1071,6 +1072,7 @@ class nsIFrame : public nsQueryFrame {
   nsRect GetPaddingRectRelativeToSelf() const;
   nsRect GetContentRect() const;
   nsRect GetContentRectRelativeToSelf() const;
+  nsRect GetMarginRect() const;
   nsRect GetMarginRectRelativeToSelf() const;
 
   /**
@@ -1910,22 +1912,18 @@ class nsIFrame : public nsQueryFrame {
   }
 
   /**
-   * Returns true if this frame is transformed (e.g. has CSS or SVG transforms)
-   * or if its parent is an SVG frame that has children-only transforms (e.g.
-   * an SVG viewBox attribute) or if its transform-style is preserve-3d or
-   * the frame has transform animations.
-   *
-   * @param aStyleDisplay:  If the caller has this->StyleDisplay(), providing
-   *   it here will improve performance.
+   * Returns true if this frame is transformed (e.g. has CSS, SVG, or custom
+   * transforms) or if its parent is an SVG frame that has children-only
+   * transforms (e.g.  an SVG viewBox attribute) or if its transform-style is
+   * preserve-3d or the frame has transform animations.
    */
-  bool IsTransformed(const nsStyleDisplay* aStyleDisplay) const;
-  bool IsTransformed() const { return IsTransformed(StyleDisplay()); }
+  bool IsTransformed() const;
 
   /**
    * Same as IsTransformed, except that it doesn't take SVG transforms
    * into account.
    */
-  bool IsCSSTransformed(const nsStyleDisplay* aStyleDisplay) const;
+  bool IsCSSTransformed() const;
 
   /**
    * True if this frame has any animation of transform in effect.
@@ -2030,15 +2028,8 @@ class nsIFrame : public nsQueryFrame {
    * Returns whether this frame has a parent that Extend3DContext() and has
    * its own transform (or hidden backface) to be combined with the parent's
    * transform.
-   *
-   * @param aStyleDisplay:  If the caller has this->StyleDisplay(), providing
-   *   it here will improve performance.
    */
-  bool Combines3DTransformWithAncestors(
-      const nsStyleDisplay* aStyleDisplay) const;
-  bool Combines3DTransformWithAncestors() const {
-    return Combines3DTransformWithAncestors(StyleDisplay());
-  }
+  bool Combines3DTransformWithAncestors() const;
 
   /**
    * Returns whether this frame has a hidden backface and has a parent that
@@ -2050,7 +2041,7 @@ class nsIFrame : public nsQueryFrame {
 
   bool IsPreserve3DLeaf(const nsStyleDisplay* aStyleDisplay,
                         mozilla::EffectSet* aEffectSet = nullptr) const {
-    return Combines3DTransformWithAncestors(aStyleDisplay) &&
+    return Combines3DTransformWithAncestors() &&
            !Extend3DContext(aStyleDisplay, StyleEffects(), aEffectSet);
   }
   bool IsPreserve3DLeaf(mozilla::EffectSet* aEffectSet = nullptr) const {
@@ -2158,6 +2149,20 @@ class nsIFrame : public nsQueryFrame {
   MOZ_CAN_RUN_SCRIPT_BOUNDARY NS_IMETHOD
   HandlePress(nsPresContext* aPresContext, mozilla::WidgetGUIEvent* aEvent,
               nsEventStatus* aEventStatus);
+
+  /**
+   * MoveCaretToEventPoint() moves caret at the point of aMouseEvent.
+   *
+   * @param aPresContext        Must not be nullptr.
+   * @param aMouseEvent         Must not be nullptr, the message must be
+   *                            eMouseDown and its button must be primary or
+   *                            middle button.
+   * @param aEventStatus        [out] Must not be nullptr.  This method ignores
+   *                            its initial value, but callees may refer it.
+   */
+  MOZ_CAN_RUN_SCRIPT nsresult MoveCaretToEventPoint(
+      nsPresContext* aPresContext, mozilla::WidgetMouseEvent* aMouseEvent,
+      nsEventStatus* aEventStatus);
 
   MOZ_CAN_RUN_SCRIPT_BOUNDARY NS_IMETHOD HandleMultiplePress(
       nsPresContext* aPresContext, mozilla::WidgetGUIEvent* aEvent,
@@ -3054,6 +3059,13 @@ class nsIFrame : public nsQueryFrame {
   //
   bool HasView() const { return !!(mState & NS_FRAME_HAS_VIEW); }
 
+  // Returns true iff this frame's computed block-size property is one of the
+  // intrinsic-sizing keywords.
+  bool HasIntrinsicKeywordForBSize() const {
+    const auto& bSize = StylePosition()->BSize(GetWritingMode());
+    return bSize.IsMozFitContent() || bSize.IsMinContent() ||
+           bSize.IsMaxContent();
+  }
   /**
    * Helper method to create a view for a frame.  Only used by a few sub-classes
    * that need a view.
@@ -5432,8 +5444,7 @@ class nsIFrame : public nsQueryFrame {
                     ListFlags aFlags = ListFlags()) const;
 
   void ListTextRuns(FILE* out = stderr) const;
-  virtual void ListTextRuns(FILE* out,
-                            nsTHashtable<nsVoidPtrHashKey>& aSeen) const;
+  virtual void ListTextRuns(FILE* out, nsTHashSet<const void*>& aSeen) const;
 
   virtual void ListWithMatchedRules(FILE* out = stderr,
                                     const char* aPrefix = "") const;

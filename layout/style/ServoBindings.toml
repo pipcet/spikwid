@@ -308,6 +308,7 @@ whitelist-types = [
     "nsStyleMargin",
     "nsStyleOutline",
     "nsStylePadding",
+    "nsStylePage",
     "nsStylePosition",
     "nsStyleSides",
     "nsStyleSVG",
@@ -392,8 +393,8 @@ opaque-types = [
     "nsTObserverArray",  # <- Inherits from nsAutoTObserverArray<T, 0>
     "nsTHashtable",  # <- Inheriting from inner typedefs that clang
                      #    doesn't expose properly.
-    "nsBaseHashtable", "nsRefPtrHashtable", "nsDataHashtable", "nsClassHashtable",  # <- Ditto
-    "nsInterfaceHashtable",  # <- Ditto
+    "nsTBaseHashSet", # <- Ditto
+    "nsBaseHashtable", "nsRefCountedHashtable", "nsClassHashtable",  # <- Ditto
     "mozilla::dom::Document_SelectorCache",  # <- Inherits from nsExpirationTracker<.., 4>
     "nsPIDOMWindow",  # <- Takes the vtable from a template parameter, and we can't
                       #    generate it conditionally.
@@ -508,6 +509,7 @@ cbindgen-types = [
     { gecko = "StyleFontFamilyNameSyntax", servo = "crate::values::computed::font::FontFamilyNameSyntax" },
     { gecko = "StyleGenericColor", servo = "crate::values::generics::color::Color" },
     { gecko = "StyleSystemColor", servo = "crate::values::specified::color::SystemColor" },
+    { gecko = "StyleSystemFont", servo = "crate::values::specified::font::SystemFont" },
     { gecko = "StyleGenericColorOrAuto", servo = "crate::values::generics::color::ColorOrAuto" },
     { gecko = "StyleGenericScrollbarColor", servo = "crate::values::generics::ui::ScrollbarColor" },
     { gecko = "StyleRGBA", servo = "cssparser::RGBA" },
@@ -582,6 +584,7 @@ cbindgen-types = [
     { gecko = "StyleFontSizeKeyword", servo = "crate::values::specified::font::FontSizeKeyword" },
     { gecko = "StyleDefaultFontSizes", servo = "crate::gecko::wrapper::DefaultFontSizes" },
     { gecko = "StyleCaptionSide", servo = "crate::values::computed::table::CaptionSide" },
+    { gecko = "StylePageSize", servo = "crate::values::computed::page::PageSize" },
 ]
 
 mapped-generic-types = [

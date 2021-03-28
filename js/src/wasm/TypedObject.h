@@ -125,11 +125,11 @@ class TypedObject : public JSObject {
 
  public:
   // Creates a new struct typed object initialized to zero.
-  static TypedObject* createStruct(JSContext* cx, HandleRttValue typeObj,
+  static TypedObject* createStruct(JSContext* cx, HandleRttValue rtt,
                                    gc::InitialHeap heap = gc::DefaultHeap);
 
   // Creates a new array typed object initialized to zero of specified length.
-  static TypedObject* createArray(JSContext* cx, HandleRttValue typeObj,
+  static TypedObject* createArray(JSContext* cx, HandleRttValue rtt,
                                   uint32_t length,
                                   gc::InitialHeap heap = gc::DefaultHeap);
 
@@ -148,7 +148,7 @@ class TypedObject : public JSObject {
     return *rttValue_;
   }
 
-  MOZ_MUST_USE bool isRuntimeSubtype(js::Handle<RttValue*> rtt) const;
+  [[nodiscard]] bool isRuntimeSubtype(js::Handle<RttValue*> rtt) const;
 
   static constexpr size_t offsetOfRttValue() {
     return offsetof(TypedObject, rttValue_);
@@ -166,7 +166,7 @@ class OutlineTypedObject : public TypedObject {
   // Owned data pointer
   uint8_t* data_;
 
-  static OutlineTypedObject* create(JSContext* cx, HandleRttValue type,
+  static OutlineTypedObject* create(JSContext* cx, HandleRttValue rtt,
                                     size_t byteLength,
                                     gc::InitialHeap heap = gc::DefaultHeap);
 
@@ -184,7 +184,7 @@ class OutlineTypedObject : public TypedObject {
   static size_t offsetOfData() { return offsetof(OutlineTypedObject, data_); }
 
   static constexpr size_t offsetOfArrayLength() { return 0; }
-  typedef uint32_t ArrayLength;
+  using ArrayLength = uint32_t;
 
   uint8_t* outOfLineTypedMem() const { return data_; }
 
@@ -194,7 +194,7 @@ class OutlineTypedObject : public TypedObject {
 
   static gc::AllocKind allocKind();
 
-  static void obj_trace(JSTracer* trace, JSObject* object);
+  static void obj_trace(JSTracer* trc, JSObject* object);
   static void obj_finalize(JSFreeOp* fop, JSObject* object);
 };
 
@@ -233,7 +233,7 @@ class InlineTypedObject : public TypedObject {
     return inlineTypedMem();
   }
 
-  static void obj_trace(JSTracer* trace, JSObject* object);
+  static void obj_trace(JSTracer* trc, JSObject* object);
   static size_t obj_moved(JSObject* dst, JSObject* src);
 
   static size_t offsetOfDataStart() {

@@ -222,28 +222,16 @@ var whitelist = [
       "chrome://browser/content/aboutlogins/components/import-details-row.js",
   },
 
-  // Referenced from the screenshots webextension
-  { file: "resource://app/localization/en-US/browser/screenshots.ftl" },
-
   // services/fxaccounts/RustFxAccount.js
   { file: "resource://gre/modules/RustFxAccount.js" },
 
   // dom/media/mediacontrol/MediaControlService.cpp
   { file: "resource://gre/localization/en-US/dom/media.ftl" },
 
-  // Bug 1687777 will use TaskScheduler.jsm, initially only on Windows.
+  // tookit/mozapps/update/BackgroundUpdate.jsm
   {
-    file: "resource://gre/modules/TaskScheduler.jsm",
-    platforms: ["macosx", "win"],
-  },
-  {
-    file: "resource://gre/modules/TaskSchedulerWinImpl.jsm",
-    platforms: ["win"],
-  },
-  // Bug 1653435 tracks using TaskScheduler.jsm on macOS.
-  {
-    file: "resource://gre/modules/TaskSchedulerMacOSImpl.jsm",
-    platforms: ["macosx"],
+    file:
+      "resource://gre/localization/en-US/toolkit/updates/backgroundupdate.ftl",
   },
 ];
 
@@ -263,7 +251,7 @@ if (AppConstants.platform == "android") {
   });
 }
 
-if (AppConstants.MOZ_BACKGROUNDTASKS) {
+if (AppConstants.MOZ_BACKGROUNDTASKS && !AppConstants.MOZ_UPDATE_AGENT) {
   // These utilities are for background tasks, not regular headed browsing.
   whitelist.push({
     file: "resource://gre/modules/BackgroundTasksUtils.jsm",

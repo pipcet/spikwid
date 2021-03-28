@@ -9,10 +9,14 @@ const { ExperimentFakes } = ChromeUtils.import(
 const { FxAccounts } = ChromeUtils.import(
   "resource://gre/modules/FxAccounts.jsm"
 );
+const { TelemetryTestUtils } = ChromeUtils.import(
+  "resource://testing-common/TelemetryTestUtils.jsm"
+);
 
 const SEPARATE_ABOUT_WELCOME_PREF = "browser.aboutwelcome.enabled";
 const ABOUT_WELCOME_OVERRIDE_CONTENT_PREF = "browser.aboutwelcome.screens";
 const DID_SEE_ABOUT_WELCOME_PREF = "trailhead.firstrun.didSeeAboutWelcome";
+const ABOUT_WELCOME_DESIGN_PREF = "browser.aboutwelcome.design";
 
 const TEST_MULTISTAGE_CONTENT = [
   {
@@ -126,6 +130,10 @@ async function setAboutWelcomePref(value) {
 
 async function setAboutWelcomeMultiStage(value = "") {
   return pushPrefs([ABOUT_WELCOME_OVERRIDE_CONTENT_PREF, value]);
+}
+
+async function setAboutWelcomeDesign(value = "") {
+  return pushPrefs([ABOUT_WELCOME_DESIGN_PREF, value]);
 }
 
 async function openAboutWelcome() {
@@ -272,6 +280,7 @@ add_task(async function test_multistage_zeroOnboarding_experimentAPI() {
  * Test the multistage welcome UI using ExperimentAPI
  */
 add_task(async function test_multistage_aboutwelcome_experimentAPI() {
+  const sandbox = sinon.createSandbox();
   await setAboutWelcomePref(true);
 
   let {
@@ -299,6 +308,9 @@ add_task(async function test_multistage_aboutwelcome_experimentAPI() {
   await enrollmentPromise;
   ExperimentAPI._store._syncToChildren({ flush: true });
 
+  sandbox.spy(ExperimentAPI, "recordExposureEvent");
+
+  Services.telemetry.clearScalars();
   let tab = await BrowserTestUtils.openNewForegroundTab(
     gBrowser,
     "about:welcome",
@@ -308,7 +320,6 @@ add_task(async function test_multistage_aboutwelcome_experimentAPI() {
   const browser = tab.linkedBrowser;
 
   let aboutWelcomeActor = await getAboutWelcomeParent(browser);
-  const sandbox = sinon.createSandbox();
   // Stub AboutWelcomeParent Content Message Handler
   sandbox.spy(aboutWelcomeActor, "onContentMessage");
   registerCleanupFunction(() => {
@@ -387,6 +398,20 @@ add_task(async function test_multistage_aboutwelcome_experimentAPI() {
     ["body.activity-stream"],
     // Unexpected selectors:
     ["div.onboardingContainer"]
+  );
+
+  Assert.ok(
+    ExperimentAPI.recordExposureEvent.called,
+    "Called for exposure event"
+  );
+
+  const scalars = TelemetryTestUtils.getProcessScalars("parent", true, true);
+  TelemetryTestUtils.assertKeyedScalar(
+    scalars,
+    "telemetry.event_counts",
+    "normandy#expose#nimbus_experiment",
+    // AboutNewTabService.welcomeURL seems to be called multiple times in the process of opening about:welcome, multiple pings get recoreded
+    2
   );
 
   await doExperimentCleanup();
@@ -827,15 +852,15 @@ add_task(async function test_AWMultistage_Import() {
   );
 });
 
-add_task(async function test_onContentMessage() {
+add_task(async function test_updatesPrefOnAWOpen() {
   Services.prefs.setBoolPref(DID_SEE_ABOUT_WELCOME_PREF, false);
   await setAboutWelcomePref(true);
 
   await openAboutWelcome();
-  Assert.equal(
-    Services.prefs.getBoolPref(DID_SEE_ABOUT_WELCOME_PREF, false),
-    true,
-    "Pref was set"
+  await BrowserTestUtils.waitForCondition(
+    () =>
+      Services.prefs.getBoolPref(DID_SEE_ABOUT_WELCOME_PREF, false) === true,
+    "Updated pref to seen AW"
   );
   Services.prefs.clearUserPref(DID_SEE_ABOUT_WELCOME_PREF);
 });
@@ -866,3 +891,55 @@ test_newtab(
   },
   "about:welcome"
 );
+
+/**
+ * Test the multistage welcome Proton UI
+ */
+add_task(async function test_multistage_aboutwelcome_proton() {
+  const sandbox = sinon.createSandbox();
+  await setAboutWelcomePref(true);
+  await setAboutWelcomeDesign("proton");
+
+  let tab = await BrowserTestUtils.openNewForegroundTab(
+    gBrowser,
+    "about:welcome",
+    true
+  );
+
+  const browser = tab.linkedBrowser;
+
+  let aboutWelcomeActor = await getAboutWelcomeParent(browser);
+  // Stub AboutWelcomeParent Content Message Handler
+  sandbox.spy(aboutWelcomeActor, "onContentMessage");
+  registerCleanupFunction(() => {
+    BrowserTestUtils.removeTab(tab);
+    sandbox.restore();
+  });
+
+  await test_screen_content(
+    browser,
+    "multistage proton step 1",
+    // Expected selectors:
+    ["div.onboardingContainer"],
+    // Unexpected selectors:
+    ["main.AW_STEP2", "main.AW_STEP3"]
+  );
+
+  await onButtonClick(browser, "button.primary");
+
+  const { callCount } = aboutWelcomeActor.onContentMessage;
+  ok(callCount >= 1, `${callCount} Stub was called`);
+  let clickCall;
+  for (let i = 0; i < callCount; i++) {
+    const call = aboutWelcomeActor.onContentMessage.getCall(i);
+    info(`Call #${i}: ${call.args[0]} ${JSON.stringify(call.args[1])}`);
+    if (call.calledWithMatch("", { event: "CLICK_BUTTON" })) {
+      clickCall = call;
+    }
+  }
+
+  Assert.ok(
+    clickCall.args[1].message_id === "DEFAULT_ABOUTWELCOME_PROTON_AW_STEP1",
+    "AboutWelcome proton message id joined with screen id"
+  );
+});

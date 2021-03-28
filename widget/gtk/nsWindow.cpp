@@ -1109,6 +1109,10 @@ void nsWindow::ApplySizeConstraints(void) {
 
     uint32_t hints = 0;
     if (mSizeConstraints.mMinSize != LayoutDeviceIntSize(0, 0)) {
+      if (!mIsX11Display) {
+        gtk_widget_set_size_request(GTK_WIDGET(mContainer), geometry.min_width,
+                                    geometry.min_height);
+      }
       AddCSDDecorationSize(&geometry.min_width, &geometry.min_height);
       hints |= GDK_HINT_MIN_SIZE;
       LOG(("nsWindow::ApplySizeConstraints [%p] min size %d %d\n", (void*)this,
@@ -1130,10 +1134,6 @@ void nsWindow::ApplySizeConstraints(void) {
 
     gtk_window_set_geometry_hints(GTK_WINDOW(mShell), nullptr, &geometry,
                                   GdkWindowHints(hints));
-    if (!mIsX11Display) {
-      gtk_widget_set_size_request(GTK_WIDGET(mContainer), geometry.min_width,
-                                  geometry.min_height);
-    }
   }
 }
 
@@ -4302,7 +4302,6 @@ gboolean nsWindow::OnTouchpadPinchEvent(GdkEventTouchpadPinch* aEvent) {
         // to not equal Zero as our discussion because we observed that the
         // scale of the PHASE_BEGIN event is 1.
         PreviousSpan = 0.999;
-        mLastPinchEventSpan = aEvent->scale;
         break;
 
       case GDK_TOUCHPAD_GESTURE_PHASE_UPDATE:
@@ -4312,7 +4311,6 @@ gboolean nsWindow::OnTouchpadPinchEvent(GdkEventTouchpadPinch* aEvent) {
         }
         CurrentSpan = aEvent->scale;
         PreviousSpan = mLastPinchEventSpan;
-        mLastPinchEventSpan = aEvent->scale;
         break;
 
       case GDK_TOUCHPAD_GESTURE_PHASE_END:
@@ -4338,6 +4336,11 @@ gboolean nsWindow::OnTouchpadPinchEvent(GdkEventTouchpadPinch* aEvent) {
                      : PreviousSpan),
         KeymapWrapper::ComputeKeyModifiers(aEvent->state));
 
+    if (!event.SetLineOrPageDeltaY(this)) {
+      return FALSE;
+    }
+
+    mLastPinchEventSpan = aEvent->scale;
     DispatchPinchGestureInput(event);
   }
   return TRUE;
@@ -4397,8 +4400,8 @@ gboolean nsWindow::OnTouchEvent(GdkEventTouch* aEvent) {
   if (aEvent->type == GDK_TOUCH_BEGIN || aEvent->type == GDK_TOUCH_UPDATE) {
     mTouches.InsertOrUpdate(aEvent->sequence, std::move(touch));
     // add all touch points to event object
-    for (auto iter = mTouches.Iter(); !iter.Done(); iter.Next()) {
-      event.mTouches.AppendElement(new dom::Touch(*iter.UserData()));
+    for (const auto& data : mTouches.Values()) {
+      event.mTouches.AppendElement(new dom::Touch(*data));
     }
   } else if (aEvent->type == GDK_TOUCH_END ||
              aEvent->type == GDK_TOUCH_CANCEL) {
@@ -4861,6 +4864,14 @@ nsresult nsWindow::Create(nsIWidget* aParent, nsNativeWidget aNativeParent,
       // the drawing window
       mGdkWindow = gtk_widget_get_window(eventWidget);
 
+#ifdef MOZ_WAYLAND
+      if (mIsX11Display && gfx::gfxVars::UseEGL() && isAccelerated) {
+        mCompositorInitiallyPaused = true;
+        mNeedsCompositorResume = true;
+        MaybeResumeCompositor();
+      }
+#endif
+
       if (mWindowType == eWindowType_popup) {
         // gdk does not automatically set the cursor for "temporary"
         // windows, which are what gtk uses for popups.
@@ -4967,6 +4978,9 @@ nsresult nsWindow::Create(nsIWidget* aParent, nsNativeWidget aNativeParent,
                            G_CALLBACK(settings_changed_cb), this);
     g_signal_connect_after(default_settings, "notify::gtk-xft-dpi",
                            G_CALLBACK(settings_xft_dpi_changed_cb), this);
+    // Text resolution affects system fonts and widget sizes.
+    g_signal_connect_after(default_settings, "notify::resolution",
+                           G_CALLBACK(settings_changed_cb), this);
     // For remote LookAndFeel, to refresh the content processes' copies:
     g_signal_connect_after(default_settings, "notify::gtk-cursor-blink-time",
                            G_CALLBACK(settings_changed_cb), this);

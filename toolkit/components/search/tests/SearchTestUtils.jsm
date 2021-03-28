@@ -40,6 +40,7 @@ var SearchTestUtils = {
       this._isMochitest = false;
       // This handles xpcshell-tests.
       gTestScope.ExtensionTestUtils = ExtensionTestUtils;
+      this.initXPCShellAddonManager(testScope);
     }
   },
 
@@ -174,7 +175,15 @@ var SearchTestUtils = {
       "extensions.webextensions.background-delayed-startup",
       false
     );
-    gTestScope.ExtensionTestUtils.init(scope);
+    // Only do this once.
+    try {
+      gTestScope.ExtensionTestUtils.init(scope);
+    } catch (ex) {
+      // This can happen if init is called twice.
+      if (ex.result != Cr.NS_ERROR_FILE_ALREADY_EXISTS) {
+        throw ex;
+      }
+    }
     AddonTestUtils.usePrivilegedSignatures = usePrivilegedSignatures;
     AddonTestUtils.overrideCertDB();
   },
@@ -182,16 +191,11 @@ var SearchTestUtils = {
   /**
    * Add a search engine as a WebExtension.
    *
-   * Note: If you are in xpcshell-tests, then you should call
-   * `initXPCShellAddonManager` before calling this.
-   *
    * Note: for tests, the extension must generally be unloaded before
    * `registerCleanupFunction`s are triggered. See bug 1694409.
    *
-   * For mochitests this function automatically registers an unload, this
+   * This function automatically registers an unload for the extension, this
    * may be skipped with the skipUnload argument.
-   * For xpcshell-tests, we will hopefully be able to add the unload once
-   * bug 1694409 is fixed.
    *
    * @param {object} [options]
    *   @see createEngineManifest
@@ -201,6 +205,8 @@ var SearchTestUtils = {
    *   The loaded extension. This will need unloading before ending the test.
    */
   async installSearchExtension(options = {}, skipUnload = false) {
+    await Services.search.init();
+
     let extensionInfo = {
       useAddonManager: "permanent",
       manifest: this.createEngineManifest(options),
@@ -222,15 +228,20 @@ var SearchTestUtils = {
       await AddonTestUtils.waitForSearchProviderStartup(extension);
     }
 
+    // For xpcshell-tests we must register the unload after adding the extension.
+    // See bug 1694409 for why this is.
+    if (!skipUnload && !this._isMochitest) {
+      gTestScope.registerCleanupFunction(async () => {
+        await extension.unload();
+      });
+    }
+
     return extension;
   },
 
   /**
    * Install a search engine as a system extension to simulate
    * Normandy updates. For xpcshell-tests only.
-   *
-   * Note: If you are in xpcshell-tests, then you should call
-   * `initXPCShellAddonManager` before calling this.
    *
    * @param {object} [options]
    *   @see createEngineManifest
@@ -271,17 +282,21 @@ var SearchTestUtils = {
    * @param {string} [options.favicon_url]
    *   The favicon to use for the search engine in the WebExtension.
    * @param {string} [options.keyword]
-   *   The keyword to use for the WebExtension.
+   *   The keyword to use for the search engine.
    * @param {string} [options.encoding]
-   *   The encoding to use for the WebExtension.
+   *   The encoding to use for the search engine.
    * @param {string} [options.search_url]
-   *   The search URL to use for the WebExtension.
+   *   The search URL to use for the search engine.
    * @param {string} [options.search_url_get_params]
-   *   The search URL parameters to use for the WebExtension.
+   *   The GET search URL parameters to use for the search engine
+   * @param {string} [options.search_url_post_params]
+   *   The POST search URL parameters to use for the search engine
    * @param {string} [options.suggest_url]
-   *   The suggestion URL to use for the WebExtension.
-   * @param {string} [options.suggest_url]
-   *   The suggestion URL parameters to use for the WebExtension.
+   *   The suggestion URL to use for the search engine.
+   * @param {string} [options.suggest_url_get_params]
+   *   The suggestion URL parameters to use for the search engine.
+   * @param {string} [options.search_form]
+   *   The search form to use for the search engine.
    * @returns {object}
    *   The generated manifest.
    */
@@ -303,11 +318,18 @@ var SearchTestUtils = {
         search_provider: {
           name: options.name,
           search_url: options.search_url ?? "https://example.com/",
-          search_url_get_params:
-            options.search_url_get_params ?? "?q={searchTerms}",
         },
       },
     };
+
+    if (options.search_url_post_params) {
+      manifest.chrome_settings_overrides.search_provider.search_url_post_params =
+        options.search_url_post_params;
+    } else {
+      manifest.chrome_settings_overrides.search_provider.search_url_get_params =
+        options.search_url_get_params ?? "?q={searchTerms}";
+    }
+
     if (options.favicon_url) {
       manifest.chrome_settings_overrides.search_provider.favicon_url =
         options.favicon_url;
@@ -327,6 +349,10 @@ var SearchTestUtils = {
     if (options.suggest_url) {
       manifest.chrome_settings_overrides.search_provider.suggest_url_get_params =
         options.suggest_url_get_params;
+    }
+    if (options.search_form) {
+      manifest.chrome_settings_overrides.search_provider.search_form =
+        options.search_form;
     }
     return manifest;
   },

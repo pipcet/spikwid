@@ -174,6 +174,10 @@ class TargetCommand extends EventEmitter {
       targetFrontsSet.delete(targetFront);
     }
 
+    if (this.isDestroyed() || targetFront.isDestroyedOrBeingDestroyed()) {
+      return;
+    }
+
     // Then, once the target is attached, notify the target front creation listeners
     await this._createListeners.emitAsync(targetType, {
       targetFront,
@@ -218,6 +222,16 @@ class TargetCommand extends EventEmitter {
   }
 
   hasTargetWatcherSupport(type) {
+    // If the top level target is a parent process, we're in the browser console or browser toolbox.
+    // In such case, if the browser toolbox fission pref is disabled, we don't want to use watchers
+    // (even if traits on the server are enabled).
+    if (
+      this.targetFront.isParentProcess &&
+      !Services.prefs.getBoolPref(BROWSERTOOLBOX_FISSION_ENABLED, false)
+    ) {
+      return false;
+    }
+
     return !!this.watcherFront?.traits[type];
   }
 
@@ -256,6 +270,8 @@ class TargetCommand extends EventEmitter {
       const supportsWatcher = this.descriptorFront.traits?.watcher;
       if (supportsWatcher) {
         this.watcherFront = await this.descriptorFront.getWatcher();
+        this.watcherFront.on("target-available", this._onTargetAvailable);
+        this.watcherFront.on("target-destroyed", this._onTargetDestroyed);
       }
     }
 
@@ -302,18 +318,10 @@ class TargetCommand extends EventEmitter {
         // When we switch to a new top level target, we don't have to stop and restart
         // Watcher listener as it is independant from the top level target.
         // This isn't the case for some Legacy Listeners, which fetch targets from the top level target
-        if (onlyLegacy) {
-          continue;
+        if (!onlyLegacy) {
+          await this.watcherFront.watchTargets(type);
         }
-        if (!this._startedListeningToWatcher) {
-          this._startedListeningToWatcher = true;
-          this.watcherFront.on("target-available", this._onTargetAvailable);
-          this.watcherFront.on("target-destroyed", this._onTargetDestroyed);
-        }
-        await this.watcherFront.watchTargets(type);
-        continue;
-      }
-      if (this.legacyImplementation[type]) {
+      } else if (this.legacyImplementation[type]) {
         await this.legacyImplementation[type].listen();
       } else {
         throw new Error(`Unsupported target type '${type}'`);
@@ -345,9 +353,7 @@ class TargetCommand extends EventEmitter {
         if (!onlyLegacy) {
           this.watcherFront.unwatchTargets(type);
         }
-        continue;
-      }
-      if (this.legacyImplementation[type]) {
+      } else if (this.legacyImplementation[type]) {
         this.legacyImplementation[type].unlisten();
       } else {
         throw new Error(`Unsupported target type '${type}'`);
@@ -536,17 +542,21 @@ class TargetCommand extends EventEmitter {
    *        The BrowsingContextTargetFront instance that navigated to another process
    */
   async onLocalTabRemotenessChange(targetFront) {
-    // By default, we do close the DevToolsClient when the target is destroyed.
-    // This happens when we close the toolbox (Toolbox.destroy calls Target.destroy),
-    // or when the tab is closes, the server emits tabDetached and the target
-    // destroy itself.
-    // Here, in the context of the process switch, the current target will be destroyed
-    // due to a tabDetached event and a we will create a new one. But we want to reuse
-    // the same client.
-    targetFront.shouldCloseClient = false;
+    // TabDescriptor may emit the event with a null targetFront, interpret that as if the previous target
+    // has already been destroyed
+    if (targetFront) {
+      // By default, we do close the DevToolsClient when the target is destroyed.
+      // This happens when we close the toolbox (Toolbox.destroy calls Target.destroy),
+      // or when the tab is closes, the server emits tabDetached and the target
+      // destroy itself.
+      // Here, in the context of the process switch, the current target will be destroyed
+      // due to a tabDetached event and a we will create a new one. But we want to reuse
+      // the same client.
+      targetFront.shouldCloseClient = false;
 
-    // Wait for the target to be destroyed so that TabDescriptorFactory clears its memoized target for this tab
-    await targetFront.once("target-destroyed");
+      // Wait for the target to be destroyed so that TabDescriptorFactory clears its memoized target for this tab
+      await targetFront.once("target-destroyed");
+    }
 
     // Fetch the new target from the descriptor.
     const newTarget = await this.descriptorFront.getTarget();

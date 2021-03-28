@@ -393,26 +393,20 @@ test_description_schema = Schema(
         # build task's run-on-projects, meaning that tests run only on platforms
         # that are built.
         Optional("run-on-projects"): optionally_keyed_by(
-            "test-platform", "test-name", "variant", Any([text_type], "built-projects")
+            "app",
+            "subtest",
+            "test-platform",
+            "test-name",
+            "variant",
+            Any([text_type], "built-projects"),
         ),
         # When set only run on projects where the build would already be running.
         # This ensures tasks where this is True won't be the cause of the build
         # running on a project it otherwise wouldn't have.
         Optional("built-projects-only"): bool,
-        # Same as `run-on-projects` except it only applies to Fission tasks. Fission
-        # tasks will ignore `run_on_projects` and non-Fission tasks will ignore
-        # `fission-run-on-projects`.
-        Optional("fission-run-on-projects"): optionally_keyed_by(
-            "test-name", "test-platform", Any([text_type], "built-projects")
-        ),
         # the sheriffing tier for this task (default: set based on test platform)
         Optional("tier"): optionally_keyed_by(
-            "test-platform", "variant", Any(int, "default")
-        ),
-        # Same as `tier` except it only applies to Fission tasks. Fission tasks
-        # will ignore `tier` and non-Fission tasks will ignore `fission-tier`.
-        Optional("fission-tier"): optionally_keyed_by(
-            "test-platform", Any(int, "default")
+            "test-platform", "variant", "app", "subtest", Any(int, "default")
         ),
         # number of chunks to create for this task.  This can be keyed by test
         # platform by passing a dictionary in the `by-test-platform` key.  If the
@@ -595,6 +589,12 @@ test_description_schema = Schema(
         },
         # Opt-in to Python 3 support
         Optional("python-3"): bool,
+        # Raptor / browsertime specific keys that need to be here to support
+        # using `by-key` after `by-variant`. Ideally these keys should not exist
+        # in the tests.py schema and instead we'd split variants before the raptor
+        # transforms need them. See bug 1700774.
+        Optional("app"): text_type,
+        Optional("subtest"): text_type,
     }
 )
 
@@ -928,7 +928,6 @@ def handle_keyed_by(config, tasks):
         "e10s",
         "suite",
         "run-on-projects",
-        "fission-run-on-projects",
         "os-groups",
         "run-as-administrator",
         "workdir",
@@ -969,9 +968,6 @@ def setup_browsertime(config, tasks):
         if task["suite"] != "raptor" or "--browsertime" not in extra_options:
             yield task
             continue
-
-        # This is appropriate as the browsertime task variants mature.
-        task["tier"] = max(task["tier"], 1)
 
         ts = {
             "by-test-platform": {
@@ -1200,10 +1196,6 @@ def split_variants(config, tasks):
             taskv["treeherder-symbol"] = join_symbol(group, symbol)
 
             taskv.update(variant.get("replace", {}))
-
-            if task["suite"] == "raptor":
-                taskv["tier"] = max(taskv["tier"], 2)
-
             yield merge(taskv, variant.get("merge", {}))
 
 
@@ -1327,9 +1319,6 @@ def handle_tier(config, tasks):
         if "tier" in task:
             resolve_keyed_by(task, "tier", item_name=task["test-name"])
 
-        if "fission-tier" in task:
-            resolve_keyed_by(task, "fission-tier", item_name=task["test-name"])
-
         # only override if not set for the test
         if "tier" not in task or task["tier"] == "default":
             if task["test-platform"] in [
@@ -1387,21 +1376,19 @@ def handle_tier(config, tasks):
 
 
 @transforms.add
-def handle_fission_attributes(config, tasks):
-    """Handle run_on_projects for fission tasks."""
+def apply_raptor_tier_optimization(config, tasks):
     for task in tasks:
+        if task["suite"] != "raptor":
+            yield task
+            continue
 
-        for attr in ("run-on-projects", "tier"):
-            fission_attr = task.pop("fission-{}".format(attr), None)
+        if not task["test-platform"].startswith("android-hw"):
+            task["optimization"] = {"skip-unless-expanded": None}
+            if task["tier"] > 1:
+                task["optimization"] = {"skip-unless-backstop": None}
 
-            if (
-                task["attributes"].get("unittest_variant")
-                not in ("fission", "geckoview-fission", "fission-xorigin")
-            ) or fission_attr is None:
-                continue
-
-            task[attr] = fission_attr
-
+        if task["attributes"].get("unittest_variant"):
+            task["tier"] = max(task["tier"], 2)
         yield task
 
 
@@ -1412,8 +1399,6 @@ def disable_try_only_platforms(config, tasks):
     for task in tasks:
         if any(re.match(k + "$", task["test-platform"]) for k in try_only_platforms):
             task["run-on-projects"] = []
-            if "fission-run-on-projects" in task:
-                task["fission-run-on-projects"] = []
         yield task
 
 
@@ -1671,13 +1656,7 @@ def enable_webrender(config, tasks):
     """
     for task in tasks:
         if task.get("webrender"):
-            extra_options = task.get("mozharness", {}).get("extra-options", [])
-
-            if task["attributes"]["unittest_category"] in ["raptor"] and (
-                "--app=chrome" in extra_options or "--app=chromium" in extra_options
-            ):
-                continue
-
+            extra_options = task["mozharness"].setdefault("extra-options", [])
             extra_options.append("--enable-webrender")
             # We only want to 'setpref' on tests that have a profile
             if not task["attributes"]["unittest_category"] in [
@@ -1760,12 +1739,12 @@ def set_worker_type(config, tasks):
             # This test already has its worker type defined, so just use that (yields below)
             pass
         elif test_platform.startswith("macosx1014-64"):
+            task["worker-type"] = MACOSX_WORKER_TYPES["macosx1014-64"]
+        elif test_platform.startswith("macosx1015-64"):
             if "--power-test" in task["mozharness"]["extra-options"]:
                 task["worker-type"] = MACOSX_WORKER_TYPES["macosx1014-64-power"]
             else:
-                task["worker-type"] = MACOSX_WORKER_TYPES["macosx1014-64"]
-        elif test_platform.startswith("macosx1015-64"):
-            task["worker-type"] = MACOSX_WORKER_TYPES["macosx1015-64"]
+                task["worker-type"] = MACOSX_WORKER_TYPES["macosx1015-64"]
         elif test_platform.startswith("win"):
             # figure out what platform the job needs to run on
             if task["virtualization"] == "hardware":

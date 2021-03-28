@@ -4,25 +4,34 @@
 
 ## App Menu
 
-appmenuitem-update-banner =
+appmenuitem-update-banner2 =
     .label-update-downloading = Downloading { -brand-shorter-name } update
-appmenuitem-protection-dashboard-title = "Protections" Dashboard
 appmenuitem-customize-mode =
     .label = Customize…
+    .label-update-available = Update available — download now
+    .label-update-manual = Update available — download now
+    .label-update-unsupported = Unable to update
+    .label-update-restart = Update available — restart now
+
+appmenuitem-protection-dashboard-title = "Protections" Dashboard
 appmenuitem-new-window =
     .label = New Window
 appmenuitem-new-private-window =
     .label = New Private Window
 appmenuitem-passwords =
     .label = Passwords
-appmenuitem-extensions-and-themes =
-    .label = Extensions and Themes
+appmenuitem-addons-and-themes =
+    .label = Add-ons and Themes
 appmenuitem-find-in-page =
     .label = Find In Page…
 appmenuitem-more-tools =
     .label = More Tools
-appmenuitem-exit =
-    .label = Exit
+appmenuitem-exit2 =
+    .label =
+        { PLATFORM() ->
+            [linux] Quit
+           *[other] Exit
+        }
 appmenu-menu-button-closed =
     .tooltiptext = Open Application Menu
     .label = { -brand-shorter-name }
@@ -56,7 +65,7 @@ appmenu-fxa-header =
 appmenu-fxa-last-sync = Last synced { $time }
     .label = Last synced { $time }
 appmenu-fxa-sync-and-save-data =
-    .value = Sync and Save Data
+    .value = Sync and save data
 appmenu-fxa-signed-in-label = Sign In
 appmenu-fxa-setup-sync =
     .label = Turn On Syncing…
@@ -151,8 +160,6 @@ appmenu-get-help =
 appmenu-help-more-troubleshooting-info =
     .label = More Troubleshooting Information
     .accesskey = T
-appmenu-help-taskmanager =
-    .label = Task Manager
 appmenu-help-report-site-issue =
     .label = Report Site Issue…
 appmenu-help-feedback-page =
@@ -162,8 +169,8 @@ appmenu-help-feedback-page =
 ## appmenu-help-enter-troubleshoot-mode and appmenu-help-exit-troubleshoot-mode
 ## are mutually exclusive, so it's possible to use the same accesskey for both.
 
-appmenu-help-enter-troubleshoot-mode =
-    .label = Troubleshoot Mode
+appmenu-help-enter-troubleshoot-mode2 =
+    .label = Troubleshoot Mode…
     .accesskey = M
 appmenu-help-exit-troubleshoot-mode =
     .label = Turn Troubleshoot Mode Off
@@ -183,5 +190,7 @@ appmenu-help-not-deceptive =
 
 appmenu-customizetoolbar =
     .label = Customize Toolbar…
+appmenu-taskmanager =
+    .label = Task Manager
 
 appmenu-developer-tools-subheader = Browser Tools

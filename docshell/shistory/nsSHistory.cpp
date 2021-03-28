@@ -276,7 +276,11 @@ nsSHistory::nsSHistory(BrowsingContext* aRootBC)
       GetCurrentSerialEventTarget());
 }
 
-nsSHistory::~nsSHistory() {}
+nsSHistory::~nsSHistory() {
+  // Clear mEntries explicitly here so that the destructor of the entries
+  // can still access nsSHistory in a reasonable way.
+  mEntries.Clear();
+}
 
 NS_IMPL_ADDREF(nsSHistory)
 NS_IMPL_RELEASE(nsSHistory)
@@ -1467,7 +1471,7 @@ class EntryAndDistance {
     if (she) {
       mFrameLoader = she->GetFrameLoader();
     }
-    NS_ASSERTION(mViewer || (mozilla::BFCacheInParent() && mFrameLoader),
+    NS_ASSERTION(mViewer || mFrameLoader,
                  "Entry should have a content viewer or frame loader.");
   }
 
@@ -1595,7 +1599,7 @@ void nsSHistory::GloballyEvictContentViewers() {
   }
 }
 
-nsresult nsSHistory::FindEntryForBFCache(nsIBFCacheEntry* aBFEntry,
+nsresult nsSHistory::FindEntryForBFCache(SHEntrySharedParentState* aEntry,
                                          nsISHEntry** aResult,
                                          int32_t* aResultIndex) {
   *aResult = nullptr;
@@ -1608,7 +1612,7 @@ nsresult nsSHistory::FindEntryForBFCache(nsIBFCacheEntry* aBFEntry,
     nsCOMPtr<nsISHEntry> shEntry = mEntries[i];
 
     // Does shEntry have the same BFCacheEntry as the argument to this method?
-    if (shEntry->HasBFCacheEntry(aBFEntry)) {
+    if (shEntry->HasBFCacheEntry(aEntry)) {
       shEntry.forget(aResult);
       *aResultIndex = i;
       return NS_OK;
@@ -1617,27 +1621,25 @@ nsresult nsSHistory::FindEntryForBFCache(nsIBFCacheEntry* aBFEntry,
   return NS_ERROR_FAILURE;
 }
 
-nsresult nsSHistory::EvictExpiredContentViewerForEntry(
-    nsIBFCacheEntry* aBFEntry) {
+NS_IMETHODIMP_(void)
+nsSHistory::EvictExpiredContentViewerForEntry(
+    SHEntrySharedParentState* aEntry) {
   int32_t index;
   nsCOMPtr<nsISHEntry> shEntry;
-  FindEntryForBFCache(aBFEntry, getter_AddRefs(shEntry), &index);
+  FindEntryForBFCache(aEntry, getter_AddRefs(shEntry), &index);
 
   if (index == mIndex) {
     NS_WARNING("How did the current SHEntry expire?");
-    return NS_OK;
   }
 
   if (shEntry) {
     EvictContentViewerForEntry(shEntry);
   }
-
-  return NS_OK;
 }
 
 NS_IMETHODIMP_(void)
-nsSHistory::AddToExpirationTracker(nsIBFCacheEntry* aBFEntry) {
-  RefPtr<nsSHEntryShared> entry = static_cast<nsSHEntryShared*>(aBFEntry);
+nsSHistory::AddToExpirationTracker(SHEntrySharedParentState* aEntry) {
+  RefPtr<SHEntrySharedParentState> entry = aEntry;
   if (!mHistoryTracker || !entry) {
     return;
   }
@@ -1647,8 +1649,8 @@ nsSHistory::AddToExpirationTracker(nsIBFCacheEntry* aBFEntry) {
 }
 
 NS_IMETHODIMP_(void)
-nsSHistory::RemoveFromExpirationTracker(nsIBFCacheEntry* aBFEntry) {
-  RefPtr<nsSHEntryShared> entry = static_cast<nsSHEntryShared*>(aBFEntry);
+nsSHistory::RemoveFromExpirationTracker(SHEntrySharedParentState* aEntry) {
+  RefPtr<SHEntrySharedParentState> entry = aEntry;
   MOZ_ASSERT(mHistoryTracker && !mHistoryTracker->IsEmpty());
   if (!mHistoryTracker || !entry) {
     return;
@@ -1874,7 +1876,8 @@ void nsSHistory::RemoveDynEntries(int32_t aIndex, nsISHEntry* aEntry) {
 void nsSHistory::RemoveDynEntriesForBFCacheEntry(nsIBFCacheEntry* aBFEntry) {
   int32_t index;
   nsCOMPtr<nsISHEntry> shEntry;
-  FindEntryForBFCache(aBFEntry, getter_AddRefs(shEntry), &index);
+  FindEntryForBFCache(static_cast<nsSHEntryShared*>(aBFEntry),
+                      getter_AddRefs(shEntry), &index);
   if (shEntry) {
     RemoveDynEntries(index, shEntry);
   }

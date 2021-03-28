@@ -1530,9 +1530,9 @@ void nsBlockFrame::Reflow(nsPresContext* aPresContext, ReflowOutput& aMetrics,
     }
   }
 
-  nsRect areaBounds = nsRect(0, 0, aMetrics.Width(), aMetrics.Height());
-  aMetrics.mOverflowAreas = ComputeOverflowAreas(
-      areaBounds, reflowInput->mStyleDisplay, blockEndEdgeOfChildren);
+  aMetrics.SetOverflowAreasToDesiredBounds();
+  ComputeOverflowAreas(aMetrics.mOverflowAreas, blockEndEdgeOfChildren,
+                       reflowInput->mStyleDisplay);
   // Factor overflow container child bounds into the overflow area
   aMetrics.mOverflowAreas.UnionWith(ocBounds);
   // Factor pushed float child bounds into the overflow area
@@ -2042,21 +2042,35 @@ void nsBlockFrame::ComputeFinalSize(const ReflowInput& aReflowInput,
 #endif
 }
 
-static void ConsiderBlockEndEdgeOfChildren(const WritingMode aWritingMode,
-                                           nscoord aBEndEdgeOfChildren,
-                                           OverflowAreas& aOverflowAreas,
-                                           const nsStyleDisplay* aDisplay) {
+void nsBlockFrame::ConsiderBlockEndEdgeOfChildren(
+    OverflowAreas& aOverflowAreas, nscoord aBEndEdgeOfChildren,
+    const nsStyleDisplay* aDisplay) const {
+  const auto wm = GetWritingMode();
+
   // Factor in the block-end edge of the children.  Child frames will be added
   // to the overflow area as we iterate through the lines, but their margins
   // won't, so we need to account for block-end margins here.
   // REVIEW: For now, we do this for both visual and scrollable area,
   // although when we make scrollable overflow area not be a subset of
   // visual, we can change this.
+
+  if (Style()->GetPseudoType() == PseudoStyleType::scrolledContent) {
+    // If we are a scrolled inner frame, add our block-end padding to our
+    // children's block-end edge.
+    //
+    // Note: aBEndEdgeOfChildren already includes our own block-start padding
+    // because it is relative to our block-start edge of our border-box, which
+    // is the same as our padding-box here.
+    MOZ_ASSERT(GetLogicalUsedBorderAndPadding(wm) == GetLogicalUsedPadding(wm),
+               "A scrolled inner frame shouldn't have any border!");
+    aBEndEdgeOfChildren += GetLogicalUsedPadding(wm).BEnd(wm);
+  }
+
   // XXX Currently, overflow areas are stored as physical rects, so we have
   // to handle writing modes explicitly here. If we change overflow rects
   // to be stored logically, this can be simplified again.
-  if (aWritingMode.IsVertical()) {
-    if (aWritingMode.IsVerticalLR()) {
+  if (wm.IsVertical()) {
+    if (wm.IsVerticalLR()) {
       for (const auto otype : AllOverflowTypes()) {
         if (!(aDisplay->IsContainLayout() &&
               otype == OverflowType::Scrollable)) {
@@ -2089,13 +2103,11 @@ static void ConsiderBlockEndEdgeOfChildren(const WritingMode aWritingMode,
   }
 }
 
-OverflowAreas nsBlockFrame::ComputeOverflowAreas(const nsRect& aBounds,
-                                                 const nsStyleDisplay* aDisplay,
-                                                 nscoord aBEndEdgeOfChildren) {
-  // Compute the overflow areas of our children
+void nsBlockFrame::ComputeOverflowAreas(OverflowAreas& aOverflowAreas,
+                                        nscoord aBEndEdgeOfChildren,
+                                        const nsStyleDisplay* aDisplay) const {
   // XXX_perf: This can be done incrementally.  It is currently one of
   // the things that makes incremental reflow O(N^2).
-  OverflowAreas areas(aBounds, aBounds);
   if (ShouldApplyOverflowClipping(aDisplay) != PhysicalAxes::Both) {
     for (const auto& line : Lines()) {
       if (aDisplay->IsContainLayout()) {
@@ -2108,9 +2120,9 @@ OverflowAreas nsBlockFrame::ComputeOverflowAreas(const nsRect& aBounds,
         nsRect childVisualRect = line.InkOverflowRect();
         OverflowAreas childVisualArea =
             OverflowAreas(childVisualRect, nsRect());
-        areas.UnionWith(childVisualArea);
+        aOverflowAreas.UnionWith(childVisualArea);
       } else {
-        areas.UnionWith(line.GetOverflowAreas());
+        aOverflowAreas.UnionWith(line.GetOverflowAreas());
       }
     }
 
@@ -2120,20 +2132,18 @@ OverflowAreas nsBlockFrame::ComputeOverflowAreas(const nsRect& aBounds,
     // factor it in anyway (it can't hurt if it was already done).
     // XXXldb Can we just fix GetOverflowArea instead?
     if (nsIFrame* outsideMarker = GetOutsideMarker()) {
-      areas.UnionAllWith(outsideMarker->GetRect());
+      aOverflowAreas.UnionAllWith(outsideMarker->GetRect());
     }
 
-    ConsiderBlockEndEdgeOfChildren(GetWritingMode(), aBEndEdgeOfChildren, areas,
+    ConsiderBlockEndEdgeOfChildren(aOverflowAreas, aBEndEdgeOfChildren,
                                    aDisplay);
   }
 
 #ifdef NOISY_OVERFLOW_AREAS
   printf("%s: InkOverflowArea=%s, ScrollableOverflowArea=%s\n", ListTag().get(),
-         ToString(areas.InkOverflow()).c_str(),
-         ToString(areas.ScrollableOverflow()).c_str());
+         ToString(aOverflowAreas.InkOverflow()).c_str(),
+         ToString(aOverflowAreas.ScrollableOverflow()).c_str());
 #endif
-
-  return areas;
 }
 
 void nsBlockFrame::UnionChildOverflow(OverflowAreas& aOverflowAreas) {
@@ -2173,8 +2183,8 @@ bool nsBlockFrame::ComputeCustomOverflow(OverflowAreas& aOverflowAreas) {
   nscoord blockEndEdgeOfChildren =
       GetProperty(BlockEndEdgeOfChildrenProperty(), &found);
   if (found) {
-    ConsiderBlockEndEdgeOfChildren(GetWritingMode(), blockEndEdgeOfChildren,
-                                   aOverflowAreas, StyleDisplay());
+    ConsiderBlockEndEdgeOfChildren(aOverflowAreas, blockEndEdgeOfChildren,
+                                   StyleDisplay());
   }
 
   // Line cursor invariants depend on the overflow areas of the lines, so

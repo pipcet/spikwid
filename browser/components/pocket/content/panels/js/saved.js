@@ -446,6 +446,7 @@ var PKT_SAVED_OVERLAY = function(options) {
       thePKT_SAVED.sendMessage("PKT_openTabWithUrl", {
         url: $(this).attr("href"),
         activate: true,
+        source: "view_list",
       });
     });
   };
@@ -545,6 +546,14 @@ var PKT_SAVED_OVERLAY = function(options) {
       $("body").addClass("recs_enabled");
       $(".pkt_ext_subshell").show();
       $(".pkt_ext_item_recs").append(renderedRecs);
+      $(".pkt_ext_learn_more").click(function(e) {
+        e.preventDefault();
+        thePKT_SAVED.sendMessage("PKT_openTabWithUrl", {
+          url: $(this).attr("href"),
+          activate: true,
+          source: "recs_learn_more",
+        });
+      });
       $(".pkt_ext_item_recs_link").click(function(e) {
         e.preventDefault();
         const url = $(this).attr("href");

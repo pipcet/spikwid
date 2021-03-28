@@ -37,6 +37,11 @@ async function setupForExperimentFeature() {
   return { sandbox, manager };
 }
 
+function setDefaultBranch(pref, value) {
+  let branch = Services.prefs.getDefaultBranch("");
+  branch.setStringPref(pref, value);
+}
+
 const TEST_FALLBACK_PREF = "testprefbranch.config";
 const FAKE_FEATURE_MANIFEST = {
   enabledFallbackPref: "testprefbranch.enabled",
@@ -46,6 +51,11 @@ const FAKE_FEATURE_MANIFEST = {
       fallbackPref: TEST_FALLBACK_PREF,
     },
   },
+};
+const FAKE_FEATURE_REMOTE_VALUE = {
+  variables: {},
+  enabled: true,
+  targeting: "true",
 };
 
 add_task(async function test_feature_manifest_is_valid() {
@@ -70,8 +80,11 @@ add_task(async function test_feature_manifest_is_valid() {
  */
 add_task(async function test_ExperimentFeature_ready() {
   const { sandbox, manager } = await setupForExperimentFeature();
-
   const featureInstance = new ExperimentFeature("foo", FAKE_FEATURE_MANIFEST);
+  let readyPromise = featureInstance.ready();
+  let stub = sandbox.stub();
+
+  featureInstance.onUpdate(stub);
 
   const expected = ExperimentFakes.experiment("anexperiment", {
     branch: {
@@ -86,13 +99,15 @@ add_task(async function test_ExperimentFeature_ready() {
 
   manager.store.addExperiment(expected);
 
-  await featureInstance.ready();
+  await readyPromise;
 
   Assert.deepEqual(
     featureInstance.getValue(),
     { whoa: true },
     "should return getValue after waiting on ready"
   );
+  Assert.equal(stub.callCount, 1, "Called when experiment registered");
+  Assert.equal(stub.firstCall.args[1], "experiment-updated", "Verify reason");
 
   Services.prefs.clearUserPref("testprefbranch.value");
   sandbox.restore();
@@ -105,14 +120,6 @@ add_task(async function test_ExperimentFeature_getValue() {
   const { sandbox } = await setupForExperimentFeature();
 
   const featureInstance = new ExperimentFeature("foo", FAKE_FEATURE_MANIFEST);
-
-  Services.prefs.clearUserPref("testprefbranch.value");
-
-  Assert.deepEqual(
-    featureInstance.getValue({ defaultValue: { hello: 1 } }),
-    { hello: 1 },
-    "should return the defaultValue if no fallback pref is set"
-  );
 
   Services.prefs.setStringPref(TEST_FALLBACK_PREF, `{"bar": 123}`);
 
@@ -145,7 +152,7 @@ add_task(
 
     manager.store.addExperiment(expected);
 
-    Services.prefs.setStringPref(TEST_FALLBACK_PREF, `{"bar": 123}`);
+    setDefaultBranch(TEST_FALLBACK_PREF, `{"bar": 123}`);
 
     Assert.deepEqual(
       featureInstance.getValue(),
@@ -201,8 +208,39 @@ add_task(async function test_ExperimentFeature_isEnabled_default() {
   sandbox.restore();
 });
 
+add_task(async function test_ExperimentFeature_isEnabled_remote_over_default() {
+  const { manager, sandbox } = await setupForExperimentFeature();
+  await manager.store.ready();
+
+  const featureInstance = new ExperimentFeature("foo", FAKE_FEATURE_MANIFEST);
+
+  Services.prefs.setBoolPref("testprefbranch.enabled", false);
+
+  Assert.equal(
+    featureInstance.isEnabled(),
+    false,
+    "should use the default pref value, including if it is false"
+  );
+
+  manager.store.updateRemoteConfigs("foo", {
+    ...FAKE_FEATURE_REMOTE_VALUE,
+    enabled: true,
+  });
+
+  await featureInstance.ready();
+
+  Assert.equal(
+    featureInstance.isEnabled(),
+    true,
+    "should use the remote value over the default"
+  );
+
+  Services.prefs.clearUserPref("testprefbranch.enabled");
+  sandbox.restore();
+});
+
 add_task(
-  async function test_ExperimentFeature_isEnabled_prefer_experiment_over_default() {
+  async function test_ExperimentFeature_isEnabled_prefer_experiment_over_remote() {
     const { sandbox, manager } = await setupForExperimentFeature();
     const expected = ExperimentFakes.experiment("foo", {
       branch: {
@@ -214,18 +252,25 @@ add_task(
         },
       },
     });
-
     const featureInstance = new ExperimentFeature("foo", FAKE_FEATURE_MANIFEST);
+
+    await manager.store.ready();
 
     manager.store.addExperiment(expected);
 
     const exposureSpy = sandbox.spy(ExperimentAPI, "recordExposureEvent");
     Services.prefs.setBoolPref("testprefbranch.enabled", false);
+    manager.store.updateRemoteConfigs("foo", {
+      ...FAKE_FEATURE_REMOTE_VALUE,
+      enabled: false,
+    });
+
+    await featureInstance.ready();
 
     Assert.equal(
       featureInstance.isEnabled(),
       true,
-      "should return the enabled value defined in the experiment, not the default pref"
+      "should return the enabled value defined in the experiment, not the default pref or the remote value"
     );
 
     Assert.ok(exposureSpy.notCalled, "should emit exposure by default event");

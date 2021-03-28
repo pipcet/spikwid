@@ -1198,9 +1198,10 @@ bool gfxPlatform::UseWebRender() { return gfx::gfxVars::UseWebRender(); }
 /* static */
 bool gfxPlatform::DoesFissionForceWebRender() {
   // Because WebRender doesn't currently support all of the tests that Fission
-  // runs in CI, we only require WebRender for users who both have Fission and
-  // are enrolled in the Fission experiment.
-  return FissionAutostart() && FissionExperimentEnrolled();
+  // runs in CI, we only require WebRender for users who are enrolled in the
+  // the Fission experiment. This applies to both the control and the treatment
+  // groups, so they are as comparable as possible.
+  return FissionExperimentEnrolled();
 }
 
 /* static */
@@ -2151,7 +2152,8 @@ void gfxPlatform::InitializeCMS() {
      of this preference, which means nsIPrefBranch::GetBoolPref will
      typically throw (and leave its out-param untouched).
    */
-  if (StaticPrefs::gfx_color_management_force_srgb()) {
+  if (StaticPrefs::gfx_color_management_force_srgb() ||
+      StaticPrefs::gfx_color_management_native_srgb()) {
     gCMSOutputProfile = gCMSsRGBProfile;
   }
 
@@ -3180,7 +3182,11 @@ void gfxPlatform::GetDisplayInfo(mozilla::widget::InfoObject& aObj) {
     }
   }
 
-  GetPlatformDisplayInfo(aObj);
+  // Platform display info is only currently used for about:support and getting
+  // it might fail in a child process anyway.
+  if (XRE_IsParentProcess()) {
+    GetPlatformDisplayInfo(aObj);
+  }
 }
 
 class FrameStatsComparator {

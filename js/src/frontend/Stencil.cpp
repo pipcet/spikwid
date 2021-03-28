@@ -34,10 +34,9 @@
 #include "vm/GeneratorAndAsyncKind.h"  // GeneratorKind, FunctionAsyncKind
 #include "vm/JSContext.h"              // JSContext
 #include "vm/JSFunction.h"  // JSFunction, GetFunctionPrototype, NewFunctionWithProto
-#include "vm/JSObject.h"      // JSObject
+#include "vm/JSObject.h"      // JSObject, TenuredObject
 #include "vm/JSONPrinter.h"   // js::JSONPrinter
 #include "vm/JSScript.h"      // BaseScript, JSScript
-#include "vm/ObjectGroup.h"   // TenuredObject
 #include "vm/Printer.h"       // js::Fprinter
 #include "vm/RegExpObject.h"  // js::RegExpObject
 #include "vm/Scope.h"  // Scope, *Scope, ScopeKindString, ScopeIter, ScopeKindIsCatch, BindingIter, GetScopeDataTrailingNames
@@ -402,11 +401,14 @@ static bool NameIsOnEnvironment(Scope* scope, JSAtom* name) {
 #endif
 
 /* static */
-NameLocation ScopeContext::searchInDelazificationEnclosingScope(
-    JSContext* cx, CompilationInput& input, ParserAtomsTable& parserAtoms,
-    TaggedParserAtomIndex name, uint8_t hops) {
+NameLocation ScopeContext::searchInEnclosingScope(JSContext* cx,
+                                                  CompilationInput& input,
+                                                  ParserAtomsTable& parserAtoms,
+                                                  TaggedParserAtomIndex name,
+                                                  uint8_t hops) {
   MOZ_ASSERT(input.target ==
-             CompilationInput::CompilationTarget::Delazification);
+                 CompilationInput::CompilationTarget::Delazification ||
+             input.target == CompilationInput::CompilationTarget::Eval);
 
   // TODO-Stencil
   //   Here, we convert our name into a JSAtom*, and hard-crash on failure
@@ -461,6 +463,7 @@ NameLocation ScopeContext::searchInDelazificationEnclosingScope(
         }
         break;
 
+      case ScopeKind::StrictEval:
       case ScopeKind::FunctionBodyVar:
       case ScopeKind::Lexical:
       case ScopeKind::NamedLambda:
@@ -514,7 +517,6 @@ NameLocation ScopeContext::searchInDelazificationEnclosingScope(
         break;
 
       case ScopeKind::Eval:
-      case ScopeKind::StrictEval:
         // As an optimization, if the eval doesn't have its own var
         // environment and its immediate enclosing scope is a global
         // scope, all accesses are global.

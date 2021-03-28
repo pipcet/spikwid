@@ -137,7 +137,7 @@ use crate::texture_cache::TextureCacheHandle;
 use crate::util::{MaxRect, VecHelper, MatrixHelpers, Recycler, raster_rect_to_device_pixels, ScaleOffset};
 use crate::filterdata::{FilterDataHandle};
 use crate::tile_cache::{SliceDebugInfo, TileDebugInfo, DirtyTileDebugInfo};
-use crate::visibility::{PrimitiveVisibilityMask, PrimitiveVisibilityFlags, FrameVisibilityContext};
+use crate::visibility::{PrimitiveVisibilityFlags, FrameVisibilityContext};
 use crate::visibility::{VisibilityState, FrameVisibilityState};
 #[cfg(any(feature = "capture", feature = "replay"))]
 use ron;
@@ -678,8 +678,6 @@ pub enum TileSurface {
     Texture {
         /// Descriptor for the surface that this tile draws into.
         descriptor: SurfaceTextureDescriptor,
-        /// Bitfield specifying the dirty region(s) that are relevant to this tile.
-        visibility_mask: PrimitiveVisibilityMask,
     },
     Color {
         color: ColorF,
@@ -1425,11 +1423,10 @@ impl Tile {
             // the tile was previously a color, or not set, then just set
             // up a new texture cache handle.
             match self.surface.take() {
-                Some(TileSurface::Texture { descriptor, visibility_mask }) => {
+                Some(TileSurface::Texture { descriptor }) => {
                     // Reuse the existing descriptor and vis mask
                     TileSurface::Texture {
                         descriptor,
-                        visibility_mask,
                     }
                 }
                 Some(TileSurface::Color { .. }) | Some(TileSurface::Clear) | None => {
@@ -1457,7 +1454,6 @@ impl Tile {
 
                     TileSurface::Texture {
                         descriptor,
-                        visibility_mask: PrimitiveVisibilityMask::empty(),
                     }
                 }
             }
@@ -1731,8 +1727,6 @@ impl TileDescriptor {
 /// Stores both the world and devices rects for a single dirty rect.
 #[derive(Debug, Clone)]
 pub struct DirtyRegionRect {
-    /// Bitfield for picture render tasks that draw this dirty region.
-    pub visibility_mask: PrimitiveVisibilityMask,
     /// The dirty region in space of the picture cache
     pub rect_in_pic_space: PictureRect,
 }
@@ -1756,7 +1750,7 @@ impl DirtyRegion {
         spatial_node_index: SpatialNodeIndex,
     ) -> Self {
         DirtyRegion {
-            dirty_rects: Vec::with_capacity(PrimitiveVisibilityMask::MAX_DIRTY_REGIONS),
+            dirty_rects: Vec::with_capacity(16),
             combined: WorldRect::zero(),
             spatial_node_index,
         }
@@ -1778,7 +1772,7 @@ impl DirtyRegion {
         &mut self,
         rect_in_pic_space: PictureRect,
         spatial_tree: &SpatialTree,
-    ) -> PrimitiveVisibilityMask {
+    ) {
         let map_pic_to_world = SpaceMapper::new_with_target(
             ROOT_SPATIAL_NODE_INDEX,
             self.spatial_node_index,
@@ -1793,29 +1787,9 @@ impl DirtyRegion {
         // Include this in the overall dirty rect
         self.combined = self.combined.union(&world_rect);
 
-        let dirty_region_index = self.dirty_rects.len();
-        let mut visibility_mask = PrimitiveVisibilityMask::empty();
-
-        if dirty_region_index < PrimitiveVisibilityMask::MAX_DIRTY_REGIONS {
-            visibility_mask.set_visible(dirty_region_index);
-
-            self.dirty_rects.push(DirtyRegionRect {
-                visibility_mask,
-                rect_in_pic_space,
-            });
-        } else {
-            // If we run out of dirty regions, then force the last dirty region to
-            // be a union of any remaining regions. This is an inefficiency, in that
-            // we'll add items to batches later on that are redundant / outside this
-            // tile, but it's really rare except in pathological cases (even on a
-            // 4k screen, the typical dirty region count is < 16).
-            visibility_mask.set_visible(PrimitiveVisibilityMask::MAX_DIRTY_REGIONS - 1);
-
-            let combined_region = self.dirty_rects.last_mut().unwrap();
-            combined_region.rect_in_pic_space = combined_region.rect_in_pic_space.union(&rect_in_pic_space);
-        }
-
-        visibility_mask
+        self.dirty_rects.push(DirtyRegionRect {
+            rect_in_pic_space,
+        });
     }
 
     // TODO(gw): This returns a heap allocated object. Perhaps we can simplify this
@@ -1844,7 +1818,6 @@ impl DirtyRegion {
 
             combined = combined.union(&world_rect);
             dirty_rects.push(DirtyRegionRect {
-                visibility_mask: rect.visibility_mask,
                 rect_in_pic_space,
             });
         }
@@ -3974,25 +3947,15 @@ impl<'a> PictureUpdateState<'a> {
             self,
             frame_context,
         ) {
-            for cluster in &prim_list.clusters {
-                if !cluster.flags.contains(ClusterFlags::IS_PICTURE) {
-                    continue;
-                }
-                for prim_instance in &prim_list.prim_instances[cluster.prim_range()] {
-                    let child_pic_index = match prim_instance.kind {
-                        PrimitiveInstanceKind::Picture { pic_index, .. } => pic_index,
-                        _ => unreachable!(),
-                    };
-
-                    self.update(
-                        child_pic_index,
-                        picture_primitives,
-                        frame_context,
-                        gpu_cache,
-                        clip_store,
-                        data_stores,
-                    );
-                }
+            for child_pic_index in &prim_list.child_pictures {
+                self.update(
+                    *child_pic_index,
+                    picture_primitives,
+                    frame_context,
+                    gpu_cache,
+                    clip_store,
+                    data_stores,
+                );
             }
 
             picture_primitives[pic_index.0].post_update(
@@ -4268,16 +4231,14 @@ bitflags! {
     /// A set of flags describing why a picture may need a backing surface.
     #[cfg_attr(feature = "capture", derive(Serialize))]
     pub struct ClusterFlags: u32 {
-        /// This cluster is a picture
-        const IS_PICTURE = 1;
         /// Whether this cluster is visible when the position node is a backface.
-        const IS_BACKFACE_VISIBLE = 2;
+        const IS_BACKFACE_VISIBLE = 1;
         /// This flag is set during the first pass picture traversal, depending on whether
         /// the cluster is visible or not. It's read during the second pass when primitives
         /// consult their owning clusters to see if the primitive itself is visible.
-        const IS_VISIBLE = 4;
+        const IS_VISIBLE = 2;
         /// Is a backdrop-filter cluster that requires special handling during post_update.
-        const IS_BACKDROP_FILTER = 8;
+        const IS_BACKDROP_FILTER = 4;
     }
 }
 
@@ -4352,6 +4313,7 @@ pub struct PrimitiveList {
     /// List of primitives grouped into clusters.
     pub clusters: Vec<PrimitiveCluster>,
     pub prim_instances: Vec<PrimitiveInstance>,
+    pub child_pictures: Vec<PictureIndex>,
 }
 
 impl PrimitiveList {
@@ -4363,6 +4325,7 @@ impl PrimitiveList {
         PrimitiveList {
             clusters: Vec::new(),
             prim_instances: Vec::new(),
+            child_pictures: Vec::new(),
         }
     }
 
@@ -4379,8 +4342,8 @@ impl PrimitiveList {
         // Pictures are always put into a new cluster, to make it faster to
         // iterate all pictures in a given primitive list.
         match prim_instance.kind {
-            PrimitiveInstanceKind::Picture { .. } => {
-                flags.insert(ClusterFlags::IS_PICTURE);
+            PrimitiveInstanceKind::Picture { pic_index, .. } => {
+                self.child_pictures.push(pic_index);
             }
             PrimitiveInstanceKind::Backdrop { .. } => {
                 flags.insert(ClusterFlags::IS_BACKDROP_FILTER);
@@ -4559,17 +4522,8 @@ impl PicturePrimitive {
         pt.add_item(format!("raster_config: {:?}", self.raster_config));
         pt.add_item(format!("requested_composite_mode: {:?}", self.requested_composite_mode));
 
-        for cluster in &self.prim_list.clusters {
-            if !cluster.flags.contains(ClusterFlags::IS_PICTURE) {
-                continue;
-            }
-            for instance in &self.prim_list.prim_instances[cluster.prim_range()] {
-                let index = match instance.kind {
-                    PrimitiveInstanceKind::Picture { pic_index, .. } => pic_index,
-                    _ => unreachable!(),
-                };
-                pictures[index.0].print(pictures, index, pt);
-            }
+        for child_pic_index in &self.prim_list.child_pictures {
+            pictures[child_pic_index.0].print(pictures, *child_pic_index, pt);
         }
 
         pt.end_level();
@@ -4903,18 +4857,16 @@ impl PicturePrimitive {
                         continue;
                     }
 
-                    // Get the visibility mask bit(s) for this tile from the dirty region tracker. This must be done
-                    // outside the if statement below, so that we include in the dirty region tiles that are handled
-                    // by a background color only (no surface allocation).
-                    let tile_vis_mask = tile_cache.dirty_region.add_dirty_region(
+                    // Add this dirty rect to the dirty region tracker. This must be done outside the if statement below,
+                    // so that we include in the dirty region tiles that are handled by a background color only (no
+                    // surface allocation).
+                    tile_cache.dirty_region.add_dirty_region(
                         tile.local_dirty_rect,
                         frame_context.spatial_tree,
                     );
 
                     // Ensure that this texture is allocated.
-                    if let TileSurface::Texture { ref mut descriptor, ref mut visibility_mask } = tile.surface.as_mut().unwrap() {
-                        *visibility_mask = tile_vis_mask;
-
+                    if let TileSurface::Texture { ref mut descriptor } = tile.surface.as_mut().unwrap() {
                         match descriptor {
                             SurfaceTextureDescriptor::TextureCache { ref mut handle } => {
                                 if !frame_state.resource_cache.texture_cache.is_allocated(handle) {
@@ -5010,7 +4962,7 @@ impl PicturePrimitive {
                                     content_origin,
                                     surface_spatial_node_index,
                                     device_pixel_scale,
-                                    *visibility_mask,
+                                    Some(tile.local_dirty_rect),
                                     Some(scissor_rect),
                                     Some(valid_rect),
                                 )
@@ -5248,7 +5200,7 @@ impl PicturePrimitive {
                                     device_rect.origin,
                                     surface_spatial_node_index,
                                     device_pixel_scale,
-                                    PrimitiveVisibilityMask::all(),
+                                    None,
                                     None,
                                     None,
                                 )
@@ -5326,7 +5278,7 @@ impl PicturePrimitive {
                                     device_rect.origin,
                                     surface_spatial_node_index,
                                     device_pixel_scale,
-                                    PrimitiveVisibilityMask::all(),
+                                    None,
                                     None,
                                     None,
                                 ),
@@ -5477,7 +5429,7 @@ impl PicturePrimitive {
                                     clipped.origin,
                                     surface_spatial_node_index,
                                     device_pixel_scale,
-                                    PrimitiveVisibilityMask::all(),
+                                    None,
                                     None,
                                     None,
                                 )
@@ -5523,7 +5475,7 @@ impl PicturePrimitive {
                                     clipped.origin,
                                     surface_spatial_node_index,
                                     device_pixel_scale,
-                                    PrimitiveVisibilityMask::all(),
+                                    None,
                                     None,
                                     None,
                                 )
@@ -5568,7 +5520,7 @@ impl PicturePrimitive {
                                     clipped.origin,
                                     surface_spatial_node_index,
                                     device_pixel_scale,
-                                    PrimitiveVisibilityMask::all(),
+                                    None,
                                     None,
                                     None,
                                 )
@@ -5614,7 +5566,7 @@ impl PicturePrimitive {
                                     clipped.origin,
                                     surface_spatial_node_index,
                                     device_pixel_scale,
-                                    PrimitiveVisibilityMask::all(),
+                                    None,
                                     None,
                                     None,
                                 )
@@ -5660,7 +5612,7 @@ impl PicturePrimitive {
                                     clipped.origin,
                                     surface_spatial_node_index,
                                     device_pixel_scale,
-                                    PrimitiveVisibilityMask::all(),
+                                    None,
                                     None,
                                     None,
                                 )
@@ -5766,7 +5718,7 @@ impl PicturePrimitive {
 
         // Disallow subpixel AA if an intermediate surface is needed.
         // TODO(lsalzman): allow overriding parent if intermediate surface is opaque
-        let (is_passthrough, subpixel_mode) = match self.raster_config {
+        let subpixel_mode = match self.raster_config {
             Some(RasterConfig { ref composite_mode, .. }) => {
                 let subpixel_mode = match composite_mode {
                     PictureCompositeMode::TileCache { slice_id } => {
@@ -5785,10 +5737,10 @@ impl PicturePrimitive {
                     }
                 };
 
-                (false, subpixel_mode)
+                subpixel_mode
             }
             None => {
-                (true, SubpixelMode::Allow)
+                SubpixelMode::Allow
             }
         };
 
@@ -5824,7 +5776,6 @@ impl PicturePrimitive {
         let context = PictureContext {
             pic_index,
             apply_local_clip_rect: self.apply_local_clip_rect,
-            is_passthrough,
             raster_spatial_node_index,
             surface_spatial_node_index,
             surface_index,

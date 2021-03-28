@@ -527,6 +527,10 @@ var SessionStore = {
   finishTabRemotenessChange(aTab, aSwitchId) {
     SessionStoreInternal.finishTabRemotenessChange(aTab, aSwitchId);
   },
+
+  restoreTabContentComplete(aBrowser, aData) {
+    SessionStoreInternal._restoreTabContentComplete(aBrowser, aData);
+  },
 };
 
 // Freeze the SessionStore object. We don't want anyone to modify it.
@@ -1004,7 +1008,6 @@ var SessionStoreInternal = {
       this._sHistoryChanges = false;
       this._permanentKey = browser.permanentKey;
       if (browser.currentURI && browser.ownerGlobal) {
-        this._lastKnownUri = browser.currentURI.displaySpec;
         this._lastKnownBody = browser.ownerGlobal.document.body;
       }
     }
@@ -1038,7 +1041,6 @@ var SessionStoreInternal = {
         }
         this._fromIdx = index;
         if (browser.currentURI && browser.ownerGlobal) {
-          this._lastKnownUri = browser.currentURI.displaySpec;
           this._lastKnownBody = browser.ownerGlobal.document.body;
         }
       },
@@ -1048,10 +1050,10 @@ var SessionStoreInternal = {
 
         if (bc?.sessionHistory) {
           bc.sessionHistory.removeSHistoryListener(this);
-          SessionStoreInternal._browserSHistoryListener.delete(
-            this._permanentKey
-          );
         }
+        SessionStoreInternal._browserSHistoryListener.delete(
+          this._permanentKey
+        );
       },
 
       OnHistoryNewEntry(newURI, oldIndex) {
@@ -1197,26 +1199,12 @@ var SessionStoreInternal = {
       }
       onStateChange(webProgress, request, stateFlags, status) {
         if (
-          !webProgress.isTopLevel ||
-          !(stateFlags & Ci.nsIWebProgressListener.STATE_IS_WINDOW)
+          webProgress.isTopLevel &&
+          stateFlags & Ci.nsIWebProgressListener.STATE_IS_WINDOW &&
+          stateFlags & Ci.nsIWebProgressListener.STATE_STOP &&
+          callbacks.onStopRequest
         ) {
-          return;
-        }
-
-        if (
-          callbacks.onStartRequest &&
-          stateFlags & Ci.nsIWebProgressListener.STATE_START
-        ) {
-          callbacks.onStartRequest();
-          this.uninstall();
-        }
-
-        if (
-          callbacks.onStopRequest &&
-          stateFlags & Ci.nsIWebProgressListener.STATE_STOP
-        ) {
-          callbacks.onStopRequest();
-          this.uninstall();
+          callbacks.onStopRequest(request, this);
         }
       }
     }
@@ -1267,12 +1255,9 @@ var SessionStoreInternal = {
           // No shistory changes needed.
           listener._sHistoryChanges = false;
         } else if (aBrowsingContext.sessionHistory) {
-          let uri = aBrowser.currentURI
-            ? aBrowser.currentURI.displaySpec
-            : listener._lastKnownUri;
-          let body = aBrowser.ownerGlobal
-            ? aBrowser.ownerGlobal.document.body
-            : listener._lastKnownBody;
+          let uri = aBrowsingContext.currentURI?.displaySpec;
+          let body =
+            aBrowser.ownerGlobal?.document.body ?? listener._lastKnownBody;
           // If aData.sHistoryNeeded we need to collect all session
           // history entries, because with SHIP this indicates that we
           // either saw 'DOMTitleChanged' in
@@ -1309,13 +1294,6 @@ var SessionStoreInternal = {
     TabState.update(aBrowser, aData);
     let win = aBrowser.ownerGlobal;
     this.saveStateDelayed(win);
-
-    if (aData.flushID) {
-      // This is an update kicked off by an async flush request. Notify the
-      // TabStateFlusher so that it can finish the request and notify its
-      // consumer that's waiting for the flush to be done.
-      TabStateFlusher.resolve(aBrowser, aData.flushID);
-    }
   },
 
   /**
@@ -1416,6 +1394,7 @@ var SessionStoreInternal = {
             }
           }
         }
+
         if (aMessage.data.isFinal) {
           // If this the final message we need to resolve all pending flush
           // requests for the given browser as they might have been sent too
@@ -1426,7 +1405,6 @@ var SessionStoreInternal = {
           for (let wm of [
             this._browserSHistoryListener,
             this._browserSHistoryListenerForRestore,
-            this._browserProgressListenerForRestore,
           ]) {
             let listener = wm.get(browser.permanentKey);
             if (listener) {
@@ -4478,24 +4456,11 @@ var SessionStoreInternal = {
     // Update the tab state in case we shut down without being notified.
     this._windows[window.__SSi].tabs[tab._tPos] = tabData;
 
-    // Prepare the tab so that it can be properly restored. We'll pin/unpin
-    // and show/hide tabs as necessary. We'll also attach a copy of the tab's
-    // data in case we close it before it's been restored.
-    if (tabData.pinned) {
-      tabbrowser.pinTab(tab);
-    } else {
-      tabbrowser.unpinTab(tab);
-    }
-
-    if (tabData.hidden) {
-      tabbrowser.hideTab(tab);
-    } else {
-      tabbrowser.showTab(tab);
-    }
-
-    if (!!tabData.muted != browser.audioMuted) {
-      tab.toggleMuteAudio(tabData.muteReason);
-    }
+    // Prepare the tab so that it can be properly restored.  We'll also attach
+    // a copy of the tab's data in case we close it before it's been restored.
+    // Anything that dispatches an event to external consumers must happen at
+    // the end of this method, to make sure that the tab/browser object is in a
+    // reliable and consistent state.
 
     if (tabData.lastAccessed) {
       tab.updateLastAccessed(tabData.lastAccessed);
@@ -4626,6 +4591,25 @@ var SessionStoreInternal = {
         userTypedValue: tabData.userTypedValue || "",
         userTypedClear: tabData.userTypedClear || 0,
       });
+    }
+
+    // Most of tabData has been restored, now continue with restoring
+    // attributes that may trigger external events.
+
+    if (tabData.pinned) {
+      tabbrowser.pinTab(tab);
+    } else {
+      tabbrowser.unpinTab(tab);
+    }
+
+    if (tabData.hidden) {
+      tabbrowser.hideTab(tab);
+    } else {
+      tabbrowser.showTab(tab);
+    }
+
+    if (!!tabData.muted != browser.audioMuted) {
+      tab.toggleMuteAudio(tabData.muteReason);
     }
 
     if (tab.hasAttribute("customizemode")) {
@@ -5646,6 +5630,15 @@ var SessionStoreInternal = {
   _resetLocalTabRestoringState(aTab) {
     let browser = aTab.linkedBrowser;
 
+    if (Services.appinfo.sessionHistoryInParent) {
+      if (this._browserProgressListenerForRestore.has(browser.permanentKey)) {
+        this._browserProgressListenerForRestore
+          .get(browser.permanentKey)
+          .uninstall();
+      }
+      SessionStoreUtils.setRestoreData(browser.browsingContext, null);
+    }
+
     // Keep the tab's previous state for later in this method
     let previousState = TAB_STATE_FOR_BROWSER.get(browser);
 
@@ -5679,7 +5672,9 @@ var SessionStoreInternal = {
       return;
     }
 
-    browser.messageManager.sendAsyncMessage("SessionStore:resetRestore", {});
+    if (!Services.appinfo.sessionHistoryInParent) {
+      browser.messageManager.sendAsyncMessage("SessionStore:resetRestore", {});
+    }
     this._resetLocalTabRestoringState(tab);
   },
 
@@ -5765,6 +5760,91 @@ var SessionStoreInternal = {
   },
 
   /**
+   * Builds a single nsISessionStoreRestoreData tree for the provided |formdata|
+   * and |scroll| trees.
+   */
+  buildRestoreData(formdata, scroll) {
+    function addFormEntries(root, fields, isXpath) {
+      for (let [key, value] of Object.entries(fields)) {
+        switch (typeof value) {
+          case "string":
+            root.addTextField(isXpath, key, value);
+            break;
+          case "boolean":
+            root.addCheckbox(isXpath, key, value);
+            break;
+          case "object": {
+            if (value === null) {
+              break;
+            }
+            if (
+              value.hasOwnProperty("type") &&
+              value.hasOwnProperty("fileList")
+            ) {
+              root.addFileList(isXpath, key, value.type, value.fileList);
+              break;
+            }
+            if (
+              value.hasOwnProperty("selectedIndex") &&
+              value.hasOwnProperty("value")
+            ) {
+              root.addSingleSelect(
+                isXpath,
+                key,
+                value.selectedIndex,
+                value.value
+              );
+              break;
+            }
+            if (
+              key === "sessionData" &&
+              ["about:sessionrestore", "about:welcomeback"].includes(
+                formdata.url
+              )
+            ) {
+              root.addTextField(isXpath, key, JSON.stringify(value));
+              break;
+            }
+            if (Array.isArray(value)) {
+              root.addMultipleSelect(isXpath, key, value);
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    let root = SessionStoreUtils.constructSessionStoreRestoreData();
+    if (scroll?.hasOwnProperty("scroll")) {
+      root.scroll = scroll.scroll;
+    }
+    if (formdata?.hasOwnProperty("url")) {
+      root.url = formdata.url;
+      if (formdata.hasOwnProperty("innerHTML")) {
+        // eslint-disable-next-line no-unsanitized/property
+        root.innerHTML = formdata.innerHTML;
+      }
+      if (formdata.hasOwnProperty("xpath")) {
+        addFormEntries(root, formdata.xpath, /* isXpath */ true);
+      }
+      if (formdata.hasOwnProperty("id")) {
+        addFormEntries(root, formdata.id, /* isXpath */ false);
+      }
+    }
+    let childrenLength = Math.max(
+      scroll?.children?.length || 0,
+      formdata?.children?.length || 0
+    );
+    for (let i = 0; i < childrenLength; i++) {
+      root.addChild(
+        this.buildRestoreData(formdata?.children?.[i], scroll?.children?.[i]),
+        i
+      );
+    }
+    return root;
+  },
+
+  /**
    * This mirrors ContentRestore.restoreHistory() for parent process session
    * history restores, but we're not actually restoring history here.
    */
@@ -5828,18 +5908,14 @@ var SessionStoreInternal = {
       throw new Error("This function should only be used with SHIP");
     }
 
-    let listener = this._browserProgressListenerForRestore.get(
-      browser.permanentKey
-    );
-    if (listener) {
-      listener.uninstall();
-    }
-
-    listener = this._browserSHistoryListenerForRestore.get(
-      browser.permanentKey
-    );
-    if (listener) {
-      listener.uninstall();
+    for (let map of [
+      this._browserProgressListenerForRestore,
+      this._browserSHistoryListenerForRestore,
+    ]) {
+      let listener = map.get(browser.permanentKey);
+      if (listener) {
+        listener.uninstall();
+      }
     }
 
     let restoreData = {
@@ -5851,43 +5927,56 @@ var SessionStoreInternal = {
     this._restoreTabContentStarted(browser, restoreData);
 
     let { tabData } = restoreData;
-
-    let uri = "about:blank";
-    let loadFlags = Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_HISTORY;
+    let uri = null;
+    let loadFlags = null;
 
     if (tabData?.userTypedValue && tabData?.userTypedClear) {
       uri = tabData.userTypedValue;
       loadFlags = Ci.nsIWebNavigation.LOAD_FLAGS_ALLOW_THIRD_PARTY_FIXUP;
     } else if (tabData?.entries.length) {
-      uri = loadFlags = null;
-      browser.messageManager.sendAsyncMessage(
-        "SessionStore:setRestoringDocument",
-        {
-          entry: tabData.entries[tabData.index - 1] || {},
-          formdata: tabData.formdata || {},
-          scrollPositions: tabData.scroll || {},
-        }
+      uri = tabData.entries[tabData.index - 1].url;
+      let willRestoreContent = SessionStoreUtils.setRestoreData(
+        browser.browsingContext,
+        this.buildRestoreData(tabData.formdata, tabData.scroll)
       );
-      browser.browsingContext.sessionHistory.reloadCurrentEntry();
+      // We'll manually call RestoreTabContentComplete when the restore is done,
+      // so we only want to create the listener below if we're not restoring tab
+      // content.
+      if (willRestoreContent) {
+        return;
+      }
+    } else {
+      uri = "about:blank";
+      loadFlags = Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_HISTORY;
     }
 
-    if (uri && loadFlags) {
-      // We only create this listener if we're *not* expecting a reply from
-      // content. OTherwise we'll call _restoreTabContentComplete too early, and
-      // fire events before the restore has actually completed.
-      //
-      // XXX: If this causes problems, we may be able to just update tests that
-      // rely on the existing timing to wait for the load event instead.
+    if (uri) {
       this.addProgressListenerForRestore(browser, {
-        onStopRequest: () => {
-          this._restoreTabContentComplete(browser, restoreData);
+        onStopRequest: (request, listener) => {
+          let requestURI = request.QueryInterface(Ci.nsIChannel)?.originalURI;
+          // FIXME: We sometimes see spurious STATE_STOP events for about:blank
+          // URIs, so we have to manually drop those here (unless we're actually
+          // expecting an about:blank load).
+          //
+          // In the case where we're firing _restoreTabContentComplete due to
+          // a normal load (i.e. !willRestoreContent), we could perhaps just not
+          // wait for the load here, and instead fix tests that depend on this
+          // behavior.
+          if (requestURI?.spec !== "about:blank" || uri === "about:blank") {
+            listener.uninstall();
+            this._restoreTabContentComplete(browser, restoreData);
+          }
         },
       });
 
-      browser.browsingContext.loadURI(uri, {
-        loadFlags,
-        triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
-      });
+      if (loadFlags) {
+        browser.browsingContext.loadURI(uri, {
+          loadFlags,
+          triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+        });
+      } else {
+        browser.browsingContext.sessionHistory.reloadCurrentEntry();
+      }
     }
   },
 

@@ -2294,22 +2294,6 @@ bool nsContentUtils::LookupBindingMember(
   return true;
 }
 
-// static
-nsINode* nsContentUtils::GetCrossDocParentNode(nsINode* aChild) {
-  MOZ_ASSERT(aChild, "The child is null!");
-
-  nsINode* parent = aChild->GetParentNode();
-  if (parent && parent->IsContent() && aChild->IsContent()) {
-    parent = aChild->AsContent()->GetFlattenedTreeParent();
-  }
-
-  if (parent || !aChild->IsDocument()) {
-    return parent;
-  }
-
-  return aChild->AsDocument()->GetEmbedderElement();
-}
-
 nsINode* nsContentUtils::GetNearestInProcessCrossDocParentNode(
     nsINode* aChild) {
   if (aChild->IsDocument()) {
@@ -9060,62 +9044,6 @@ void nsContentUtils::SetScrollbarsVisibility(nsIDocShell* aDocShell,
   }
   auto pref = aVisible ? ScrollbarPreference::Auto : ScrollbarPreference::Never;
   nsDocShell::Cast(aDocShell)->SetScrollbarPreference(pref);
-}
-
-/* static */
-void nsContentUtils::GetPresentationURL(nsIDocShell* aDocShell,
-                                        nsAString& aPresentationUrl) {
-  MOZ_ASSERT(aDocShell);
-
-  // Simulate receiver context for web platform test
-  if (StaticPrefs::dom_presentation_testing_simulate_receiver()) {
-    RefPtr<Document> doc;
-
-    nsCOMPtr<nsPIDOMWindowOuter> docShellWin =
-        do_QueryInterface(aDocShell->GetScriptGlobalObject());
-    if (docShellWin) {
-      doc = docShellWin->GetExtantDoc();
-    }
-
-    if (NS_WARN_IF(!doc)) {
-      return;
-    }
-
-    nsCOMPtr<nsIURI> uri = doc->GetDocumentURI();
-    if (NS_WARN_IF(!uri)) {
-      return;
-    }
-
-    nsAutoCString uriStr;
-    uri->GetSpec(uriStr);
-    CopyUTF8toUTF16(uriStr, aPresentationUrl);
-    return;
-  }
-
-  if (XRE_IsContentProcess()) {
-    nsCOMPtr<nsIDocShellTreeItem> sameTypeRoot;
-    aDocShell->GetInProcessSameTypeRootTreeItem(getter_AddRefs(sameTypeRoot));
-    nsCOMPtr<nsIDocShellTreeItem> root;
-    aDocShell->GetInProcessRootTreeItem(getter_AddRefs(root));
-    if (sameTypeRoot.get() == root.get()) {
-      // presentation URL is stored in BrowserChild for the top most
-      // <iframe mozbrowser> in content process.
-      BrowserChild* browserChild = BrowserChild::GetFrom(aDocShell);
-      if (browserChild) {
-        aPresentationUrl = browserChild->PresentationURL();
-      }
-      return;
-    }
-  }
-
-  nsCOMPtr<nsILoadContext> loadContext(do_QueryInterface(aDocShell));
-  RefPtr<Element> topFrameElt;
-  loadContext->GetTopFrameElement(getter_AddRefs(topFrameElt));
-  if (!topFrameElt) {
-    return;
-  }
-
-  topFrameElt->GetAttr(nsGkAtoms::mozpresentation, aPresentationUrl);
 }
 
 /* static */

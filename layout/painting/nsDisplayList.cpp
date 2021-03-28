@@ -114,10 +114,6 @@
 #include "mozilla/layers/WebRenderMessages.h"
 #include "mozilla/layers/WebRenderScrollData.h"
 
-#ifdef MOZ_GECKO_PROFILER
-#  include "GeckoProfiler.h"
-#endif
-
 using namespace mozilla;
 using namespace mozilla::layers;
 using namespace mozilla::dom;
@@ -1182,8 +1178,7 @@ void nsDisplayListBuilder::LeavePresShell(const nsIFrame* aReferenceFrame,
       }
     }
     nsRootPresContext* rootPresContext = pc->GetRootPresContext();
-    if (!pc->HadContentfulPaint() && rootPresContext &&
-        rootPresContext->RefreshDriver()->IsInRefresh()) {
+    if (!pc->HadContentfulPaint() && rootPresContext) {
       if (!CurrentPresShellState()->mIsBackgroundOnly) {
         if (pc->HasEverBuiltInvisibleText() ||
             DisplayListIsContentful(this, aPaintedContents)) {
@@ -1672,9 +1667,8 @@ void nsDisplayListBuilder::RecomputeCurrentAnimatedGeometryRoot() {
     // and check to see if they need to be updated. AGRs can be in the cache
     // multiple times, so we may end up doing the work multiple times for AGRs
     // that don't change.
-    for (auto iter = mFrameToAnimatedGeometryRootMap.Iter(); !iter.Done();
-         iter.Next()) {
-      RefPtr<AnimatedGeometryRoot> cached = iter.UserData();
+    for (const RefPtr<AnimatedGeometryRoot>& cached :
+         mFrameToAnimatedGeometryRootMap.Values()) {
       if (cached->mParentAGR == oldAGR && cached != mCurrentAGR) {
         // It's possible that this cached AGR struct that has the old AGR as a
         // parent should instead have mCurrentFrame has a parent.
@@ -1876,7 +1870,7 @@ void nsDisplayListBuilder::WeakFrameRegion::RemoveModifiedFramesAndRects() {
         AnyContentAncestorModified(wrapper.mWeakFrame->GetFrame())) {
       // To avoid multiple O(n) shifts in the array, move the last element of
       // the array to the current position and decrease the array length.
-      mFrameSet.RemoveEntry(wrapper.mFrame);
+      mFrameSet.Remove(wrapper.mFrame);
       mFrames[i] = std::move(mFrames[length - 1]);
       mRects[i] = std::move(mRects[length - 1]);
       length--;
@@ -2042,7 +2036,7 @@ bool nsDisplayListBuilder::AddToAGRBudget(nsIFrame* aFrame) {
 
   if (onBudget) {
     mUsedAGRBudget += cost;
-    mAGRBudgetSet.PutEntry(aFrame);
+    mAGRBudgetSet.Insert(aFrame);
   }
 
   return onBudget;
@@ -2295,11 +2289,8 @@ FrameLayerBuilder* nsDisplayList::BuildLayers(nsDisplayListBuilder* aBuilder,
   RefPtr<ContainerLayer> root;
   {
     AUTO_PROFILER_LABEL_CATEGORY_PAIR(GRAPHICS_LayerBuilding);
-#ifdef MOZ_GECKO_PROFILER
-    nsCOMPtr<nsIDocShell> docShell = presContext->GetDocShell();
     AUTO_PROFILER_TRACING_MARKER_DOCSHELL("Paint", "LayerBuilding", GRAPHICS,
-                                          docShell);
-#endif
+                                          presContext->GetDocShell());
 
     if (XRE_IsContentProcess() && StaticPrefs::gfx_content_always_paint()) {
       FrameLayerBuilder::InvalidateAllLayers(aLayerManager);
@@ -2393,7 +2384,8 @@ FrameLayerBuilder* nsDisplayList::BuildLayers(nsDisplayListBuilder* aBuilder,
  * root of the layer manager, drawing into the PaintedLayers.
  */
 already_AddRefed<LayerManager> nsDisplayList::PaintRoot(
-    nsDisplayListBuilder* aBuilder, gfxContext* aCtx, uint32_t aFlags) {
+    nsDisplayListBuilder* aBuilder, gfxContext* aCtx, uint32_t aFlags,
+    mozilla::Maybe<double> aDisplayListBuildTime) {
   AUTO_PROFILER_LABEL("nsDisplayList::PaintRoot", GRAPHICS);
 
   RefPtr<LayerManager> layerManager;
@@ -2457,7 +2449,8 @@ already_AddRefed<LayerManager> nsDisplayList::PaintRoot(
       }
 
       wrManager->EndTransactionWithoutLayer(this, aBuilder,
-                                            std::move(wrFilters));
+                                            std::move(wrFilters), nullptr,
+                                            aDisplayListBuildTime.valueOr(0.0));
     }
 
     // For layers-free mode, we check the invalidation state bits in the
@@ -2927,7 +2920,7 @@ nsDisplayItem::nsDisplayItem(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame,
   if (mFrame->BackfaceIsHidden(disp)) {
     mItemFlags += ItemFlag::BackfaceHidden;
   }
-  if (mFrame->Combines3DTransformWithAncestors(disp)) {
+  if (mFrame->Combines3DTransformWithAncestors()) {
     mItemFlags += ItemFlag::Combines3DTransformWithAncestors;
   }
 }
@@ -3353,8 +3346,7 @@ nsDisplayBackgroundImage::nsDisplayBackgroundImage(
       mLayer(aInitData.layer),
       mIsRasterImage(aInitData.isRasterImage),
       mShouldFixToViewport(aInitData.shouldFixToViewport),
-      mImageFlags(0),
-      mOpacity(1.0f) {
+      mImageFlags(0) {
   MOZ_COUNT_CTOR(nsDisplayBackgroundImage);
 #ifdef DEBUG
   if (mBackgroundStyle && mBackgroundStyle != mFrame->Style()) {
@@ -3954,8 +3946,6 @@ already_AddRefed<Layer> nsDisplayBackgroundImage::BuildLayer(
   RefPtr<ImageContainer> imageContainer = GetContainer(aManager, aBuilder);
   layer->SetContainer(imageContainer);
   ConfigureLayer(layer, aParameters);
-  // ConfigureLayer doesn't know about our opacity, so apply it to layer here.
-  layer->SetOpacity(mOpacity);
   return layer.forget();
 }
 
@@ -3986,7 +3976,7 @@ bool nsDisplayBackgroundImage::CreateWebRenderCommands(
   nsCSSRendering::PaintBGParams params =
       nsCSSRendering::PaintBGParams::ForSingleLayer(
           *StyleFrame()->PresContext(), GetPaintRect(), mBackgroundRect,
-          StyleFrame(), mImageFlags, mLayer, CompositionOp::OP_OVER, mOpacity);
+          StyleFrame(), mImageFlags, mLayer, CompositionOp::OP_OVER);
   params.bgClipRect = &mBounds;
   ImgDrawResult result =
       nsCSSRendering::BuildWebRenderDisplayItemsForStyleImageLayer(
@@ -4051,7 +4041,7 @@ nsRegion nsDisplayBackgroundImage::GetOpaqueRegion(
   nsRegion result;
   *aSnap = false;
 
-  if (!mBackgroundStyle || mOpacity != 1.0f) {
+  if (!mBackgroundStyle) {
     return result;
   }
 
@@ -4143,7 +4133,7 @@ void nsDisplayBackgroundImage::PaintInternal(nsDisplayListBuilder* aBuilder,
   nsCSSRendering::PaintBGParams params =
       nsCSSRendering::PaintBGParams::ForSingleLayer(
           *StyleFrame()->PresContext(), aBounds, mBackgroundRect, StyleFrame(),
-          mImageFlags, mLayer, CompositionOp::OP_OVER, mOpacity);
+          mImageFlags, mLayer, CompositionOp::OP_OVER);
   params.bgClipRect = aClipRect;
   ImgDrawResult result = nsCSSRendering::PaintStyleImageLayer(params, *aCtx);
 
@@ -5120,12 +5110,13 @@ bool nsDisplayBoxShadowOuter::CanBuildWebRenderDisplayItems() {
   }
 
   bool hasBorderRadius;
-  bool nativeTheme =
-      nsCSSRendering::HasBoxShadowNativeTheme(mFrame, hasBorderRadius);
-
   // We don't support native themed things yet like box shadows around
   // input buttons.
-  if (nativeTheme) {
+  //
+  // TODO(emilio): The non-native theme could provide the right rect+radius
+  // instead relatively painlessly, if we find this causes performance issues or
+  // what not.
+  if (nsCSSRendering::HasBoxShadowNativeTheme(mFrame, hasBorderRadius)) {
     return false;
   }
 
@@ -5405,32 +5396,18 @@ nsDisplayWrapList::nsDisplayWrapList(
   mListPtr->AppendToTop(aList);
   nsDisplayWrapList::UpdateBounds(aBuilder);
 
+#ifdef DEBUG
   if (!aFrame || !aFrame->IsTransformed()) {
     return;
   }
 
-  // If we're a transformed frame, then we need to find out if we're inside
-  // the nsDisplayTransform or outside of it. Frames inside the transform
-  // need mReferenceFrame == mFrame, outside needs the next ancestor
-  // reference frame.
-  // If we're inside the transform, then the nsDisplayItem constructor
-  // will have done the right thing.
-  // If we're outside the transform, then we should have only one child
-  // (since nsDisplayTransform wraps all actual content), and that child
-  // will have the correct reference frame set (since nsDisplayTransform
-  // handles this explictly).
   nsDisplayItem* i = mListPtr->GetBottom();
   if (i &&
       (!i->GetAbove() || i->GetType() == DisplayItemType::TYPE_TRANSFORM) &&
       i->Frame() == mFrame) {
-    mReferenceFrame = i->ReferenceFrame();
-    mToReferenceFrame = i->ToReferenceFrame();
+    MOZ_ASSERT(mReferenceFrame == i->ReferenceFrame());
   }
-
-  nsRect visible = aBuilder->GetVisibleRect() +
-                   aBuilder->GetCurrentFrameOffsetToReferenceFrame();
-
-  SetBuildingRect(visible);
+#endif
 }
 
 nsDisplayWrapList::nsDisplayWrapList(nsDisplayListBuilder* aBuilder,
@@ -7346,9 +7323,24 @@ void nsDisplayTransform::SetReferenceFrameToAncestor(
   if (mFrame == aBuilder->RootReferenceFrame()) {
     return;
   }
+  // We manually recompute mToReferenceFrame without going through the
+  // builder, since this won't apply the 'additional offset'. Our
+  // children will already be painting with that applied, and we don't
+  // want to include it a second time in our transform. We don't recompute
+  // our visible/building rects, since those should still include the additional
+  // offset.
+  // TODO: Are there are things computed using our ToReferenceFrame that should
+  // have the additional offset applied? Should we instead just manually remove
+  // the offset from our transform instead of this more general value?
+  // Can we instead apply the additional offset to us and not our children, like
+  // we do for all other offsets (and how reference frames are supposed to
+  // work)?
+#ifdef DEBUG
   nsIFrame* outerFrame = nsLayoutUtils::GetCrossDocParentFrame(mFrame);
-  mReferenceFrame = aBuilder->FindReferenceFrameFor(outerFrame);
+  MOZ_ASSERT(mReferenceFrame == aBuilder->FindReferenceFrameFor(outerFrame));
+#endif
   mToReferenceFrame = mFrame->GetOffsetToCrossDoc(mReferenceFrame);
+
   if (DisplayPortUtils::IsFixedPosFrameInDisplayPort(mFrame)) {
     // This is an odd special case. If we are both IsFixedPosFrameInDisplayPort
     // and transformed that we are our own AGR parent.
@@ -7374,8 +7366,6 @@ void nsDisplayTransform::SetReferenceFrameToAncestor(
       mAnimatedGeometryRoot = mAnimatedGeometryRoot->mParentAGR;
     }
   }
-
-  SetBuildingRect(aBuilder->GetVisibleRect() + mToReferenceFrame);
 }
 
 void nsDisplayTransform::Init(nsDisplayListBuilder* aBuilder,
@@ -7548,13 +7538,12 @@ Matrix4x4 nsDisplayTransform::GetResultingTransformMatrixInternal(
   /* Get the matrix, then change its basis to factor in the origin. */
   Matrix4x4 result;
   // Call IsSVGTransformed() regardless of the value of
-  // disp->mSpecifiedTransform, since we still need any
-  // parentsChildrenOnlyTransform.
+  // aProperties.HasTransform(), since we still need any
+  // potential parentsChildrenOnlyTransform.
   Matrix svgTransform, parentsChildrenOnlyTransform;
-  bool hasSVGTransforms =
-      frame &&
+  const bool hasSVGTransforms =
+      frame && frame->HasAnyStateBits(NS_FRAME_MAY_BE_TRANSFORMED) &&
       frame->IsSVGTransformed(&svgTransform, &parentsChildrenOnlyTransform);
-
   bool shouldRound = nsLayoutUtils::ShouldSnapToGrid(frame);
 
   /* Transformed frames always have a transform, or are preserving 3d (and might
@@ -7577,7 +7566,7 @@ Matrix4x4 nsDisplayTransform::GetResultingTransformMatrixInternal(
 
   // See the comment for SVGContainerFrame::HasChildrenOnlyTransform for
   // an explanation of what children-only transforms are.
-  bool parentHasChildrenOnlyTransform =
+  const bool parentHasChildrenOnlyTransform =
       hasSVGTransforms && !parentsChildrenOnlyTransform.IsIdentity();
 
   if (parentHasChildrenOnlyTransform) {
@@ -8732,7 +8721,10 @@ bool nsDisplayPerspective::CreateWebRenderCommands(
 
   Maybe<uint64_t> scrollingRelativeTo;
   for (auto* asr = GetActiveScrolledRoot(); asr; asr = asr->mParent) {
-    if (nsLayoutUtils::IsAncestorFrameCrossDoc(
+    // In OOP documents, the root scrollable frame of the in-process root
+    // document is always active, so using IsAncestorFrameCrossDocInProcess
+    // should be fine here.
+    if (nsLayoutUtils::IsAncestorFrameCrossDocInProcess(
             asr->mScrollableFrame->GetScrolledFrame(), perspectiveFrame)) {
       scrollingRelativeTo.emplace(asr->GetViewId());
       break;
@@ -8763,25 +8755,24 @@ bool nsDisplayPerspective::ComputeVisibility(nsDisplayListBuilder* aBuilder,
 }
 
 nsDisplayText::nsDisplayText(nsDisplayListBuilder* aBuilder,
-                             nsTextFrame* aFrame,
-                             const Maybe<bool>& aIsSelected)
+                             nsTextFrame* aFrame)
     : nsPaintedDisplayItem(aBuilder, aFrame),
       mOpacity(1.0f),
       mVisIStartEdge(0),
       mVisIEndEdge(0) {
   MOZ_COUNT_CTOR(nsDisplayText);
-  mIsFrameSelected = aIsSelected;
   mBounds = mFrame->InkOverflowRectRelativeToSelf() + ToReferenceFrame();
   // Bug 748228
   mBounds.Inflate(mFrame->PresContext()->AppUnitsPerDevPixel());
 }
 
 bool nsDisplayText::CanApplyOpacity() const {
-  if (IsSelected()) {
+  auto* f = static_cast<nsTextFrame*>(mFrame);
+
+  if (f->IsSelected()) {
     return false;
   }
 
-  nsTextFrame* f = static_cast<nsTextFrame*>(mFrame);
   const nsStyleText* textStyle = f->StyleText();
   if (textStyle->HasTextShadow()) {
     return false;
@@ -8852,7 +8843,7 @@ bool nsDisplayText::CreateWebRenderCommands(
   // view. Also if we're selected we might have some shadows from the
   // ::selected and ::inctive-selected pseudo-selectors. So don't do this
   // optimization if we have shadows or a selection.
-  if (!(IsSelected() || f->StyleText()->HasTextShadow())) {
+  if (!(f->IsSelected() || f->StyleText()->HasTextShadow())) {
     nsRect visible = GetPaintRect();
     visible.Inflate(3 * appUnitsPerDevPixel);
     bounds = bounds.Intersect(visible);
@@ -8938,21 +8929,11 @@ void nsDisplayText::RenderToContext(gfxContext* aCtx,
   }
 
   f->PaintText(params, mVisIStartEdge, mVisIEndEdge, ToReferenceFrame(),
-               IsSelected(), mOpacity);
+               f->IsSelected(), mOpacity);
 
   if (willClip) {
     aCtx->PopClip();
   }
-}
-
-bool nsDisplayText::IsSelected() const {
-  if (mIsFrameSelected.isNothing()) {
-    MOZ_ASSERT((nsTextFrame*)do_QueryFrame(mFrame));
-    auto* f = static_cast<nsTextFrame*>(mFrame);
-    mIsFrameSelected.emplace(f->IsSelected());
-  }
-
-  return mIsFrameSelected.value();
 }
 
 class nsDisplayTextGeometry : public nsDisplayItemGenericGeometry {

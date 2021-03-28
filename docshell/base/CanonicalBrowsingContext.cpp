@@ -14,6 +14,7 @@
 #include "mozilla/dom/BrowsingContextGroup.h"
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/EventTarget.h"
+#include "mozilla/dom/PWindowGlobalParent.h"
 #include "mozilla/dom/WindowGlobalParent.h"
 #include "mozilla/dom/ContentProcessManager.h"
 #include "mozilla/dom/MediaController.h"
@@ -39,6 +40,7 @@
 #include "nsQueryObject.h"
 #include "nsBrowserStatusFilter.h"
 #include "nsIBrowser.h"
+#include "nsTHashSet.h"
 
 using namespace mozilla::ipc;
 
@@ -173,6 +175,15 @@ void CanonicalBrowsingContext::ReplacedBy(
   }
   aNewContext->mWebProgress = std::move(mWebProgress);
 
+  // Bug 1698601 - We'll eventually want to copy this data over to the new
+  // context instead of clearing it completely.
+  SetRestoreData(nullptr);
+  mRequestedContentRestores = 0;
+  mCompletedContentRestores = 0;
+  aNewContext->mRestoreData = nullptr;
+  aNewContext->mRequestedContentRestores = 0;
+  aNewContext->mCompletedContentRestores = 0;
+
   // Use the Transaction for the fields which need to be updated whether or not
   // the new context has been attached before.
   // SetWithoutSyncing can be used if context hasn't been attached.
@@ -180,6 +191,7 @@ void CanonicalBrowsingContext::ReplacedBy(
   txn.SetBrowserId(GetBrowserId());
   txn.SetHistoryID(GetHistoryID());
   txn.SetExplicitActive(GetExplicitActive());
+  txn.SetHasRestoreData(false);
   if (aNewContext->EverAttached()) {
     MOZ_ALWAYS_SUCCEEDS(txn.Commit(aNewContext));
   } else {
@@ -920,7 +932,7 @@ void CanonicalBrowsingContext::NotifyMediaMutedChanged(bool aMuted,
 uint32_t CanonicalBrowsingContext::CountSiteOrigins(
     GlobalObject& aGlobal,
     const Sequence<OwningNonNull<BrowsingContext>>& aRoots) {
-  nsTHashtable<nsCStringHashKey> uniqueSiteOrigins;
+  nsTHashSet<nsCString> uniqueSiteOrigins;
 
   for (const auto& root : aRoots) {
     root->PreOrderWalk([&](BrowsingContext* aContext) {
@@ -934,7 +946,7 @@ uint32_t CanonicalBrowsingContext::CountSiteOrigins(
         if (isContentPrincipal) {
           nsCString siteOrigin;
           documentPrincipal->GetSiteOrigin(siteOrigin);
-          uniqueSiteOrigins.PutEntry(siteOrigin);
+          uniqueSiteOrigins.Insert(siteOrigin);
         }
       }
     });
@@ -1718,6 +1730,65 @@ void CanonicalBrowsingContext::ResetScalingZoom() {
   // context.
   if (WindowGlobalParent* topWindow = GetTopWindowContext()) {
     Unused << topWindow->SendResetScalingZoom();
+  }
+}
+
+void CanonicalBrowsingContext::SetRestoreData(SessionStoreRestoreData* aData) {
+  MOZ_DIAGNOSTIC_ASSERT(!mRestoreData || !aData,
+                        "must either be clearing or initializing");
+  MOZ_DIAGNOSTIC_ASSERT(
+      !aData || mCompletedContentRestores == mRequestedContentRestores,
+      "must not start restore in an unstable state");
+  mRestoreData = aData;
+  MOZ_ALWAYS_SUCCEEDS(SetHasRestoreData(mRestoreData));
+}
+
+void CanonicalBrowsingContext::RequestRestoreTabContent(
+    WindowGlobalParent* aWindow) {
+  MOZ_DIAGNOSTIC_ASSERT(IsTop());
+
+  if (IsDiscarded() || !mRestoreData || mRestoreData->IsEmpty()) {
+    return;
+  }
+
+  CanonicalBrowsingContext* context = aWindow->GetBrowsingContext();
+  MOZ_DIAGNOSTIC_ASSERT(!context->IsDiscarded());
+
+  RefPtr<SessionStoreRestoreData> data = mRestoreData->FindChild(context);
+
+  // We'll only arrive here for a toplevel context after we've already sent
+  // down data for any out-of-process descendants, so it's fine to clear our
+  // data now.
+  if (context->IsTop()) {
+    MOZ_DIAGNOSTIC_ASSERT(context == this);
+    SetRestoreData(nullptr);
+  }
+
+  if (data && !data->IsEmpty()) {
+    auto onTabRestoreComplete = [self = RefPtr{this}](auto) {
+      self->mCompletedContentRestores++;
+      if (!self->mRestoreData &&
+          self->mCompletedContentRestores == self->mRequestedContentRestores) {
+        if (Element* browser = self->GetEmbedderElement()) {
+          SessionStoreUtils::CallRestoreTabContentComplete(browser);
+        }
+      }
+    };
+
+    mRequestedContentRestores++;
+
+    if (data->CanRestoreInto(aWindow->GetDocumentURI())) {
+      if (!aWindow->IsInProcess()) {
+        aWindow->SendRestoreTabContent(data, onTabRestoreComplete,
+                                       onTabRestoreComplete);
+        return;
+      }
+      data->RestoreInto(context);
+    }
+
+    // This must be called both when we're doing an in-process restore, and when
+    // we didn't do a restore at all due to a URL mismatch.
+    onTabRestoreComplete(true);
   }
 }
 

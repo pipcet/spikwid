@@ -77,6 +77,8 @@ impl NeqoHttp3Conn {
         };
 
         let quic_version = match alpn_conv {
+            "h3-32" => QuicVersion::Draft32,
+            "h3-31" => QuicVersion::Draft31,
             "h3-30" => QuicVersion::Draft30,
             "h3-29" => QuicVersion::Draft29,
             "h3-28" => QuicVersion::Draft28,
@@ -90,9 +92,9 @@ impl NeqoHttp3Conn {
             local,
             remote,
             ConnectionParameters::default()
-                .quic_version(quic_version)
-                .disable_preferred_address(),
+                .quic_version(quic_version),
             &http3_settings,
+            Instant::now(),
         ) {
             Ok(c) => c,
             Err(_) => return Err(NS_ERROR_INVALID_ARG),

@@ -214,9 +214,9 @@ class BrowserParent final : public PBrowserParent,
   template <typename Callback>
   void VisitAllDescendants(Callback aCallback) {
     const auto& browserBridges = ManagedPBrowserBridgeParent();
-    for (auto iter = browserBridges.ConstIter(); !iter.Done(); iter.Next()) {
+    for (const auto& key : browserBridges) {
       BrowserBridgeParent* browserBridge =
-          static_cast<BrowserBridgeParent*>(iter.Get()->GetKey());
+          static_cast<BrowserBridgeParent*>(key);
       BrowserParent* browserParent = browserBridge->GetBrowserParent();
 
       aCallback(browserParent);
@@ -230,9 +230,9 @@ class BrowserParent final : public PBrowserParent,
   template <typename Callback>
   void VisitChildren(Callback aCallback) {
     const auto& browserBridges = ManagedPBrowserBridgeParent();
-    for (auto iter = browserBridges.ConstIter(); !iter.Done(); iter.Next()) {
+    for (const auto& key : browserBridges) {
       BrowserBridgeParent* browserBridge =
-          static_cast<BrowserBridgeParent*>(iter.Get()->GetKey());
+          static_cast<BrowserBridgeParent*>(key);
       aCallback(browserBridge);
     }
   }
@@ -314,15 +314,10 @@ class BrowserParent final : public PBrowserParent,
 
   mozilla::ipc::IPCResult RecvSessionStoreUpdate(
       const Maybe<nsCString>& aDocShellCaps, const Maybe<bool>& aPrivatedMode,
-      nsTArray<nsCString>&& aPositions,
-      nsTArray<int32_t>&& aPositionDescendants,
-      const nsTArray<InputFormData>& aInputs,
-      const nsTArray<CollectedInputDataValue>& aIdVals,
-      const nsTArray<CollectedInputDataValue>& aXPathVals,
       nsTArray<nsCString>&& aOrigins, nsTArray<nsString>&& aKeys,
       nsTArray<nsString>&& aValues, const bool aIsFullStorage,
-      const bool aNeedCollectSHistory, const uint32_t& aFlushId,
-      const bool& aIsFinal, const uint32_t& aEpoch);
+      const bool aNeedCollectSHistory, const bool& aIsFinal,
+      const uint32_t& aEpoch);
 
   mozilla::ipc::IPCResult RecvIntrinsicSizeOrRatioChanged(
       const Maybe<IntrinsicSize>& aIntrinsicSize,
@@ -473,6 +468,11 @@ class BrowserParent final : public PBrowserParent,
   DimensionInfo GetDimensionInfo();
 
   nsresult UpdatePosition();
+
+  // Notify position update to all descendant documents in this browser parent.
+  // NOTE: This should use only for browsers in popup windows attached to the
+  // main browser window.
+  void NotifyPositionUpdatedForContentsInPopup();
 
   void SizeModeChanged(const nsSizeMode& aSizeMode);
 

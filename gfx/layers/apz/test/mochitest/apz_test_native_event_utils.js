@@ -377,56 +377,34 @@ function synthesizeNativeWheel(aTarget, aX, aY, aDeltaX, aDeltaY, aObserver) {
   return true;
 }
 
-// Synthesizes a native mousewheel event and invokes the callback once the
+// Synthesizes a native mousewheel event and resolve the returned promise once the
 // request has been successfully made to the OS. This does not necessarily
 // guarantee that the OS generates the event we requested. See
 // synthesizeNativeWheel for details on the parameters.
-function synthesizeNativeWheelAndWaitForObserver(
+function promiseNativeWheelAndWaitForObserver(
   aElement,
   aX,
   aY,
   aDeltaX,
-  aDeltaY,
-  aCallback
+  aDeltaY
 ) {
-  var observer = {
-    observe(aSubject, aTopic, aData) {
-      if (aCallback && aTopic == "mousescrollevent") {
-        setTimeout(aCallback, 0);
-      }
-    },
-  };
-  return synthesizeNativeWheel(aElement, aX, aY, aDeltaX, aDeltaY, observer);
+  return new Promise(resolve => {
+    var observer = {
+      observe(aSubject, aTopic, aData) {
+        if (aTopic == "mousescrollevent") {
+          resolve();
+        }
+      },
+    };
+    synthesizeNativeWheel(aElement, aX, aY, aDeltaX, aDeltaY, observer);
+  });
 }
 
-// Synthesizes a native mousewheel event and invokes the callback once the
+// Synthesizes a native mousewheel event and resolve the returned promise once the
 // wheel event is dispatched to |aTarget|'s containing window. If the event
 // targets content in a subdocument, |aTarget| should be inside the
 // subdocument (or the subdocument's window). See synthesizeNativeWheel for
 // details on the other parameters.
-function synthesizeNativeWheelAndWaitForWheelEvent(
-  aTarget,
-  aX,
-  aY,
-  aDeltaX,
-  aDeltaY,
-  aCallback
-) {
-  let p = promiseNativeWheelAndWaitForWheelEvent(
-    aTarget,
-    aX,
-    aY,
-    aDeltaX,
-    aDeltaY
-  );
-  if (aCallback) {
-    p.then(aCallback);
-  }
-  return true;
-}
-
-// Same as synthesizeNativeWheelAndWaitForWheelEvent, except returns a promise
-// instead of taking a callback
 function promiseNativeWheelAndWaitForWheelEvent(
   aTarget,
   aX,
@@ -451,31 +429,11 @@ function promiseNativeWheelAndWaitForWheelEvent(
   });
 }
 
-// Synthesizes a native mousewheel event and invokes the callback once the
+// Synthesizes a native mousewheel event and resolves the returned promise once the
 // first resulting scroll event is dispatched to |aTarget|'s containing window.
 // If the event targets content in a subdocument, |aTarget| should be inside
 // the subdocument (or the subdocument's window).  See synthesizeNativeWheel
 // for details on the other parameters.
-function synthesizeNativeWheelAndWaitForScrollEvent(
-  aTarget,
-  aX,
-  aY,
-  aDeltaX,
-  aDeltaY,
-  aCallback
-) {
-  promiseNativeWheelAndWaitForScrollEvent(
-    aTarget,
-    aX,
-    aY,
-    aDeltaX,
-    aDeltaY
-  ).then(aCallback);
-  return true;
-}
-
-// Same as synthesizeNativeWheelAndWaitForScrollEvent, but returns a promise
-// instead of taking a callback
 function promiseNativeWheelAndWaitForScrollEvent(
   aTarget,
   aX,
@@ -500,7 +458,18 @@ function promiseNativeWheelAndWaitForScrollEvent(
   });
 }
 
-function synthesizeTouchpadPinch(scales, focusX, focusY) {
+async function synthesizeTouchpadPinch(scales, focusX, focusY, options) {
+  // Check for options, fill in defaults if appropriate.
+  let waitForTransformEnd =
+    options.waitForTransformEnd !== undefined
+      ? options.waitForTransformEnd
+      : true;
+  let waitForFrames =
+    options.waitForFrames !== undefined ? options.waitForFrames : false;
+
+  // Register the listener for the TransformEnd observer topic
+  let transformEndPromise = promiseTransformEnd();
+
   var modifierFlags = 0;
   var pt = coordinatesRelativeToScreen({
     offsetX: focusX,
@@ -518,6 +487,14 @@ function synthesizeTouchpadPinch(scales, focusX, focusY) {
       phase = SpecialPowers.DOMWindowUtils.PHASE_UPDATE;
     }
     utils.sendNativeTouchpadPinch(phase, scales[i], pt.x, pt.y, modifierFlags);
+    if (waitForFrames) {
+      await promiseFrame();
+    }
+  }
+
+  // Wait for TransformEnd to fire.
+  if (waitForTransformEnd) {
+    await transformEndPromise;
   }
 }
 // Synthesizes a native touch event and dispatches it. aX and aY in CSS pixels
@@ -938,56 +915,29 @@ function promiseNativeMouseEventWithAPZ(aParams) {
 }
 
 // See synthesizeNativeMouseEventWithAPZ for the detail of aParams.
-function synthesizeNativeMouseEventWithAPZAndWaitForEvent(
-  aParams,
-  aCallback = null
-) {
-  const targetWindow = windowForTarget(aParams.target);
-  const eventType = aParams.eventTypeToWait || aParams.type;
-  targetWindow.addEventListener(
-    eventType,
-    function(e) {
-      setTimeout(aCallback, 0);
-    },
-    { capture: true, once: true }
-  );
-  return synthesizeNativeMouseEventWithAPZ(aParams);
-}
-
 function promiseNativeMouseEventWithAPZAndWaitForEvent(aParams) {
   return new Promise(resolve => {
-    synthesizeNativeMouseEventWithAPZAndWaitForEvent(aParams, resolve);
+    const targetWindow = windowForTarget(aParams.target);
+    const eventType = aParams.eventTypeToWait || aParams.type;
+    targetWindow.addEventListener(eventType, resolve, {
+      capture: true,
+      once: true,
+    });
+    synthesizeNativeMouseEventWithAPZ(aParams);
   });
 }
 
 // Move the mouse to (dx, dy) relative to |target|, and scroll the wheel
 // at that location.
 // Moving the mouse is necessary to avoid wheel events from two consecutive
-// moveMouseAndScrollWheelOver() calls on different elements being incorrectly
+// promiseMoveMouseAndScrollWheelOver() calls on different elements being incorrectly
 // considered as part of the same wheel transaction.
 // We also wait for the mouse move event to be processed before sending the
 // wheel event, otherwise there is a chance they might get reordered, and
 // we have the transaction problem again.
-function moveMouseAndScrollWheelOver(
-  target,
-  dx,
-  dy,
-  testDriver,
-  waitForScroll = true,
-  scrollDelta = 10
-) {
-  promiseMoveMouseAndScrollWheelOver(
-    target,
-    dx,
-    dy,
-    waitForScroll,
-    scrollDelta
-  ).then(testDriver);
-  return true;
-}
-
-// Same as moveMouseAndScrollWheelOver, but returns a promise instead of taking
-// a callback function.
+// This function returns a promise that is resolved when the resulting wheel
+// (if waitForScroll = false) or scroll (if waitForScroll = true) event is
+// received.
 function promiseMoveMouseAndScrollWheelOver(
   target,
   dx,
@@ -1250,17 +1200,19 @@ async function pinchZoomInWithTouch(focusX, focusY) {
 // to succeed. It returns after APZ has completed the zoom and reaches the end
 // of the transform. The focus point is expected to be in CSS coordinates
 // relative to the document body.
-async function pinchZoomInWithTouchpad(focusX, focusY) {
-  // Register the listener for the TransformEnd observer topic
-  let transformEndPromise = promiseTopic("APZ:TransformEnd");
-
+async function pinchZoomInWithTouchpad(focusX, focusY, options = {}) {
   var zoomIn = [
     1.0,
     1.019531,
     1.035156,
+    1.037156,
+    1.039156,
     1.054688,
+    1.056688,
     1.070312,
+    1.072312,
     1.089844,
+    1.091844,
     1.109375,
     1.128906,
     1.144531,
@@ -1284,14 +1236,10 @@ async function pinchZoomInWithTouchpad(focusX, focusY) {
     1.421875,
     1.0,
   ];
-  synthesizeTouchpadPinch(zoomIn, focusX, focusY);
-  // Wait for TransformEnd to fire.
-  await transformEndPromise;
+  await synthesizeTouchpadPinch(zoomIn, focusX, focusY, options);
 }
 
-async function pinchZoomOutWithTouchpad(focusX, focusY) {
-  // Register the listener for the TransformEnd observer topic
-  let transformEndPromise = promiseTopic("APZ:TransformEnd");
+async function pinchZoomOutWithTouchpad(focusX, focusY, options = {}) {
   // The last item equal one to indicate scale end
   var zoomOut = [
     1.0,
@@ -1319,14 +1267,10 @@ async function pinchZoomOutWithTouchpad(focusX, focusY) {
     0.933594,
     1.0,
   ];
-  synthesizeTouchpadPinch(zoomOut, focusX, focusY);
-  // Wait for TransformEnd to fire.
-  await transformEndPromise;
+  await synthesizeTouchpadPinch(zoomOut, focusX, focusY, options);
 }
 
-async function pinchZoomInOutWithTouchpad(focusX, focusY) {
-  // Register the listener for the TransformEnd observer topic
-  let transformEndPromise = promiseTopic("APZ:TransformEnd");
+async function pinchZoomInOutWithTouchpad(focusX, focusY, options = {}) {
   // Use the same scale for two events in a row to make sure the code handles this properly.
   var zoomInOut = [
     1.0,
@@ -1347,9 +1291,7 @@ async function pinchZoomInOutWithTouchpad(focusX, focusY) {
     1.0,
     1.0,
   ];
-  synthesizeTouchpadPinch(zoomInOut, focusX, focusY);
-  // Wait for TransformEnd to fire.
-  await transformEndPromise;
+  await synthesizeTouchpadPinch(zoomInOut, focusX, focusY, options);
 }
 // This generates a touch-based pinch gesture that is expected to succeed
 // and trigger an APZ:TransformEnd observer notification.

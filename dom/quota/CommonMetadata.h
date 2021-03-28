@@ -8,6 +8,7 @@
 #define DOM_QUOTA_COMMONMETADATA_H_
 
 #include <utility>
+#include "mozilla/dom/quota/Client.h"
 #include "mozilla/dom/quota/PersistenceType.h"
 #include "nsString.h"
 
@@ -48,9 +49,22 @@ struct OriginMetadata : public PrincipalMetadata {
 
 struct FullOriginMetadata : OriginMetadata {
   bool mPersisted;
-  int64_t mTimestamp;
+  int64_t mLastAccessTime;
 
-  // XXX Only default construction is needed for now.
+  FullOriginMetadata() = default;
+
+  FullOriginMetadata(OriginMetadata aOriginMetadata, bool aPersisted,
+                     int64_t aLastAccessTime)
+      : OriginMetadata(std::move(aOriginMetadata)),
+        mPersisted(aPersisted),
+        mLastAccessTime(aLastAccessTime) {}
+};
+
+struct ClientMetadata : OriginMetadata {
+  const Client::Type mClientType;
+
+  ClientMetadata(OriginMetadata aOriginMetadata, Client::Type aClientType)
+      : OriginMetadata(std::move(aOriginMetadata)), mClientType(aClientType) {}
 };
 
 }  // namespace mozilla::dom::quota

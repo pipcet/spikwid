@@ -67,9 +67,6 @@ loader.lazyRequireGetter(
   true
 );
 
-// This import to chrome code is forbidden according to the inspector specific
-// eslintrc. TODO: Fix in Bug 1591091.
-// eslint-disable-next-line mozilla/reject-some-requires
 loader.lazyImporter(
   this,
   "DeferredTask",
@@ -206,21 +203,6 @@ Inspector.prototype = {
       r => (this._resolveMarkupViewInitialized = r)
     );
 
-    // If the server-side stylesheet watcher is enabled, we should start to watch
-    // stylesheet resources before instanciating the inspector front since pageStyle
-    // actor should refer the watcher.
-    if (
-      this.toolbox.resourceWatcher.hasResourceWatcherSupport(
-        this.toolbox.resourceWatcher.TYPES.STYLESHEET
-      )
-    ) {
-      this._isServerSideStyleSheetWatcherEnabled = true;
-      await this.toolbox.resourceWatcher.watchResources(
-        [this.toolbox.resourceWatcher.TYPES.STYLESHEET],
-        { onAvailable: this.onResourceAvailable }
-      );
-    }
-
     await this.toolbox.targetList.watchTargets(
       [this.toolbox.targetList.TYPES.FRAME],
       this._onTargetAvailable,
@@ -274,11 +256,6 @@ Inspector.prototype = {
   async initInspectorFront(targetFront) {
     this.inspectorFront = await targetFront.getFront("inspector");
     this.walker = this.inspectorFront.walker;
-
-    // PageStyle front need the resource watcher when the server-side stylesheet watcher is enabled.
-    if (this._isServerSideStyleSheetWatcherEnabled) {
-      this.inspectorFront.pageStyle.resourceWatcher = this.toolbox.resourceWatcher;
-    }
   },
 
   get toolbox() {
@@ -1302,7 +1279,11 @@ Inspector.prototype = {
   onResourceAvailable: function(resources) {
     for (const resource of resources) {
       if (
-        resource.resourceType === this.toolbox.resourceWatcher.TYPES.ROOT_NODE
+        resource.resourceType ===
+          this.toolbox.resourceWatcher.TYPES.ROOT_NODE &&
+        // It might happen that the ROOT_NODE resource (which is a Front) is already
+        // destroyed, and in such case we want to ignore it.
+        !resource.isDestroyed()
       ) {
         const rootNodeFront = resource;
         const isTopLevelTarget = !!resource.targetFront.isTopLevel;

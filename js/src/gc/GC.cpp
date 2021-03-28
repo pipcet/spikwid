@@ -763,7 +763,7 @@ void TenuredChunk::verify() const {
   size_t freeCount = 0;
   size_t freeCommittedCount = 0;
   for (size_t i = 0; i < ArenasPerChunk; ++i) {
-    if (decommittedArenas[i]) {
+    if (decommittedPages[pageIndex(i)]) {
       // Free but not committed.
       freeCount++;
       continue;
@@ -847,6 +847,40 @@ inline void GCRuntime::prepareToFreeChunk(TenuredChunkInfo& info) {
 
 inline void GCRuntime::updateOnArenaFree() { ++numArenasFreeCommitted; }
 
+bool TenuredChunk::isPageFree(size_t pageIndex) const {
+  if (decommittedPages[pageIndex]) {
+    return true;
+  }
+
+  size_t arenaIndex = pageIndex * ArenasPerPage;
+  for (size_t i = 0; i < ArenasPerPage; i++) {
+    if (arenas[arenaIndex + i].allocated()) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+bool TenuredChunk::isPageFree(const Arena* arena) const {
+  MOZ_ASSERT(arena);
+  // arena must come from the freeArenasHead list.
+  MOZ_ASSERT(!arena->allocated());
+  size_t count = 1;
+  size_t expectedPage = pageIndex(arena);
+
+  Arena* nextArena = arena->next;
+  while (nextArena && (pageIndex(nextArena) == expectedPage)) {
+    count++;
+    if (count == ArenasPerPage) {
+      break;
+    }
+    nextArena = nextArena->next;
+  }
+
+  return count == ArenasPerPage;
+}
+
 void TenuredChunk::addArenaToFreeList(GCRuntime* gc, Arena* arena) {
   MOZ_ASSERT(!arena->allocated());
   arena->next = info.freeArenasHead;
@@ -856,9 +890,117 @@ void TenuredChunk::addArenaToFreeList(GCRuntime* gc, Arena* arena) {
   gc->updateOnArenaFree();
 }
 
-void TenuredChunk::addArenaToDecommittedList(const Arena* arena) {
-  ++info.numArenasFree;
-  decommittedArenas[TenuredChunk::arenaIndex(arena->address())] = true;
+void TenuredChunk::addArenasInPageToFreeList(GCRuntime* gc, size_t pageIndex) {
+  MOZ_ASSERT(isPageFree(pageIndex));
+
+  size_t arenaIndex = pageIndex * ArenasPerPage;
+  for (size_t i = 0; i < ArenasPerPage; i++) {
+    Arena* a = &arenas[arenaIndex + i];
+    MOZ_ASSERT(!a->allocated());
+    a->next = info.freeArenasHead;
+    info.freeArenasHead = a;
+    // These arenas are already free, don't need to update numArenasFree.
+    ++info.numArenasFreeCommitted;
+    gc->updateOnArenaFree();
+  }
+}
+
+void TenuredChunk::rebuildFreeArenasList() {
+  if (info.numArenasFreeCommitted == 0) {
+    MOZ_ASSERT(!info.freeArenasHead);
+    return;
+  }
+
+  mozilla::BitSet<ArenasPerChunk, uint32_t> freeArenas;
+  freeArenas.ResetAll();
+
+  Arena* arena = info.freeArenasHead;
+  while (arena) {
+    freeArenas[arenaIndex(arena->address())] = true;
+    arena = arena->next;
+  }
+
+  info.freeArenasHead = nullptr;
+  Arena** freeCursor = &info.freeArenasHead;
+
+  for (size_t i = 0; i < PagesPerChunk; i++) {
+    for (size_t j = 0; j < ArenasPerPage; j++) {
+      size_t arenaIndex = i * ArenasPerPage + j;
+      if (freeArenas[arenaIndex]) {
+        *freeCursor = &arenas[arenaIndex];
+        freeCursor = &arenas[arenaIndex].next;
+      }
+    }
+  }
+
+  *freeCursor = nullptr;
+}
+
+void TenuredChunk::decommitFreeArenas(GCRuntime* gc, const bool& cancel,
+                                      AutoLockGC& lock) {
+  MOZ_ASSERT(DecommitEnabled());
+
+  // We didn't traverse all arenas in the chunk to prevent accessing the arena
+  // mprotect'ed during compaction in debug build. Instead, we traverse through
+  // freeArenasHead list.
+  Arena** freeCursor = &info.freeArenasHead;
+  while (*freeCursor && !cancel) {
+    if ((ArenasPerPage > 1) && !isPageFree(*freeCursor)) {
+      freeCursor = &(*freeCursor)->next;
+      continue;
+    }
+
+    // Find the next free arena after this page.
+    Arena* nextArena = *freeCursor;
+    for (size_t i = 0; i < ArenasPerPage; i++) {
+      nextArena = nextArena->next;
+      MOZ_ASSERT_IF(i != ArenasPerPage - 1, isPageFree(pageIndex(nextArena)));
+    }
+
+    size_t pIndex = pageIndex(*freeCursor);
+
+    // Remove the free arenas from the list.
+    *freeCursor = nextArena;
+
+    info.numArenasFreeCommitted -= ArenasPerPage;
+    // When we unlock below, other thread might acquire the lock and do
+    // allocations. But it may find out the numArenasFree > 0 but there isn't
+    // any free arena (Because we mark the decommit bit after the
+    // MarkPagesUnusedSoft call). So we reduce the numArenasFree before unlock
+    // and add it back once we acquire the lock again.
+    info.numArenasFree -= ArenasPerPage;
+    updateChunkListAfterAlloc(gc, lock);
+
+    bool ok = decommitOneFreePage(gc, pIndex, lock);
+
+    info.numArenasFree += ArenasPerPage;
+    updateChunkListAfterFree(gc, ArenasPerPage, lock);
+
+    if (!ok) {
+      break;
+    }
+
+    // When we unlock in decommit, freeArenasHead might be updated by other
+    // threads doing allocations.
+    // Because the free list is sorted, we check if the freeArenasHead has
+    // bypassed the page we did in decommit, if so, we forward to the updated
+    // freeArenasHead, otherwise we just continue to check the next free arena
+    // in the list.
+    //
+    // If the freeArenasHead is nullptr, we set it to the largest index so
+    // freeArena will be set to freeArenasHead as well.
+    size_t latestIndex =
+        info.freeArenasHead ? pageIndex(info.freeArenasHead) : PagesPerChunk;
+    if (latestIndex > pIndex) {
+      freeCursor = &info.freeArenasHead;
+    }
+  }
+}
+
+void TenuredChunk::markArenasInPageDecommitted(size_t pageIndex) {
+  // The arenas within this page are already free, and numArenasFreeCommitted is
+  // subtracted in decommitFreeArenas.
+  decommittedPages[pageIndex] = true;
 }
 
 void TenuredChunk::recycleArena(Arena* arena, SortedArenaList& dest,
@@ -870,51 +1012,62 @@ void TenuredChunk::recycleArena(Arena* arena, SortedArenaList& dest,
 void TenuredChunk::releaseArena(GCRuntime* gc, Arena* arena,
                                 const AutoLockGC& lock) {
   addArenaToFreeList(gc, arena);
-  updateChunkListAfterFree(gc, lock);
+  updateChunkListAfterFree(gc, 1, lock);
 }
 
-bool TenuredChunk::decommitOneFreeArena(GCRuntime* gc, AutoLockGC& lock) {
+bool TenuredChunk::decommitOneFreePage(GCRuntime* gc, size_t pageIndex,
+                                       AutoLockGC& lock) {
   MOZ_ASSERT(DecommitEnabled());
-  MOZ_ASSERT(info.numArenasFreeCommitted > 0);
-  Arena* arena = fetchNextFreeArena(gc);
-  updateChunkListAfterAlloc(gc, lock);
+
+#ifdef DEBUG
+  size_t index = pageIndex * ArenasPerPage;
+  for (size_t i = 0; i < ArenasPerPage; i++) {
+    MOZ_ASSERT(!arenas[index + i].allocated());
+  }
+#endif
 
   bool ok;
   {
     AutoUnlockGC unlock(lock);
-    ok = MarkPagesUnusedSoft(arena, ArenaSize);
+    ok = MarkPagesUnusedSoft(pageAddress(pageIndex), PageSize);
   }
 
   if (ok) {
-    addArenaToDecommittedList(arena);
+    markArenasInPageDecommitted(pageIndex);
   } else {
-    addArenaToFreeList(gc, arena);
+    addArenasInPageToFreeList(gc, pageIndex);
   }
-  updateChunkListAfterFree(gc, lock);
 
   return ok;
 }
 
 void TenuredChunk::decommitFreeArenasWithoutUnlocking(const AutoLockGC& lock) {
   MOZ_ASSERT(DecommitEnabled());
+
   info.freeArenasHead = nullptr;
   Arena** freeCursor = &info.freeArenasHead;
 
-  for (size_t i = 0; i < ArenasPerChunk; ++i) {
-    Arena* arena = &arenas[i];
-    if (decommittedArenas[i] || arena->allocated()) {
+  for (size_t i = 0; i < PagesPerChunk; i++) {
+    if (decommittedPages[i]) {
       continue;
     }
 
-    if (js::oom::ShouldFailWithOOM() ||
-        !MarkPagesUnusedSoft(arena, ArenaSize)) {
-      *freeCursor = arena;
-      freeCursor = &arena->next;
+    if (!isPageFree(i) || js::oom::ShouldFailWithOOM() ||
+        !MarkPagesUnusedSoft(pageAddress(i), SystemPageSize())) {
+      // Find out the free arenas and add it to freeArenasHead.
+      for (size_t j = 0; j < ArenasPerPage; j++) {
+        size_t arenaIndex = i * ArenasPerPage + j;
+        if (!arenas[arenaIndex].allocated()) {
+          *freeCursor = &arenas[arenaIndex];
+          freeCursor = &arenas[arenaIndex].next;
+        }
+      }
       continue;
     }
 
-    info.numArenasFreeCommitted--;
-    decommittedArenas[i] = true;
+    decommittedPages[i] = true;
+    MOZ_ASSERT(info.numArenasFreeCommitted >= ArenasPerPage);
+    info.numArenasFreeCommitted -= ArenasPerPage;
   }
 
   *freeCursor = nullptr;
@@ -932,9 +1085,9 @@ void TenuredChunk::updateChunkListAfterAlloc(GCRuntime* gc,
   }
 }
 
-void TenuredChunk::updateChunkListAfterFree(GCRuntime* gc,
+void TenuredChunk::updateChunkListAfterFree(GCRuntime* gc, size_t numArenasFree,
                                             const AutoLockGC& lock) {
-  if (info.numArenasFree == 1) {
+  if (info.numArenasFree == numArenasFree) {
     gc->fullChunks(lock).remove(this);
     gc->availableChunks(lock).push(this);
   } else if (!unused()) {
@@ -3371,16 +3524,8 @@ void GCRuntime::decommitFreeArenas(const bool& cancel, AutoLockGC& lock) {
   }
 
   for (TenuredChunk* chunk : chunksToDecommit) {
-    // The arena list is not doubly-linked, so we have to work in the free
-    // list order and not in the natural order.
-
-    while (chunk->info.numArenasFreeCommitted && !cancel) {
-      if (!chunk->decommitOneFreeArena(this, lock)) {
-        // If we are low enough on memory that we can't update the page
-        // tables, break out of the loop.
-        break;
-      }
-    }
+    chunk->rebuildFreeArenasList();
+    chunk->decommitFreeArenas(this, cancel, lock);
   }
 }
 
@@ -3920,6 +4065,7 @@ void CompartmentCheckTracer::onChild(const JS::GCCellPtr& thing) {
   if (comp && compartment) {
     MOZ_ASSERT(
         comp == compartment ||
+        runtime()->mainContextFromOwnThread()->disableCompartmentCheckTracer ||
         (srcKind == JS::TraceKind::Object &&
          InCrossCompartmentMap(runtime(), static_cast<JSObject*>(src), thing)));
   } else {

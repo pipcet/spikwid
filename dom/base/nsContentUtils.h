@@ -369,14 +369,11 @@ class nsContentUtils {
       int32_t* aOutputHeight);
 
   /**
-   * Returns the parent node of aChild crossing document boundaries.
+   * Returns the parent node of aChild crossing document boundaries, but skips
+   * any cross-process parent frames and continues with the nearest in-process
+   * frame in the hierarchy.
+   *
    * Uses the parent node in the composed document.
-   */
-  static nsINode* GetCrossDocParentNode(nsINode* aChild);
-
-  /**
-   * Like GetCrossDocParentNode, but skips any cross-process parent frames and
-   * continues with the nearest in-process frame in the hierarchy.
    */
   static nsINode* GetNearestInProcessCrossDocParentNode(nsINode* aChild);
 
@@ -2964,13 +2961,6 @@ class nsContentUtils {
   static bool IsSpecificAboutPage(JSObject* aGlobal, const char* aUri);
 
   static void SetScrollbarsVisibility(nsIDocShell* aDocShell, bool aVisible);
-
-  /*
-   * Return the associated presentation URL of the presented content.
-   * Will return empty string if the docshell is not in a presented content.
-   */
-  static void GetPresentationURL(nsIDocShell* aDocShell,
-                                 nsAString& aPresentationUrl);
 
   /*
    * Try to find the docshell corresponding to the given event target.

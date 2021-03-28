@@ -60,7 +60,6 @@ this container is a toolbar. This avoids double-speaking. -->
 <!-- LOCALIZATION NOTE (libraryDownloads.label): This label is similar to
   -  downloads.label, but used in the Library panel. -->
 <!ENTITY libraryDownloads.label       "Downloads">
-<!ENTITY addons.label                 "Add-ons">
 
 <!ENTITY webDeveloperMenu.label       "Web Developer">
 
@@ -108,9 +107,6 @@ this container is a toolbar. This avoids double-speaking. -->
 <!ENTITY appMenuRemoteTabs.unverified.label "Your account needs to be verified.">
 <!ENTITY appMenuRemoteTabs.signintosync.label "Sign in to &syncBrand.shortName.label;…">
 <!ENTITY appMenuRemoteTabs.turnonsync.label "Turn on &syncBrand.shortName.label;…">
-<!ENTITY appMenuRemoteTabs.managedevices.label "Manage Devices…">
-<!ENTITY appMenuRemoteTabs.sidebar.label "View Synced Tabs Sidebar">
-<!ENTITY appMenuRemoteTabs.hidesidebar.label "Hide Synced Tabs Sidebar">
 <!ENTITY appMenuRemoteTabs.connectdevice.label "Connect Another Device">
 
 <!ENTITY customizeMenu.addToToolbar.label "Add to Toolbar">
@@ -174,11 +170,6 @@ this container is a toolbar. This avoids double-speaking. -->
 <!ENTITY panicButton.thankyou.msg1                "Your recent history is cleared.">
 <!ENTITY panicButton.thankyou.msg2                "Safe browsing!">
 <!ENTITY panicButton.thankyou.buttonlabel         "Thanks!">
-
-<!ENTITY updateAvailable.panelUI.label "Download &brandShorterName; update">
-<!ENTITY updateManual.panelUI.label "Download a fresh copy of &brandShorterName;">
-<!ENTITY updateUnsupported.panelUI.label "You cannot perform further updates">
-<!ENTITY updateRestart.panelUI.label2 "Restart to update &brandShorterName;">
 
 <!ENTITY sendToDevice.syncNotReady.label "Syncing Devices…">
 
