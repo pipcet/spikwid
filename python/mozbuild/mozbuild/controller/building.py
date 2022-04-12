@@ -1572,10 +1572,6 @@ class BuildDriver(MozbuildObject):
             # Just stick with the default
             pass
 
-        if monitor.elapsed > notify_minimum_time:
-            # Display a notification when the build completes.
-            self.notify("Build complete" if not status else "Build failed")
-
         if status:
             if what and any(
                 [target for target in what if target not in ("faster", "binaries")]
@@ -1594,22 +1590,6 @@ class BuildDriver(MozbuildObject):
             #    print(EXCESSIVE_SWAP_MESSAGE)
 
             print("To view resource usage of the build, run |mach " "resource-usage|.")
-
-        long_build = monitor.elapsed > 1200
-
-        if long_build:
-            output.on_line(
-                "We know it took a while, but your build finally finished successfully!"
-            )
-            if not using_sccache:
-                output.on_line(
-                    "If you are building Firefox often, SCCache can save you a lot "
-                    "of time. You can learn more here: "
-                    "https://firefox-source-docs.mozilla.org/setup/"
-                    "configuring_build_options.html#sccache"
-                )
-        else:
-            output.on_line("Your build was successful!")
 
         # Only for full builds because incremental builders likely don't
         # need to be burdened with this.
