@@ -444,10 +444,10 @@ pref("browser.urlbar.keepPanelOpenDuringImeComposition", false);
 pref("browser.urlbar.groupLabels.enabled", true);
 
 // Whether Merino is enabled as a quick suggest source in the urlbar.
-pref("browser.urlbar.merino.enabled", true);
+pref("browser.urlbar.merino.enabled", false);
 
 // The Merino endpoint URL, not including parameters.
-pref("browser.urlbar.merino.endpointURL", "https://merino.services.mozilla.com/api/v1/suggest");
+pref("browser.urlbar.merino.endpointURL", "");
 
 // Timeout for Merino fetches (ms).
 pref("browser.urlbar.merino.timeoutMs", 200);
@@ -527,7 +527,7 @@ pref("browser.helperApps.showOpenOptionForPdfJS", true);
 pref("browser.helperApps.showOpenOptionForViewableInternally", true);
 
 // search engine removal URL
-pref("browser.search.searchEngineRemoval", "https://support.mozilla.org/1/firefox/%VERSION%/%OS%/%LOCALE%/search-engine-removal");
+pref("browser.search.searchEngineRemoval", "");
 
 // search engines URL
 pref("browser.search.searchEnginesURL",      "");
@@ -1454,12 +1454,12 @@ pref("prompts.defaultModalType", 3);
 pref("browser.topsites.useRemoteSetting", true);
 // Fetch sponsored Top Sites from Mozilla Tiles Service (Contile)
 pref("browser.topsites.contile.enabled", true);
-pref("browser.topsites.contile.endpoint", "https://contile.services.mozilla.com/v1/tiles");
+pref("browser.topsites.contile.endpoint", "");
 
 // The base URL for the Quick Suggest anonymizing proxy. To make a request to
 // the proxy, include a campaign ID in the path.
-pref("browser.partnerlink.attributionURL", "https://topsites.services.mozilla.com/cid/");
-pref("browser.partnerlink.campaign.topsites", "amzn_2020_a1");
+pref("browser.partnerlink.attributionURL", "");
+pref("browser.partnerlink.campaign.topsites", "");
 
 // Whether to show tab level system prompts opened via nsIPrompt(Service) as
 // SubDialogs in the TabDialogBox (true) or as TabModalPrompt in the

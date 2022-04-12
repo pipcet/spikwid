@@ -1763,7 +1763,7 @@ def die_on_old_libstdcxx():
 
 
 try_compile(
-    includes=["cstddef"],
+    includes=[],
     body="\n".join(
         [
             # _GLIBCXX_RELEASE showed up in libstdc++ 7.
